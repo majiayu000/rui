@@ -1,0 +1,61 @@
+[package]
+name = "rui"
+version = "0.1.0"
+edition = "2024"
+description = "A GPU-accelerated UI framework for Rust"
+license = "MIT"
+
+[features]
+default = ["metal"]
+metal = ["dep:metal", "dep:objc2", "dep:objc2-foundation", "dep:objc2-app-kit", "dep:objc2-quartz-core"]
+
+[dependencies]
+# Math and geometry
+glam = "0.29"
+bytemuck = { version = "1.21", features = ["derive"] }
+
+# Layout engine
+taffy = "0.7"
+
+# Metal rendering (macOS)
+metal = { version = "0.31", optional = true }
+objc2 = { version = "0.6", optional = true }
+objc2-foundation = { version = "0.3", features = ["NSRunLoop", "NSDate", "NSString", "NSThread"], optional = true }
+objc2-app-kit = { version = "0.3", features = [
+    "NSApplication",
+    "NSWindow",
+    "NSView",
+    "NSEvent",
+    "NSScreen",
+    "NSGraphicsContext",
+    "NSResponder",
+    "NSRunningApplication",
+    "NSColor",
+], optional = true }
+objc2-quartz-core = { version = "0.3", features = ["CAMetalLayer", "CALayer"], optional = true }
+
+# Utilities
+smallvec = "1.13"
+slotmap = "1.0"
+parking_lot = "0.12"
+log = "0.4"
+env_logger = "0.11"
+
+[dev-dependencies]
+pollster = "0.4"
+
+[[example]]
+name = "hello_world"
+path = "examples/hello_world.rs"
+
+[[example]]
+name = "counter"
+path = "examples/counter.rs"
+
+[[example]]
+name = "dashboard"
+path = "examples/dashboard.rs"
+
+[[example]]
+name = "animation_demo"
+path = "examples/animation_demo.rs"
