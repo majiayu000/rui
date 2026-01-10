@@ -39,6 +39,12 @@ impl Default for ElementId {
     }
 }
 
+impl From<u64> for ElementId {
+    fn from(value: u64) -> Self {
+        Self(value)
+    }
+}
+
 /// Pixels unit type for type-safe pixel measurements
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Default)]
 pub struct Pixels(pub f32);

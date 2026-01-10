@@ -161,6 +161,12 @@ impl From<Hsla> for Rgba {
     }
 }
 
+impl From<[f32; 4]> for Rgba {
+    fn from(arr: [f32; 4]) -> Self {
+        Self::new(arr[0], arr[1], arr[2], arr[3])
+    }
+}
+
 /// High-level Color type that can be either RGBA or HSLA
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Color {

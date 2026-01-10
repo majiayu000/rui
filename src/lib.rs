@@ -28,6 +28,7 @@
 
 pub mod core;
 pub mod elements;
+pub mod hooks;
 pub mod renderer;
 
 #[cfg(target_os = "macos")]
