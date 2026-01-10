@@ -20,7 +20,7 @@ pub fn run_app<E: Element + 'static>(context: AppContext, root: E) {
 
 /// Run the application with custom window options
 pub fn run_app_with_options<E: Element + 'static>(
-    mut context: AppContext,
+    context: AppContext,
     mut root: E,
     options: WindowOptions,
 ) {
@@ -42,7 +42,7 @@ pub fn run_app_with_options<E: Element + 'static>(
         let _: () = msg_send![&*window, makeKeyAndOrderFront: std::ptr::null::<objc2::runtime::AnyObject>()];
 
         // Activate the application
-        app.activateIgnoringOtherApps(true);
+        app.activate();
 
         // Create layout engine
         let mut taffy: TaffyTree<crate::core::ElementId> = TaffyTree::new();

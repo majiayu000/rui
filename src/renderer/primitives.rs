@@ -1,7 +1,7 @@
 //! Rendering primitives - the basic shapes the GPU can draw
 
 use crate::core::color::Rgba;
-use crate::core::geometry::{Bounds, Edges, Point};
+use crate::core::geometry::{Bounds, Edges};
 use crate::core::style::Corners;
 use crate::elements::text::TextAlign;
 use bytemuck::{Pod, Zeroable};

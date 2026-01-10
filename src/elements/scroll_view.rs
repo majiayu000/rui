@@ -1,7 +1,7 @@
 //! ScrollView element for scrollable content
 
 use crate::core::color::Color;
-use crate::core::geometry::{Bounds, Edges, Point, Size};
+use crate::core::geometry::{Bounds, Edges, Size};
 use crate::core::style::{Corners, Overflow, Style};
 use crate::core::ElementId;
 use crate::elements::element::{style_to_taffy, AnyElement, Element, LayoutContext, PaintContext};

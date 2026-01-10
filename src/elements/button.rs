@@ -1,12 +1,11 @@
 //! Button element - interactive clickable component
 
 use crate::core::color::Color;
-use crate::core::geometry::{Bounds, Size};
-use crate::core::style::{Background, Corners, Style};
+use crate::core::geometry::Bounds;
+use crate::core::style::{Corners, Style};
 use crate::core::ElementId;
 use crate::core::event::Cursor;
 use crate::elements::element::{style_to_taffy, AnyElement, Element, LayoutContext, PaintContext};
-use crate::elements::text::{text, Text};
 use crate::renderer::Primitive;
 use taffy::prelude::*;
 

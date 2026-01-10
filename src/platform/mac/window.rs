@@ -30,13 +30,15 @@ pub unsafe fn create_window(
     }
 
     // Create window
-    let window = NSWindow::initWithContentRect_styleMask_backing_defer(
-        NSWindow::alloc(mtm),
-        frame,
-        style,
-        objc2_app_kit::NSBackingStoreType(2), // NSBackingStoreBuffered = 2
-        false,
-    );
+    let window = unsafe {
+        NSWindow::initWithContentRect_styleMask_backing_defer(
+            NSWindow::alloc(mtm),
+            frame,
+            style,
+            objc2_app_kit::NSBackingStoreType(2), // NSBackingStoreBuffered = 2
+            false,
+        )
+    };
 
     // Set title
     let title = NSString::from_str(&options.title);

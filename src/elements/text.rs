@@ -1,7 +1,6 @@
 //! Text element for rendering text
 
 use crate::core::color::Color;
-use crate::core::geometry::Bounds;
 use crate::core::style::Style;
 use crate::core::ElementId;
 use crate::elements::element::{style_to_taffy, Element, LayoutContext, PaintContext};

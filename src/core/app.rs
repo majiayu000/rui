@@ -100,7 +100,7 @@ impl App {
 
         // Create the main window
         let window_options = WindowOptions::default().title("RUI Application");
-        let window_id = self.context.open_window(window_options);
+        let _window_id = self.context.open_window(window_options);
 
         // Start the platform-specific event loop
         #[cfg(target_os = "macos")]

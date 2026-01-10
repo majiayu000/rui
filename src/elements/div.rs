@@ -1,7 +1,7 @@
 //! Div element - the primary container element
 
 use crate::core::color::Color;
-use crate::core::geometry::{Bounds, Edges, Point, Size};
+use crate::core::geometry::{Bounds, Edges, Size};
 use crate::core::style::{
     AlignItems, Background, BorderStyle, Corners, Display, FlexDirection, JustifyContent,
     Overflow, Position, Shadow, Style,
