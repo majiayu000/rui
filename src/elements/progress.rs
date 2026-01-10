@@ -400,13 +400,13 @@ mod tests {
     #[test]
     fn test_progress_id() {
         let p = Progress::new().id(ElementId::from(42u64));
-        assert_eq!(p.id(), Some(ElementId::from(42u64)));
+        assert_eq!(Element::id(&p), Some(ElementId::from(42u64)));
     }
 
     #[test]
     fn test_progress_default_id_is_none() {
         let p = Progress::new();
-        assert_eq!(p.id(), None);
+        assert_eq!(Element::id(&p), None);
     }
 
     #[test]

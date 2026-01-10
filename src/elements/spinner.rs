@@ -227,7 +227,7 @@ impl Element for Spinner {
 
     fn paint(&mut self, cx: &mut PaintContext) {
         let bounds = cx.bounds();
-        let c = self.render_text();
+        let content = self.render_text();
 
         cx.paint(Primitive::Text {
             bounds,
@@ -250,6 +250,7 @@ pub fn spinner() -> Spinner {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::elements::element::Element;
 
     // SpinnerType tests
     #[test]
@@ -497,13 +498,13 @@ mod tests {
     #[test]
     fn test_spinner_id() {
         let s = Spinner::new().id(ElementId::from(123u64));
-        assert_eq!(s.id(), Some(ElementId::from(123u64)));
+        assert_eq!(Element::id(&s), Some(ElementId::from(123u64)));
     }
 
     #[test]
     fn test_spinner_default_id_is_none() {
         let s = Spinner::new();
-        assert_eq!(s.id(), None);
+        assert_eq!(Element::id(&s), None);
     }
 
     #[test]
