@@ -5,7 +5,10 @@ use crate::core::geometry::Bounds;
 use crate::core::style::{Corners, Style};
 use crate::core::ElementId;
 use crate::core::event::Cursor;
-use crate::elements::element::{style_to_taffy, AnyElement, Element, LayoutContext, PaintContext};
+use crate::elements::element::{
+    style_to_taffy, AnyElement, Element, EventContext, LayoutContext, PaintContext,
+    PointerEvent, PointerEventKind,
+};
 use crate::renderer::Primitive;
 use taffy::prelude::*;
 
@@ -332,6 +335,42 @@ impl Element for Button {
             line_height: 1.2,
             align: crate::elements::text::TextAlign::Center,
         });
+    }
+
+    fn handle_pointer_event(&mut self, cx: &mut EventContext, event: &PointerEvent) -> bool {
+        if self.state.disabled {
+            self.state.pressed = false;
+            self.state.hovered = false;
+            return false;
+        }
+
+        let inside = cx.bounds().contains(event.position);
+        match event.kind {
+            PointerEventKind::Move => {
+                self.state.hovered = inside;
+                false
+            }
+            PointerEventKind::Down => {
+                if inside {
+                    self.state.pressed = true;
+                    true
+                } else {
+                    false
+                }
+            }
+            PointerEventKind::Up => {
+                let was_pressed = self.state.pressed;
+                self.state.pressed = false;
+                if inside && was_pressed {
+                    if let Some(handler) = &self.on_click {
+                        handler();
+                    }
+                    true
+                } else {
+                    false
+                }
+            }
+        }
     }
 }
 

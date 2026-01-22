@@ -90,13 +90,10 @@ impl App {
     /// Run the application with a root view builder
     pub fn run<F, E>(mut self, build_root: F)
     where
-        F: FnOnce(&mut AppContext) -> E + 'static,
+        F: FnMut(&mut AppContext) -> E + 'static,
         E: Element + 'static,
     {
         self.context.running = true;
-
-        // Build the root element
-        let root_element = build_root(&mut self.context);
 
         // Create the main window
         let window_options = WindowOptions::default().title("RUI Application");
@@ -105,7 +102,7 @@ impl App {
         // Start the platform-specific event loop
         #[cfg(target_os = "macos")]
         {
-            crate::platform::mac::run_app(self.context, root_element);
+            crate::platform::mac::run_app(self.context, build_root);
         }
 
         #[cfg(not(target_os = "macos"))]
@@ -117,17 +114,16 @@ impl App {
     /// Run with custom window options
     pub fn run_with_options<F, E>(mut self, options: WindowOptions, build_root: F)
     where
-        F: FnOnce(&mut AppContext) -> E + 'static,
+        F: FnMut(&mut AppContext) -> E + 'static,
         E: Element + 'static,
     {
         self.context.running = true;
 
-        let root_element = build_root(&mut self.context);
         let _window_id = self.context.open_window(options.clone());
 
         #[cfg(target_os = "macos")]
         {
-            crate::platform::mac::run_app_with_options(self.context, root_element, options);
+            crate::platform::mac::run_app_with_options(self.context, build_root, options);
         }
 
         #[cfg(not(target_os = "macos"))]

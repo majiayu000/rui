@@ -1,6 +1,6 @@
 [package]
 name = "rui"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "A GPU-accelerated UI framework for Rust"
 license = "MIT"
@@ -43,6 +43,11 @@ env_logger = "0.11"
 
 [dev-dependencies]
 pollster = "0.4"
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", features = ["json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+unicode-width = "0.2"
 
 [[example]]
 name = "hello_world"
@@ -59,3 +64,7 @@ path = "examples/dashboard.rs"
 [[example]]
 name = "animation_demo"
 path = "examples/animation_demo.rs"
+
+[[example]]
+name = "glm_chat"
+path = "examples/glm_chat.rs"

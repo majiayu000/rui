@@ -13,7 +13,10 @@ use crate::core::geometry::{Bounds, Edges};
 use crate::core::style::{Corners, Style};
 use crate::core::ElementId;
 use crate::core::event::Cursor;
-use crate::elements::element::{style_to_taffy, Element, LayoutContext, PaintContext};
+use crate::elements::element::{
+    style_to_taffy, Element, EventContext, LayoutContext, PaintContext, PointerEvent,
+    PointerEventKind,
+};
 use crate::renderer::Primitive;
 use taffy::prelude::*;
 
@@ -97,7 +100,7 @@ impl TextInput {
 
     /// Check if the input is focused
     pub fn is_focused(&self) -> bool {
-        self.focu
+        self.focused
     }
 
     /// Set the focus state

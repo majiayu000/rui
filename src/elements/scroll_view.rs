@@ -4,7 +4,10 @@ use crate::core::color::Color;
 use crate::core::geometry::{Bounds, Edges, Size};
 use crate::core::style::{Corners, Overflow, Style};
 use crate::core::ElementId;
-use crate::elements::element::{style_to_taffy, AnyElement, Element, LayoutContext, PaintContext};
+use crate::elements::element::{
+    style_to_taffy, AnyElement, Element, EventContext, LayoutContext, PaintContext,
+    PointerEvent, PointerEventKind,
+};
 use crate::renderer::Primitive;
 use smallvec::SmallVec;
 use taffy::prelude::*;
@@ -117,6 +120,7 @@ pub struct ScrollView {
     scrollbar_width: f32,
     on_scroll: Option<Box<dyn Fn(f32, f32)>>,
     layout_node: Option<NodeId>,
+    child_nodes: SmallVec<[NodeId; 4]>,
 }
 
 impl ScrollView {
@@ -135,6 +139,7 @@ impl ScrollView {
             scrollbar_width: 8.0,
             on_scroll: None,
             layout_node: None,
+            child_nodes: SmallVec::new(),
         }
     }
 
@@ -285,6 +290,7 @@ impl Element for ScrollView {
             .expect("Failed to create scroll view layout node");
 
         self.layout_node = Some(node);
+        self.child_nodes = SmallVec::from_vec(child_nodes);
         node
     }
 
@@ -309,16 +315,27 @@ impl Element for ScrollView {
         cx.scene.push_layer(bounds);
 
         // Paint children with scroll offset
-        for child in &mut self.children {
-            let child_bounds = Bounds::from_xywh(
-                bounds.x() - self.state.offset_x,
-                bounds.y() - self.state.offset_y,
-                bounds.width(),
-                bounds.height(),
+        let mut content_right = bounds.x();
+        let mut content_bottom = bounds.y();
+        for (child, node) in self.children.iter_mut().zip(self.child_nodes.iter().copied()) {
+            let child_bounds = cx.child_bounds(node).unwrap_or(bounds);
+            content_right = content_right.max(child_bounds.max_x());
+            content_bottom = content_bottom.max(child_bounds.max_y());
+
+            let scrolled_bounds = Bounds::from_xywh(
+                child_bounds.x() - self.state.offset_x,
+                child_bounds.y() - self.state.offset_y,
+                child_bounds.width(),
+                child_bounds.height(),
             );
-            let mut child_cx = cx.with_bounds(child_bounds);
+            let mut child_cx = cx.with_bounds(scrolled_bounds);
             child.paint(&mut child_cx);
         }
+
+        self.state.content_size = Size::new(
+            (content_right - bounds.x()).max(0.0),
+            (content_bottom - bounds.y()).max(0.0),
+        );
 
         // Pop clipping mask
         cx.scene.pop_layer();
@@ -391,6 +408,97 @@ impl Element for ScrollView {
 
     fn children(&self) -> &[AnyElement] {
         &self.children
+    }
+
+    fn handle_pointer_event(&mut self, cx: &mut EventContext, event: &PointerEvent) -> bool {
+        let is_move = matches!(event.kind, PointerEventKind::Move);
+        let mut handled = false;
+        let bounds = cx.bounds();
+
+        for (child, node) in self
+            .children
+            .iter_mut()
+            .zip(self.child_nodes.iter().copied())
+            .rev()
+        {
+            let child_bounds = cx.child_bounds(node).unwrap_or(bounds);
+            let scrolled_bounds = Bounds::from_xywh(
+                child_bounds.x() - self.state.offset_x,
+                child_bounds.y() - self.state.offset_y,
+                child_bounds.width(),
+                child_bounds.height(),
+            );
+            let mut child_cx = cx.with_bounds(scrolled_bounds);
+            let child_handled = child.handle_pointer_event(&mut child_cx, event);
+            if !is_move && child_handled {
+                handled = true;
+                break;
+            }
+        }
+
+        handled
+    }
+
+    fn handle_scroll_event(
+        &mut self,
+        cx: &mut EventContext,
+        event: &crate::core::event::ScrollEvent,
+    ) -> bool {
+        let bounds = cx.bounds();
+        if !bounds.contains(event.position) {
+            return false;
+        }
+
+        let mut dx = event.delta_x;
+        let mut dy = event.delta_y;
+
+        match self.direction {
+            ScrollDirection::Vertical => dx = 0.0,
+            ScrollDirection::Horizontal => dy = 0.0,
+            ScrollDirection::Both => {}
+        }
+
+        if dx == 0.0 && dy == 0.0 {
+            return false;
+        }
+
+        self.state.scroll_by(dx, dy);
+        if let Some(handler) = &self.on_scroll {
+            handler(self.state.offset_x, self.state.offset_y);
+        }
+
+        true
+    }
+
+    fn handle_key_event(
+        &mut self,
+        cx: &mut EventContext,
+        event: &crate::core::event::KeyEvent,
+    ) -> bool {
+        if let Some(focused) = cx.focused_id() {
+            for child in self.children.iter_mut().rev() {
+                if child.id() == Some(focused) {
+                    return child.handle_key_event(cx, event);
+                }
+            }
+        }
+
+        for child in self.children.iter_mut().rev() {
+            if child.handle_key_event(cx, event) {
+                return true;
+            }
+        }
+
+        false
+    }
+
+    fn handle_window_event(&mut self, event: &crate::core::event::Event) -> bool {
+        for child in self.children.iter_mut().rev() {
+            if child.handle_window_event(event) {
+                return true;
+            }
+        }
+        false
     }
 }
 

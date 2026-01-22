@@ -5,7 +5,10 @@ use crate::core::event::Cursor;
 use crate::core::geometry::{Bounds, Edges};
 use crate::core::style::{Corners, Style};
 use crate::core::ElementId;
-use crate::elements::element::{style_to_taffy, Element, LayoutContext, PaintContext};
+use crate::elements::element::{
+    style_to_taffy, Element, EventContext, LayoutContext, PaintContext, PointerEvent,
+    PointerEventKind,
+};
 use crate::renderer::Primitive;
 use taffy::prelude::*;
 
@@ -281,6 +284,125 @@ impl Element for Input {
                 corner_radii: Corners::ZERO,
             });
         }
+    }
+
+    fn handle_pointer_event(&mut self, cx: &mut EventContext, event: &PointerEvent) -> bool {
+        let should_be_focused = cx.is_focused(self.id);
+        if self.state.focused != should_be_focused {
+            self.state.focused = should_be_focused;
+            if self.state.focused {
+                if let Some(handler) = &self.on_focus {
+                    handler();
+                }
+            } else if let Some(handler) = &self.on_blur {
+                handler();
+            }
+        }
+
+        let inside = cx.bounds().contains(event.position);
+        match event.kind {
+            PointerEventKind::Move => {
+                self.state.hovered = inside;
+                false
+            }
+            PointerEventKind::Down => {
+                if inside {
+                    if !self.state.focused {
+                        self.state.focused = true;
+                        if let Some(handler) = &self.on_focus {
+                            handler();
+                        }
+                    }
+                    cx.request_focus(self.id);
+                    true
+                } else if self.state.focused {
+                    self.state.focused = false;
+                    if let Some(handler) = &self.on_blur {
+                        handler();
+                    }
+                    cx.clear_focus();
+                    false
+                } else {
+                    false
+                }
+            }
+            PointerEventKind::Up => inside,
+        }
+    }
+
+    fn handle_key_event(&mut self, cx: &mut EventContext, event: &crate::core::event::KeyEvent) -> bool {
+        if !cx.is_focused(self.id) && !self.state.focused {
+            return false;
+        }
+
+        let mut handled = false;
+        match event.key {
+            crate::core::event::KeyCode::Backspace => {
+                if self.state.cursor_position > 0 && !self.state.value.is_empty() {
+                    let idx = self.state.cursor_position - 1;
+                    self.state.value.remove(idx);
+                    self.state.cursor_position = idx;
+                    handled = true;
+                }
+            }
+            crate::core::event::KeyCode::Delete => {
+                if self.state.cursor_position < self.state.value.len() {
+                    self.state.value.remove(self.state.cursor_position);
+                    handled = true;
+                }
+            }
+            crate::core::event::KeyCode::ArrowLeft => {
+                if self.state.cursor_position > 0 {
+                    self.state.cursor_position -= 1;
+                    handled = true;
+                }
+            }
+            crate::core::event::KeyCode::ArrowRight => {
+                if self.state.cursor_position < self.state.value.len() {
+                    self.state.cursor_position += 1;
+                    handled = true;
+                }
+            }
+            crate::core::event::KeyCode::Home => {
+                self.state.cursor_position = 0;
+                handled = true;
+            }
+            crate::core::event::KeyCode::End => {
+                self.state.cursor_position = self.state.value.len();
+                handled = true;
+            }
+            crate::core::event::KeyCode::Enter => {
+                if let Some(handler) = &self.on_submit {
+                    handler(&self.state.value);
+                }
+                handled = true;
+            }
+            _ => {}
+        }
+
+        if !handled {
+            if let Some(ch) = event.char {
+                if ch == '\n' || ch == '\r' {
+                    if let Some(handler) = &self.on_submit {
+                        handler(&self.state.value);
+                    }
+                    handled = true;
+                } else if !ch.is_control() {
+                    let idx = self.state.cursor_position.min(self.state.value.len());
+                    self.state.value.insert(idx, ch);
+                    self.state.cursor_position = idx + 1;
+                    handled = true;
+                }
+            }
+        }
+
+        if handled {
+            if let Some(handler) = &self.on_change {
+                handler(&self.state.value);
+            }
+        }
+
+        handled
     }
 }
 

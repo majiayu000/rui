@@ -71,6 +71,8 @@ pub unsafe fn create_window(
     // Set layer on view
     let _: () = msg_send![&*content_view, setWantsLayer: true];
     let _: () = msg_send![&*content_view, setLayer: &*metal_layer];
+    let _: () = msg_send![&*window, setAcceptsMouseMovedEvents: true];
+    let _: () = msg_send![&*window, makeFirstResponder: &*content_view];
 
     // Center window on screen
     window.center();

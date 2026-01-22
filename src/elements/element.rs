@@ -1,9 +1,10 @@
 //! Core Element trait and related types
 
-use crate::core::geometry::{Bounds, Size};
+use crate::core::event::{KeyEvent, MouseButton, ScrollEvent};
+use crate::core::geometry::{Bounds, Point, Size};
 use crate::core::style::Style;
 use crate::core::ElementId;
-use crate::renderer::{Scene, Primitive};
+use crate::renderer::{Primitive, Scene};
 use taffy::prelude::*;
 
 /// Layout context passed during layout phase
@@ -25,11 +26,12 @@ impl<'a> LayoutContext<'a> {
 pub struct PaintContext<'a> {
     pub(crate) scene: &'a mut Scene,
     pub(crate) bounds: Bounds,
+    pub(crate) taffy: &'a TaffyTree<ElementId>,
 }
 
 impl<'a> PaintContext<'a> {
-    pub fn new(scene: &'a mut Scene, bounds: Bounds) -> Self {
-        Self { scene, bounds }
+    pub fn new(scene: &'a mut Scene, bounds: Bounds, taffy: &'a TaffyTree<ElementId>) -> Self {
+        Self { scene, bounds, taffy }
     }
 
     /// Add a primitive to the scene
@@ -42,11 +44,94 @@ impl<'a> PaintContext<'a> {
         self.bounds
     }
 
+    pub fn child_bounds(&self, node: NodeId) -> Option<Bounds> {
+        let layout = self.taffy.layout(node).ok()?;
+        Some(Bounds::from_xywh(
+            self.bounds.x() + layout.location.x,
+            self.bounds.y() + layout.location.y,
+            layout.size.width,
+            layout.size.height,
+        ))
+    }
+
     /// Create a child paint context with new bounds
     pub fn with_bounds(&mut self, bounds: Bounds) -> PaintContext<'_> {
         PaintContext {
             scene: self.scene,
             bounds,
+            taffy: self.taffy,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PointerEventKind {
+    Move,
+    Down,
+    Up,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct PointerEvent {
+    pub kind: PointerEventKind,
+    pub position: Point,
+    pub button: Option<MouseButton>,
+}
+
+pub struct EventContext<'a> {
+    pub(crate) bounds: Bounds,
+    pub(crate) taffy: &'a TaffyTree<ElementId>,
+    pub(crate) focused: &'a mut Option<ElementId>,
+}
+
+impl<'a> EventContext<'a> {
+    pub fn new(
+        bounds: Bounds,
+        taffy: &'a TaffyTree<ElementId>,
+        focused: &'a mut Option<ElementId>,
+    ) -> Self {
+        Self {
+            bounds,
+            taffy,
+            focused,
+        }
+    }
+
+    pub fn bounds(&self) -> Bounds {
+        self.bounds
+    }
+
+    pub fn focused_id(&self) -> Option<ElementId> {
+        *self.focused
+    }
+
+    pub fn is_focused(&self, id: Option<ElementId>) -> bool {
+        id.is_some() && *self.focused == id
+    }
+
+    pub fn request_focus(&mut self, id: Option<ElementId>) {
+        *self.focused = id;
+    }
+
+    pub fn clear_focus(&mut self) {
+        *self.focused = None;
+    }
+
+    pub fn child_bounds(&self, node: NodeId) -> Option<Bounds> {
+        let layout = self.taffy.layout(node).ok()?;
+        Some(Bounds::from_xywh(
+            self.bounds.x() + layout.location.x,
+            self.bounds.y() + layout.location.y,
+            layout.size.width,
+            layout.size.height,
+        ))
+    }
+
+    pub fn with_bounds(&mut self, bounds: Bounds) -> EventContext<'_> {
+        EventContext {
+            bounds,
+            taffy: self.taffy,
+            focused: self.focused,
         }
     }
 }
@@ -66,6 +151,26 @@ pub trait Element: 'static {
 
     /// Paint the element to the scene
     fn paint(&mut self, cx: &mut PaintContext);
+
+    /// Handle pointer events (mouse/touch)
+    fn handle_pointer_event(&mut self, _cx: &mut EventContext, _event: &PointerEvent) -> bool {
+        false
+    }
+
+    /// Handle scroll wheel events
+    fn handle_scroll_event(&mut self, _cx: &mut EventContext, _event: &ScrollEvent) -> bool {
+        false
+    }
+
+    /// Handle key events
+    fn handle_key_event(&mut self, _cx: &mut EventContext, _event: &KeyEvent) -> bool {
+        false
+    }
+
+    /// Handle window events
+    fn handle_window_event(&mut self, _event: &crate::core::event::Event) -> bool {
+        false
+    }
 
     /// Get child elements
     fn children(&self) -> &[AnyElement] {
@@ -95,6 +200,26 @@ impl AnyElement {
 
     pub fn paint(&mut self, cx: &mut PaintContext) {
         self.inner.paint(cx)
+    }
+
+    pub fn handle_pointer_event(&mut self, cx: &mut EventContext, event: &PointerEvent) -> bool {
+        self.inner.handle_pointer_event(cx, event)
+    }
+
+    pub fn handle_scroll_event(&mut self, cx: &mut EventContext, event: &ScrollEvent) -> bool {
+        self.inner.handle_scroll_event(cx, event)
+    }
+
+    pub fn handle_key_event(&mut self, cx: &mut EventContext, event: &KeyEvent) -> bool {
+        self.inner.handle_key_event(cx, event)
+    }
+
+    pub fn handle_window_event(&mut self, event: &crate::core::event::Event) -> bool {
+        self.inner.handle_window_event(event)
+    }
+
+    pub fn id(&self) -> Option<ElementId> {
+        self.inner.id()
     }
 }
 

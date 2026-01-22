@@ -4,7 +4,10 @@ use crate::core::color::Color;
 use crate::core::geometry::Bounds;
 use crate::core::style::{Display, FlexDirection, Style};
 use crate::core::ElementId;
-use crate::elements::element::{style_to_taffy, AnyElement, Element, LayoutContext, PaintContext};
+use crate::elements::element::{
+    style_to_taffy, AnyElement, Element, EventContext, LayoutContext, PaintContext,
+    PointerEvent, PointerEventKind,
+};
 use crate::elements::text::{FontWeight, TextAlign};
 use crate::renderer::Primitive;
 use smallvec::SmallVec;
@@ -114,6 +117,7 @@ pub struct ListItem {
     content: AnyElement,
     style: Style,
     layout_node: Option<NodeId>,
+    content_node: Option<NodeId>,
 }
 
 impl ListItem {
@@ -124,6 +128,7 @@ impl ListItem {
             content: content.into(),
             style: Style::new(),
             layout_node: None,
+            content_node: None,
         }
     }
 
@@ -159,11 +164,55 @@ impl Element for ListItem {
             .expect("Failed to create list item layout node");
 
         self.layout_node = Some(node);
+        self.content_node = Some(content_node);
         node
     }
 
     fn paint(&mut self, cx: &mut PaintContext) {
-        self.content.paint(cx);
+        let bounds = cx.bounds();
+        if let Some(content_node) = self.content_node {
+            let content_bounds = cx.child_bounds(content_node).unwrap_or(bounds);
+            let mut child_cx = cx.with_bounds(content_bounds);
+            self.content.paint(&mut child_cx);
+        } else {
+            self.content.paint(cx);
+        }
+    }
+
+    fn handle_pointer_event(&mut self, cx: &mut EventContext, event: &PointerEvent) -> bool {
+        if let Some(content_node) = self.content_node {
+            let content_bounds = cx.child_bounds(content_node).unwrap_or(cx.bounds());
+            let mut child_cx = cx.with_bounds(content_bounds);
+            self.content.handle_pointer_event(&mut child_cx, event)
+        } else {
+            self.content.handle_pointer_event(cx, event)
+        }
+    }
+
+    fn handle_scroll_event(
+        &mut self,
+        cx: &mut EventContext,
+        event: &crate::core::event::ScrollEvent,
+    ) -> bool {
+        if let Some(content_node) = self.content_node {
+            let content_bounds = cx.child_bounds(content_node).unwrap_or(cx.bounds());
+            let mut child_cx = cx.with_bounds(content_bounds);
+            self.content.handle_scroll_event(&mut child_cx, event)
+        } else {
+            self.content.handle_scroll_event(cx, event)
+        }
+    }
+
+    fn handle_key_event(
+        &mut self,
+        cx: &mut EventContext,
+        event: &crate::core::event::KeyEvent,
+    ) -> bool {
+        self.content.handle_key_event(cx, event)
+    }
+
+    fn handle_window_event(&mut self, event: &crate::core::event::Event) -> bool {
+        self.content.handle_window_event(event)
     }
 }
 
@@ -179,6 +228,7 @@ pub struct List {
     marker_width: f32,
     start_index: usize,
     layout_node: Option<NodeId>,
+    child_nodes: SmallVec<[NodeId; 8]>,
 }
 
 impl List {
@@ -199,6 +249,7 @@ impl List {
             marker_width: 24.0,
             start_index: 0,
             layout_node: None,
+            child_nodes: SmallVec::new(),
         }
     }
 
@@ -358,24 +409,30 @@ impl Element for List {
             .expect("Failed to create list layout node");
 
         self.layout_node = Some(node);
+        self.child_nodes = SmallVec::from_vec(child_nodes);
         node
     }
 
     fn paint(&mut self, cx: &mut PaintContext) {
         let bounds = cx.bounds();
-        let mut y_offset = bounds.y();
 
-        for (index, item) in self.items.iter_mut().enumerate() {
+        for (index, (item, node)) in self
+            .items
+            .iter_mut()
+            .zip(self.child_nodes.iter().copied())
+            .enumerate()
+        {
+            let item_bounds = cx.child_bounds(node).unwrap_or(bounds);
             // Calculate the marker for this item
             let marker_text = self.list_style.marker(self.start_index + index);
 
             // Paint the marker if not empty
             if !marker_text.is_empty() {
                 let marker_bounds = Bounds::from_xywh(
-                    bounds.x(),
-                    y_offset,
+                    item_bounds.x(),
+                    item_bounds.y(),
                     self.marker_width,
-                    self.marker_font_size * 1.4,
+                    item_bounds.height().max(self.marker_font_size * 1.4),
                 );
 
                 cx.paint(Primitive::Text {
@@ -392,17 +449,88 @@ impl Element for List {
 
             // Paint the item content with offset for the marker
             let content_bounds = Bounds::from_xywh(
-                bounds.x() + self.marker_width + 4.0, // 4px gap between marker and content
-                y_offset,
-                bounds.width() - self.marker_width - 4.0,
-                self.marker_font_size * 1.4,
+                item_bounds.x() + self.marker_width + 4.0, // 4px gap between marker and content
+                item_bounds.y(),
+                (item_bounds.width() - self.marker_width - 4.0).max(0.0),
+                item_bounds.height(),
             );
 
             let mut child_cx = cx.with_bounds(content_bounds);
             item.paint(&mut child_cx);
-
-            y_offset += self.marker_font_size * 1.4 + self.gap;
         }
+    }
+
+    fn handle_pointer_event(&mut self, cx: &mut EventContext, event: &PointerEvent) -> bool {
+        let is_move = matches!(event.kind, PointerEventKind::Move);
+        let mut handled = false;
+
+        for index in (0..self.items.len()).rev() {
+            let Some(node) = self.child_nodes.get(index).copied() else {
+                continue;
+            };
+            let item = &mut self.items[index];
+            let item_bounds = cx.child_bounds(node).unwrap_or(cx.bounds());
+            let mut item_cx = cx.with_bounds(item_bounds);
+            let item_handled = item.handle_pointer_event(&mut item_cx, event);
+            if !is_move && item_handled {
+                handled = true;
+                break;
+            }
+        }
+
+        handled
+    }
+
+    fn handle_scroll_event(
+        &mut self,
+        cx: &mut EventContext,
+        event: &crate::core::event::ScrollEvent,
+    ) -> bool {
+        let mut handled = false;
+        for index in (0..self.items.len()).rev() {
+            let Some(node) = self.child_nodes.get(index).copied() else {
+                continue;
+            };
+            let item = &mut self.items[index];
+            let item_bounds = cx.child_bounds(node).unwrap_or(cx.bounds());
+            let mut item_cx = cx.with_bounds(item_bounds);
+            if item.handle_scroll_event(&mut item_cx, event) {
+                handled = true;
+                break;
+            }
+        }
+        handled
+    }
+
+    fn handle_key_event(
+        &mut self,
+        cx: &mut EventContext,
+        event: &crate::core::event::KeyEvent,
+    ) -> bool {
+        if let Some(focused) = cx.focused_id() {
+            for item in self.items.iter_mut().rev() {
+                if item.id == Some(focused) {
+                    return item.handle_key_event(cx, event);
+                }
+            }
+        }
+
+        for item in self.items.iter_mut().rev() {
+            if item.handle_key_event(cx, event) {
+                return true;
+            }
+        }
+
+        false
+    }
+
+    fn handle_window_event(&mut self, event: &crate::core::event::Event) -> bool {
+        for item in self.items.iter_mut().rev() {
+            if item.handle_window_event(event) {
+                return true;
+            }
+        }
+        false
     }
 }
 

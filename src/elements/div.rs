@@ -7,7 +7,10 @@ use crate::core::style::{
     Overflow, Position, Shadow, Style,
 };
 use crate::core::ElementId;
-use crate::elements::element::{style_to_taffy, AnyElement, Element, LayoutContext, PaintContext};
+use crate::elements::element::{
+    style_to_taffy, AnyElement, Element, EventContext, LayoutContext, PaintContext, PointerEvent,
+    PointerEventKind,
+};
 use crate::renderer::Primitive;
 use smallvec::SmallVec;
 use taffy::prelude::*;
@@ -19,7 +22,9 @@ pub struct Div {
     children: SmallVec<[AnyElement; 4]>,
     on_click: Option<Box<dyn Fn()>>,
     on_hover: Option<Box<dyn Fn(bool)>>,
+    hovered: bool,
     layout_node: Option<NodeId>,
+    child_nodes: SmallVec<[NodeId; 4]>,
 }
 
 impl Div {
@@ -30,7 +35,9 @@ impl Div {
             children: SmallVec::new(),
             on_click: None,
             on_hover: None,
+            hovered: false,
             layout_node: None,
+            child_nodes: SmallVec::new(),
         }
     }
 
@@ -382,6 +389,7 @@ impl Element for Div {
             .expect("Failed to create layout node");
 
         self.layout_node = Some(node);
+        self.child_nodes = SmallVec::from_vec(child_nodes);
         node
     }
 
@@ -437,11 +445,105 @@ impl Element for Div {
 
         // Paint children
         // Note: In a full implementation, we'd get child bounds from the layout tree
-        for child in &mut self.children {
-            // For now, just pass through the same bounds
-            // A real implementation would compute child bounds from Taffy
-            child.paint(cx);
+        for (child, node) in self.children.iter_mut().zip(self.child_nodes.iter().copied()) {
+            let child_bounds = cx.child_bounds(node).unwrap_or(bounds);
+            let mut child_cx = cx.with_bounds(child_bounds);
+            child.paint(&mut child_cx);
         }
+    }
+
+    fn handle_pointer_event(&mut self, cx: &mut EventContext, event: &PointerEvent) -> bool {
+        let is_move = matches!(event.kind, PointerEventKind::Move);
+        let mut handled = false;
+
+        for (child, node) in self
+            .children
+            .iter_mut()
+            .zip(self.child_nodes.iter().copied())
+            .rev()
+        {
+            let child_bounds = cx.child_bounds(node).unwrap_or(cx.bounds());
+            let mut child_cx = cx.with_bounds(child_bounds);
+            let child_handled = child.handle_pointer_event(&mut child_cx, event);
+            if !is_move && child_handled {
+                handled = true;
+                break;
+            }
+        }
+
+        let inside = cx.bounds().contains(event.position);
+
+        if is_move && inside != self.hovered {
+            self.hovered = inside;
+            if let Some(handler) = &self.on_hover {
+                handler(inside);
+            }
+        }
+
+        if !handled && matches!(event.kind, PointerEventKind::Down) && !inside {
+            cx.clear_focus();
+        }
+
+        if !handled && matches!(event.kind, PointerEventKind::Up) && inside {
+            if let Some(handler) = &self.on_click {
+                handler();
+                handled = true;
+            }
+        }
+
+        handled
+    }
+
+    fn handle_scroll_event(
+        &mut self,
+        cx: &mut EventContext,
+        event: &crate::core::event::ScrollEvent,
+    ) -> bool {
+        let mut handled = false;
+        for child in self.children.iter_mut().rev() {
+            if let Some(focused) = cx.focused_id() {
+                if child.id() == Some(focused) {
+                    handled = child.handle_scroll_event(cx, event);
+                    break;
+                }
+            }
+            if child.handle_scroll_event(cx, event) {
+                handled = true;
+                break;
+            }
+        }
+        handled
+    }
+
+    fn handle_key_event(
+        &mut self,
+        cx: &mut EventContext,
+        event: &crate::core::event::KeyEvent,
+    ) -> bool {
+        if let Some(focused) = cx.focused_id() {
+            for child in self.children.iter_mut().rev() {
+                if child.id() == Some(focused) {
+                    return child.handle_key_event(cx, event);
+                }
+            }
+        }
+
+        for child in self.children.iter_mut().rev() {
+            if child.handle_key_event(cx, event) {
+                return true;
+            }
+        }
+
+        false
+    }
+
+    fn handle_window_event(&mut self, event: &crate::core::event::Event) -> bool {
+        for child in self.children.iter_mut().rev() {
+            if child.handle_window_event(event) {
+                return true;
+            }
+        }
+        false
     }
 
     fn children(&self) -> &[AnyElement] {
