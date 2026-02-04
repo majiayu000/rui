@@ -8,8 +8,8 @@ use taffy::prelude::*;
 
 /// Layout context passed during layout phase
 pub struct LayoutContext<'a> {
-    pub(crate) taffy: &'a mut TaffyTree<ElementId>,
-    pub(crate) available_space: Size,
+    pub taffy: &'a mut TaffyTree<ElementId>,
+    pub available_space: Size,
 }
 
 impl<'a> LayoutContext<'a> {
@@ -23,8 +23,8 @@ impl<'a> LayoutContext<'a> {
 
 /// Paint context passed during paint phase
 pub struct PaintContext<'a> {
-    pub(crate) scene: &'a mut Scene,
-    pub(crate) bounds: Bounds,
+    pub scene: &'a mut Scene,
+    pub bounds: Bounds,
 }
 
 impl<'a> PaintContext<'a> {

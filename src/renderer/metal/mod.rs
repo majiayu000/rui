@@ -2,5 +2,6 @@
 
 mod renderer;
 mod shaders;
+mod text_renderer;
 
 pub use renderer::MetalRenderer;

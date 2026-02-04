@@ -1,5 +1,43 @@
 //! Metal shader source code
 
+/// Metal shader for text overlay rendering (textured full-screen quad)
+pub const TEXT_SHADER: &str = r#"
+#include <metal_stdlib>
+using namespace metal;
+
+struct TextVertexOut {
+    float4 position [[position]];
+    float2 uv;
+};
+
+vertex TextVertexOut text_vertex(uint vertex_id [[vertex_id]]) {
+    // Full-screen triangle pair
+    float2 positions[6] = {
+        float2(0, 0), float2(1, 0), float2(0, 1),
+        float2(1, 0), float2(1, 1), float2(0, 1)
+    };
+
+    float2 unit_pos = positions[vertex_id];
+
+    TextVertexOut out;
+    // Map [0,1] to clip space [-1,1], flip Y for screen
+    out.position = float4(unit_pos.x * 2.0 - 1.0, -(unit_pos.y * 2.0 - 1.0), 0.0, 1.0);
+    // CG bitmap pixels are mirrored horizontally relative to Metal; flip U to correct
+    out.uv = float2(1.0 - unit_pos.x, unit_pos.y);
+    return out;
+}
+
+fragment float4 text_fragment(
+    TextVertexOut in [[stage_in]],
+    texture2d<float> tex [[texture(0)]]
+) {
+    constexpr sampler s(mag_filter::linear, min_filter::linear);
+    float4 color = tex.sample(s, in.uv);
+    // The texture has premultiplied alpha (from CoreGraphics), pass through
+    return color;
+}
+"#;
+
 /// Metal Shading Language source for quad rendering
 pub const QUAD_SHADER: &str = r#"
 #include <metal_stdlib>

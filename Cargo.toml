@@ -34,6 +34,11 @@ objc2-app-kit = { version = "0.3", features = [
 ], optional = true }
 objc2-quartz-core = { version = "0.3", features = ["CAMetalLayer", "CALayer"], optional = true }
 
+# Text rendering (macOS)
+core-foundation = "0.9"
+core-graphics = "0.23"
+core-text = "20.1"
+
 # Utilities
 smallvec = "1.13"
 slotmap = "1.0"

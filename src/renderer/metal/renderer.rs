@@ -19,6 +19,7 @@ pub struct MetalRenderer {
     command_queue: CommandQueue,
     quad_pipeline: RenderPipelineState,
     shadow_pipeline: RenderPipelineState,
+    text_pipeline: RenderPipelineState,
 }
 
 impl MetalRenderer {
@@ -34,6 +35,10 @@ impl MetalRenderer {
         let shadow_library = device
             .new_library_with_source(super::shaders::SHADOW_SHADER, &CompileOptions::new())
             .expect("Failed to compile shadow shader");
+
+        let text_library = device
+            .new_library_with_source(super::shaders::TEXT_SHADER, &CompileOptions::new())
+            .expect("Failed to compile text shader");
 
         // Create quad pipeline
         let quad_vertex = library.get_function("quad_vertex", None).unwrap();
@@ -87,11 +92,40 @@ impl MetalRenderer {
             .new_render_pipeline_state(&shadow_pipeline_desc)
             .expect("Failed to create shadow pipeline");
 
+        // Create text pipeline
+        let text_vertex = text_library.get_function("text_vertex", None).unwrap();
+        let text_fragment = text_library.get_function("text_fragment", None).unwrap();
+
+        let text_pipeline_desc = RenderPipelineDescriptor::new();
+        text_pipeline_desc.set_vertex_function(Some(&text_vertex));
+        text_pipeline_desc.set_fragment_function(Some(&text_fragment));
+        text_pipeline_desc
+            .color_attachments()
+            .object_at(0)
+            .unwrap()
+            .set_pixel_format(MTLPixelFormat::BGRA8Unorm);
+
+        // Premultiplied alpha blending for text overlay
+        let text_color = text_pipeline_desc
+            .color_attachments()
+            .object_at(0)
+            .unwrap();
+        text_color.set_blending_enabled(true);
+        text_color.set_source_rgb_blend_factor(MTLBlendFactor::One);
+        text_color.set_destination_rgb_blend_factor(MTLBlendFactor::OneMinusSourceAlpha);
+        text_color.set_source_alpha_blend_factor(MTLBlendFactor::One);
+        text_color.set_destination_alpha_blend_factor(MTLBlendFactor::OneMinusSourceAlpha);
+
+        let text_pipeline = device
+            .new_render_pipeline_state(&text_pipeline_desc)
+            .expect("Failed to create text pipeline");
+
         Some(Self {
             device,
             command_queue,
             quad_pipeline,
             shadow_pipeline,
+            text_pipeline,
         })
     }
 
@@ -127,8 +161,10 @@ impl MetalRenderer {
             self.render_quads(encoder, scene.quads(), &uniforms);
         }
 
-        // Text would be rendered here with a text atlas
-        // For now, we skip text rendering in this minimal implementation
+        // Render text overlay
+        if !scene.text_items().is_empty() {
+            self.render_text(encoder, scene, viewport_size);
+        }
 
         encoder.end_encoding();
         command_buffer.present_drawable(drawable);
@@ -193,5 +229,42 @@ impl MetalRenderer {
             6,
             shadows.len() as u64,
         );
+    }
+
+    fn render_text(
+        &self,
+        encoder: &RenderCommandEncoderRef,
+        scene: &Scene,
+        viewport_size: Size,
+    ) {
+        let w = viewport_size.width as u32;
+        let h = viewport_size.height as u32;
+        if w == 0 || h == 0 {
+            return;
+        }
+
+        // Rasterize all text items into a pixel buffer
+        let pixels = super::text_renderer::rasterize_text_items(scene.text_items(), w, h);
+
+        // Create Metal texture
+        let tex_desc = TextureDescriptor::new();
+        tex_desc.set_pixel_format(MTLPixelFormat::BGRA8Unorm);
+        tex_desc.set_width(w as u64);
+        tex_desc.set_height(h as u64);
+        tex_desc.set_usage(MTLTextureUsage::ShaderRead);
+
+        let texture = self.device.new_texture(&tex_desc);
+        texture.replace_region(
+            MTLRegion::new_2d(0, 0, w as u64, h as u64),
+            0,
+            pixels.as_ptr() as *const _,
+            (w as u64) * 4,
+        );
+
+        // Render full-screen textured quad
+        encoder.set_render_pipeline_state(&self.text_pipeline);
+        encoder.set_fragment_texture(0, Some(&texture));
+
+        encoder.draw_primitives(MTLPrimitiveType::Triangle, 0, 6);
     }
 }
