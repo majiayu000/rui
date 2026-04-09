@@ -1,4 +1,5 @@
 use rui::core::entity::EntityStore;
+use rui::core::geometry::{Point, Rect};
 use std::hint::black_box;
 use std::time::Instant;
 
@@ -75,15 +76,76 @@ fn bench_type_miss(iterations: usize, entity_count: usize) -> f64 {
     elapsed.as_nanos() as f64 / (iterations * entity_count) as f64
 }
 
+fn bench_rect_contains(iterations: usize, rect_count: usize) -> f64 {
+    let rects: Vec<_> = (0..rect_count)
+        .map(|i| {
+            let x = (i % 512) as f32;
+            let y = (i / 512) as f32;
+            Rect::from_xywh(x, y, 64.0, 48.0)
+        })
+        .collect();
+    let points: Vec<_> = (0..rect_count)
+        .map(|i| Point::new((i % 512) as f32 + 24.0, (i / 512) as f32 + 12.0))
+        .collect();
+
+    let start = Instant::now();
+    let mut hits = 0usize;
+    for _ in 0..iterations {
+        for i in 0..rect_count {
+            if rects[i].contains(points[i]) {
+                hits += 1;
+            }
+        }
+    }
+    black_box(hits);
+    let elapsed = start.elapsed();
+    elapsed.as_nanos() as f64 / (iterations * rect_count) as f64
+}
+
+fn bench_rect_intersection(iterations: usize, rect_count: usize) -> f64 {
+    let rects_a: Vec<_> = (0..rect_count)
+        .map(|i| {
+            let x = (i % 512) as f32;
+            let y = (i / 512) as f32;
+            Rect::from_xywh(x, y, 80.0, 60.0)
+        })
+        .collect();
+    let rects_b: Vec<_> = (0..rect_count)
+        .map(|i| {
+            let x = (i % 512) as f32 + 10.0;
+            let y = (i / 512) as f32 + 8.0;
+            Rect::from_xywh(x, y, 80.0, 60.0)
+        })
+        .collect();
+
+    let start = Instant::now();
+    let mut total_area = 0.0f32;
+    for _ in 0..iterations {
+        for i in 0..rect_count {
+            if let Some(intersection) = rects_a[i].intersection(&rects_b[i]) {
+                total_area += intersection.width() * intersection.height();
+            }
+        }
+    }
+    black_box(total_area);
+    let elapsed = start.elapsed();
+    elapsed.as_nanos() as f64 / (iterations * rect_count) as f64
+}
+
 fn main() {
     let entity_count = 20_000;
     let iterations = 100;
+    let rect_count = 20_000;
 
     let get_ns = bench_get(iterations, entity_count);
     let get_mut_ns = bench_get_mut(iterations / 2, entity_count);
     let miss_ns = bench_type_miss(iterations, entity_count);
+    let contains_ns = bench_rect_contains(iterations, rect_count);
+    let intersection_ns = bench_rect_intersection(iterations, rect_count);
 
     println!("entity_get_ns_per_op={get_ns:.2}");
     println!("entity_get_mut_ns_per_op={get_mut_ns:.2}");
     println!("entity_type_miss_ns_per_op={miss_ns:.2}");
+    println!("rect_contains_ns_per_op={contains_ns:.2}");
+    println!("rect_intersection_ns_per_op={intersection_ns:.2}");
 }

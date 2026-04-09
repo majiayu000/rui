@@ -147,24 +147,43 @@ impl Rect {
     }
 
     pub fn contains(&self, point: Point) -> bool {
-        point.x >= self.min_x()
-            && point.x <= self.max_x()
-            && point.y >= self.min_y()
-            && point.y <= self.max_y()
+        let x1 = self.origin.x;
+        let y1 = self.origin.y;
+        let x2 = x1 + self.size.width;
+        let y2 = y1 + self.size.height;
+
+        point.x >= x1 && point.x <= x2 && point.y >= y1 && point.y <= y2
     }
 
     pub fn intersects(&self, other: &Rect) -> bool {
-        self.min_x() < other.max_x()
-            && self.max_x() > other.min_x()
-            && self.min_y() < other.max_y()
-            && self.max_y() > other.min_y()
+        let ax1 = self.origin.x;
+        let ay1 = self.origin.y;
+        let ax2 = ax1 + self.size.width;
+        let ay2 = ay1 + self.size.height;
+
+        let bx1 = other.origin.x;
+        let by1 = other.origin.y;
+        let bx2 = bx1 + other.size.width;
+        let by2 = by1 + other.size.height;
+
+        ax1 < bx2 && ax2 > bx1 && ay1 < by2 && ay2 > by1
     }
 
     pub fn intersection(&self, other: &Rect) -> Option<Rect> {
-        let x1 = self.min_x().max(other.min_x());
-        let y1 = self.min_y().max(other.min_y());
-        let x2 = self.max_x().min(other.max_x());
-        let y2 = self.max_y().min(other.max_y());
+        let ax1 = self.origin.x;
+        let ay1 = self.origin.y;
+        let ax2 = ax1 + self.size.width;
+        let ay2 = ay1 + self.size.height;
+
+        let bx1 = other.origin.x;
+        let by1 = other.origin.y;
+        let bx2 = bx1 + other.size.width;
+        let by2 = by1 + other.size.height;
+
+        let x1 = ax1.max(bx1);
+        let y1 = ay1.max(by1);
+        let x2 = ax2.min(bx2);
+        let y2 = ay2.min(by2);
 
         if x1 < x2 && y1 < y2 {
             Some(Rect::from_xywh(x1, y1, x2 - x1, y2 - y1))
