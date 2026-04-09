@@ -111,30 +111,37 @@ impl Rect {
         self.origin.x
     }
 
+    #[inline]
     pub fn y(&self) -> f32 {
         self.origin.y
     }
 
+    #[inline]
     pub fn width(&self) -> f32 {
         self.size.width
     }
 
+    #[inline]
     pub fn height(&self) -> f32 {
         self.size.height
     }
 
+    #[inline]
     pub fn min_x(&self) -> f32 {
         self.origin.x
     }
 
+    #[inline]
     pub fn min_y(&self) -> f32 {
         self.origin.y
     }
 
+    #[inline]
     pub fn max_x(&self) -> f32 {
         self.origin.x + self.size.width
     }
 
+    #[inline]
     pub fn max_y(&self) -> f32 {
         self.origin.y + self.size.height
     }
@@ -146,6 +153,7 @@ impl Rect {
         )
     }
 
+    #[inline]
     pub fn contains(&self, point: Point) -> bool {
         let x1 = self.origin.x;
         let y1 = self.origin.y;
@@ -155,6 +163,7 @@ impl Rect {
         point.x >= x1 && point.x <= x2 && point.y >= y1 && point.y <= y2
     }
 
+    #[inline]
     pub fn intersects(&self, other: &Rect) -> bool {
         let ax1 = self.origin.x;
         let ay1 = self.origin.y;
@@ -169,6 +178,7 @@ impl Rect {
         ax1 < bx2 && ax2 > bx1 && ay1 < by2 && ay2 > by1
     }
 
+    #[inline]
     pub fn intersection(&self, other: &Rect) -> Option<Rect> {
         let ax1 = self.origin.x;
         let ay1 = self.origin.y;
