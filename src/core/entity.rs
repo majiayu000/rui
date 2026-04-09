@@ -35,29 +35,15 @@ impl EntityStore {
 
     /// Get a reference to an entity
     pub fn get<T: 'static>(&self, id: EntityId) -> Option<std::cell::Ref<'_, T>> {
-        self.entities.get(id).and_then(|entity| {
-            let borrowed = entity.borrow();
-            if borrowed.downcast_ref::<T>().is_some() {
-                Some(std::cell::Ref::map(borrowed, |e| {
-                    e.downcast_ref::<T>().unwrap()
-                }))
-            } else {
-                None
-            }
-        })
+        self.entities
+            .get(id)
+            .and_then(|entity| std::cell::Ref::filter_map(entity.borrow(), |e| e.downcast_ref::<T>()).ok())
     }
 
     /// Get a mutable reference to an entity
     pub fn get_mut<T: 'static>(&self, id: EntityId) -> Option<std::cell::RefMut<'_, T>> {
         self.entities.get(id).and_then(|entity| {
-            let borrowed = entity.borrow_mut();
-            if (*borrowed).downcast_ref::<T>().is_some() {
-                Some(std::cell::RefMut::map(borrowed, |e| {
-                    e.downcast_mut::<T>().unwrap()
-                }))
-            } else {
-                None
-            }
+            std::cell::RefMut::filter_map(entity.borrow_mut(), |e| e.downcast_mut::<T>()).ok()
         })
     }
 
