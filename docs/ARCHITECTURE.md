@@ -176,6 +176,31 @@ sequenceDiagram
 - `Text` - Text rendering with font styling
 - `Image` - Texture-based image rendering
 - `Shadow` - Drop shadows with blur
+- `PushClip/PopClip` - Clip stack for scissoring
+
+### 4.1 Render Scheduling
+
+Rendering is event-driven. The main loop blocks when there are no events and no dirty flags:
+
+```mermaid
+flowchart LR
+    A[OS Event] --> B[Event Dispatch]
+    B --> C[Set Dirty/Rebuild]
+    C --> D[Layout + Paint]
+    D --> E[Render]
+```
+
+`AppContext` maintains two flags:
+- `needs_rebuild`: rebuild the element tree
+- `dirty`: re-layout/repaint without rebuilding
+
+### 4.2 Resource Pipeline
+
+The renderer owns CPU-side caches for text and images:
+- Text is rasterized via `rusttype` and cached by `(content, size, weight, family)`
+- Images are decoded via `image` and cached by source key
+
+Both caches lazily upload textures to the GPU on first use.
 
 ### 5. Platform Layer
 
@@ -203,12 +228,13 @@ graph TB
 
 ```mermaid
 flowchart LR
-    A[App::run] --> B[Build Element Tree]
-    B --> C[Layout with Taffy]
-    C --> D[Generate Primitives]
-    D --> E[Build Scene]
-    E --> F[Metal Render Pass]
-    F --> G[Present to Screen]
+    A[App::run] --> B[Event Dispatch]
+    B --> C[Dirty/Rebuild Flags]
+    C --> D[Build Element Tree]
+    D --> E[Layout with Taffy]
+    E --> F[Generate Primitives]
+    F --> G[Metal Render Pass]
+    G --> H[Present to Screen]
 ```
 
 ### Event Flow
@@ -342,7 +368,7 @@ rui/
 │   │
 │   ├── renderer/           # Rendering
 │   │   ├── scene.rs        # Scene graph
-│   │   └── primitive.rs    # Render primitives
+│   │   └── primitives.rs   # Render primitives
 │   │
 │   └── platform/           # Platform-specific
 │       └── macos/          # macOS (Metal)
@@ -358,13 +384,12 @@ rui/
 
 ### GPU Rendering
 - Direct Metal rendering bypasses CPU-bound drawing
-- Batched draw calls reduce GPU state changes
-- Vertex buffer reuse minimizes allocations
+- Primitives are drawn in order for correctness
+- Future optimization: batch compatible primitives
 
 ### Layout Caching
-- Taffy caches layout calculations
-- Only dirty subtrees are recalculated
-- Incremental layout updates
+- Current implementation clears the layout tree on every rendered frame.
+- Future optimization: persistent Taffy nodes + incremental dirty propagation.
 
 ### Memory Efficiency
 - Zero-copy where possible

@@ -47,7 +47,7 @@ where
         app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
 
         // Create the renderer
-        let renderer = MetalRenderer::new().expect("Failed to create Metal renderer");
+        let mut renderer = MetalRenderer::new().expect("Failed to create Metal renderer");
 
         // Create the window with Metal layer
         let (window, metal_layer) = create_window(&options, renderer.device(), mtm);
@@ -71,10 +71,8 @@ where
         let mut focused_element: Option<crate::core::ElementId> = None;
         let mut window_visible = true;
 
-        // Render loop
-        let mut needs_rebuild = true;
+        // Render loop (event-driven)
         loop {
-            let expiration = NSDate::distantPast();
             let mask = NSEventMask::MouseMoved
                 | NSEventMask::LeftMouseDown
                 | NSEventMask::LeftMouseUp
@@ -93,10 +91,17 @@ where
                 view_bounds.size.height as f32,
             );
 
-            let window_number = window.windowNumber();
             let mut pointer_events = Vec::new();
             let mut scroll_events = Vec::new();
             let mut key_events = Vec::new();
+            let mut had_event = false;
+
+            let window_number = window.windowNumber();
+            let mut expiration = if context.dirty || context.needs_rebuild {
+                NSDate::distantPast()
+            } else {
+                NSDate::distantFuture()
+            };
 
             while let Some(event) = app.nextEventMatchingMask_untilDate_inMode_dequeue(
                 mask,
@@ -104,11 +109,14 @@ where
                 &NSDefaultRunLoopMode,
                 true,
             ) {
+                expiration = NSDate::distantPast();
+
                 let event_type = event.r#type();
                 if event.windowNumber() != window_number {
                     app.sendEvent(&event);
                     continue;
                 }
+                had_event = true;
 
                 let location: NSPoint = event.locationInWindow();
                 let position = Point::new(
@@ -173,13 +181,28 @@ where
                 app.sendEvent(&event);
             }
 
-            if needs_rebuild || !context.pending_updates.is_empty() {
-                root = build_root(&mut context);
-                context.pending_updates.clear();
-                needs_rebuild = false;
+            if had_event {
+                context.request_redraw();
             }
 
-            // Rebuild layout tree each frame to avoid unbounded growth
+            if viewport_size != last_viewport_size {
+                context.request_redraw();
+            }
+
+            if !context.dirty && !context.needs_rebuild && context.pending_updates.is_empty() {
+                if !context.is_running() {
+                    break;
+                }
+                continue;
+            }
+
+            if context.needs_rebuild || !context.pending_updates.is_empty() {
+                root = build_root(&mut context);
+                context.pending_updates.clear();
+                context.needs_rebuild = false;
+            }
+
+            // Rebuild layout tree each frame we render to avoid unbounded growth
             taffy.clear();
 
             // Layout phase
@@ -224,6 +247,7 @@ where
                 };
                 root.handle_window_event(&evt);
                 last_focused = is_focused;
+                context.request_redraw();
             }
 
             let is_visible: bool = msg_send![&*window, isVisible];
@@ -231,6 +255,7 @@ where
                 root.handle_window_event(&Event::WindowClose);
                 context.quit();
                 window_visible = false;
+                context.request_redraw();
             }
 
             let mut event_cx = EventContext::new(root_bounds, &taffy, &mut focused_element);
@@ -264,13 +289,12 @@ where
                 renderer.render(&scene, metal_drawable, viewport_size);
             }
 
+            context.dirty = false;
+
             // Check if we should quit
             if !context.is_running() {
                 break;
             }
-
-            // Small sleep to prevent spinning
-            std::thread::sleep(std::time::Duration::from_millis(16));
         }
     }
 }

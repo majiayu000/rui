@@ -3,6 +3,7 @@
 use crate::core::color::Rgba;
 use crate::core::geometry::{Bounds, Edges};
 use crate::core::style::Corners;
+use crate::{ImageFit, ImageSource};
 use crate::elements::text::TextAlign;
 use bytemuck::{Pod, Zeroable};
 
@@ -32,6 +33,8 @@ pub enum Primitive {
         start: Rgba,
         end: Rgba,
         angle: f32,
+        border_color: Rgba,
+        border_widths: Edges,
         corner_radii: Corners,
     },
 
@@ -40,6 +43,8 @@ pub enum Primitive {
         bounds: Bounds,
         inner: Rgba,
         outer: Rgba,
+        border_color: Rgba,
+        border_widths: Edges,
         corner_radii: Corners,
     },
 
@@ -58,7 +63,8 @@ pub enum Primitive {
     /// Image rendering
     Image {
         bounds: Bounds,
-        texture_id: u32,
+        source: ImageSource,
+        fit: ImageFit,
         corner_radii: Corners,
         opacity: f32,
     },
@@ -107,10 +113,16 @@ pub struct GpuQuad {
     pub border_widths: [f32; 4],
     // Corner radii (top_left, top_right, bottom_right, bottom_left)
     pub corner_radii: [f32; 4],
+    // Gradient start color (for gradients)
+    pub gradient_start: [f32; 4],
+    // Gradient end color (for gradients)
+    pub gradient_end: [f32; 4],
+    // Gradient params: x = fill_type (0 solid, 1 linear, 2 radial), y = angle (radians)
+    pub gradient_params: [f32; 4],
 }
 
 impl GpuQuad {
-    pub fn from_primitive(
+    pub fn solid(
         bounds: Bounds,
         background: Rgba,
         border_color: Rgba,
@@ -133,6 +145,70 @@ impl GpuQuad {
                 corner_radii.bottom_right,
                 corner_radii.bottom_left,
             ],
+            gradient_start: [0.0; 4],
+            gradient_end: [0.0; 4],
+            gradient_params: [0.0, 0.0, 0.0, 0.0],
+        }
+    }
+
+    pub fn linear_gradient(
+        bounds: Bounds,
+        start: Rgba,
+        end: Rgba,
+        angle_radians: f32,
+        border_color: Rgba,
+        border_widths: Edges,
+        corner_radii: Corners,
+    ) -> Self {
+        Self {
+            bounds: [bounds.x(), bounds.y(), bounds.width(), bounds.height()],
+            background: [0.0; 4],
+            border_color: border_color.to_array(),
+            border_widths: [
+                border_widths.top,
+                border_widths.right,
+                border_widths.bottom,
+                border_widths.left,
+            ],
+            corner_radii: [
+                corner_radii.top_left,
+                corner_radii.top_right,
+                corner_radii.bottom_right,
+                corner_radii.bottom_left,
+            ],
+            gradient_start: start.to_array(),
+            gradient_end: end.to_array(),
+            gradient_params: [1.0, angle_radians, 0.0, 0.0],
+        }
+    }
+
+    pub fn radial_gradient(
+        bounds: Bounds,
+        inner: Rgba,
+        outer: Rgba,
+        border_color: Rgba,
+        border_widths: Edges,
+        corner_radii: Corners,
+    ) -> Self {
+        Self {
+            bounds: [bounds.x(), bounds.y(), bounds.width(), bounds.height()],
+            background: [0.0; 4],
+            border_color: border_color.to_array(),
+            border_widths: [
+                border_widths.top,
+                border_widths.right,
+                border_widths.bottom,
+                border_widths.left,
+            ],
+            corner_radii: [
+                corner_radii.top_left,
+                corner_radii.top_right,
+                corner_radii.bottom_right,
+                corner_radii.bottom_left,
+            ],
+            gradient_start: inner.to_array(),
+            gradient_end: outer.to_array(),
+            gradient_params: [2.0, 0.0, 0.0, 0.0],
         }
     }
 }

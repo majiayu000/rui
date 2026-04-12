@@ -269,27 +269,14 @@ impl Element for Image {
             corner_radii: self.style.border.radius,
         });
 
-        // Paint image if loaded
-        if let Some(texture_id) = self.texture_id {
-            let image_size = self.intrinsic_size.unwrap_or(bounds.size);
-            let dest_bounds = self.calculate_dest_bounds(bounds, image_size);
-
-            // Push clip for rounded corners
-            if !self.style.border.radius.is_zero() {
-                cx.scene.push_layer(bounds);
-            }
-
-            cx.paint(Primitive::Image {
-                bounds: dest_bounds,
-                texture_id,
-                corner_radii: self.style.border.radius,
-                opacity: self.style.opacity,
-            });
-
-            if !self.style.border.radius.is_zero() {
-                cx.scene.pop_layer();
-            }
-        }
+        // Request image rendering; renderer will resolve the source and fit
+        cx.paint(Primitive::Image {
+            bounds,
+            source: self.source.clone(),
+            fit: self.fit,
+            corner_radii: self.style.border.radius,
+            opacity: self.style.opacity,
+        });
 
         // Show alt text on error
         if self.state == ImageState::Error {

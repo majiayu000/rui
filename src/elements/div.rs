@@ -430,6 +430,8 @@ impl Element for Div {
                     start: start.to_rgba(),
                     end: end.to_rgba(),
                     angle: *angle,
+                    border_color: self.style.border.color.to_rgba(),
+                    border_widths: self.style.border.width,
                     corner_radii: self.style.border.radius,
                 });
             }
@@ -438,6 +440,8 @@ impl Element for Div {
                     bounds,
                     inner: inner.to_rgba(),
                     outer: outer.to_rgba(),
+                    border_color: self.style.border.color.to_rgba(),
+                    border_widths: self.style.border.width,
                     corner_radii: self.style.border.radius,
                 });
             }

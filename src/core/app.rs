@@ -14,6 +14,8 @@ pub struct AppContext {
     pub(crate) windows: Vec<Window>,
     pub(crate) pending_updates: HashSet<EntityId>,
     pub(crate) running: bool,
+    pub(crate) needs_rebuild: bool,
+    pub(crate) dirty: bool,
 }
 
 impl AppContext {
@@ -23,6 +25,8 @@ impl AppContext {
             windows: Vec::new(),
             pending_updates: HashSet::new(),
             running: false,
+            needs_rebuild: true,
+            dirty: true,
         }
     }
 
@@ -45,6 +49,19 @@ impl AppContext {
     /// Mark an entity as needing re-render
     pub fn notify(&mut self, entity_id: EntityId) {
         self.pending_updates.insert(entity_id);
+        self.needs_rebuild = true;
+        self.dirty = true;
+    }
+
+    /// Request a full rebuild of the UI tree
+    pub fn request_rebuild(&mut self) {
+        self.needs_rebuild = true;
+        self.dirty = true;
+    }
+
+    /// Request a redraw without rebuilding the UI tree
+    pub fn request_redraw(&mut self) {
+        self.dirty = true;
     }
 
     /// Open a new window
