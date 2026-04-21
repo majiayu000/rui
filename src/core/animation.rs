@@ -1076,12 +1076,18 @@ mod tests {
         let mut anim = Animation::new(0.0_f32, 100.0_f32, Duration::from_millis(100))
             .easing(Easing::EaseIn);
 
-        anim.start();
-        thread::sleep(Duration::from_millis(50));
-
+        // Avoid sleep-based timing here; slower CI runners can overshoot the midpoint
+        // enough to make the assertion flaky even when easing is correct.
+        anim.state = AnimationState::Running;
+        anim.start_time = Some(Instant::now() - Duration::from_millis(50));
         let value = anim.value();
-        // EaseIn should be slower at start, so value at 50% time should be < 50
-        assert!(value < 50.0, "EaseIn should produce value < 50 at midpoint");
+        let expected_midpoint = 100.0 * Easing::EaseIn.apply(0.5);
+
+        assert!(
+            approx_eq(value, expected_midpoint, 5.0),
+            "EaseIn animation should stay near the eased midpoint value, got {}",
+            value
+        );
     }
 
     // ==================== Animatable Trait Tests ====================
