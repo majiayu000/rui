@@ -1,7 +1,9 @@
 //! Core types and abstractions
 
 pub mod color;
+pub mod color_palette;
 pub mod geometry;
+pub mod geometry_ops;
 pub mod style;
 pub mod app;
 pub mod window;
