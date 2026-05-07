@@ -23,8 +23,8 @@
 //! let hit_box = button.inflate(4.0, 4.0);
 //! let combined = hit_box.union(&tooltip);
 //!
-//! assert_eq!(hit_box.size(), Size::new(108.0, 48.0));
-//! assert_eq!(combined.origin(), Point::new(6.0, 16.0));
+//! assert_eq!(hit_box.size, Size::new(108.0, 48.0));
+//! assert_eq!(combined.origin, Point::new(6.0, 16.0));
 //! ```
 
 use super::geometry::{Bounds, Edges, Point, Rect, Size};
@@ -117,34 +117,6 @@ impl Size {
 }
 
 impl Rect {
-    /// Return the rectangle's origin point.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use rui::{Point, Rect};
-    /// let r = Rect::from_xywh(3.0, 4.0, 10.0, 20.0);
-    /// assert_eq!(r.origin(), Point::new(3.0, 4.0));
-    /// ```
-    #[inline]
-    pub fn origin(&self) -> Point {
-        self.origin
-    }
-
-    /// Return the rectangle's size.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use rui::{Rect, Size};
-    /// let r = Rect::from_xywh(0.0, 0.0, 10.0, 20.0);
-    /// assert_eq!(r.size(), Size::new(10.0, 20.0));
-    /// ```
-    #[inline]
-    pub fn size(&self) -> Size {
-        self.size
-    }
-
     /// Translate the rectangle by an `(x, y)` offset.
     ///
     /// Only the origin moves; the size is unchanged.
@@ -366,13 +338,6 @@ mod tests {
         let b = Rect::from_xywh(10.0, 10.0, 10.0, 10.0);
         // b is fully inside a — union equals a.
         assert_eq!(a.union(&b), a);
-    }
-
-    #[test]
-    fn rect_origin_size_accessors() {
-        let r = Rect::from_xywh(3.0, 4.0, 10.0, 20.0);
-        assert_eq!(r.origin(), Point::new(3.0, 4.0));
-        assert_eq!(r.size(), Size::new(10.0, 20.0));
     }
 
     #[test]
