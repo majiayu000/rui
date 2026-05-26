@@ -31,6 +31,7 @@ pub mod advanced_ui;
 pub mod elements;
 pub mod hooks;
 pub mod renderer;
+pub mod testing;
 
 pub mod platform;
 
