@@ -1,5 +1,13 @@
 //! Ergonomic UI building blocks layered on the existing element system.
 
+mod button;
+mod checkbox;
+mod progress_bar;
+mod scrollable;
+mod segmented_control;
+mod tokens;
+mod tooltip;
+
 use crate::core::color::Color;
 use crate::core::event::Cursor;
 use crate::core::geometry::{Edges, Point, Size};
@@ -11,6 +19,14 @@ use crate::elements::element::{
 use crate::elements::text::{FontWeight, TextAlign};
 use crate::elements::{div, text as raw_text, Div, Text as RawText};
 use taffy::prelude::NodeId;
+
+pub use button::{button, Button};
+pub use checkbox::{checkbox, Checkbox};
+pub use progress_bar::{progress_bar, ProgressBar};
+pub use scrollable::{scrollable, Scrollable};
+pub use segmented_control::{segmented_control, SegmentedControl, SegmentedOption};
+pub use tokens::{ControlColors, ControlSize, ControlState, ControlVariant};
+pub use tooltip::{tooltip, Tooltip};
 
 macro_rules! impl_div_wrapper_element {
     ($wrapper:ty) => {
