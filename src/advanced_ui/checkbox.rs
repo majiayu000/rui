@@ -2,6 +2,9 @@ use crate::advanced_ui::tokens::{
     control_border_color, control_colors, text_color, ControlSize, ControlState, ControlVariant,
     CONTROL_GAP, CONTROL_RADIUS,
 };
+use crate::core::accessibility::{
+    AccessibilityContext, AccessibilityError, AccessibilityNode, AccessibilityRole,
+};
 use crate::core::event::Cursor;
 use crate::core::geometry::{Bounds, Edges};
 use crate::core::style::{Corners, Style};
@@ -160,6 +163,20 @@ impl Element for Checkbox {
         });
     }
 
+    fn accessibility(
+        &self,
+        cx: &AccessibilityContext,
+    ) -> Result<Option<AccessibilityNode>, AccessibilityError> {
+        let value = if self.checked { "checked" } else { "unchecked" };
+        let node =
+            AccessibilityNode::label_required(self.id, AccessibilityRole::Checkbox, &self.label)?
+                .value_required(value)?
+                .with_checked(self.checked)
+                .with_enabled(!self.state.disabled)
+                .with_focused(cx.a11y_has_focus(self.id));
+        Ok(Some(node))
+    }
+
     fn handle_pointer_event(&mut self, cx: &mut EventContext, event: &PointerEvent) -> bool {
         if self.state.disabled {
             self.state.hovered = false;
@@ -196,6 +213,12 @@ impl Element for Checkbox {
                     if let Some(handler) = &self.on_change {
                         handler(self.checked);
                     }
+                    let message = if self.checked {
+                        format!("{} checked", self.label)
+                    } else {
+                        format!("{} unchecked", self.label)
+                    };
+                    cx.announce_accessibility_action(self.id, message);
                     cx.request_redraw();
                     true
                 } else {

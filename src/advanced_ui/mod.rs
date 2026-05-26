@@ -8,6 +8,9 @@ mod segmented_control;
 mod tokens;
 mod tooltip;
 
+use crate::core::accessibility::{
+    AccessibilityContext, AccessibilityError, AccessibilityNode, AccessibilityRole,
+};
 use crate::core::color::Color;
 use crate::core::event::Cursor;
 use crate::core::geometry::{Edges, Point, Size};
@@ -334,17 +337,24 @@ impl_div_wrapper_element!(Flex);
 /// Thin text wrapper for the advanced UI layer.
 pub struct Text {
     inner: RawText,
+    id: ElementId,
+    content: String,
 }
 
 impl Text {
     pub fn new(content: impl Into<String>) -> Self {
+        let content = content.into();
+        let id = ElementId::new();
         Self {
-            inner: raw_text(content),
+            inner: raw_text(content.clone()).id(id),
+            id,
+            content,
         }
     }
 
     pub fn id(mut self, id: ElementId) -> Self {
         self.inner = self.inner.id(id);
+        self.id = id;
         self
     }
 
@@ -410,7 +420,7 @@ impl Text {
 
 impl Element for Text {
     fn id(&self) -> Option<ElementId> {
-        Element::id(&self.inner)
+        Some(self.id)
     }
 
     fn style(&self) -> &Style {
@@ -423,6 +433,20 @@ impl Element for Text {
 
     fn paint(&mut self, cx: &mut PaintContext) {
         self.inner.paint(cx);
+    }
+
+    fn accessibility(
+        &self,
+        cx: &AccessibilityContext,
+    ) -> Result<Option<AccessibilityNode>, AccessibilityError> {
+        if self.content.trim().is_empty() {
+            return Ok(None);
+        }
+
+        let node = AccessibilityNode::new(self.id, AccessibilityRole::Text)
+            .with_label(self.content.clone())
+            .with_focused(cx.a11y_has_focus(self.id));
+        Ok(Some(node))
     }
 }
 
