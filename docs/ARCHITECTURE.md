@@ -370,8 +370,9 @@ rui/
 │   │   ├── scene.rs        # Scene graph
 │   │   └── primitives.rs   # Render primitives
 │   │
-│   └── platform/           # Platform-specific
-│       └── macos/          # macOS (Metal)
+│   └── platform/           # Platform-specific runtime boundary
+│       ├── window.rs       # Shared window backend contract
+│       └── mac/            # macOS (Metal)
 │
 └── examples/               # Example apps
     ├── hello_world.rs
@@ -399,6 +400,7 @@ rui/
 ## Future Directions
 
 1. **Cross-Platform Support**
+   - Implement the shared platform window contract before claiming support
    - Vulkan renderer for Windows/Linux
    - WebGPU for browser support
 

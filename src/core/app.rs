@@ -170,7 +170,7 @@ impl App {
 
         #[cfg(not(target_os = "macos"))]
         {
-            log::error!("Platform not supported");
+            panic!("{}", unsupported_platform_error());
         }
     }
 
@@ -201,7 +201,7 @@ impl App {
 
         #[cfg(not(target_os = "macos"))]
         {
-            log::error!("Platform not supported");
+            panic!("{}", unsupported_platform_error());
         }
     }
 
@@ -233,9 +233,17 @@ impl App {
 
         #[cfg(not(target_os = "macos"))]
         {
-            log::error!("Platform not supported");
+            panic!("{}", unsupported_platform_error());
         }
     }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn unsupported_platform_error() -> crate::platform::window::PlatformWindowError {
+    crate::platform::window::PlatformWindowError::unsupported(
+        std::env::consts::OS,
+        crate::platform::window::PlatformWindowFeature::Lifecycle,
+    )
 }
 
 impl Default for App {
@@ -247,7 +255,7 @@ impl Default for App {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::elements::{text, Text};
+    use crate::elements::{Text, text};
     use std::cell::Cell;
     use std::rc::Rc;
 

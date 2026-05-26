@@ -32,7 +32,6 @@ pub mod elements;
 pub mod hooks;
 pub mod renderer;
 
-#[cfg(target_os = "macos")]
 pub mod platform;
 
 pub mod prelude;
