@@ -11,6 +11,7 @@ pub mod entity;
 pub mod view;
 pub mod event;
 pub mod animation;
+pub mod action;
 pub mod text_editing;
 
 pub use app::{App, AppContext};
