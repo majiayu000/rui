@@ -1,6 +1,7 @@
 //! Renderer runtime traits and test utilities.
 
 use crate::core::geometry::Size;
+use crate::renderer::resources::{RendererDiagnostics, RendererResourceError};
 use crate::renderer::{Primitive, Scene};
 use std::error::Error;
 use std::fmt;
@@ -10,6 +11,7 @@ use std::fmt;
 pub enum RendererError {
     BackendUnavailable(String),
     RenderFailed(String),
+    Resource(RendererResourceError),
 }
 
 impl RendererError {
@@ -29,11 +31,18 @@ impl fmt::Display for RendererError {
                 write!(f, "renderer backend unavailable: {}", message)
             }
             Self::RenderFailed(message) => write!(f, "renderer failed: {}", message),
+            Self::Resource(err) => write!(f, "{err}"),
         }
     }
 }
 
 impl Error for RendererError {}
+
+impl From<RendererResourceError> for RendererError {
+    fn from(value: RendererResourceError) -> Self {
+        Self::Resource(value)
+    }
+}
 
 /// Backend-independent rendering contract.
 pub trait Renderer {
@@ -45,6 +54,10 @@ pub trait Renderer {
         target: &Self::Target,
         viewport_size: Size,
     ) -> Result<(), RendererError>;
+
+    fn diagnostics(&self) -> RendererDiagnostics {
+        RendererDiagnostics::headless("renderer")
+    }
 }
 
 /// Captured frame from `RecordingRenderer`.
@@ -93,6 +106,10 @@ impl Renderer for RecordingRenderer {
             primitives: scene.primitives().to_vec(),
         });
         Ok(())
+    }
+
+    fn diagnostics(&self) -> RendererDiagnostics {
+        RendererDiagnostics::headless("recording")
     }
 }
 
