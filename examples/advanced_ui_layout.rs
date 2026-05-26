@@ -14,7 +14,7 @@ fn main() {
     });
 }
 
-fn dashboard() -> impl Element {
+pub fn dashboard() -> impl Element {
     ui::container()
         .w(920.0)
         .h(620.0)

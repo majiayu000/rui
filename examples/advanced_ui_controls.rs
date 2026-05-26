@@ -14,7 +14,7 @@ fn main() {
     });
 }
 
-fn controls_panel() -> impl Element {
+pub fn controls_panel() -> impl Element {
     ui::container()
         .w(760.0)
         .h(520.0)
