@@ -27,11 +27,12 @@
 //! ```
 
 pub mod core;
+pub mod advanced_ui;
 pub mod elements;
 pub mod hooks;
 pub mod renderer;
+pub mod testing;
 
-#[cfg(target_os = "macos")]
 pub mod platform;
 
 pub mod prelude;

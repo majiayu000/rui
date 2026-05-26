@@ -42,6 +42,7 @@ log = "0.4"
 env_logger = "0.11"
 image = "0.25"
 rusttype = "0.9"
+unicode-segmentation = "1.12"
 
 [dev-dependencies]
 pollster = "0.4"
@@ -70,3 +71,8 @@ path = "examples/animation_demo.rs"
 [[example]]
 name = "glm_chat"
 path = "examples/glm_chat.rs"
+
+[[bench]]
+name = "runtime_baselines"
+path = "benches/runtime_baselines.rs"
+harness = false

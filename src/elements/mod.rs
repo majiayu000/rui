@@ -12,7 +12,7 @@ mod list;
 mod progress;
 mod spinner;
 
-pub use element::{Element, IntoElement, AnyElement, Render};
+pub use element::{AnyElement, Element, EventResult, IntoElement, Render};
 pub use div::{Div, div};
 pub use text::{Text, text};
 pub use button::{Button, button, ButtonVariant, ButtonSize};

@@ -11,13 +11,16 @@ pub mod entity;
 pub mod view;
 pub mod event;
 pub mod animation;
+pub mod action;
+pub mod accessibility;
+pub mod text_editing;
 
 pub use app::{App, AppContext};
 pub use color::{Color, Hsla, Rgba};
 pub use entity::EntityId;
 pub use geometry::{Bounds, Edges, Point, Rect, Size};
 pub use style::{Background, BorderStyle, Corners, Style};
-pub use view::{View, ViewContext};
+pub use view::{View, ViewContext, ViewNotifier};
 pub use window::{Window, WindowOptions};
 
 use std::sync::atomic::{AtomicU64, Ordering};

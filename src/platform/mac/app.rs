@@ -1,23 +1,23 @@
 //! macOS application runner
 
 use crate::core::app::AppContext;
-use crate::core::geometry::Bounds;
-use crate::core::window::WindowOptions;
 use crate::core::event::{Event, KeyCode, KeyEvent, Modifiers, MouseButton, ScrollEvent};
-use crate::core::geometry::{Point, Size};
+use crate::core::geometry::Bounds;
+use crate::core::geometry::Point;
+use crate::core::window::WindowOptions;
 use crate::elements::element::{
     Element, EventContext, LayoutContext, PaintContext, PointerEvent, PointerEventKind,
 };
 use crate::platform::mac::window::create_window;
-use crate::renderer::metal::MetalRenderer;
+use crate::renderer::RendererError;
 use crate::renderer::Scene;
-use objc2::msg_send;
+use crate::renderer::metal::MetalRenderer;
 use objc2::MainThreadMarker;
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSEvent, NSEventMask, NSEventModifierFlags,
     NSEventType,
 };
-use objc2_foundation::{NSDate, NSDefaultRunLoopMode, NSPoint, NSRect};
+use objc2_foundation::{NSDate, NSDefaultRunLoopMode, NSPoint};
 use taffy::prelude::*;
 
 /// Run the application with default window options
@@ -30,8 +30,20 @@ where
 }
 
 /// Run the application with custom window options
-pub fn run_app_with_options<F, E>(context: AppContext, mut build_root: F, options: WindowOptions)
+pub fn run_app_with_options<F, E>(context: AppContext, build_root: F, options: WindowOptions)
 where
+    F: FnMut(&mut AppContext) -> E + 'static,
+    E: Element + 'static,
+{
+    run_app_with_renderer_factory(context, build_root, options, MetalRenderer::new);
+}
+
+pub(crate) fn run_app_with_renderer_factory<F, E>(
+    context: AppContext,
+    mut build_root: F,
+    options: WindowOptions,
+    create_renderer: impl FnOnce() -> Result<MetalRenderer, RendererError>,
+) where
     F: FnMut(&mut AppContext) -> E + 'static,
     E: Element + 'static,
 {
@@ -47,13 +59,19 @@ where
         app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
 
         // Create the renderer
-        let mut renderer = MetalRenderer::new().expect("Failed to create Metal renderer");
+        let mut renderer = match create_renderer() {
+            Ok(renderer) => renderer,
+            Err(err) => panic!("failed to create renderer: {}", err),
+        };
 
         // Create the window with Metal layer
-        let (window, metal_layer) = create_window(&options, renderer.device(), mtm);
+        let window = match create_window(&options, renderer.device(), mtm) {
+            Ok(window) => window,
+            Err(err) => panic!("failed to create platform window: {}", err),
+        };
 
         // Make key and order front
-        let _: () = msg_send![&*window, makeKeyAndOrderFront: std::ptr::null::<objc2::runtime::AnyObject>()];
+        window.make_key_and_order_front();
 
         // Activate the application
         app.activate();
@@ -69,6 +87,8 @@ where
         let mut last_viewport_size = viewport_size;
         let mut last_focused = false;
         let mut focused_element: Option<crate::core::ElementId> = None;
+        let mut last_pointer_hit_target: Option<crate::core::ElementId> = None;
+        let mut pointer_capture_target: Option<crate::core::ElementId> = None;
         let mut window_visible = true;
 
         // Render loop (event-driven)
@@ -84,19 +104,17 @@ where
                 | NSEventMask::KeyDown
                 | NSEventMask::KeyUp;
 
-            let content_view = window.contentView().expect("No content view");
-            let view_bounds: NSRect = msg_send![&*content_view, bounds];
-            viewport_size = Size::new(
-                view_bounds.size.width as f32,
-                view_bounds.size.height as f32,
-            );
+            viewport_size = match window.content_size() {
+                Ok(size) => size,
+                Err(err) => panic!("failed to read platform window size: {}", err),
+            };
 
             let mut pointer_events = Vec::new();
             let mut scroll_events = Vec::new();
             let mut key_events = Vec::new();
             let mut had_event = false;
 
-            let window_number = window.windowNumber();
+            let window_number = window.window_number();
             let mut expiration = if context.dirty || context.needs_rebuild {
                 NSDate::distantPast()
             } else {
@@ -106,7 +124,7 @@ where
             while let Some(event) = app.nextEventMatchingMask_untilDate_inMode_dequeue(
                 mask,
                 Some(&expiration),
-                &NSDefaultRunLoopMode,
+                NSDefaultRunLoopMode,
                 true,
             ) {
                 expiration = NSDate::distantPast();
@@ -121,7 +139,7 @@ where
                 let location: NSPoint = event.locationInWindow();
                 let position = Point::new(
                     location.x as f32,
-                    (view_bounds.size.height - location.y) as f32,
+                    (viewport_size.height as f64 - location.y) as f32,
                 );
 
                 if event_type == NSEventType::LeftMouseDown {
@@ -189,6 +207,8 @@ where
                 context.request_redraw();
             }
 
+            context.consume_runtime_view_notification();
+
             if !context.dirty && !context.needs_rebuild && context.pending_updates.is_empty() {
                 if !context.is_running() {
                     break;
@@ -197,9 +217,12 @@ where
             }
 
             if context.needs_rebuild || !context.pending_updates.is_empty() {
-                root = build_root(&mut context);
                 context.pending_updates.clear();
                 context.needs_rebuild = false;
+                root = build_root(&mut context);
+                if !context.pending_updates.is_empty() {
+                    context.needs_rebuild = true;
+                }
             }
 
             // Rebuild layout tree each frame we render to avoid unbounded growth
@@ -237,7 +260,7 @@ where
                 last_viewport_size = viewport_size;
             }
 
-            let is_focused: bool = msg_send![&*window, isKeyWindow];
+            let is_focused = window.is_focused();
             if is_focused != last_focused {
                 let evt = if is_focused {
                     Event::Focus(crate::core::event::FocusEvent { focused: true })
@@ -250,7 +273,7 @@ where
                 context.request_redraw();
             }
 
-            let is_visible: bool = msg_send![&*window, isVisible];
+            let is_visible = window.is_visible();
             if window_visible && !is_visible {
                 root.handle_window_event(&Event::WindowClose);
                 context.quit();
@@ -261,7 +284,35 @@ where
             let mut event_cx = EventContext::new(root_bounds, &taffy, &mut focused_element);
 
             for event in &pointer_events {
-                root.handle_pointer_event(&mut event_cx, event);
+                let hit_target = scene.hit_test(event.position);
+                let dispatch_target = pointer_capture_target.or(hit_target);
+                let previous_target = if matches!(event.kind, PointerEventKind::Move) {
+                    last_pointer_hit_target
+                } else {
+                    None
+                };
+
+                event_cx.set_hit_target(dispatch_target);
+                event_cx.set_previous_hit_target(previous_target);
+
+                let result = root.dispatch_pointer_event(&mut event_cx, event);
+
+                match event.kind {
+                    PointerEventKind::Down if result.is_stopped() => {
+                        pointer_capture_target = dispatch_target;
+                    }
+                    PointerEventKind::Up => {
+                        pointer_capture_target = None;
+                    }
+                    PointerEventKind::Move => {
+                        last_pointer_hit_target = hit_target;
+                    }
+                    PointerEventKind::Down => {}
+                }
+            }
+
+            if event_cx.redraw_requested() {
+                context.request_redraw();
             }
 
             for event in &scroll_events {
@@ -273,23 +324,26 @@ where
                 root.handle_key_event(&mut event_cx, event);
             }
 
+            if context.consume_runtime_view_notification() {
+                context.request_redraw();
+            }
+
             // Paint phase
             scene.clear();
             let mut paint_cx = PaintContext::new(&mut scene, root_bounds, &taffy);
             root.paint(&mut paint_cx);
             scene.finish();
 
-            // Get next drawable from Metal layer
-            let layer_ptr = objc2::rc::Retained::as_ptr(&metal_layer) as *mut objc2::runtime::AnyObject;
-            let drawable: *mut objc2::runtime::AnyObject = msg_send![layer_ptr, nextDrawable];
-
-            if !drawable.is_null() {
-                // Render the scene - cast to metal crate's type
-                let metal_drawable = std::mem::transmute::<*mut objc2::runtime::AnyObject, &metal::MetalDrawableRef>(drawable);
-                renderer.render(&scene, metal_drawable, viewport_size);
+            // Get next drawable from the platform window renderer attachment
+            if let Some(metal_drawable) = window.next_drawable()
+                && let Err(err) = renderer.render(&scene, metal_drawable, viewport_size)
+            {
+                panic!("renderer failed: {}", err);
             }
 
-            context.dirty = false;
+            if !context.needs_rebuild && context.pending_updates.is_empty() {
+                context.dirty = false;
+            }
 
             // Check if we should quit
             if !context.is_running() {
@@ -314,18 +368,17 @@ fn key_event_from_event(event: &NSEvent) -> KeyEvent {
     let mut key_event = KeyEvent::new(KeyCode::Unknown(event.keyCode() as u32), modifiers);
     key_event.is_repeat = event.isARepeat();
 
-    if let Some(chars) = event.charactersIgnoringModifiers() {
-        if let Some(ch) = chars.to_string().chars().next() {
-            key_event.key = keycode_from_char(ch);
-        }
+    if let Some(chars) = event.charactersIgnoringModifiers()
+        && let Some(ch) = chars.to_string().chars().next()
+    {
+        key_event.key = keycode_from_char(ch);
     }
 
-    if let Some(chars) = event.characters() {
-        if let Some(ch) = chars.to_string().chars().next() {
-            if !ch.is_control() {
-                key_event.char = Some(ch);
-            }
-        }
+    if let Some(chars) = event.characters()
+        && let Some(ch) = chars.to_string().chars().next()
+        && !ch.is_control()
+    {
+        key_event.char = Some(ch);
     }
 
     key_event

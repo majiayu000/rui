@@ -196,11 +196,14 @@ flowchart LR
 
 ### 4.2 Resource Pipeline
 
-The renderer owns CPU-side caches for text and images:
-- Text is rasterized via `rusttype` and cached by `(content, size, weight, family)`
-- Images are decoded via `image` and cached by source key
+The renderer owns explicit resource caches for text, images, and GPU textures:
+- Text is rasterized via `rusttype` and tracked as glyph resources by `(content, size, weight, family)`
+- Images are decoded via `image`, tracked by source key, and fail explicitly on invalid data
+- Texture uploads are tracked as renderer-owned resources with observable pressure and disposal counters
 
-Both caches lazily upload textures to the GPU on first use.
+Caches lazily upload textures to the GPU on first use. Resource pressure must
+evict only inactive entries; active visible content returns a renderer error
+instead of being silently dropped.
 
 ### 5. Platform Layer
 
@@ -370,8 +373,9 @@ rui/
 │   │   ├── scene.rs        # Scene graph
 │   │   └── primitives.rs   # Render primitives
 │   │
-│   └── platform/           # Platform-specific
-│       └── macos/          # macOS (Metal)
+│   └── platform/           # Platform-specific runtime boundary
+│       ├── window.rs       # Shared window backend contract
+│       └── mac/            # macOS (Metal)
 │
 └── examples/               # Example apps
     ├── hello_world.rs
@@ -399,6 +403,7 @@ rui/
 ## Future Directions
 
 1. **Cross-Platform Support**
+   - Implement the shared platform window contract before claiming support
    - Vulkan renderer for Windows/Linux
    - WebGPU for browser support
 
