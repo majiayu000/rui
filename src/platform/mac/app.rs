@@ -69,6 +69,8 @@ where
         let mut last_viewport_size = viewport_size;
         let mut last_focused = false;
         let mut focused_element: Option<crate::core::ElementId> = None;
+        let mut last_pointer_hit_target: Option<crate::core::ElementId> = None;
+        let mut pointer_capture_target: Option<crate::core::ElementId> = None;
         let mut window_visible = true;
 
         // Render loop (event-driven)
@@ -261,7 +263,35 @@ where
             let mut event_cx = EventContext::new(root_bounds, &taffy, &mut focused_element);
 
             for event in &pointer_events {
-                root.handle_pointer_event(&mut event_cx, event);
+                let hit_target = scene.hit_test(event.position);
+                let dispatch_target = pointer_capture_target.or(hit_target);
+                let previous_target = if matches!(event.kind, PointerEventKind::Move) {
+                    last_pointer_hit_target
+                } else {
+                    None
+                };
+
+                event_cx.set_hit_target(dispatch_target);
+                event_cx.set_previous_hit_target(previous_target);
+
+                let result = root.dispatch_pointer_event(&mut event_cx, event);
+
+                match event.kind {
+                    PointerEventKind::Down if result.is_stopped() => {
+                        pointer_capture_target = dispatch_target;
+                    }
+                    PointerEventKind::Up => {
+                        pointer_capture_target = None;
+                    }
+                    PointerEventKind::Move => {
+                        last_pointer_hit_target = hit_target;
+                    }
+                    PointerEventKind::Down => {}
+                }
+            }
+
+            if event_cx.redraw_requested() {
+                context.request_redraw();
             }
 
             for event in &scroll_events {

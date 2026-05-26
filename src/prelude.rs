@@ -12,7 +12,7 @@ pub use crate::core::{
 pub use crate::elements::{
     div, text, button, input, scroll_view, image, image_url,
     Div, Text, Button, Input, ScrollView, Image,
-    Element, IntoElement, Render,
+    Element, EventResult, IntoElement, Render,
     ButtonVariant, ButtonSize, InputType, ScrollDirection, ImageFit,
 };
 

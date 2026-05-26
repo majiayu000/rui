@@ -1,10 +1,12 @@
 //! Core Element trait and related types
 
-use crate::core::event::{KeyEvent, MouseButton, ScrollEvent};
+use crate::core::event::{Cursor, KeyEvent, MouseButton, ScrollEvent};
 use crate::core::geometry::{Bounds, Point, Size};
 use crate::core::style::Style;
 use crate::core::ElementId;
 use crate::renderer::{Primitive, Scene};
+use std::cell::Cell;
+use std::rc::Rc;
 use taffy::prelude::*;
 
 /// Layout context passed during layout phase
@@ -54,6 +56,10 @@ impl<'a> PaintContext<'a> {
         ))
     }
 
+    pub fn register_hit_region(&mut self, id: ElementId, bounds: Bounds) -> bool {
+        self.scene.register_hit_region(id, bounds)
+    }
+
     /// Create a child paint context with new bounds
     pub fn with_bounds(&mut self, bounds: Bounds) -> PaintContext<'_> {
         PaintContext {
@@ -78,10 +84,35 @@ pub struct PointerEvent {
     pub button: Option<MouseButton>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum EventResult {
+    #[default]
+    Propagate,
+    Stop,
+}
+
+impl EventResult {
+    pub fn from_handled(handled: bool) -> Self {
+        if handled {
+            Self::Stop
+        } else {
+            Self::Propagate
+        }
+    }
+
+    pub fn is_stopped(self) -> bool {
+        matches!(self, Self::Stop)
+    }
+}
+
 pub struct EventContext<'a> {
     pub(crate) bounds: Bounds,
     pub(crate) taffy: &'a TaffyTree<ElementId>,
     pub(crate) focused: &'a mut Option<ElementId>,
+    hit_target: Option<ElementId>,
+    previous_hit_target: Option<ElementId>,
+    cursor: Rc<Cell<Option<Cursor>>>,
+    redraw_requested: Rc<Cell<bool>>,
 }
 
 impl<'a> EventContext<'a> {
@@ -94,6 +125,10 @@ impl<'a> EventContext<'a> {
             bounds,
             taffy,
             focused,
+            hit_target: None,
+            previous_hit_target: None,
+            cursor: Rc::new(Cell::new(None)),
+            redraw_requested: Rc::new(Cell::new(false)),
         }
     }
 
@@ -117,6 +152,42 @@ impl<'a> EventContext<'a> {
         *self.focused = None;
     }
 
+    pub fn hit_target(&self) -> Option<ElementId> {
+        self.hit_target
+    }
+
+    pub fn set_hit_target(&mut self, id: Option<ElementId>) {
+        self.hit_target = id;
+    }
+
+    pub fn previous_hit_target(&self) -> Option<ElementId> {
+        self.previous_hit_target
+    }
+
+    pub fn set_previous_hit_target(&mut self, id: Option<ElementId>) {
+        self.previous_hit_target = id;
+    }
+
+    pub fn has_hit_filter(&self) -> bool {
+        self.hit_target.is_some() || self.previous_hit_target.is_some()
+    }
+
+    pub fn request_redraw(&self) {
+        self.redraw_requested.set(true);
+    }
+
+    pub fn redraw_requested(&self) -> bool {
+        self.redraw_requested.get()
+    }
+
+    pub fn set_cursor(&self, cursor: Cursor) {
+        self.cursor.set(Some(cursor));
+    }
+
+    pub fn cursor(&self) -> Option<Cursor> {
+        self.cursor.get()
+    }
+
     pub fn child_bounds(&self, node: NodeId) -> Option<Bounds> {
         let layout = self.taffy.layout(node).ok()?;
         Some(Bounds::from_xywh(
@@ -132,6 +203,10 @@ impl<'a> EventContext<'a> {
             bounds,
             taffy: self.taffy,
             focused: self.focused,
+            hit_target: self.hit_target,
+            previous_hit_target: self.previous_hit_target,
+            cursor: Rc::clone(&self.cursor),
+            redraw_requested: Rc::clone(&self.redraw_requested),
         }
     }
 }
@@ -157,6 +232,14 @@ pub trait Element: 'static {
         false
     }
 
+    fn dispatch_pointer_event(
+        &mut self,
+        cx: &mut EventContext,
+        event: &PointerEvent,
+    ) -> EventResult {
+        EventResult::from_handled(self.handle_pointer_event(cx, event))
+    }
+
     /// Handle scroll wheel events
     fn handle_scroll_event(&mut self, _cx: &mut EventContext, _event: &ScrollEvent) -> bool {
         false
@@ -175,6 +258,10 @@ pub trait Element: 'static {
     /// Get child elements
     fn children(&self) -> &[AnyElement] {
         &[]
+    }
+
+    fn contains_id(&self, id: ElementId) -> bool {
+        self.id() == Some(id) || self.children().iter().any(|child| child.contains_id(id))
     }
 }
 
@@ -203,7 +290,20 @@ impl AnyElement {
     }
 
     pub fn handle_pointer_event(&mut self, cx: &mut EventContext, event: &PointerEvent) -> bool {
-        self.inner.handle_pointer_event(cx, event)
+        let matches_current = cx
+            .hit_target()
+            .map(|target| self.contains_id(target))
+            .unwrap_or(false);
+        let matches_previous = cx
+            .previous_hit_target()
+            .map(|target| self.contains_id(target))
+            .unwrap_or(false);
+
+        if cx.has_hit_filter() && !matches_current && !matches_previous {
+            return false;
+        }
+
+        self.inner.dispatch_pointer_event(cx, event).is_stopped()
     }
 
     pub fn handle_scroll_event(&mut self, cx: &mut EventContext, event: &ScrollEvent) -> bool {
@@ -220,6 +320,10 @@ impl AnyElement {
 
     pub fn id(&self) -> Option<ElementId> {
         self.inner.id()
+    }
+
+    pub fn contains_id(&self, id: ElementId) -> bool {
+        self.inner.contains_id(id)
     }
 }
 

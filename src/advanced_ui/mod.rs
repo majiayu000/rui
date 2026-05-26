@@ -1,14 +1,15 @@
 //! Ergonomic UI building blocks layered on the existing element system.
 
-use crate::core::ElementId;
 use crate::core::color::Color;
-use crate::core::geometry::{Edges, Size};
+use crate::core::event::Cursor;
+use crate::core::geometry::{Edges, Point, Size};
 use crate::core::style::{Shadow, Style};
+use crate::core::ElementId;
 use crate::elements::element::{
     AnyElement, Element, EventContext, LayoutContext, PaintContext, PointerEvent,
 };
 use crate::elements::text::{FontWeight, TextAlign};
-use crate::elements::{Div, Text as RawText, div, text as raw_text};
+use crate::elements::{div, text as raw_text, Div, Text as RawText};
 use taffy::prelude::NodeId;
 
 macro_rules! impl_div_wrapper_element {
@@ -409,6 +410,136 @@ impl Element for Text {
     }
 }
 
+/// Pointer hover wrapper with enter, move, leave, and cursor intent.
+pub struct Hoverable {
+    id: ElementId,
+    inner: AnyElement,
+    hovered: bool,
+    cursor: Option<Cursor>,
+    on_enter: Option<Box<dyn Fn()>>,
+    on_move: Option<Box<dyn Fn(Point)>>,
+    on_leave: Option<Box<dyn Fn()>>,
+}
+
+impl Hoverable {
+    pub fn new(child: impl Into<AnyElement>) -> Self {
+        Self {
+            id: ElementId::new(),
+            inner: child.into(),
+            hovered: false,
+            cursor: None,
+            on_enter: None,
+            on_move: None,
+            on_leave: None,
+        }
+    }
+
+    pub fn id(mut self, id: ElementId) -> Self {
+        self.id = id;
+        self
+    }
+
+    pub fn cursor(mut self, cursor: Cursor) -> Self {
+        self.cursor = Some(cursor);
+        self
+    }
+
+    pub fn on_enter(mut self, handler: impl Fn() + 'static) -> Self {
+        self.on_enter = Some(Box::new(handler));
+        self
+    }
+
+    pub fn on_move(mut self, handler: impl Fn(Point) + 'static) -> Self {
+        self.on_move = Some(Box::new(handler));
+        self
+    }
+
+    pub fn on_leave(mut self, handler: impl Fn() + 'static) -> Self {
+        self.on_leave = Some(Box::new(handler));
+        self
+    }
+}
+
+impl Element for Hoverable {
+    fn id(&self) -> Option<ElementId> {
+        Some(self.id)
+    }
+
+    fn style(&self) -> &Style {
+        self.inner.style()
+    }
+
+    fn layout(&mut self, cx: &mut LayoutContext) -> NodeId {
+        self.inner.layout(cx)
+    }
+
+    fn paint(&mut self, cx: &mut PaintContext) {
+        cx.register_hit_region(self.id, cx.bounds());
+        self.inner.paint(cx);
+    }
+
+    fn handle_pointer_event(&mut self, cx: &mut EventContext, event: &PointerEvent) -> bool {
+        let inside = cx.bounds().contains(event.position);
+
+        if matches!(event.kind, crate::elements::element::PointerEventKind::Move) {
+            if inside {
+                if let Some(cursor) = self.cursor {
+                    cx.set_cursor(cursor);
+                }
+                if !self.hovered {
+                    self.hovered = true;
+                    if let Some(handler) = &self.on_enter {
+                        handler();
+                    }
+                    cx.request_redraw();
+                }
+                if let Some(handler) = &self.on_move {
+                    handler(event.position);
+                }
+            } else if self.hovered {
+                self.hovered = false;
+                if let Some(handler) = &self.on_leave {
+                    handler();
+                }
+                cx.request_redraw();
+            }
+        }
+
+        let hit_target = cx.hit_target();
+        let previous_hit_target = cx.previous_hit_target();
+        cx.set_hit_target(None);
+        cx.set_previous_hit_target(None);
+        let handled = self.inner.handle_pointer_event(cx, event);
+        cx.set_hit_target(hit_target);
+        cx.set_previous_hit_target(previous_hit_target);
+        handled
+    }
+
+    fn handle_scroll_event(
+        &mut self,
+        cx: &mut EventContext,
+        event: &crate::core::event::ScrollEvent,
+    ) -> bool {
+        self.inner.handle_scroll_event(cx, event)
+    }
+
+    fn handle_key_event(
+        &mut self,
+        cx: &mut EventContext,
+        event: &crate::core::event::KeyEvent,
+    ) -> bool {
+        self.inner.handle_key_event(cx, event)
+    }
+
+    fn handle_window_event(&mut self, event: &crate::core::event::Event) -> bool {
+        self.inner.handle_window_event(event)
+    }
+
+    fn contains_id(&self, id: ElementId) -> bool {
+        self.id == id || self.inner.contains_id(id)
+    }
+}
+
 pub fn container() -> Container {
     Container::new()
 }
@@ -423,4 +554,8 @@ pub fn column() -> Flex {
 
 pub fn text(content: impl Into<String>) -> Text {
     Text::new(content)
+}
+
+pub fn hoverable(child: impl Into<AnyElement>) -> Hoverable {
+    Hoverable::new(child)
 }
