@@ -1,7 +1,11 @@
 //! Shared text measurement and rasterization.
 
 use crate::core::geometry::{Bounds, Size};
-use rusttype::{point, Font, Scale};
+use crate::renderer::resources::{
+    GlyphResourceKey, RendererResourceCache, RendererResourceError, RendererResourceKind,
+    RendererResourceStats,
+};
+use rusttype::{Font, Scale, point};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -11,6 +15,13 @@ pub const TEXT_BOUNDS_TOLERANCE: f32 = 1.0;
 pub enum TextError {
     MissingFont,
     UnsupportedFontFamily(String),
+    Resource(RendererResourceError),
+}
+
+impl From<RendererResourceError> for TextError {
+    fn from(value: RendererResourceError) -> Self {
+        Self::Resource(value)
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -82,24 +93,6 @@ impl TextMeasureKey {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct TextRasterKey {
-    content: String,
-    size_bits: u32,
-    line_height_bits: u32,
-}
-
-impl TextRasterKey {
-    fn from_request(request: TextRequest<'_>) -> Result<Self, TextError> {
-        resolve_font_family(request.font_family)?;
-        Ok(Self {
-            content: request.content.to_string(),
-            size_bits: request.font_size.to_bits(),
-            line_height_bits: request.line_height.to_bits(),
-        })
-    }
-}
-
 pub struct TextMeasureCache {
     font: Option<Font<'static>>,
     metrics: HashMap<TextMeasureKey, TextMetrics>,
@@ -149,17 +142,45 @@ impl Default for TextMeasureCache {
 
 pub struct TextRasterCache {
     measurer: TextMeasureCache,
-    next_id: u32,
-    entries: HashMap<TextRasterKey, Arc<TextRasterEntry>>,
+    resources: RendererResourceCache<GlyphResourceKey>,
+    entries: HashMap<GlyphResourceKey, Arc<TextRasterEntry>>,
 }
 
 impl TextRasterCache {
     pub fn new() -> Self {
         Self {
             measurer: TextMeasureCache::new(),
-            next_id: 1,
+            resources: RendererResourceCache::unbounded(RendererResourceKind::Glyph),
             entries: HashMap::new(),
         }
+    }
+
+    pub fn with_limits(max_entries: usize, max_bytes: usize) -> Self {
+        Self {
+            measurer: TextMeasureCache::new(),
+            resources: RendererResourceCache::new(
+                RendererResourceKind::Glyph,
+                max_entries,
+                max_bytes,
+            ),
+            entries: HashMap::new(),
+        }
+    }
+
+    pub fn begin_frame(&mut self) {
+        self.resources.begin_frame();
+    }
+
+    pub fn resource_stats(&self) -> RendererResourceStats {
+        self.resources.stats()
+    }
+
+    pub fn dispose(
+        &mut self,
+        key: &GlyphResourceKey,
+    ) -> Result<crate::renderer::RendererResourceHandle, TextError> {
+        self.entries.remove(key);
+        Ok(self.resources.dispose(key)?)
     }
 
     pub fn resolve(
@@ -171,28 +192,40 @@ impl TextRasterCache {
             return Ok(None);
         }
 
-        let key = TextRasterKey::from_request(request)?;
-        if let Some(entry) = self.entries.get(&key) {
-            return Ok(Some(entry.clone()));
+        let key = GlyphResourceKey::new(
+            request.content,
+            request.font_size,
+            request.font_weight,
+            request.font_family,
+            request.line_height,
+        );
+        if let Some(entry) = self.entries.get(&key).cloned() {
+            let allocation = self.resources.resolve(key.clone(), entry.pixels.len())?;
+            self.drop_evicted(allocation.evicted);
+            return Ok(Some(entry));
         }
 
-        let entry = Arc::new(TextRasterEntry {
-            id: self.next_entry_id(),
+        let pixels = rasterize_with_font(
+            self.measurer.font.as_ref().ok_or(TextError::MissingFont)?,
+            request,
             metrics,
-            pixels: rasterize_with_font(
-                self.measurer.font.as_ref().ok_or(TextError::MissingFont)?,
-                request,
-                metrics,
-            ),
+        );
+        let allocation = self.resources.resolve(key.clone(), pixels.len())?;
+        self.drop_evicted(allocation.evicted);
+
+        let entry = Arc::new(TextRasterEntry {
+            id: allocation.handle.id.as_u32(),
+            metrics,
+            pixels,
         });
         self.entries.insert(key, entry.clone());
         Ok(Some(entry))
     }
 
-    fn next_entry_id(&mut self) -> u32 {
-        let id = self.next_id;
-        self.next_id += 1;
-        id
+    fn drop_evicted(&mut self, evicted: Vec<GlyphResourceKey>) {
+        for key in evicted {
+            self.entries.remove(&key);
+        }
     }
 }
 
@@ -308,10 +341,10 @@ fn load_system_font() -> Option<Font<'static>> {
     ];
 
     for path in candidates {
-        if let Ok(bytes) = std::fs::read(path) {
-            if let Some(font) = Font::try_from_vec(bytes) {
-                return Some(font);
-            }
+        if let Ok(bytes) = std::fs::read(path)
+            && let Some(font) = Font::try_from_vec(bytes)
+        {
+            return Some(font);
         }
     }
 

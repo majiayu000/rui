@@ -3,13 +3,14 @@
 use crate::core::geometry::{Bounds, Size};
 use crate::renderer::primitives::{GpuQuad, GpuShadow, Primitive};
 use crate::renderer::text::{TextRasterCache, TextRequest};
-use crate::renderer::{Renderer, RendererError, Scene};
+use crate::renderer::{
+    Renderer, RendererDeviceDiagnostics, RendererDiagnostics, RendererError, RendererImageCache,
+    RendererResourceCache, RendererResourceError, RendererResourceKind, Scene,
+};
 use crate::{ImageFit, ImageSource};
 use metal::*;
 use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
 use std::mem;
-use std::sync::Arc;
 
 /// Uniform data passed to shaders
 #[repr(C)]
@@ -29,7 +30,12 @@ struct GpuImage {
 }
 
 impl GpuImage {
-    fn new(bounds: Bounds, corner_radii: crate::core::style::Corners, color: [f32; 4], opacity: f32) -> Self {
+    fn new(
+        bounds: Bounds,
+        corner_radii: crate::core::style::Corners,
+        color: [f32; 4],
+        opacity: f32,
+    ) -> Self {
         Self {
             bounds: [bounds.x(), bounds.y(), bounds.width(), bounds.height()],
             corner_radii: [
@@ -45,98 +51,6 @@ impl GpuImage {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-enum ImageKey {
-    File(String),
-    Data { hash: u64, width: u32, height: u32 },
-}
-
-struct ImageEntry {
-    id: u32,
-    size: Size,
-    pixels: Vec<u8>,
-}
-
-struct ImageCache {
-    next_id: u32,
-    entries: HashMap<ImageKey, Arc<ImageEntry>>,
-}
-
-impl ImageCache {
-    fn new() -> Self {
-        Self {
-            next_id: 1,
-            entries: HashMap::new(),
-        }
-    }
-
-    fn resolve(&mut self, source: &ImageSource) -> Option<Arc<ImageEntry>> {
-        let key = match source {
-            ImageSource::File(path) => ImageKey::File(path.clone()),
-            ImageSource::Data { data, width, height } => {
-                if data.len() != (*width as usize) * (*height as usize) * 4 {
-                    log::error!("ImageSource::Data length mismatch: expected {} bytes", (*width as usize) * (*height as usize) * 4);
-                    return None;
-                }
-                let mut hasher = std::collections::hash_map::DefaultHasher::new();
-                data.hash(&mut hasher);
-                let hash = hasher.finish();
-                ImageKey::Data { hash, width: *width, height: *height }
-            }
-            ImageSource::Url(url) => {
-                log::error!("ImageSource::Url not supported yet: {}", url);
-                return None;
-            }
-            ImageSource::Texture(_) => {
-                return None;
-            }
-        };
-
-        if let Some(entry) = self.entries.get(&key) {
-            return Some(entry.clone());
-        }
-
-        let entry = match source {
-            ImageSource::File(path) => {
-                let image = match image::open(path) {
-                    Ok(img) => img,
-                    Err(err) => {
-                        log::error!("Failed to load image {}: {}", path, err);
-                        return None;
-                    }
-                };
-                let rgba = image.to_rgba8();
-                let (w, h) = rgba.dimensions();
-                ImageEntry {
-                    id: self.alloc_id(),
-                    size: Size::new(w as f32, h as f32),
-                    pixels: rgba.into_raw(),
-                }
-            }
-            ImageSource::Data { data, width, height } => ImageEntry {
-                id: self.alloc_id(),
-                size: Size::new(*width as f32, *height as f32),
-                pixels: data.clone(),
-            },
-            ImageSource::Url(url) => {
-                log::error!("ImageSource::Url not supported yet: {}", url);
-                return None;
-            }
-            ImageSource::Texture(_) => return None,
-        };
-
-        let entry = Arc::new(entry);
-        self.entries.insert(key.clone(), entry.clone());
-        Some(entry)
-    }
-
-    fn alloc_id(&mut self) -> u32 {
-        let id = self.next_id;
-        self.next_id += 1;
-        id
-    }
-}
-
 /// Metal-based renderer
 pub struct MetalRenderer {
     device: Device,
@@ -146,7 +60,8 @@ pub struct MetalRenderer {
     image_pipeline: RenderPipelineState,
     sampler: SamplerState,
     textures: HashMap<u32, Texture>,
-    image_cache: ImageCache,
+    texture_resources: RendererResourceCache<u32>,
+    image_cache: RendererImageCache,
     text_cache: TextRasterCache,
 }
 
@@ -264,7 +179,8 @@ impl MetalRenderer {
             image_pipeline,
             sampler,
             textures: HashMap::new(),
-            image_cache: ImageCache::new(),
+            texture_resources: RendererResourceCache::unbounded(RendererResourceKind::Texture),
+            image_cache: RendererImageCache::new(),
             text_cache: TextRasterCache::new(),
         })
     }
@@ -274,6 +190,10 @@ impl MetalRenderer {
         &self.device
     }
 
+    pub fn diagnostics(&self) -> RendererDiagnostics {
+        <Self as Renderer>::diagnostics(self)
+    }
+
     /// Render a scene to a drawable
     pub fn render(
         &mut self,
@@ -281,6 +201,10 @@ impl MetalRenderer {
         drawable: &MetalDrawableRef,
         viewport_size: Size,
     ) -> Result<(), RendererError> {
+        self.texture_resources.begin_frame();
+        self.image_cache.begin_frame();
+        self.text_cache.begin_frame();
+
         let command_queue = self.command_queue.to_owned();
         let command_buffer = command_queue.new_command_buffer();
 
@@ -314,12 +238,8 @@ impl MetalRenderer {
                     blur_radius,
                     color,
                 } => {
-                    let instance = GpuShadow::from_primitive(
-                        *bounds,
-                        *corner_radii,
-                        *blur_radius,
-                        *color,
-                    );
+                    let instance =
+                        GpuShadow::from_primitive(*bounds, *corner_radii, *blur_radius, *color);
                     self.draw_shadow(encoder, &instance, &uniforms);
                 }
                 Primitive::Quad {
@@ -394,7 +314,7 @@ impl MetalRenderer {
                         scale_factor,
                         drawable_size,
                         &mut clip_stack,
-                    );
+                    )?;
                 }
                 Primitive::Text {
                     bounds,
@@ -424,16 +344,27 @@ impl MetalRenderer {
                 }
                 Primitive::PushClip { bounds, .. } => {
                     let new_clip = if let Some(prev) = clip_stack.last() {
-                        prev.intersection(bounds).unwrap_or(Bounds::from_xywh(0.0, 0.0, 0.0, 0.0))
+                        prev.intersection(bounds)
+                            .unwrap_or(Bounds::from_xywh(0.0, 0.0, 0.0, 0.0))
                     } else {
                         *bounds
                     };
                     clip_stack.push(new_clip);
-                    self.set_scissor_rect(encoder, clip_stack.last().copied(), scale_factor, drawable_size);
+                    self.set_scissor_rect(
+                        encoder,
+                        clip_stack.last().copied(),
+                        scale_factor,
+                        drawable_size,
+                    );
                 }
                 Primitive::PopClip => {
                     clip_stack.pop();
-                    self.set_scissor_rect(encoder, clip_stack.last().copied(), scale_factor, drawable_size);
+                    self.set_scissor_rect(
+                        encoder,
+                        clip_stack.last().copied(),
+                        scale_factor,
+                        drawable_size,
+                    );
                 }
             }
         }
@@ -465,7 +396,12 @@ impl MetalRenderer {
         encoder.draw_primitives_instanced(MTLPrimitiveType::Triangle, 0, 6, 1);
     }
 
-    fn draw_shadow(&self, encoder: &RenderCommandEncoderRef, shadow: &GpuShadow, uniforms: &Uniforms) {
+    fn draw_shadow(
+        &self,
+        encoder: &RenderCommandEncoderRef,
+        shadow: &GpuShadow,
+        uniforms: &Uniforms,
+    ) {
         encoder.set_render_pipeline_state(&self.shadow_pipeline);
 
         let instance_buffer = self.device.new_buffer_with_data(
@@ -527,46 +463,44 @@ impl MetalRenderer {
         scale_factor: f32,
         drawable_size: Size,
         clip_stack: &mut Vec<Bounds>,
-    ) {
-        match source {
-            ImageSource::Texture(id) => {
-                if let Some(texture) = self.textures.get(id) {
-                    let instance = GpuImage::new(*bounds, corner_radii, [1.0, 1.0, 1.0, 1.0], opacity);
-                    self.draw_image(encoder, texture, &instance, uniforms);
-                }
-                return;
-            }
-            ImageSource::Url(url) => {
-                log::error!("ImageSource::Url not supported yet: {}", url);
-                return;
-            }
-            _ => {}
+    ) -> Result<(), RendererError> {
+        if let ImageSource::Texture(id) = source {
+            let texture = self.textures.get(id).ok_or_else(|| {
+                RendererResourceError::missing(RendererResourceKind::Texture, *id)
+            })?;
+            let instance = GpuImage::new(*bounds, corner_radii, [1.0, 1.0, 1.0, 1.0], opacity);
+            self.draw_image(encoder, texture, &instance, uniforms);
+            return Ok(());
         }
 
-        let entry = match self.image_cache.resolve(source) {
-            Some(entry) => entry,
-            None => return,
-        };
+        let entry = self.image_cache.resolve(source)?;
 
-        let texture = self.ensure_texture(entry.id, entry.size, &entry.pixels);
+        let texture = self.ensure_texture(entry.handle.id.as_u32(), entry.size, &entry.pixels)?;
 
         let dest_bounds = calculate_fit_bounds(*bounds, entry.size, fit);
 
         // Clip to container for cover/contain
         let previous_clip = clip_stack.last().copied();
         let container_clip = if let Some(prev) = previous_clip {
-            prev.intersection(bounds).unwrap_or(Bounds::from_xywh(0.0, 0.0, 0.0, 0.0))
+            prev.intersection(bounds)
+                .unwrap_or(Bounds::from_xywh(0.0, 0.0, 0.0, 0.0))
         } else {
             *bounds
         };
         clip_stack.push(container_clip);
-        self.set_scissor_rect(encoder, clip_stack.last().copied(), scale_factor, drawable_size);
+        self.set_scissor_rect(
+            encoder,
+            clip_stack.last().copied(),
+            scale_factor,
+            drawable_size,
+        );
 
         let instance = GpuImage::new(dest_bounds, corner_radii, [1.0, 1.0, 1.0, 1.0], opacity);
         self.draw_image(encoder, &texture, &instance, uniforms);
 
         clip_stack.pop();
         self.set_scissor_rect(encoder, previous_clip, scale_factor, drawable_size);
+        Ok(())
     }
 
     fn draw_text_primitive(
@@ -601,9 +535,12 @@ impl MetalRenderer {
 
         let texture = self.ensure_texture(
             entry.id,
-            Size::new(entry.metrics.ink_bounds.width(), entry.metrics.ink_bounds.height()),
+            Size::new(
+                entry.metrics.ink_bounds.width(),
+                entry.metrics.ink_bounds.height(),
+            ),
             &entry.pixels,
-        );
+        )?;
 
         let mut x = bounds.x();
         let mut y = bounds.y();
@@ -624,12 +561,27 @@ impl MetalRenderer {
 
         let text_bounds = Bounds::from_xywh(x, y, text_width, text_height);
         let color_array = color.to_array();
-        let instance = GpuImage::new(text_bounds, crate::core::style::Corners::ZERO, color_array, 1.0);
+        let instance = GpuImage::new(
+            text_bounds,
+            crate::core::style::Corners::ZERO,
+            color_array,
+            1.0,
+        );
         self.draw_image(encoder, &texture, &instance, uniforms);
         Ok(())
     }
 
-    fn ensure_texture(&mut self, id: u32, size: Size, pixels: &[u8]) -> Texture {
+    fn ensure_texture(
+        &mut self,
+        id: u32,
+        size: Size,
+        pixels: &[u8],
+    ) -> Result<Texture, RendererError> {
+        let allocation = self.texture_resources.resolve(id, pixels.len())?;
+        for evicted_id in allocation.evicted {
+            self.textures.remove(&evicted_id);
+        }
+
         if !self.textures.contains_key(&id) {
             let width = size.width.max(1.0).round() as u64;
             let height = size.height.max(1.0).round() as u64;
@@ -643,7 +595,7 @@ impl MetalRenderer {
 
             let texture = self.device.new_texture(&desc);
 
-            let bytes_per_row = (width * 4) as u64;
+            let bytes_per_row = width * 4;
             let region = MTLRegion {
                 origin: MTLOrigin { x: 0, y: 0, z: 0 },
                 size: MTLSize {
@@ -659,8 +611,8 @@ impl MetalRenderer {
 
         self.textures
             .get(&id)
-            .expect("Texture missing")
-            .to_owned()
+            .cloned()
+            .ok_or_else(|| RendererResourceError::missing(RendererResourceKind::Texture, id).into())
     }
 
     fn set_scissor_rect(
@@ -672,7 +624,12 @@ impl MetalRenderer {
     ) {
         if let Some(bounds) = clip {
             if bounds.is_empty() {
-                let rect = MTLScissorRect { x: 0, y: 0, width: 0, height: 0 };
+                let rect = MTLScissorRect {
+                    x: 0,
+                    y: 0,
+                    width: 0,
+                    height: 0,
+                };
                 encoder.set_scissor_rect(rect);
                 return;
             }
@@ -692,7 +649,12 @@ impl MetalRenderer {
                 height = max_h.saturating_sub(y);
             }
 
-            let rect = MTLScissorRect { x, y, width, height };
+            let rect = MTLScissorRect {
+                x,
+                y,
+                width,
+                height,
+            };
             encoder.set_scissor_rect(rect);
         } else {
             let rect = MTLScissorRect {
@@ -716,6 +678,25 @@ impl Renderer for MetalRenderer {
         viewport_size: Size,
     ) -> Result<(), RendererError> {
         MetalRenderer::render(self, scene, target, viewport_size)
+    }
+
+    fn diagnostics(&self) -> RendererDiagnostics {
+        RendererDiagnostics::new(
+            RendererDeviceDiagnostics {
+                backend: String::from("metal"),
+                device_name: self.device.name().to_string(),
+                is_headless: self.device.is_headless(),
+                unified_memory: Some(self.device.has_unified_memory()),
+                recommended_max_working_set_size: Some(
+                    self.device.recommended_max_working_set_size(),
+                ),
+            },
+            vec![
+                self.texture_resources.stats(),
+                self.image_cache.stats(),
+                self.text_cache.resource_stats(),
+            ],
+        )
     }
 }
 
