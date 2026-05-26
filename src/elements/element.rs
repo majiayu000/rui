@@ -4,6 +4,7 @@ use crate::core::event::{Cursor, KeyEvent, MouseButton, ScrollEvent};
 use crate::core::geometry::{Bounds, Point, Size};
 use crate::core::style::Style;
 use crate::core::ElementId;
+use crate::renderer::text::TextMeasureCache;
 use crate::renderer::{Primitive, Scene};
 use std::cell::Cell;
 use std::rc::Rc;
@@ -13,6 +14,7 @@ use taffy::prelude::*;
 pub struct LayoutContext<'a> {
     pub(crate) taffy: &'a mut TaffyTree<ElementId>,
     pub(crate) available_space: Size,
+    text_measurer: TextMeasureCache,
 }
 
 impl<'a> LayoutContext<'a> {
@@ -20,7 +22,12 @@ impl<'a> LayoutContext<'a> {
         Self {
             taffy,
             available_space,
+            text_measurer: TextMeasureCache::new(),
         }
+    }
+
+    pub fn text_measurer(&mut self) -> &mut TextMeasureCache {
+        &mut self.text_measurer
     }
 }
 
