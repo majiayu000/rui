@@ -191,6 +191,8 @@ where
                 context.request_redraw();
             }
 
+            context.consume_runtime_view_notification();
+
             if !context.dirty && !context.needs_rebuild && context.pending_updates.is_empty() {
                 if !context.is_running() {
                     break;
@@ -199,9 +201,12 @@ where
             }
 
             if context.needs_rebuild || !context.pending_updates.is_empty() {
-                root = build_root(&mut context);
                 context.pending_updates.clear();
                 context.needs_rebuild = false;
+                root = build_root(&mut context);
+                if !context.pending_updates.is_empty() {
+                    context.needs_rebuild = true;
+                }
             }
 
             // Rebuild layout tree each frame we render to avoid unbounded growth
@@ -303,6 +308,10 @@ where
                 root.handle_key_event(&mut event_cx, event);
             }
 
+            if context.consume_runtime_view_notification() {
+                context.request_redraw();
+            }
+
             // Paint phase
             scene.clear();
             let mut paint_cx = PaintContext::new(&mut scene, root_bounds, &taffy);
@@ -319,7 +328,9 @@ where
                 renderer.render(&scene, metal_drawable, viewport_size);
             }
 
-            context.dirty = false;
+            if !context.needs_rebuild && context.pending_updates.is_empty() {
+                context.dirty = false;
+            }
 
             // Check if we should quit
             if !context.is_running() {

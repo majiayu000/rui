@@ -6,7 +6,7 @@ pub use crate::core::{
     style::{Background, BorderStyle, Corners, Style},
     event::{MouseEvent, KeyEvent, KeyCode, Modifiers, Cursor},
     animation::{Animation, Animatable, Easing, Transform, Transition},
-    App, AppContext, ElementId, EntityId, View, ViewContext, Window, WindowOptions,
+    App, AppContext, ElementId, EntityId, View, ViewContext, ViewNotifier, Window, WindowOptions,
 };
 
 pub use crate::elements::{
