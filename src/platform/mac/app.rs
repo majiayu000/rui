@@ -9,6 +9,7 @@ use crate::elements::element::{
     Element, EventContext, LayoutContext, PaintContext, PointerEvent, PointerEventKind,
 };
 use crate::platform::mac::window::create_window;
+use crate::renderer::RendererError;
 use crate::renderer::metal::MetalRenderer;
 use crate::renderer::Scene;
 use objc2::msg_send;
@@ -30,7 +31,20 @@ where
 }
 
 /// Run the application with custom window options
-pub fn run_app_with_options<F, E>(context: AppContext, mut build_root: F, options: WindowOptions)
+pub fn run_app_with_options<F, E>(context: AppContext, build_root: F, options: WindowOptions)
+where
+    F: FnMut(&mut AppContext) -> E + 'static,
+    E: Element + 'static,
+{
+    run_app_with_renderer_factory(context, build_root, options, MetalRenderer::new);
+}
+
+pub(crate) fn run_app_with_renderer_factory<F, E>(
+    context: AppContext,
+    mut build_root: F,
+    options: WindowOptions,
+    create_renderer: impl FnOnce() -> Result<MetalRenderer, RendererError>,
+)
 where
     F: FnMut(&mut AppContext) -> E + 'static,
     E: Element + 'static,
@@ -47,7 +61,10 @@ where
         app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
 
         // Create the renderer
-        let mut renderer = MetalRenderer::new().expect("Failed to create Metal renderer");
+        let mut renderer = match create_renderer() {
+            Ok(renderer) => renderer,
+            Err(err) => panic!("failed to create renderer: {}", err),
+        };
 
         // Create the window with Metal layer
         let (window, metal_layer) = create_window(&options, renderer.device(), mtm);
@@ -325,7 +342,9 @@ where
             if !drawable.is_null() {
                 // Render the scene - cast to metal crate's type
                 let metal_drawable = std::mem::transmute::<*mut objc2::runtime::AnyObject, &metal::MetalDrawableRef>(drawable);
-                renderer.render(&scene, metal_drawable, viewport_size);
+                if let Err(err) = renderer.render(&scene, metal_drawable, viewport_size) {
+                    panic!("renderer failed: {}", err);
+                }
             }
 
             if !context.needs_rebuild && context.pending_updates.is_empty() {

@@ -1,10 +1,10 @@
 //! Metal renderer implementation
 
 use crate::core::geometry::{Bounds, Size};
-use crate::{ImageFit, ImageSource};
 use crate::renderer::primitives::{GpuQuad, GpuShadow, Primitive};
 use crate::renderer::text::{TextRasterCache, TextRequest};
-use crate::renderer::Scene;
+use crate::renderer::{Renderer, RendererError, Scene};
+use crate::{ImageFit, ImageSource};
 use metal::*;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -151,8 +151,9 @@ pub struct MetalRenderer {
 }
 
 impl MetalRenderer {
-    pub fn new() -> Option<Self> {
-        let device = Device::system_default()?;
+    pub fn new() -> Result<Self, RendererError> {
+        let device = Device::system_default()
+            .ok_or_else(|| RendererError::backend_unavailable("Metal device is unavailable"))?;
         let command_queue = device.new_command_queue();
 
         // Compile shaders
@@ -255,7 +256,7 @@ impl MetalRenderer {
         sampler_desc.set_address_mode_t(MTLSamplerAddressMode::ClampToEdge);
         let sampler = device.new_sampler(&sampler_desc);
 
-        Some(Self {
+        Ok(Self {
             device,
             command_queue,
             quad_pipeline,
@@ -274,7 +275,12 @@ impl MetalRenderer {
     }
 
     /// Render a scene to a drawable
-    pub fn render(&mut self, scene: &Scene, drawable: &MetalDrawableRef, viewport_size: Size) {
+    pub fn render(
+        &mut self,
+        scene: &Scene,
+        drawable: &MetalDrawableRef,
+        viewport_size: Size,
+    ) -> Result<(), RendererError> {
         let command_queue = self.command_queue.to_owned();
         let command_buffer = command_queue.new_command_buffer();
 
@@ -411,7 +417,7 @@ impl MetalRenderer {
                         *line_height,
                         *align,
                         &uniforms,
-                    );
+                    )?;
                 }
                 Primitive::Path { .. } => {
                     // TODO: path rendering
@@ -435,6 +441,7 @@ impl MetalRenderer {
         encoder.end_encoding();
         command_buffer.present_drawable(drawable);
         command_buffer.commit();
+        Ok(())
     }
 
     fn draw_quad(&self, encoder: &RenderCommandEncoderRef, quad: &GpuQuad, uniforms: &Uniforms) {
@@ -574,7 +581,7 @@ impl MetalRenderer {
         line_height: f32,
         align: crate::elements::text::TextAlign,
         uniforms: &Uniforms,
-    ) {
+    ) -> Result<(), RendererError> {
         let entry = match self.text_cache.resolve(TextRequest::new(
             content,
             font_size,
@@ -583,10 +590,12 @@ impl MetalRenderer {
             line_height,
         )) {
             Ok(Some(entry)) => entry,
-            Ok(None) => return,
+            Ok(None) => return Ok(()),
             Err(err) => {
-                log::error!("Text rendering failed: {:?}", err);
-                return;
+                return Err(RendererError::render_failed(format!(
+                    "text rendering failed: {:?}",
+                    err
+                )));
             }
         };
 
@@ -617,6 +626,7 @@ impl MetalRenderer {
         let color_array = color.to_array();
         let instance = GpuImage::new(text_bounds, crate::core::style::Corners::ZERO, color_array, 1.0);
         self.draw_image(encoder, &texture, &instance, uniforms);
+        Ok(())
     }
 
     fn ensure_texture(&mut self, id: u32, size: Size, pixels: &[u8]) -> Texture {
@@ -693,6 +703,19 @@ impl MetalRenderer {
             };
             encoder.set_scissor_rect(rect);
         }
+    }
+}
+
+impl Renderer for MetalRenderer {
+    type Target = MetalDrawableRef;
+
+    fn render(
+        &mut self,
+        scene: &Scene,
+        target: &Self::Target,
+        viewport_size: Size,
+    ) -> Result<(), RendererError> {
+        MetalRenderer::render(self, scene, target, viewport_size)
     }
 }
 
