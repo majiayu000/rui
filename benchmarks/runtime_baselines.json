@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-05-26T23:36:00+08:00",
+  "baseline_revision": "b31da25",
+  "environment": {
+    "os": "macos",
+    "arch": "aarch64",
+    "rustc": "rustc 1.95.0 (59807616e 2026-04-14)",
+    "profile": "bench",
+    "notes": "Initial local baseline captured on macOS arm64; refresh on stable CI hardware before enforcement."
+  },
+  "thresholds": {
+    "warning_median_percent": 15.0,
+    "blocking_median_percent": 25.0,
+    "blocking_p95_percent": 30.0,
+    "enforcement_enabled": false
+  },
+  "benchmarks": [
+    {
+      "id": "layout.flex_tree",
+      "category": "layout",
+      "unit": "ns_per_frame",
+      "median": 102699.875,
+      "p95": 135167.96875,
+      "samples": 9
+    },
+    {
+      "id": "text.measure_raster",
+      "category": "text",
+      "unit": "ns_per_frame",
+      "median": 18893.234375,
+      "p95": 22975.921875,
+      "samples": 9
+    },
+    {
+      "id": "scene.build",
+      "category": "scene",
+      "unit": "ns_per_frame",
+      "median": 4247.390625,
+      "p95": 4332.671875,
+      "samples": 9
+    },
+    {
+      "id": "event.pointer_dispatch",
+      "category": "event",
+      "unit": "ns_per_dispatch",
+      "median": 853.479,
+      "p95": 887.2085,
+      "samples": 9
+    },
+    {
+      "id": "renderer.recording_throughput",
+      "category": "renderer",
+      "unit": "ns_per_frame",
+      "median": 3348.296875,
+      "p95": 4201.828125,
+      "samples": 9
+    }
+  ]
+}
