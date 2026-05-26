@@ -1,7 +1,10 @@
+use crate::core::accessibility::{
+    AccessibilityContext, AccessibilityError, AccessibilityNode, AccessibilityRole,
+};
 use crate::core::color::Color;
+use crate::core::ElementId;
 use crate::core::geometry::Size;
 use crate::core::style::Style;
-use crate::core::ElementId;
 use crate::elements::element::{
     AnyElement, Element, EventContext, LayoutContext, PaintContext, PointerEvent,
 };
@@ -9,24 +12,38 @@ use crate::elements::{ScrollDirection, ScrollView};
 use taffy::prelude::NodeId;
 
 pub struct Scrollable {
+    id: ElementId,
     inner: ScrollView,
+    accessibility_label: Option<String>,
 }
 
 impl Scrollable {
     pub fn new(child: impl Into<AnyElement>) -> Self {
+        let id = ElementId::new();
         Self {
-            inner: ScrollView::new().child(child),
+            id,
+            inner: ScrollView::new().id(id).child(child),
+            accessibility_label: None,
         }
     }
 
     pub fn empty() -> Self {
+        let id = ElementId::new();
         Self {
-            inner: ScrollView::new(),
+            id,
+            inner: ScrollView::new().id(id),
+            accessibility_label: None,
         }
     }
 
     pub fn id(mut self, id: ElementId) -> Self {
+        self.id = id;
         self.inner = self.inner.id(id);
+        self
+    }
+
+    pub fn accessibility_label(mut self, label: impl Into<String>) -> Self {
+        self.accessibility_label = Some(label.into());
         self
     }
 
@@ -103,7 +120,7 @@ impl Scrollable {
 
 impl Element for Scrollable {
     fn id(&self) -> Option<ElementId> {
-        Element::id(&self.inner)
+        Some(self.id)
     }
 
     fn style(&self) -> &Style {
@@ -116,6 +133,19 @@ impl Element for Scrollable {
 
     fn paint(&mut self, cx: &mut PaintContext) {
         self.inner.paint(cx);
+    }
+
+    fn accessibility(
+        &self,
+        cx: &AccessibilityContext,
+    ) -> Result<Option<AccessibilityNode>, AccessibilityError> {
+        let mut node = AccessibilityNode::new(self.id, AccessibilityRole::ScrollArea)
+            .with_enabled(true)
+            .with_focused(cx.a11y_has_focus(self.id));
+        if let Some(label) = &self.accessibility_label {
+            node = node.with_label(label.clone());
+        }
+        Ok(Some(node))
     }
 
     fn handle_pointer_event(&mut self, cx: &mut EventContext, event: &PointerEvent) -> bool {

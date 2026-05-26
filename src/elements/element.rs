@@ -1,12 +1,16 @@
 //! Core Element trait and related types
 
+use crate::core::accessibility::{
+    AccessibilityAnnouncement, AccessibilityAnnouncementKind, AccessibilityContext,
+    AccessibilityError, AccessibilityNode,
+};
 use crate::core::event::{Cursor, KeyEvent, MouseButton, ScrollEvent};
 use crate::core::geometry::{Bounds, Point, Size};
 use crate::core::style::Style;
 use crate::core::ElementId;
 use crate::renderer::text::TextMeasureCache;
 use crate::renderer::{Primitive, Scene};
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use taffy::prelude::*;
 
@@ -120,6 +124,7 @@ pub struct EventContext<'a> {
     previous_hit_target: Option<ElementId>,
     cursor: Rc<Cell<Option<Cursor>>>,
     redraw_requested: Rc<Cell<bool>>,
+    accessibility_announcements: Rc<RefCell<Vec<AccessibilityAnnouncement>>>,
 }
 
 impl<'a> EventContext<'a> {
@@ -136,6 +141,7 @@ impl<'a> EventContext<'a> {
             previous_hit_target: None,
             cursor: Rc::new(Cell::new(None)),
             redraw_requested: Rc::new(Cell::new(false)),
+            accessibility_announcements: Rc::new(RefCell::new(Vec::new())),
         }
     }
 
@@ -152,6 +158,15 @@ impl<'a> EventContext<'a> {
     }
 
     pub fn request_focus(&mut self, id: Option<ElementId>) {
+        if let Some(id) = id
+            && *self.focused != Some(id)
+        {
+            self.announce_accessibility(AccessibilityAnnouncement::new(
+                id,
+                AccessibilityAnnouncementKind::FocusChanged,
+                "focus changed",
+            ));
+        }
         *self.focused = id;
     }
 
@@ -195,6 +210,28 @@ impl<'a> EventContext<'a> {
         self.cursor.get()
     }
 
+    pub fn announce_accessibility(&self, announcement: AccessibilityAnnouncement) {
+        self.accessibility_announcements
+            .borrow_mut()
+            .push(announcement);
+    }
+
+    pub fn announce_accessibility_action(&self, id: ElementId, message: impl Into<String>) {
+        self.announce_accessibility(AccessibilityAnnouncement::new(
+            id,
+            AccessibilityAnnouncementKind::ActionFeedback,
+            message,
+        ));
+    }
+
+    pub fn accessibility_announcements(&self) -> Vec<AccessibilityAnnouncement> {
+        self.accessibility_announcements.borrow().clone()
+    }
+
+    pub fn take_accessibility_announcements(&self) -> Vec<AccessibilityAnnouncement> {
+        std::mem::take(&mut *self.accessibility_announcements.borrow_mut())
+    }
+
     pub fn child_bounds(&self, node: NodeId) -> Option<Bounds> {
         let layout = self.taffy.layout(node).ok()?;
         Some(Bounds::from_xywh(
@@ -214,6 +251,7 @@ impl<'a> EventContext<'a> {
             previous_hit_target: self.previous_hit_target,
             cursor: Rc::clone(&self.cursor),
             redraw_requested: Rc::clone(&self.redraw_requested),
+            accessibility_announcements: Rc::clone(&self.accessibility_announcements),
         }
     }
 }
@@ -265,6 +303,29 @@ pub trait Element: 'static {
     /// Get child elements
     fn children(&self) -> &[AnyElement] {
         &[]
+    }
+
+    fn accessibility(
+        &self,
+        _cx: &AccessibilityContext,
+    ) -> Result<Option<AccessibilityNode>, AccessibilityError> {
+        Ok(None)
+    }
+
+    fn accessibility_nodes(
+        &self,
+        cx: &AccessibilityContext,
+    ) -> Result<Vec<AccessibilityNode>, AccessibilityError> {
+        let mut child_nodes = Vec::new();
+        for child in self.children() {
+            child_nodes.extend(child.accessibility_nodes(cx)?);
+        }
+
+        if let Some(node) = self.accessibility(cx)? {
+            Ok(vec![node.with_children(child_nodes)])
+        } else {
+            Ok(child_nodes)
+        }
     }
 
     fn contains_id(&self, id: ElementId) -> bool {
@@ -331,6 +392,13 @@ impl AnyElement {
 
     pub fn contains_id(&self, id: ElementId) -> bool {
         self.inner.contains_id(id)
+    }
+
+    fn accessibility_nodes(
+        &self,
+        cx: &AccessibilityContext,
+    ) -> Result<Vec<AccessibilityNode>, AccessibilityError> {
+        self.inner.accessibility_nodes(cx)
     }
 }
 

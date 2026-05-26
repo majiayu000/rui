@@ -1,6 +1,9 @@
 use crate::advanced_ui::tokens::{
     control_border_color, control_colors, ControlSize, ControlState, ControlVariant, CONTROL_RADIUS,
 };
+use crate::core::accessibility::{
+    AccessibilityContext, AccessibilityError, AccessibilityNode, AccessibilityRole,
+};
 use crate::core::geometry::{Bounds, Edges};
 use crate::core::style::{Corners, Style};
 use crate::core::ElementId;
@@ -45,7 +48,9 @@ impl From<(&str, &str)> for SegmentedOption {
 pub struct SegmentedControl {
     id: ElementId,
     options: Vec<SegmentedOption>,
+    option_ids: Vec<ElementId>,
     selected: String,
+    accessibility_label: Option<String>,
     size: ControlSize,
     state: ControlState,
     hovered_index: Option<usize>,
@@ -63,6 +68,7 @@ impl SegmentedControl {
         let options: Vec<SegmentedOption> = options.into_iter().map(Into::into).collect();
         let selected = selected.into();
         validate_options(&options, &selected);
+        let option_ids = options.iter().map(|_| ElementId::new()).collect();
 
         let mut style = Style::new();
         style.border.radius = Corners::all(CONTROL_RADIUS);
@@ -70,7 +76,9 @@ impl SegmentedControl {
         Self {
             id: ElementId::new(),
             options,
+            option_ids,
             selected,
+            accessibility_label: None,
             size: ControlSize::default(),
             state: ControlState::default(),
             hovered_index: None,
@@ -99,6 +107,11 @@ impl SegmentedControl {
 
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.state.disabled = disabled;
+        self
+    }
+
+    pub fn accessibility_label(mut self, label: impl Into<String>) -> Self {
+        self.accessibility_label = Some(label.into());
         self
     }
 
@@ -219,6 +232,37 @@ impl Element for SegmentedControl {
         }
     }
 
+    fn accessibility(
+        &self,
+        cx: &AccessibilityContext,
+    ) -> Result<Option<AccessibilityNode>, AccessibilityError> {
+        let label =
+            self.accessibility_label
+                .as_deref()
+                .ok_or(AccessibilityError::MissingLabel {
+                    role: AccessibilityRole::SegmentedControl,
+                })?;
+        let mut node =
+            AccessibilityNode::label_required(self.id, AccessibilityRole::SegmentedControl, label)?
+                .value_required(&self.selected)?
+                .with_enabled(!self.state.disabled)
+                .with_focused(cx.a11y_has_focus(self.id));
+
+        for (option, id) in self.options.iter().zip(self.option_ids.iter().copied()) {
+            let child = AccessibilityNode::label_required(
+                id,
+                AccessibilityRole::SegmentedOption,
+                &option.label,
+            )?
+            .value_required(&option.value)?
+            .with_selected(option.value == self.selected)
+            .with_enabled(!self.state.disabled);
+            node = node.with_child(child);
+        }
+
+        Ok(Some(node))
+    }
+
     fn handle_pointer_event(&mut self, cx: &mut EventContext, event: &PointerEvent) -> bool {
         if self.state.disabled {
             self.hovered_index = None;
@@ -257,6 +301,10 @@ impl Element for SegmentedControl {
                         if let Some(handler) = &self.on_change {
                             handler(&self.selected);
                         }
+                        cx.announce_accessibility_action(
+                            self.id,
+                            format!("{} selected", self.options[released].label),
+                        );
                     }
                     cx.request_redraw();
                     return true;

@@ -10,6 +10,11 @@ pub use crate::core::{
         ActionError, ActionHandler, ActionId, ActionOutcome, ActionRouter, KeyChord, Keymap,
         StandardAction,
     },
+    accessibility::{
+        AccessibilityAnnouncement, AccessibilityAnnouncementKind, AccessibilityBridge,
+        AccessibilityContext, AccessibilityError, AccessibilityNode, AccessibilityRole,
+        AccessibilityTree, UnsupportedAccessibilityBridge,
+    },
     text_editing::{
         CaretGeometry, Clipboard, ClipboardError, MemoryClipboard, SelectionRect, TextComposition,
         TextEditBuffer, TextEditError, TextEditLayout, TextEditOutcome, TextInputEvent, TextLine,

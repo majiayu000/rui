@@ -1,6 +1,9 @@
 use crate::advanced_ui::tokens::{
     control_colors, ControlSize, ControlState, ControlVariant, CONTROL_RADIUS,
 };
+use crate::core::accessibility::{
+    AccessibilityContext, AccessibilityError, AccessibilityNode, AccessibilityRole,
+};
 use crate::core::event::Cursor;
 use crate::core::geometry::Edges;
 use crate::core::style::{Corners, Style};
@@ -160,6 +163,17 @@ impl Element for Button {
         });
     }
 
+    fn accessibility(
+        &self,
+        cx: &AccessibilityContext,
+    ) -> Result<Option<AccessibilityNode>, AccessibilityError> {
+        let node =
+            AccessibilityNode::label_required(self.id, AccessibilityRole::Button, &self.label)?
+                .with_enabled(!self.state.disabled)
+                .with_focused(cx.a11y_has_focus(self.id));
+        Ok(Some(node))
+    }
+
     fn handle_pointer_event(&mut self, cx: &mut EventContext, event: &PointerEvent) -> bool {
         if self.state.disabled {
             self.state.hovered = false;
@@ -198,6 +212,7 @@ impl Element for Button {
                     if let Some(handler) = &self.on_click {
                         handler();
                     }
+                    cx.announce_accessibility_action(self.id, format!("{} activated", self.label));
                     true
                 } else {
                     false
