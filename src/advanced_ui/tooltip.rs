@@ -1,7 +1,8 @@
-use crate::advanced_ui::tokens::{text_color, CONTROL_RADIUS};
+use crate::advanced_ui::state::{InteractionState, require_non_empty};
+use crate::advanced_ui::tokens::{CONTROL_RADIUS, text_color};
+use crate::core::ElementId;
 use crate::core::geometry::{Bounds, Edges};
 use crate::core::style::{Corners, Style};
-use crate::core::ElementId;
 use crate::elements::element::{
     AnyElement, Element, EventContext, LayoutContext, PaintContext, PointerEvent, PointerEventKind,
 };
@@ -12,21 +13,19 @@ pub struct Tooltip {
     id: ElementId,
     child: AnyElement,
     content: String,
-    hovered: bool,
+    state: InteractionState,
 }
 
 impl Tooltip {
     pub fn new(child: impl Into<AnyElement>, content: impl Into<String>) -> Self {
         let content = content.into();
-        if content.trim().is_empty() {
-            panic!("tooltip content must not be empty");
-        }
+        require_non_empty(&content, "tooltip content must not be empty");
 
         Self {
             id: ElementId::new(),
             child: child.into(),
             content,
-            hovered: false,
+            state: InteractionState::default(),
         }
     }
 
@@ -36,7 +35,21 @@ impl Tooltip {
     }
 
     pub fn is_visible(&self) -> bool {
-        self.hovered
+        self.state.hovered()
+    }
+
+    pub fn disabled(mut self, disabled: bool) -> Self {
+        self.state.set_disabled(disabled);
+        self
+    }
+
+    pub fn read_only(mut self, read_only: bool) -> Self {
+        self.state.set_read_only(read_only);
+        self
+    }
+
+    pub fn interaction_state(&self) -> InteractionState {
+        self.state
     }
 }
 
@@ -58,14 +71,10 @@ impl Element for Tooltip {
         cx.register_hit_region(self.id, bounds);
         self.child.paint(cx);
 
-        if self.hovered {
+        if self.state.hovered() {
             let width = self.content.chars().count() as f32 * 7.0 + 16.0;
-            let tooltip_bounds = Bounds::from_xywh(
-                bounds.x(),
-                (bounds.y() - 30.0).max(0.0),
-                width,
-                24.0,
-            );
+            let tooltip_bounds =
+                Bounds::from_xywh(bounds.x(), (bounds.y() - 30.0).max(0.0), width, 24.0);
 
             cx.paint(Primitive::Quad {
                 bounds: tooltip_bounds,
@@ -89,11 +98,11 @@ impl Element for Tooltip {
 
     fn handle_pointer_event(&mut self, cx: &mut EventContext, event: &PointerEvent) -> bool {
         if matches!(event.kind, PointerEventKind::Move) {
-            let inside = cx.bounds().contains(event.position);
-            if inside != self.hovered {
-                self.hovered = inside;
-                cx.request_redraw();
-            }
+            self.state.update_hover(cx.bounds(), event.position, cx);
+        }
+
+        if !self.state.can_activate() {
+            return false;
         }
 
         let hit_target = cx.hit_target();
@@ -138,9 +147,12 @@ pub fn tooltip(child: impl Into<AnyElement>, content: impl Into<String>) -> Tool
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::advanced_ui::container;
+    use crate::advanced_ui::{button, container};
+    use crate::core::event::MouseButton;
     use crate::core::geometry::Point;
     use crate::elements::element::PointerEvent;
+    use std::cell::Cell;
+    use std::rc::Rc;
     use taffy::TaffyTree;
 
     #[test]
@@ -163,12 +175,49 @@ mod tests {
             },
         );
         assert!(tooltip.is_visible());
+        assert!(tooltip.interaction_state().hovered());
         assert!(cx.redraw_requested());
+    }
+
+    #[test]
+    fn advanced_ui_tooltip_disabled_does_not_dispatch_child_activation() {
+        let clicked = Rc::new(Cell::new(false));
+        let clicked_ref = Rc::clone(&clicked);
+        let mut tooltip = Tooltip::new(
+            button("Open").on_click(move || clicked_ref.set(true)),
+            "Open details",
+        )
+        .disabled(true);
+        let taffy = TaffyTree::<ElementId>::new();
+        let mut focused = None;
+        let mut cx = EventContext::new(
+            Bounds::from_xywh(0.0, 0.0, 80.0, 32.0),
+            &taffy,
+            &mut focused,
+        );
+
+        assert!(!tooltip.handle_pointer_event(
+            &mut cx,
+            &PointerEvent {
+                kind: PointerEventKind::Down,
+                position: Point::new(4.0, 4.0),
+                button: Some(MouseButton::Left),
+            },
+        ));
+        assert!(!tooltip.handle_pointer_event(
+            &mut cx,
+            &PointerEvent {
+                kind: PointerEventKind::Up,
+                position: Point::new(4.0, 4.0),
+                button: Some(MouseButton::Left),
+            },
+        ));
+        assert!(!clicked.get());
     }
 
     #[test]
     #[should_panic(expected = "tooltip content must not be empty")]
     fn advanced_ui_tooltip_rejects_empty_content() {
-        let _ = Tooltip::new(container(), " ");
+        drop(Tooltip::new(container(), " "));
     }
 }

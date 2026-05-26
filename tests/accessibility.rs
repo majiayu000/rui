@@ -135,17 +135,8 @@ fn accessibility_text_and_scrollable_expose_semantic_tree() {
 
 #[test]
 fn accessibility_missing_required_labels_are_errors() {
-    let button = Button::new(" ");
-    let error = match button.accessibility_nodes(&AccessibilityContext::default()) {
-        Ok(_) => panic!("blank button label should fail"),
-        Err(err) => err,
-    };
-    assert_eq!(
-        error,
-        AccessibilityError::MissingLabel {
-            role: AccessibilityRole::Button
-        }
-    );
+    let button_panic = std::panic::catch_unwind(|| drop(Button::new(" ")));
+    assert!(button_panic.is_err());
 
     let control = SegmentedControl::new([("list", "List")], "list");
     let error = match control.accessibility_nodes(&AccessibilityContext::default()) {
