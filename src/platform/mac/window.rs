@@ -1,22 +1,161 @@
 //! macOS window creation
 
+use crate::core::geometry::Size;
 use crate::core::window::WindowOptions;
+use crate::platform::window::{
+    PlatformRendererAttachment, PlatformRendererTarget, PlatformWindow, PlatformWindowError,
+    PlatformWindowFeature, PlatformWindowFeatures, PlatformWindowState, validate_window_options,
+};
 use metal::Device;
-use objc2::rc::Retained;
-use objc2::msg_send;
-use objc2::MainThreadMarker;
-use objc2_app_kit::{NSWindow, NSWindowStyleMask};
-use objc2_foundation::{NSRect, NSPoint, NSSize, NSString};
-use objc2::MainThreadOnly;
-use objc2_quartz_core::CAMetalLayer;
 use metal::foreign_types::ForeignType;
+use objc2::MainThreadMarker;
+use objc2::MainThreadOnly;
+use objc2::msg_send;
+use objc2::rc::Retained;
+use objc2_app_kit::{NSWindow, NSWindowStyleMask};
+use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
+use objc2_quartz_core::CAMetalLayer;
+
+pub struct MacWindow {
+    window: Retained<NSWindow>,
+    metal_layer: Retained<CAMetalLayer>,
+}
+
+impl MacWindow {
+    pub(crate) fn make_key_and_order_front(&self) {
+        unsafe {
+            let _: () = msg_send![
+                &*self.window,
+                makeKeyAndOrderFront: std::ptr::null::<objc2::runtime::AnyObject>()
+            ];
+        }
+    }
+
+    pub(crate) fn window_number(&self) -> isize {
+        self.window.windowNumber()
+    }
+
+    pub(crate) fn content_size(&self) -> Result<Size, PlatformWindowError> {
+        let content_view = self
+            .window
+            .contentView()
+            .ok_or_else(|| PlatformWindowError::backend("macos", "window has no content view"))?;
+        let view_bounds: NSRect = unsafe { msg_send![&*content_view, bounds] };
+        Ok(Size::new(
+            view_bounds.size.width as f32,
+            view_bounds.size.height as f32,
+        ))
+    }
+
+    pub(crate) fn is_focused(&self) -> bool {
+        unsafe { msg_send![&*self.window, isKeyWindow] }
+    }
+
+    pub(crate) fn is_visible(&self) -> bool {
+        unsafe { msg_send![&*self.window, isVisible] }
+    }
+
+    pub(crate) fn next_drawable(&self) -> Option<&metal::MetalDrawableRef> {
+        let layer_ptr =
+            objc2::rc::Retained::as_ptr(&self.metal_layer) as *mut objc2::runtime::AnyObject;
+        let drawable: *mut objc2::runtime::AnyObject =
+            unsafe { msg_send![layer_ptr, nextDrawable] };
+
+        if drawable.is_null() {
+            return None;
+        }
+
+        Some(unsafe { &*drawable.cast::<metal::MetalDrawableRef>() })
+    }
+
+    fn scale_factor(&self) -> f32 {
+        let scale_factor: f64 = unsafe { msg_send![&*self.window, backingScaleFactor] };
+        scale_factor as f32
+    }
+}
+
+impl PlatformWindow for MacWindow {
+    fn platform_name(&self) -> &'static str {
+        "macos"
+    }
+
+    fn features(&self) -> PlatformWindowFeatures {
+        PlatformWindowFeatures {
+            lifecycle: true,
+            input_events: true,
+            dpi: true,
+            resizing: true,
+            focus: true,
+            clipboard: false,
+            renderer_attachment: true,
+        }
+    }
+
+    fn state(&self) -> Result<PlatformWindowState, PlatformWindowError> {
+        Ok(PlatformWindowState {
+            size: self.content_size()?,
+            scale_factor: self.scale_factor(),
+            focused: self.is_focused(),
+            visible: self.is_visible(),
+            renderer_attached: true,
+        })
+    }
+
+    fn set_title(&mut self, title: &str) -> Result<(), PlatformWindowError> {
+        let title = NSString::from_str(title);
+        self.window.setTitle(&title);
+        Ok(())
+    }
+
+    fn set_size(&mut self, size: Size) -> Result<(), PlatformWindowError> {
+        if size.width <= 0.0 || size.height <= 0.0 {
+            return Err(PlatformWindowError::invalid_options(
+                "window width and height must be greater than zero",
+            ));
+        }
+
+        let content_size = NSSize::new(size.width as f64, size.height as f64);
+        unsafe {
+            let _: () = msg_send![&*self.window, setContentSize: content_size];
+        }
+        Ok(())
+    }
+
+    fn set_focus(&mut self, focused: bool) -> Result<(), PlatformWindowError> {
+        unsafe {
+            if focused {
+                self.make_key_and_order_front();
+            } else {
+                let _: () = msg_send![&*self.window, resignKeyWindow];
+            }
+        }
+        Ok(())
+    }
+
+    fn renderer_attachment(&self) -> Result<PlatformRendererAttachment, PlatformWindowError> {
+        Ok(PlatformRendererAttachment {
+            target: PlatformRendererTarget::MetalLayer,
+            viewport_size: self.content_size()?,
+            scale_factor: self.scale_factor(),
+        })
+    }
+
+    fn close(&mut self) -> Result<(), PlatformWindowError> {
+        unsafe {
+            let _: () = msg_send![&*self.window, close];
+        }
+        Ok(())
+    }
+}
 
 /// Create a macOS window with a Metal layer
 pub unsafe fn create_window(
     options: &WindowOptions,
     device: &Device,
     mtm: MainThreadMarker,
-) -> (Retained<NSWindow>, Retained<CAMetalLayer>) {
+) -> Result<MacWindow, PlatformWindowError> {
+    validate_window_options(options)?;
+
     // Define window frame
     let frame = NSRect::new(
         NSPoint::new(100.0, 100.0),
@@ -24,7 +163,8 @@ pub unsafe fn create_window(
     );
 
     // Window style
-    let mut style = NSWindowStyleMask::Titled | NSWindowStyleMask::Closable | NSWindowStyleMask::Miniaturizable;
+    let mut style =
+        NSWindowStyleMask::Titled | NSWindowStyleMask::Closable | NSWindowStyleMask::Miniaturizable;
     if options.resizable {
         style |= NSWindowStyleMask::Resizable;
     }
@@ -77,5 +217,33 @@ pub unsafe fn create_window(
     // Center window on screen
     window.center();
 
-    (window, metal_layer)
+    Ok(MacWindow {
+        window,
+        metal_layer,
+    })
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct MacWindowBackend;
+
+impl MacWindowBackend {
+    pub fn new() -> Self {
+        Self
+    }
+
+    pub fn features(&self) -> PlatformWindowFeatures {
+        PlatformWindowFeatures {
+            lifecycle: true,
+            input_events: true,
+            dpi: true,
+            resizing: true,
+            focus: true,
+            clipboard: false,
+            renderer_attachment: true,
+        }
+    }
+
+    pub fn unsupported_clipboard_error(&self) -> PlatformWindowError {
+        PlatformWindowError::unsupported("macos", PlatformWindowFeature::Clipboard)
+    }
 }
