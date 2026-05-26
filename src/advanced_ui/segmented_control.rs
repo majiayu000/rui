@@ -1,15 +1,18 @@
-use crate::advanced_ui::tokens::{
-    control_border_color, control_colors, ControlSize, ControlState, ControlVariant, CONTROL_RADIUS,
+use crate::advanced_ui::state::{
+    IndexedInteractionState, InteractionState, require_non_empty, validation_border_color,
 };
+use crate::advanced_ui::tokens::{
+    CONTROL_RADIUS, ControlSize, ControlVariant, control_border_color, control_colors,
+};
+use crate::core::ElementId;
 use crate::core::accessibility::{
     AccessibilityContext, AccessibilityError, AccessibilityNode, AccessibilityRole,
 };
 use crate::core::geometry::{Bounds, Edges};
 use crate::core::style::{Corners, Style};
-use crate::core::ElementId;
 use crate::elements::element::{
-    style_to_taffy, Element, EventContext, LayoutContext, PaintContext, PointerEvent,
-    PointerEventKind,
+    Element, EventContext, LayoutContext, PaintContext, PointerEvent, PointerEventKind,
+    style_to_taffy,
 };
 use crate::renderer::Primitive;
 use taffy::prelude::*;
@@ -24,10 +27,12 @@ pub struct SegmentedOption {
 
 impl SegmentedOption {
     pub fn new(value: impl Into<String>, label: impl Into<String>) -> Self {
-        Self {
-            value: value.into(),
-            label: label.into(),
-        }
+        let value = value.into();
+        let label = label.into();
+        require_non_empty(&value, "segmented option value must not be empty");
+        require_non_empty(&label, "segmented option label must not be empty");
+
+        Self { value, label }
     }
 
     pub fn value(&self) -> &str {
@@ -52,9 +57,8 @@ pub struct SegmentedControl {
     selected: String,
     accessibility_label: Option<String>,
     size: ControlSize,
-    state: ControlState,
-    hovered_index: Option<usize>,
-    pressed_index: Option<usize>,
+    state: InteractionState,
+    indexed_state: IndexedInteractionState,
     style: Style,
     on_change: Option<SegmentChangeHandler>,
 }
@@ -80,9 +84,8 @@ impl SegmentedControl {
             selected,
             accessibility_label: None,
             size: ControlSize::default(),
-            state: ControlState::default(),
-            hovered_index: None,
-            pressed_index: None,
+            state: InteractionState::default(),
+            indexed_state: IndexedInteractionState::default(),
             style,
             on_change: None,
         }
@@ -106,12 +109,33 @@ impl SegmentedControl {
     }
 
     pub fn disabled(mut self, disabled: bool) -> Self {
-        self.state.disabled = disabled;
+        self.state.set_disabled(disabled);
+        if disabled {
+            self.indexed_state.clear();
+        }
+        self
+    }
+
+    pub fn read_only(mut self, read_only: bool) -> Self {
+        self.state.set_read_only(read_only);
+        if read_only {
+            self.indexed_state.clear();
+        }
+        self
+    }
+
+    pub fn invalid(mut self, invalid: bool) -> Self {
+        self.state.set_invalid(invalid);
         self
     }
 
     pub fn accessibility_label(mut self, label: impl Into<String>) -> Self {
-        self.accessibility_label = Some(label.into());
+        let label = label.into();
+        require_non_empty(
+            &label,
+            "segmented control accessibility label must not be empty",
+        );
+        self.accessibility_label = Some(label);
         self
     }
 
@@ -125,7 +149,15 @@ impl SegmentedControl {
     }
 
     pub fn hovered_index(&self) -> Option<usize> {
-        self.hovered_index
+        self.indexed_state.hovered_index()
+    }
+
+    pub fn pressed_index(&self) -> Option<usize> {
+        self.indexed_state.pressed_index()
+    }
+
+    pub fn interaction_state(&self) -> InteractionState {
+        self.state
     }
 
     fn option_width(&self) -> f32 {
@@ -164,7 +196,10 @@ impl Element for SegmentedControl {
 
         match cx.taffy.new_leaf(style) {
             Ok(node) => node,
-            Err(err) => panic!("failed to create advanced segmented control layout node: {}", err),
+            Err(err) => panic!(
+                "failed to create advanced segmented control layout node: {}",
+                err
+            ),
         }
     }
 
@@ -175,7 +210,8 @@ impl Element for SegmentedControl {
         cx.paint(Primitive::Quad {
             bounds,
             background: crate::advanced_ui::tokens::surface_color().to_rgba(),
-            border_color: control_border_color().to_rgba(),
+            border_color: validation_border_color(self.state.invalid(), control_border_color())
+                .to_rgba(),
             border_widths: Edges::all(1.0),
             corner_radii: self.style.border.radius,
         });
@@ -189,17 +225,14 @@ impl Element for SegmentedControl {
                 bounds.height(),
             );
             let selected = option.value == self.selected;
-            let colors = control_colors(
-                ControlVariant::Primary,
-                ControlState {
-                    selected,
-                    hovered: self.hovered_index == Some(index),
-                    pressed: self.pressed_index == Some(index),
-                    disabled: self.state.disabled,
-                },
-            );
+            let hovered = self.indexed_state.hovered_index() == Some(index);
+            let mut segment_state = self.state;
+            segment_state.set_selected(selected);
+            segment_state.set_hovered(hovered);
+            segment_state.set_pressed(self.indexed_state.pressed_index() == Some(index));
+            let colors = control_colors(ControlVariant::Primary, segment_state.into());
 
-            if selected || self.hovered_index == Some(index) {
+            if selected || hovered {
                 cx.paint(Primitive::Quad {
                     bounds: segment_bounds,
                     background: if selected {
@@ -245,7 +278,7 @@ impl Element for SegmentedControl {
         let mut node =
             AccessibilityNode::label_required(self.id, AccessibilityRole::SegmentedControl, label)?
                 .value_required(&self.selected)?
-                .with_enabled(!self.state.disabled)
+                .with_enabled(!self.state.disabled())
                 .with_focused(cx.a11y_has_focus(self.id));
 
         for (option, id) in self.options.iter().zip(self.option_ids.iter().copied()) {
@@ -256,7 +289,7 @@ impl Element for SegmentedControl {
             )?
             .value_required(&option.value)?
             .with_selected(option.value == self.selected)
-            .with_enabled(!self.state.disabled);
+            .with_enabled(!self.state.disabled());
             node = node.with_child(child);
         }
 
@@ -264,37 +297,20 @@ impl Element for SegmentedControl {
     }
 
     fn handle_pointer_event(&mut self, cx: &mut EventContext, event: &PointerEvent) -> bool {
-        if self.state.disabled {
-            self.hovered_index = None;
-            self.pressed_index = None;
-            return false;
-        }
-
         let index = self.index_at(cx.bounds(), event.position);
         match event.kind {
             PointerEventKind::Move => {
-                if self.hovered_index != index {
-                    self.hovered_index = index;
-                    cx.request_redraw();
-                }
-                if index.is_some() {
-                    cx.set_cursor(crate::core::event::Cursor::Pointer);
-                }
+                self.indexed_state.update_hover(index, cx, self.state);
                 false
             }
-            PointerEventKind::Down => {
-                self.pressed_index = index;
-                if index.is_some() {
-                    cx.request_redraw();
-                }
-                index.is_some()
-            }
+            PointerEventKind::Down => self.indexed_state.press(index, cx, self.state),
             PointerEventKind::Up => {
-                let pressed = self.pressed_index;
-                self.pressed_index = None;
-                if let (Some(pressed), Some(released)) = (pressed, index)
-                    && pressed == released
-                {
+                let release = self.indexed_state.release(index, cx, self.state);
+                if release.activated {
+                    let released = match release.released_index {
+                        Some(released) => released,
+                        None => return false,
+                    };
                     let value = self.options[released].value.clone();
                     if value != self.selected {
                         self.selected = value;
@@ -403,16 +419,65 @@ mod tests {
             &mut focused,
         );
 
-        assert!(!control.handle_pointer_event(
-            &mut cx,
-            &pointer_at(PointerEventKind::Down, 120.0, 80.0),
-        ));
+        assert!(
+            !control
+                .handle_pointer_event(&mut cx, &pointer_at(PointerEventKind::Down, 120.0, 80.0),)
+        );
         assert_eq!(control.selected_value(), "list");
+    }
+
+    #[test]
+    fn advanced_ui_segmented_control_read_only_does_not_change_selected_value() {
+        let changes = Rc::new(RefCell::new(Vec::<String>::new()));
+        let changes_ref = Rc::clone(&changes);
+        let mut control = SegmentedControl::new([("list", "List"), ("grid", "Grid")], "list")
+            .read_only(true)
+            .on_change(move |value| changes_ref.borrow_mut().push(value.to_string()));
+        let taffy = TaffyTree::<ElementId>::new();
+        let mut focused = None;
+        let mut cx = EventContext::new(
+            Bounds::from_xywh(0.0, 0.0, 160.0, 36.0),
+            &taffy,
+            &mut focused,
+        );
+
+        assert!(!control.handle_pointer_event(&mut cx, &pointer(PointerEventKind::Down, 120.0)));
+        assert!(!control.handle_pointer_event(&mut cx, &pointer(PointerEventKind::Up, 120.0)));
+        assert_eq!(control.selected_value(), "list");
+        assert!(changes.borrow().is_empty());
+    }
+
+    #[test]
+    fn advanced_ui_segmented_control_disabled_clears_hovered_and_pressed_index() {
+        let mut control = SegmentedControl::new([("list", "List"), ("grid", "Grid")], "list");
+        let taffy = TaffyTree::<ElementId>::new();
+        let mut focused = None;
+        let mut cx = EventContext::new(
+            Bounds::from_xywh(0.0, 0.0, 160.0, 36.0),
+            &taffy,
+            &mut focused,
+        );
+
+        control.handle_pointer_event(&mut cx, &pointer(PointerEventKind::Move, 120.0));
+        control.handle_pointer_event(&mut cx, &pointer(PointerEventKind::Down, 120.0));
+        assert_eq!(control.hovered_index(), Some(1));
+        assert_eq!(control.pressed_index(), Some(1));
+
+        control = control.disabled(true);
+
+        assert_eq!(control.hovered_index(), None);
+        assert_eq!(control.pressed_index(), None);
     }
 
     #[test]
     #[should_panic(expected = "segmented control selected value must match an option")]
     fn advanced_ui_segmented_control_rejects_missing_selection() {
-        let _ = SegmentedControl::new([("list", "List")], "grid");
+        drop(SegmentedControl::new([("list", "List")], "grid"));
+    }
+
+    #[test]
+    #[should_panic(expected = "segmented option label must not be empty")]
+    fn advanced_ui_segmented_control_rejects_empty_option_label() {
+        drop(SegmentedControl::new([("list", "")], "list"));
     }
 }

@@ -1,17 +1,17 @@
+use crate::advanced_ui::state::{InteractionState, require_non_empty, validation_border_color};
 use crate::advanced_ui::tokens::{
-    control_border_color, control_colors, text_color, ControlSize, ControlState, ControlVariant,
-    CONTROL_GAP, CONTROL_RADIUS,
+    CONTROL_GAP, CONTROL_RADIUS, ControlSize, ControlState, ControlVariant, control_border_color,
+    control_colors, text_color,
 };
+use crate::core::ElementId;
 use crate::core::accessibility::{
     AccessibilityContext, AccessibilityError, AccessibilityNode, AccessibilityRole,
 };
-use crate::core::event::Cursor;
 use crate::core::geometry::{Bounds, Edges};
 use crate::core::style::{Corners, Style};
-use crate::core::ElementId;
 use crate::elements::element::{
-    style_to_taffy, Element, EventContext, LayoutContext, PaintContext, PointerEvent,
-    PointerEventKind,
+    Element, EventContext, LayoutContext, PaintContext, PointerEvent, PointerEventKind,
+    style_to_taffy,
 };
 use crate::renderer::Primitive;
 use taffy::prelude::*;
@@ -21,19 +21,22 @@ pub struct Checkbox {
     label: String,
     checked: bool,
     size: ControlSize,
-    state: ControlState,
+    state: InteractionState,
     style: Style,
     on_change: Option<Box<dyn Fn(bool)>>,
 }
 
 impl Checkbox {
     pub fn new(label: impl Into<String>) -> Self {
+        let label = label.into();
+        require_non_empty(&label, "advanced checkbox label must not be empty");
+
         Self {
             id: ElementId::new(),
-            label: label.into(),
+            label,
             checked: false,
             size: ControlSize::default(),
-            state: ControlState::default(),
+            state: InteractionState::default(),
             style: Style::new(),
             on_change: None,
         }
@@ -50,7 +53,17 @@ impl Checkbox {
     }
 
     pub fn disabled(mut self, disabled: bool) -> Self {
-        self.state.disabled = disabled;
+        self.state.set_disabled(disabled);
+        self
+    }
+
+    pub fn read_only(mut self, read_only: bool) -> Self {
+        self.state.set_read_only(read_only);
+        self
+    }
+
+    pub fn invalid(mut self, invalid: bool) -> Self {
+        self.state.set_invalid(invalid);
         self
     }
 
@@ -69,6 +82,12 @@ impl Checkbox {
     }
 
     pub fn state(&self) -> ControlState {
+        let mut state = self.state;
+        state.set_selected(self.checked);
+        state.into()
+    }
+
+    pub fn interaction_state(&self) -> InteractionState {
         self.state
     }
 
@@ -106,19 +125,11 @@ impl Element for Checkbox {
         let indicator = self.size.indicator_extent();
         let indicator_y = bounds.y() + (bounds.height() - indicator) / 2.0;
         let box_bounds = Bounds::from_xywh(bounds.x(), indicator_y, indicator, indicator);
-        let colors = control_colors(
-            ControlVariant::Primary,
-            ControlState {
-                selected: self.checked,
-                disabled: self.state.disabled,
-                hovered: self.state.hovered,
-                pressed: self.state.pressed,
-            },
-        );
+        let colors = control_colors(ControlVariant::Primary, self.state());
 
         let box_background = if self.checked {
             colors.background
-        } else if self.state.hovered {
+        } else if self.state.hovered() {
             crate::advanced_ui::tokens::disabled_surface_color()
         } else {
             crate::advanced_ui::tokens::surface_color()
@@ -127,7 +138,15 @@ impl Element for Checkbox {
         cx.paint(Primitive::Quad {
             bounds: box_bounds,
             background: box_background.to_rgba(),
-            border_color: if self.checked { colors.background } else { control_border_color() }.to_rgba(),
+            border_color: validation_border_color(
+                self.state.invalid(),
+                if self.checked {
+                    colors.background
+                } else {
+                    control_border_color()
+                },
+            )
+            .to_rgba(),
             border_widths: Edges::all(1.0),
             corner_radii: Corners::all(CONTROL_RADIUS / 2.0),
         });
@@ -172,43 +191,22 @@ impl Element for Checkbox {
             AccessibilityNode::label_required(self.id, AccessibilityRole::Checkbox, &self.label)?
                 .value_required(value)?
                 .with_checked(self.checked)
-                .with_enabled(!self.state.disabled)
+                .with_enabled(!self.state.disabled())
                 .with_focused(cx.a11y_has_focus(self.id));
         Ok(Some(node))
     }
 
     fn handle_pointer_event(&mut self, cx: &mut EventContext, event: &PointerEvent) -> bool {
-        if self.state.disabled {
-            self.state.hovered = false;
-            self.state.pressed = false;
-            return false;
-        }
-
         let inside = cx.bounds().contains(event.position);
         match event.kind {
             PointerEventKind::Move => {
-                if self.state.hovered != inside {
-                    self.state.hovered = inside;
-                    cx.request_redraw();
-                }
-                if inside {
-                    cx.set_cursor(Cursor::Pointer);
-                }
+                self.state.update_hover(cx.bounds(), event.position, cx);
                 false
             }
-            PointerEventKind::Down => {
-                if inside {
-                    self.state.pressed = true;
-                    cx.request_redraw();
-                    true
-                } else {
-                    false
-                }
-            }
+            PointerEventKind::Down => self.state.press_inside(inside, cx),
             PointerEventKind::Up => {
-                let was_pressed = self.state.pressed;
-                self.state.pressed = false;
-                if inside && was_pressed {
+                let release = self.state.release_inside(inside, cx);
+                if release.activated {
                     self.checked = !self.checked;
                     if let Some(handler) = &self.on_change {
                         handler(self.checked);
@@ -222,9 +220,6 @@ impl Element for Checkbox {
                     cx.request_redraw();
                     true
                 } else {
-                    if was_pressed {
-                        cx.request_redraw();
-                    }
                     false
                 }
             }
@@ -257,7 +252,8 @@ mod tests {
     fn advanced_ui_checkbox_toggles_and_reports_change() {
         let latest = Rc::new(Cell::new(false));
         let latest_ref = Rc::clone(&latest);
-        let mut checkbox = Checkbox::new("Enable").on_change(move |checked| latest_ref.set(checked));
+        let mut checkbox =
+            Checkbox::new("Enable").on_change(move |checked| latest_ref.set(checked));
         let taffy = TaffyTree::<ElementId>::new();
         let mut focused = None;
         let mut cx = EventContext::new(
@@ -285,5 +281,54 @@ mod tests {
 
         assert!(!checkbox.handle_pointer_event(&mut cx, &pointer(PointerEventKind::Down)));
         assert!(!checkbox.is_checked());
+    }
+
+    #[test]
+    fn advanced_ui_checkbox_read_only_does_not_toggle() {
+        let latest = Rc::new(Cell::new(false));
+        let latest_ref = Rc::clone(&latest);
+        let mut checkbox = Checkbox::new("Enable")
+            .read_only(true)
+            .on_change(move |checked| latest_ref.set(checked));
+        let taffy = TaffyTree::<ElementId>::new();
+        let mut focused = None;
+        let mut cx = EventContext::new(
+            Bounds::from_xywh(0.0, 0.0, 120.0, 36.0),
+            &taffy,
+            &mut focused,
+        );
+
+        assert!(!checkbox.handle_pointer_event(&mut cx, &pointer(PointerEventKind::Down)));
+        assert!(!checkbox.handle_pointer_event(&mut cx, &pointer(PointerEventKind::Up)));
+        assert!(!checkbox.is_checked());
+        assert!(!latest.get());
+    }
+
+    #[test]
+    fn advanced_ui_checkbox_disabled_clears_hover_and_active() {
+        let mut checkbox = Checkbox::new("Enable");
+        let taffy = TaffyTree::<ElementId>::new();
+        let mut focused = None;
+        let mut cx = EventContext::new(
+            Bounds::from_xywh(0.0, 0.0, 120.0, 36.0),
+            &taffy,
+            &mut focused,
+        );
+
+        checkbox.handle_pointer_event(&mut cx, &pointer(PointerEventKind::Move));
+        checkbox.handle_pointer_event(&mut cx, &pointer(PointerEventKind::Down));
+        assert!(checkbox.interaction_state().hovered());
+        assert!(checkbox.interaction_state().pressed());
+
+        checkbox = checkbox.disabled(true);
+
+        assert!(!checkbox.interaction_state().hovered());
+        assert!(!checkbox.interaction_state().pressed());
+    }
+
+    #[test]
+    #[should_panic(expected = "advanced checkbox label must not be empty")]
+    fn advanced_ui_checkbox_rejects_empty_label() {
+        drop(Checkbox::new(""));
     }
 }

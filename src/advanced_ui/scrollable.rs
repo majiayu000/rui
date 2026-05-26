@@ -1,8 +1,9 @@
+use crate::advanced_ui::state::{InteractionState, require_non_empty};
+use crate::core::ElementId;
 use crate::core::accessibility::{
     AccessibilityContext, AccessibilityError, AccessibilityNode, AccessibilityRole,
 };
 use crate::core::color::Color;
-use crate::core::ElementId;
 use crate::core::geometry::Size;
 use crate::core::style::Style;
 use crate::elements::element::{
@@ -15,6 +16,7 @@ pub struct Scrollable {
     id: ElementId,
     inner: ScrollView,
     accessibility_label: Option<String>,
+    state: InteractionState,
 }
 
 impl Scrollable {
@@ -24,6 +26,7 @@ impl Scrollable {
             id,
             inner: ScrollView::new().id(id).child(child),
             accessibility_label: None,
+            state: InteractionState::default(),
         }
     }
 
@@ -33,6 +36,7 @@ impl Scrollable {
             id,
             inner: ScrollView::new().id(id),
             accessibility_label: None,
+            state: InteractionState::default(),
         }
     }
 
@@ -43,8 +47,24 @@ impl Scrollable {
     }
 
     pub fn accessibility_label(mut self, label: impl Into<String>) -> Self {
-        self.accessibility_label = Some(label.into());
+        let label = label.into();
+        require_non_empty(&label, "scrollable accessibility label must not be empty");
+        self.accessibility_label = Some(label);
         self
+    }
+
+    pub fn disabled(mut self, disabled: bool) -> Self {
+        self.state.set_disabled(disabled);
+        self
+    }
+
+    pub fn read_only(mut self, read_only: bool) -> Self {
+        self.state.set_read_only(read_only);
+        self
+    }
+
+    pub fn interaction_state(&self) -> InteractionState {
+        self.state
     }
 
     pub fn direction(mut self, direction: ScrollDirection) -> Self {
@@ -140,7 +160,7 @@ impl Element for Scrollable {
         cx: &AccessibilityContext,
     ) -> Result<Option<AccessibilityNode>, AccessibilityError> {
         let mut node = AccessibilityNode::new(self.id, AccessibilityRole::ScrollArea)
-            .with_enabled(true)
+            .with_enabled(!self.state.disabled())
             .with_focused(cx.a11y_has_focus(self.id));
         if let Some(label) = &self.accessibility_label {
             node = node.with_label(label.clone());
@@ -149,6 +169,9 @@ impl Element for Scrollable {
     }
 
     fn handle_pointer_event(&mut self, cx: &mut EventContext, event: &PointerEvent) -> bool {
+        if !self.state.can_activate() {
+            return false;
+        }
         self.inner.handle_pointer_event(cx, event)
     }
 
@@ -157,6 +180,9 @@ impl Element for Scrollable {
         cx: &mut EventContext,
         event: &crate::core::event::ScrollEvent,
     ) -> bool {
+        if !self.state.can_activate() {
+            return false;
+        }
         self.inner.handle_scroll_event(cx, event)
     }
 
@@ -165,10 +191,16 @@ impl Element for Scrollable {
         cx: &mut EventContext,
         event: &crate::core::event::KeyEvent,
     ) -> bool {
+        if !self.state.can_activate() {
+            return false;
+        }
         self.inner.handle_key_event(cx, event)
     }
 
     fn handle_window_event(&mut self, event: &crate::core::event::Event) -> bool {
+        if !self.state.can_activate() {
+            return false;
+        }
         self.inner.handle_window_event(event)
     }
 
@@ -227,5 +259,56 @@ mod tests {
             },
         ));
         assert!(did_scroll.get());
+    }
+
+    #[test]
+    fn advanced_ui_scrollable_disabled_or_read_only_does_not_dispatch_scroll_callback() {
+        for mut scrollable in [
+            Scrollable::new(container().w(100.0).h(300.0))
+                .h(100.0)
+                .disabled(true),
+            Scrollable::new(container().w(100.0).h(300.0))
+                .h(100.0)
+                .read_only(true),
+        ] {
+            let did_scroll = Rc::new(Cell::new(false));
+            let did_scroll_ref = Rc::clone(&did_scroll);
+            scrollable = scrollable.on_scroll(move |_, _| did_scroll_ref.set(true));
+            let mut taffy = TaffyTree::<ElementId>::new();
+            let mut layout_cx = LayoutContext::new(&mut taffy, Size::new(100.0, 100.0));
+            let node = scrollable.layout(&mut layout_cx);
+            if let Err(err) = taffy.compute_layout(
+                node,
+                taffy::Size {
+                    width: taffy::prelude::AvailableSpace::Definite(100.0),
+                    height: taffy::prelude::AvailableSpace::Definite(100.0),
+                },
+            ) {
+                panic!("layout should compute: {}", err);
+            }
+
+            let mut focused = None;
+            let mut event_cx = EventContext::new(
+                Bounds::from_xywh(0.0, 0.0, 100.0, 100.0),
+                &taffy,
+                &mut focused,
+            );
+            assert!(!scrollable.handle_scroll_event(
+                &mut event_cx,
+                &ScrollEvent {
+                    position: Point::new(4.0, 4.0),
+                    delta_x: 0.0,
+                    delta_y: 24.0,
+                    modifiers: Modifiers::default(),
+                },
+            ));
+            assert!(!did_scroll.get());
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "scrollable accessibility label must not be empty")]
+    fn advanced_ui_scrollable_rejects_empty_accessibility_label() {
+        drop(Scrollable::empty().accessibility_label(" "));
     }
 }

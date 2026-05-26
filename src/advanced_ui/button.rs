@@ -1,16 +1,17 @@
+use crate::advanced_ui::state::{InteractionState, require_non_empty, validation_border_color};
 use crate::advanced_ui::tokens::{
-    control_colors, ControlSize, ControlState, ControlVariant, CONTROL_RADIUS,
+    CONTROL_RADIUS, ControlSize, ControlState, ControlVariant, control_colors,
 };
+use crate::core::ElementId;
 use crate::core::accessibility::{
     AccessibilityContext, AccessibilityError, AccessibilityNode, AccessibilityRole,
 };
 use crate::core::event::Cursor;
 use crate::core::geometry::Edges;
 use crate::core::style::{Corners, Style};
-use crate::core::ElementId;
 use crate::elements::element::{
-    style_to_taffy, Element, EventContext, LayoutContext, PaintContext, PointerEvent,
-    PointerEventKind,
+    Element, EventContext, LayoutContext, PaintContext, PointerEvent, PointerEventKind,
+    style_to_taffy,
 };
 use crate::renderer::Primitive;
 use taffy::prelude::*;
@@ -20,22 +21,25 @@ pub struct Button {
     label: String,
     variant: ControlVariant,
     size: ControlSize,
-    state: ControlState,
+    state: InteractionState,
     style: Style,
     on_click: Option<Box<dyn Fn()>>,
 }
 
 impl Button {
     pub fn new(label: impl Into<String>) -> Self {
+        let label = label.into();
+        require_non_empty(&label, "advanced button label must not be empty");
+
         let mut style = Style::new();
         style.border.radius = Corners::all(CONTROL_RADIUS);
 
         Self {
             id: ElementId::new(),
-            label: label.into(),
+            label,
             variant: ControlVariant::default(),
             size: ControlSize::default(),
-            state: ControlState::default(),
+            state: InteractionState::default(),
             style,
             on_click: None,
         }
@@ -81,7 +85,17 @@ impl Button {
     }
 
     pub fn disabled(mut self, disabled: bool) -> Self {
-        self.state.disabled = disabled;
+        self.state.set_disabled(disabled);
+        self
+    }
+
+    pub fn read_only(mut self, read_only: bool) -> Self {
+        self.state.set_read_only(read_only);
+        self
+    }
+
+    pub fn invalid(mut self, invalid: bool) -> Self {
+        self.state.set_invalid(invalid);
         self
     }
 
@@ -95,15 +109,15 @@ impl Button {
     }
 
     pub fn state(&self) -> ControlState {
+        self.state.into()
+    }
+
+    pub fn interaction_state(&self) -> InteractionState {
         self.state
     }
 
     pub fn cursor(&self) -> Cursor {
-        if self.state.disabled {
-            Cursor::NotAllowed
-        } else {
-            Cursor::Pointer
-        }
+        self.state.cursor()
     }
 
     fn preferred_width(&self) -> f32 {
@@ -136,7 +150,7 @@ impl Element for Button {
         let bounds = cx.bounds();
         cx.register_hit_region(self.id, bounds);
 
-        let colors = control_colors(self.variant, self.state);
+        let colors = control_colors(self.variant, self.state.into());
         let border_widths = if matches!(self.variant, ControlVariant::Outline) {
             Edges::all(1.0)
         } else {
@@ -146,7 +160,7 @@ impl Element for Button {
         cx.paint(Primitive::Quad {
             bounds,
             background: colors.background.to_rgba(),
-            border_color: colors.border.to_rgba(),
+            border_color: validation_border_color(self.state.invalid(), colors.border).to_rgba(),
             border_widths,
             corner_radii: self.style.border.radius,
         });
@@ -169,46 +183,22 @@ impl Element for Button {
     ) -> Result<Option<AccessibilityNode>, AccessibilityError> {
         let node =
             AccessibilityNode::label_required(self.id, AccessibilityRole::Button, &self.label)?
-                .with_enabled(!self.state.disabled)
+                .with_enabled(!self.state.disabled())
                 .with_focused(cx.a11y_has_focus(self.id));
         Ok(Some(node))
     }
 
     fn handle_pointer_event(&mut self, cx: &mut EventContext, event: &PointerEvent) -> bool {
-        if self.state.disabled {
-            self.state.hovered = false;
-            self.state.pressed = false;
-            return false;
-        }
-
         let inside = cx.bounds().contains(event.position);
         match event.kind {
             PointerEventKind::Move => {
-                if self.state.hovered != inside {
-                    self.state.hovered = inside;
-                    cx.request_redraw();
-                }
-                if inside {
-                    cx.set_cursor(self.cursor());
-                }
+                self.state.update_hover(cx.bounds(), event.position, cx);
                 false
             }
-            PointerEventKind::Down => {
-                if inside {
-                    self.state.pressed = true;
-                    cx.request_redraw();
-                    true
-                } else {
-                    false
-                }
-            }
+            PointerEventKind::Down => self.state.press_inside(inside, cx),
             PointerEventKind::Up => {
-                let was_pressed = self.state.pressed;
-                self.state.pressed = false;
-                if was_pressed {
-                    cx.request_redraw();
-                }
-                if inside && was_pressed {
+                let release = self.state.release_inside(inside, cx);
+                if release.activated {
                     if let Some(handler) = &self.on_click {
                         handler();
                     }
@@ -285,6 +275,55 @@ mod tests {
     }
 
     #[test]
+    fn advanced_ui_button_read_only_does_not_click() {
+        let clicked = Rc::new(Cell::new(false));
+        let clicked_ref = Rc::clone(&clicked);
+        let mut button = Button::new("Save")
+            .read_only(true)
+            .on_click(move || clicked_ref.set(true));
+        let taffy = TaffyTree::<ElementId>::new();
+        let mut focused = None;
+        let mut cx = EventContext::new(
+            Bounds::from_xywh(0.0, 0.0, 80.0, 36.0),
+            &taffy,
+            &mut focused,
+        );
+
+        assert!(!button.handle_pointer_event(&mut cx, &event(PointerEventKind::Down, 4.0, 4.0)));
+        assert!(!button.handle_pointer_event(&mut cx, &event(PointerEventKind::Up, 4.0, 4.0)));
+        assert!(!clicked.get());
+        assert_eq!(button.cursor(), Cursor::Default);
+    }
+
+    #[test]
+    fn advanced_ui_button_disabled_clears_hover_and_active() {
+        let mut button = Button::new("Save");
+        let taffy = TaffyTree::<ElementId>::new();
+        let mut focused = None;
+        let mut cx = EventContext::new(
+            Bounds::from_xywh(0.0, 0.0, 80.0, 36.0),
+            &taffy,
+            &mut focused,
+        );
+
+        button.handle_pointer_event(&mut cx, &event(PointerEventKind::Move, 4.0, 4.0));
+        button.handle_pointer_event(&mut cx, &event(PointerEventKind::Down, 4.0, 4.0));
+        assert!(button.interaction_state().hovered());
+        assert!(button.interaction_state().pressed());
+
+        button = button.disabled(true);
+
+        assert!(!button.interaction_state().hovered());
+        assert!(!button.interaction_state().pressed());
+    }
+
+    #[test]
+    #[should_panic(expected = "advanced button label must not be empty")]
+    fn advanced_ui_button_rejects_empty_label() {
+        drop(Button::new(" "));
+    }
+
+    #[test]
     fn advanced_ui_button_layout_uses_control_size() {
         let mut button = Button::new("Save").size(ControlSize::Large);
         let mut taffy = TaffyTree::<ElementId>::new();
@@ -300,6 +339,9 @@ mod tests {
         ) {
             panic!("layout should compute: {}", err);
         }
-        assert_eq!(taffy.layout(node).map(|layout| layout.size.height), Ok(44.0));
+        assert_eq!(
+            taffy.layout(node).map(|layout| layout.size.height),
+            Ok(44.0)
+        );
     }
 }

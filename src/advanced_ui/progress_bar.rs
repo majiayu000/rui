@@ -1,9 +1,12 @@
-use crate::advanced_ui::tokens::{control_border_color, ControlSize, CONTROL_RADIUS};
+use crate::advanced_ui::state::{
+    InteractionState, require_finite, require_finite_non_negative, validation_border_color,
+};
+use crate::advanced_ui::tokens::{CONTROL_RADIUS, ControlSize, control_border_color};
+use crate::core::ElementId;
 use crate::core::color::Color;
 use crate::core::geometry::{Bounds, Edges};
 use crate::core::style::{Corners, Style};
-use crate::core::ElementId;
-use crate::elements::element::{style_to_taffy, Element, LayoutContext, PaintContext};
+use crate::elements::element::{Element, LayoutContext, PaintContext, style_to_taffy};
 use crate::renderer::Primitive;
 use taffy::prelude::*;
 
@@ -15,6 +18,7 @@ pub struct ProgressBar {
     show_label: bool,
     color: Color,
     background: Color,
+    state: InteractionState,
     style: Style,
 }
 
@@ -33,6 +37,7 @@ impl ProgressBar {
             show_label: true,
             color: Color::hex(0x2563eb),
             background: Color::hex(0xe5e7eb),
+            state: InteractionState::default(),
             style,
         }
     }
@@ -54,9 +59,10 @@ impl ProgressBar {
     }
 
     pub fn width(mut self, width: f32) -> Self {
-        if !width.is_finite() || width < 0.0 {
-            panic!("progress bar width must be a finite non-negative value");
-        }
+        require_finite_non_negative(
+            width,
+            "progress bar width must be a finite non-negative value",
+        );
         self.width = width;
         self
     }
@@ -74,6 +80,15 @@ impl ProgressBar {
     pub fn background(mut self, color: impl Into<Color>) -> Self {
         self.background = color.into();
         self
+    }
+
+    pub fn invalid(mut self, invalid: bool) -> Self {
+        self.state.set_invalid(invalid);
+        self
+    }
+
+    pub fn interaction_state(&self) -> InteractionState {
+        self.state
     }
 
     pub fn get_value(&self) -> f32 {
@@ -101,7 +116,10 @@ impl Element for ProgressBar {
 
         match cx.taffy.new_leaf(style) {
             Ok(node) => node,
-            Err(err) => panic!("failed to create advanced progress bar layout node: {}", err),
+            Err(err) => panic!(
+                "failed to create advanced progress bar layout node: {}",
+                err
+            ),
         }
     }
 
@@ -112,7 +130,8 @@ impl Element for ProgressBar {
         cx.paint(Primitive::Quad {
             bounds,
             background: self.background.to_rgba(),
-            border_color: control_border_color().to_rgba(),
+            border_color: validation_border_color(self.state.invalid(), control_border_color())
+                .to_rgba(),
             border_widths: Edges::all(1.0),
             corner_radii: radius,
         });
@@ -144,9 +163,7 @@ impl Element for ProgressBar {
 }
 
 fn validate_progress_value(value: f32) {
-    if !value.is_finite() {
-        panic!("progress bar value must be finite");
-    }
+    require_finite(value, "progress bar value must be finite");
 }
 
 pub fn progress_bar(value: f32) -> ProgressBar {
@@ -169,7 +186,20 @@ mod tests {
     #[test]
     #[should_panic(expected = "progress bar value must be finite")]
     fn advanced_ui_progress_bar_rejects_nan() {
-        let _ = ProgressBar::new(f32::NAN);
+        ProgressBar::new(f32::NAN);
+    }
+
+    #[test]
+    #[should_panic(expected = "progress bar width must be a finite non-negative value")]
+    fn advanced_ui_progress_bar_rejects_invalid_width() {
+        ProgressBar::new(0.5).width(-1.0);
+    }
+
+    #[test]
+    fn advanced_ui_progress_bar_preserves_invalid_state_for_style_resolution() {
+        let bar = ProgressBar::new(0.5).invalid(true);
+
+        assert!(bar.interaction_state().invalid());
     }
 
     #[test]
@@ -189,11 +219,8 @@ mod tests {
         }
 
         let mut scene = Scene::new();
-        let mut paint_cx = PaintContext::new(
-            &mut scene,
-            Bounds::from_xywh(0.0, 0.0, 200.0, 18.0),
-            &taffy,
-        );
+        let mut paint_cx =
+            PaintContext::new(&mut scene, Bounds::from_xywh(0.0, 0.0, 200.0, 18.0), &taffy);
         bar.paint(&mut paint_cx);
 
         assert_eq!(scene.primitives().len(), 3);
