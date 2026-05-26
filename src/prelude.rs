@@ -6,6 +6,10 @@ pub use crate::core::{
     style::{Background, BorderStyle, Corners, Style},
     event::{MouseEvent, KeyEvent, KeyCode, Modifiers, Cursor},
     animation::{Animation, Animatable, Easing, Transform, Transition},
+    action::{
+        ActionError, ActionHandler, ActionId, ActionOutcome, ActionRouter, KeyChord, Keymap,
+        StandardAction,
+    },
     text_editing::{
         CaretGeometry, Clipboard, ClipboardError, MemoryClipboard, SelectionRect, TextComposition,
         TextEditBuffer, TextEditError, TextEditLayout, TextEditOutcome, TextInputEvent, TextLine,
