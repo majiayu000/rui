@@ -2,6 +2,7 @@
 
 mod primitives;
 mod scene;
+pub mod text;
 
 #[cfg(target_os = "macos")]
 pub mod metal;

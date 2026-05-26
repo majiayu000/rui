@@ -3,9 +3,9 @@
 use crate::core::geometry::{Bounds, Size};
 use crate::{ImageFit, ImageSource};
 use crate::renderer::primitives::{GpuQuad, GpuShadow, Primitive};
+use crate::renderer::text::{TextRasterCache, TextRequest};
 use crate::renderer::Scene;
 use metal::*;
-use rusttype::{point, Font, Scale};
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::mem;
@@ -137,153 +137,6 @@ impl ImageCache {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-struct TextKey {
-    content: String,
-    size: u32,
-    weight: u16,
-    font_family: Option<String>,
-}
-
-struct TextEntry {
-    id: u32,
-    size: Size,
-    pixels: Vec<u8>,
-}
-
-struct TextCache {
-    font: Option<Font<'static>>,
-    next_id: u32,
-    entries: HashMap<TextKey, Arc<TextEntry>>,
-}
-
-impl TextCache {
-    fn new() -> Self {
-        Self {
-            font: load_system_font(),
-            next_id: 1,
-            entries: HashMap::new(),
-        }
-    }
-
-    fn resolve(
-        &mut self,
-        content: &str,
-        font_size: f32,
-        font_weight: u16,
-        font_family: Option<&str>,
-    ) -> Option<Arc<TextEntry>> {
-        if content.is_empty() {
-            return None;
-        }
-
-        let key = TextKey {
-            content: content.to_string(),
-            size: font_size.max(1.0).round() as u32,
-            weight: font_weight,
-            font_family: font_family.map(|s| s.to_string()),
-        };
-
-        if let Some(entry) = self.entries.get(&key) {
-            return Some(entry.clone());
-        }
-
-        let font = match &self.font {
-            Some(font) => font,
-            None => {
-                log::error!("No font available for text rendering");
-                return None;
-            }
-        };
-
-        let scale = Scale::uniform(font_size.max(1.0));
-        let v_metrics = font.v_metrics(scale);
-        let glyphs: Vec<_> = font
-            .layout(content, scale, point(0.0, v_metrics.ascent))
-            .collect();
-
-        let mut min_x = i32::MAX;
-        let mut min_y = i32::MAX;
-        let mut max_x = i32::MIN;
-        let mut max_y = i32::MIN;
-
-        for glyph in &glyphs {
-            if let Some(bb) = glyph.pixel_bounding_box() {
-                min_x = min_x.min(bb.min.x);
-                min_y = min_y.min(bb.min.y);
-                max_x = max_x.max(bb.max.x);
-                max_y = max_y.max(bb.max.y);
-            }
-        }
-
-        if min_x >= max_x || min_y >= max_y {
-            return None;
-        }
-
-        let width = (max_x - min_x) as u32;
-        let height = (max_y - min_y) as u32;
-        let mut pixels = vec![0u8; (width * height * 4) as usize];
-
-        for glyph in glyphs {
-            if let Some(bb) = glyph.pixel_bounding_box() {
-                glyph.draw(|x, y, v| {
-                    let px = x as i32 + bb.min.x - min_x;
-                    let py = y as i32 + bb.min.y - min_y;
-                    if px < 0 || py < 0 {
-                        return;
-                    }
-                    let px = px as u32;
-                    let py = py as u32;
-                    if px >= width || py >= height {
-                        return;
-                    }
-                    let idx = ((py * width + px) * 4) as usize;
-                    let alpha = (v * 255.0) as u8;
-                    pixels[idx] = 255;
-                    pixels[idx + 1] = 255;
-                    pixels[idx + 2] = 255;
-                    pixels[idx + 3] = alpha;
-                });
-            }
-        }
-
-        let entry = TextEntry {
-            id: self.alloc_id(),
-            size: Size::new(width as f32, height as f32),
-            pixels,
-        };
-
-        let entry = Arc::new(entry);
-        self.entries.insert(key.clone(), entry.clone());
-        Some(entry)
-    }
-
-    fn alloc_id(&mut self) -> u32 {
-        let id = self.next_id;
-        self.next_id += 1;
-        id
-    }
-}
-
-fn load_system_font() -> Option<Font<'static>> {
-    let candidates = [
-        "/System/Library/Fonts/SFNS.ttf",
-        "/System/Library/Fonts/SFNSMono.ttf",
-        "/System/Library/Fonts/Monaco.ttf",
-        "/System/Library/Fonts/Geneva.ttf",
-    ];
-
-    for path in candidates {
-        if let Ok(bytes) = std::fs::read(path) {
-            if let Some(font) = Font::try_from_vec(bytes) {
-                return Some(font);
-            }
-        }
-    }
-
-    None
-}
-
 /// Metal-based renderer
 pub struct MetalRenderer {
     device: Device,
@@ -294,7 +147,7 @@ pub struct MetalRenderer {
     sampler: SamplerState,
     textures: HashMap<u32, Texture>,
     image_cache: ImageCache,
-    text_cache: TextCache,
+    text_cache: TextRasterCache,
 }
 
 impl MetalRenderer {
@@ -411,7 +264,7 @@ impl MetalRenderer {
             sampler,
             textures: HashMap::new(),
             image_cache: ImageCache::new(),
-            text_cache: TextCache::new(),
+            text_cache: TextRasterCache::new(),
         })
     }
 
@@ -544,8 +397,8 @@ impl MetalRenderer {
                     font_size,
                     font_weight,
                     font_family,
+                    line_height,
                     align,
-                    ..
                 } => {
                     self.draw_text_primitive(
                         encoder,
@@ -555,6 +408,7 @@ impl MetalRenderer {
                         *font_size,
                         *font_weight,
                         font_family.as_deref(),
+                        *line_height,
                         *align,
                         &uniforms,
                     );
@@ -717,20 +571,35 @@ impl MetalRenderer {
         font_size: f32,
         font_weight: u16,
         font_family: Option<&str>,
+        line_height: f32,
         align: crate::elements::text::TextAlign,
         uniforms: &Uniforms,
     ) {
-        let entry = match self.text_cache.resolve(content, font_size, font_weight, font_family) {
-            Some(entry) => entry,
-            None => return,
+        let entry = match self.text_cache.resolve(TextRequest::new(
+            content,
+            font_size,
+            font_weight,
+            font_family,
+            line_height,
+        )) {
+            Ok(Some(entry)) => entry,
+            Ok(None) => return,
+            Err(err) => {
+                log::error!("Text rendering failed: {:?}", err);
+                return;
+            }
         };
 
-        let texture = self.ensure_texture(entry.id, entry.size, &entry.pixels);
+        let texture = self.ensure_texture(
+            entry.id,
+            Size::new(entry.metrics.ink_bounds.width(), entry.metrics.ink_bounds.height()),
+            &entry.pixels,
+        );
 
         let mut x = bounds.x();
         let mut y = bounds.y();
-        let text_width = entry.size.width;
-        let text_height = entry.size.height;
+        let text_width = entry.metrics.ink_bounds.width();
+        let text_height = entry.metrics.ink_bounds.height();
 
         match align {
             crate::elements::text::TextAlign::Left => {}
