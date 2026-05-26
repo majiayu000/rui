@@ -1,10 +1,10 @@
 //! Rendering subsystem
 
-mod scene;
 mod primitives;
+mod scene;
 
 #[cfg(target_os = "macos")]
 pub mod metal;
 
-pub use scene::Scene;
 pub use primitives::Primitive;
+pub use scene::{HitRegion, Layer, LayerId, Scene, ZIndex};
