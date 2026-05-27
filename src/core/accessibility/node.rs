@@ -12,6 +12,13 @@ pub enum AccessibilityRole {
     ScrollArea,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AccessibilityAction {
+    Activate,
+    ScrollForward,
+    ScrollBackward,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct AccessibilityContext {
     focused: Option<ElementId>,
@@ -41,6 +48,7 @@ pub struct AccessibilityNode {
     focused: bool,
     selected: Option<bool>,
     checked: Option<bool>,
+    actions: Vec<AccessibilityAction>,
     children: Vec<AccessibilityNode>,
 }
 
@@ -55,6 +63,7 @@ impl AccessibilityNode {
             focused: false,
             selected: None,
             checked: None,
+            actions: Vec::new(),
             children: Vec::new(),
         }
     }
@@ -89,6 +98,10 @@ impl AccessibilityNode {
 
     pub fn a11y_checked(&self) -> Option<bool> {
         self.checked
+    }
+
+    pub fn a11y_actions(&self) -> &[AccessibilityAction] {
+        &self.actions
     }
 
     pub fn a11y_children(&self) -> &[AccessibilityNode] {
@@ -143,6 +156,22 @@ impl AccessibilityNode {
 
     pub fn with_checked(mut self, checked: bool) -> Self {
         self.checked = Some(checked);
+        self
+    }
+
+    pub fn with_action(mut self, action: AccessibilityAction) -> Self {
+        if !self.actions.contains(&action) {
+            self.actions.push(action);
+        }
+        self
+    }
+
+    pub fn with_actions(mut self, actions: impl IntoIterator<Item = AccessibilityAction>) -> Self {
+        for action in actions {
+            if !self.actions.contains(&action) {
+                self.actions.push(action);
+            }
+        }
         self
     }
 

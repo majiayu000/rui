@@ -1,7 +1,8 @@
 use crate::advanced_ui::state::{InteractionState, require_non_empty};
 use crate::core::ElementId;
 use crate::core::accessibility::{
-    AccessibilityContext, AccessibilityError, AccessibilityNode, AccessibilityRole,
+    AccessibilityAction, AccessibilityContext, AccessibilityError, AccessibilityNode,
+    AccessibilityRole,
 };
 use crate::core::color::Color;
 use crate::core::geometry::Size;
@@ -162,6 +163,12 @@ impl Element for Scrollable {
         let mut node = AccessibilityNode::new(self.id, AccessibilityRole::ScrollArea)
             .with_enabled(!self.state.disabled())
             .with_focused(cx.a11y_has_focus(self.id));
+        if self.state.can_activate() {
+            node = node.with_actions([
+                AccessibilityAction::ScrollForward,
+                AccessibilityAction::ScrollBackward,
+            ]);
+        }
         if let Some(label) = &self.accessibility_label {
             node = node.with_label(label.clone());
         }

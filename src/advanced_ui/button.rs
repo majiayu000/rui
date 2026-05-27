@@ -4,7 +4,8 @@ use crate::advanced_ui::tokens::{
 };
 use crate::core::ElementId;
 use crate::core::accessibility::{
-    AccessibilityContext, AccessibilityError, AccessibilityNode, AccessibilityRole,
+    AccessibilityAction, AccessibilityContext, AccessibilityError, AccessibilityNode,
+    AccessibilityRole,
 };
 use crate::core::event::Cursor;
 use crate::core::geometry::Edges;
@@ -181,10 +182,13 @@ impl Element for Button {
         &self,
         cx: &AccessibilityContext,
     ) -> Result<Option<AccessibilityNode>, AccessibilityError> {
-        let node =
+        let mut node =
             AccessibilityNode::label_required(self.id, AccessibilityRole::Button, &self.label)?
                 .with_enabled(!self.state.disabled())
                 .with_focused(cx.a11y_has_focus(self.id));
+        if self.state.can_activate() {
+            node = node.with_action(AccessibilityAction::Activate);
+        }
         Ok(Some(node))
     }
 
