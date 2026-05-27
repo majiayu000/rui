@@ -1,7 +1,8 @@
 use rui::ImageSource;
 use rui::renderer::{
-    GlyphResourceKey, RecordingRenderer, Renderer, RendererImageCache, RendererResourceCache,
-    RendererResourceError, RendererResourceKind,
+    GlyphResourceKey, RecordingRenderer, Renderer, RendererDeviceDiagnostics, RendererDiagnostics,
+    RendererImageCache, RendererResourceCache, RendererResourceError, RendererResourceKind,
+    RendererResourceStats,
 };
 
 #[test]
@@ -128,6 +129,61 @@ fn renderer_resource_image_cache_reports_invalid_data_without_placeholder_conten
             ..
         }
     ));
+}
+
+#[test]
+fn renderer_resource_errors_expose_structured_context() {
+    let invalid = RendererResourceError::invalid(RendererResourceKind::Image, "bad pixels");
+    assert_eq!(invalid.kind(), RendererResourceKind::Image);
+    assert_eq!(invalid.resource_id(), None);
+    assert!(!invalid.is_pressure());
+
+    let missing = RendererResourceError::missing(RendererResourceKind::Texture, 42);
+    assert_eq!(missing.kind(), RendererResourceKind::Texture);
+    assert_eq!(missing.resource_id(), Some(42));
+    assert!(!missing.is_pressure());
+
+    let mut cache = RendererResourceCache::new(RendererResourceKind::Glyph, 0, 8);
+    let pressure = match cache.resolve(GlyphResourceKey::new("A", 12.0, 400, None, 1.0), 4) {
+        Ok(_) => panic!("zero-entry cache should report resource pressure"),
+        Err(err) => err,
+    };
+    assert_eq!(pressure.kind(), RendererResourceKind::Glyph);
+    assert_eq!(pressure.resource_id(), None);
+    assert!(pressure.is_pressure());
+}
+
+#[test]
+fn renderer_diagnostics_reports_resource_totals_by_kind() {
+    let diagnostics = RendererDiagnostics::new(
+        RendererDeviceDiagnostics::headless("diagnostic-test"),
+        vec![
+            RendererResourceStats {
+                kind: RendererResourceKind::Texture,
+                live_entries: 2,
+                live_bytes: 96,
+                disposed_entries: 1,
+                pressure_events: 0,
+            },
+            RendererResourceStats {
+                kind: RendererResourceKind::Image,
+                live_entries: 1,
+                live_bytes: 32,
+                disposed_entries: 0,
+                pressure_events: 2,
+            },
+        ],
+    );
+
+    let texture = match diagnostics.resource(RendererResourceKind::Texture) {
+        Some(stats) => stats,
+        None => panic!("texture diagnostics should be available"),
+    };
+    assert_eq!(texture.live_entries, 2);
+    assert_eq!(diagnostics.resource(RendererResourceKind::Glyph), None);
+    assert_eq!(diagnostics.total_live_entries(), 3);
+    assert_eq!(diagnostics.total_live_bytes(), 128);
+    assert_eq!(diagnostics.total_pressure_events(), 2);
 }
 
 #[test]

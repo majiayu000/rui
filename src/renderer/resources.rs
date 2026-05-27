@@ -81,6 +81,26 @@ impl RendererResourceError {
             message: message.into(),
         }
     }
+
+    pub fn kind(&self) -> RendererResourceKind {
+        match self {
+            Self::InvalidResource { kind, .. }
+            | Self::MissingResource { kind, .. }
+            | Self::UnsupportedResource { kind, .. }
+            | Self::ResourcePressure { kind, .. } => *kind,
+        }
+    }
+
+    pub fn resource_id(&self) -> Option<u32> {
+        match self {
+            Self::MissingResource { id, .. } => Some(*id),
+            _ => None,
+        }
+    }
+
+    pub fn is_pressure(&self) -> bool {
+        matches!(self, Self::ResourcePressure { .. })
+    }
 }
 
 impl fmt::Display for RendererResourceError {
@@ -157,6 +177,25 @@ impl RendererDiagnostics {
             device: RendererDeviceDiagnostics::headless(backend),
             resources: Vec::new(),
         }
+    }
+
+    pub fn resource(&self, kind: RendererResourceKind) -> Option<&RendererResourceStats> {
+        self.resources.iter().find(|stats| stats.kind == kind)
+    }
+
+    pub fn total_live_entries(&self) -> usize {
+        self.resources.iter().map(|stats| stats.live_entries).sum()
+    }
+
+    pub fn total_live_bytes(&self) -> usize {
+        self.resources.iter().map(|stats| stats.live_bytes).sum()
+    }
+
+    pub fn total_pressure_events(&self) -> usize {
+        self.resources
+            .iter()
+            .map(|stats| stats.pressure_events)
+            .sum()
     }
 }
 
