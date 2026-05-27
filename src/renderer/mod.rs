@@ -5,6 +5,7 @@ mod resources;
 mod runtime;
 mod scene;
 pub mod text;
+mod text_shaping;
 
 #[cfg(target_os = "macos")]
 pub mod metal;
