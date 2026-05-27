@@ -43,6 +43,8 @@ pub enum StandardAction {
     SelectLeft,
     SelectRight,
     SelectAll,
+    FocusNext,
+    FocusPrevious,
     DeleteBackward,
     DeleteForward,
     InsertNewline,
