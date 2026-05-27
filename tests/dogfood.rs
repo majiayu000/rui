@@ -48,10 +48,9 @@ fn dogfood_controls_mount_real_data_headlessly() {
     };
     assert!(snapshot.as_str().contains("rui local dogfood"));
     assert!(
-        snapshot.as_str().contains("working tree")
-            || snapshot
-                .as_str()
-                .contains("examples/advanced_ui_controls.rs")
+        data.git_changes
+            .iter()
+            .any(|change| snapshot.as_str().contains(change))
     );
 }
 

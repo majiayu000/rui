@@ -1,8 +1,10 @@
+use rui::core::color::Rgba;
 use rui::core::event::{KeyCode, KeyEvent, Modifiers};
 use rui::core::text_editing::{
-    ClipboardError, MemoryClipboard, TextEditBuffer, TextEditError, TextEditLayout, TextInputEvent,
-    TextRange, TextSelection,
+    ClipboardError, MemoryClipboard, TextEditBuffer, TextEditError, TextEditLayout,
+    TextEditPaintStyle, TextInputEvent, TextRange, TextSelection,
 };
+use rui::renderer::Primitive;
 
 fn range(start: usize, end: usize) -> TextRange {
     match TextRange::new(start, end) {
@@ -171,6 +173,73 @@ fn text_editing_layout_reports_caret_and_selection_geometry() {
     assert_eq!(rects[0].bounds.width(), 10.0);
     assert_eq!(rects[1].range, range(3, 5));
     assert_eq!(rects[1].bounds.width(), 20.0);
+}
+
+#[test]
+fn text_editing_layout_exposes_renderer_primitives_for_caret_and_selection() {
+    let layout = TextEditLayout::new("ab\ncde", 10.0, 20.0);
+    let style = TextEditPaintStyle::new(2.0, Rgba::RED, Rgba::BLUE.with_alpha(0.25));
+
+    let caret = match layout.caret_primitive(1, style) {
+        Ok(primitive) => primitive,
+        Err(err) => panic!("caret primitive failed: {err}"),
+    };
+
+    match caret {
+        Primitive::Quad {
+            bounds,
+            background,
+            border_color,
+            border_widths,
+            corner_radii,
+        } => {
+            assert_eq!(bounds.x(), 10.0);
+            assert_eq!(bounds.y(), 0.0);
+            assert_eq!(bounds.width(), 2.0);
+            assert_eq!(bounds.height(), 20.0);
+            assert_eq!(background, Rgba::RED);
+            assert_eq!(border_color, Rgba::TRANSPARENT);
+            assert_eq!(border_widths, rui::Edges::ZERO);
+            assert_eq!(corner_radii, rui::Corners::ZERO);
+        }
+        other => panic!("expected caret quad primitive, got {other:?}"),
+    }
+
+    let selection = match layout.selection_primitives(range(1, 5), style) {
+        Ok(primitives) => primitives,
+        Err(err) => panic!("selection primitives failed: {err}"),
+    };
+    assert_eq!(selection.len(), 2);
+
+    match &selection[0] {
+        Primitive::Quad {
+            bounds, background, ..
+        } => {
+            assert_eq!(bounds.x(), 10.0);
+            assert_eq!(bounds.y(), 0.0);
+            assert_eq!(bounds.width(), 10.0);
+            assert_eq!(*background, Rgba::BLUE.with_alpha(0.25));
+        }
+        other => panic!("expected selection quad primitive, got {other:?}"),
+    }
+
+    match &selection[1] {
+        Primitive::Quad {
+            bounds, background, ..
+        } => {
+            assert_eq!(bounds.x(), 0.0);
+            assert_eq!(bounds.y(), 20.0);
+            assert_eq!(bounds.width(), 20.0);
+            assert_eq!(*background, Rgba::BLUE.with_alpha(0.25));
+        }
+        other => panic!("expected selection quad primitive, got {other:?}"),
+    }
+
+    let empty = match layout.selection_primitives(range(2, 2), style) {
+        Ok(primitives) => primitives,
+        Err(err) => panic!("empty selection primitives failed: {err}"),
+    };
+    assert!(empty.is_empty());
 }
 
 #[test]
