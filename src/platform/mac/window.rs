@@ -101,6 +101,11 @@ impl PlatformWindow for MacWindow {
         })
     }
 
+    fn show(&mut self) -> Result<(), PlatformWindowError> {
+        self.make_key_and_order_front();
+        Ok(())
+    }
+
     fn set_title(&mut self, title: &str) -> Result<(), PlatformWindowError> {
         let title = NSString::from_str(title);
         self.window.setTitle(&title);
@@ -138,6 +143,17 @@ impl PlatformWindow for MacWindow {
             viewport_size: self.content_size()?,
             scale_factor: self.scale_factor(),
         })
+    }
+
+    fn request_redraw(&self) -> Result<(), PlatformWindowError> {
+        let content_view = self
+            .window
+            .contentView()
+            .ok_or_else(|| PlatformWindowError::backend("macos", "window has no content view"))?;
+        unsafe {
+            let _: () = msg_send![&*content_view, setNeedsDisplay: true];
+        }
+        Ok(())
     }
 
     fn close(&mut self) -> Result<(), PlatformWindowError> {

@@ -1,7 +1,7 @@
 use rui::core::{Size, WindowOptions};
 use rui::platform::{
-    PlatformWindow, PlatformWindowError, PlatformWindowFeature, PlatformWindowFeatures,
-    UnsupportedPlatformWindow, validate_window_options,
+    PlatformWindow, PlatformWindowError, PlatformWindowEvent, PlatformWindowFeature,
+    PlatformWindowFeatures, UnsupportedPlatformWindow, validate_window_options,
 };
 use rui::renderer::RendererError;
 use std::fs;
@@ -49,6 +49,13 @@ fn unsupported_platform_window_returns_explicit_errors() {
     assert!(!state.renderer_attached);
 
     assert_eq!(
+        window.show(),
+        Err(PlatformWindowError::unsupported(
+            "linux",
+            PlatformWindowFeature::Lifecycle,
+        ))
+    );
+    assert_eq!(
         window.set_title("new title"),
         Err(PlatformWindowError::unsupported(
             "linux",
@@ -69,6 +76,20 @@ fn unsupported_platform_window_returns_explicit_errors() {
             PlatformWindowFeature::RendererAttachment,
         ))
     );
+    assert_eq!(
+        window.request_redraw(),
+        Err(PlatformWindowError::unsupported(
+            "linux",
+            PlatformWindowFeature::Lifecycle,
+        ))
+    );
+    assert_eq!(
+        window.close(),
+        Err(PlatformWindowError::unsupported(
+            "linux",
+            PlatformWindowFeature::Lifecycle,
+        ))
+    );
 }
 
 #[test]
@@ -86,6 +107,16 @@ fn platform_window_option_validation_rejects_invalid_sizes() {
         validate_window_options(&inverted_bounds),
         Err(PlatformWindowError::InvalidOptions { .. })
     ));
+}
+
+#[test]
+fn platform_window_events_identify_redraw_work() {
+    assert!(PlatformWindowEvent::Created.requests_redraw());
+    assert!(PlatformWindowEvent::Resized(Size::new(640.0, 480.0)).requests_redraw());
+    assert!(PlatformWindowEvent::ScaleFactorChanged(2.0).requests_redraw());
+    assert!(PlatformWindowEvent::FocusChanged(true).requests_redraw());
+    assert!(PlatformWindowEvent::RedrawRequested.requests_redraw());
+    assert!(!PlatformWindowEvent::CloseRequested.requests_redraw());
 }
 
 #[test]

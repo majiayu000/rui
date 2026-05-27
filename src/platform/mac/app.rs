@@ -9,6 +9,7 @@ use crate::elements::element::{
     Element, EventContext, LayoutContext, PaintContext, PointerEvent, PointerEventKind,
 };
 use crate::platform::mac::window::create_window;
+use crate::platform::window::PlatformWindow;
 use crate::renderer::RendererError;
 use crate::renderer::Scene;
 use crate::renderer::metal::MetalRenderer;
@@ -65,13 +66,14 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
         };
 
         // Create the window with Metal layer
-        let window = match create_window(&options, renderer.device(), mtm) {
+        let mut window = match create_window(&options, renderer.device(), mtm) {
             Ok(window) => window,
             Err(err) => panic!("failed to create platform window: {}", err),
         };
 
-        // Make key and order front
-        window.make_key_and_order_front();
+        if let Err(err) = window.show() {
+            panic!("failed to show platform window: {}", err);
+        }
 
         // Activate the application
         app.activate();
@@ -200,11 +202,11 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
             }
 
             if had_event {
-                context.request_redraw();
+                schedule_platform_redraw(&window, &mut context);
             }
 
             if viewport_size != last_viewport_size {
-                context.request_redraw();
+                schedule_platform_redraw(&window, &mut context);
             }
 
             context.consume_runtime_view_notification();
@@ -270,7 +272,7 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
                 };
                 root.handle_window_event(&evt);
                 last_focused = is_focused;
-                context.request_redraw();
+                schedule_platform_redraw(&window, &mut context);
             }
 
             let is_visible = window.is_visible();
@@ -278,7 +280,7 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
                 root.handle_window_event(&Event::WindowClose);
                 context.quit();
                 window_visible = false;
-                context.request_redraw();
+                schedule_platform_redraw(&window, &mut context);
             }
 
             let mut event_cx = EventContext::new(root_bounds, &taffy, &mut focused_element);
@@ -312,7 +314,7 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
             }
 
             if event_cx.redraw_requested() {
-                context.request_redraw();
+                schedule_platform_redraw(&window, &mut context);
             }
 
             for event in &scroll_events {
@@ -325,7 +327,7 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
             }
 
             if context.consume_runtime_view_notification() {
-                context.request_redraw();
+                schedule_platform_redraw(&window, &mut context);
             }
 
             // Paint phase
@@ -350,6 +352,13 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
                 break;
             }
         }
+    }
+}
+
+fn schedule_platform_redraw<W: PlatformWindow>(window: &W, context: &mut AppContext) {
+    context.request_redraw();
+    if let Err(err) = window.request_redraw() {
+        panic!("failed to schedule platform redraw: {}", err);
     }
 }
 
