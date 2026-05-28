@@ -7,6 +7,7 @@ use crate::renderer::resources::{
 };
 use crate::renderer::text_shaping::shape_with_font;
 use rusttype::{Font, Scale, point};
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -268,7 +269,8 @@ fn rasterize_with_font(
 
     let scale = Scale::uniform(request.font_size);
     let v_metrics = font.v_metrics(scale);
-    for glyph in font.layout(request.content, scale, point(0.0, v_metrics.ascent)) {
+    let raster_content = rasterizable_text(request.content);
+    for glyph in font.layout(&raster_content, scale, point(0.0, v_metrics.ascent)) {
         if let Some(bb) = glyph.pixel_bounding_box() {
             glyph.draw(|x, y, v| {
                 let px = x as i32 + bb.min.x - metrics.ink_bounds.x() as i32;
@@ -291,6 +293,14 @@ fn rasterize_with_font(
     }
 
     pixels
+}
+
+fn rasterizable_text(content: &str) -> Cow<'_, str> {
+    if content.chars().any(char::is_control) {
+        Cow::Owned(content.chars().filter(|ch| !ch.is_control()).collect())
+    } else {
+        Cow::Borrowed(content)
+    }
 }
 
 fn resolve_font_family(font_family: Option<&str>) -> Result<(), TextError> {
@@ -443,6 +453,50 @@ mod tests {
                 direction: TextDirection::Mixed
             }
         )));
+    }
+
+    #[test]
+    fn shaping_recognizes_non_latin_ltr_scripts() {
+        let mut cache = TextMeasureCache::new();
+
+        let cyrillic = shape(&mut cache, request("Привет"));
+        assert_eq!(cyrillic.direction(), TextDirection::LeftToRight);
+
+        let mixed = shape(&mut cache, request("Привет שלום"));
+        assert_eq!(mixed.direction(), TextDirection::Mixed);
+    }
+
+    #[test]
+    fn shaping_treats_emoji_as_neutral_for_bidi_diagnostics() {
+        let mut cache = TextMeasureCache::new();
+        let plan = shape(&mut cache, request("שלום 🙂"));
+
+        assert_eq!(plan.direction(), TextDirection::RightToLeft);
+        assert!(plan.clusters().iter().any(|cluster| {
+            cluster.text == "🙂" && cluster.direction == TextDirection::Neutral
+        }));
+        assert!(!plan.diagnostics().iter().any(|diagnostic| matches!(
+            diagnostic,
+            TextShapeDiagnostic::MixedDirection { .. }
+        )));
+    }
+
+    #[test]
+    fn rasterization_filters_control_characters_like_measurement() {
+        let mut cache = TextRasterCache::new();
+        let with_control = match cache.resolve(request("A\tW")) {
+            Ok(Some(entry)) => entry,
+            Ok(None) => panic!("expected rasterized control-character text entry"),
+            Err(err) => panic!("text rasterization failed: {:?}", err),
+        };
+        let without_control = match cache.resolve(request("AW")) {
+            Ok(Some(entry)) => entry,
+            Ok(None) => panic!("expected rasterized filtered text entry"),
+            Err(err) => panic!("text rasterization failed: {:?}", err),
+        };
+
+        assert_eq!(with_control.metrics, without_control.metrics);
+        assert_eq!(with_control.pixels, without_control.pixels);
     }
 
     #[test]

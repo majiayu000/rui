@@ -233,10 +233,7 @@ fn classify_script(cluster: &str) -> TextScript {
 fn classify_direction(cluster: &str) -> TextDirection {
     if cluster.chars().any(is_rtl) {
         TextDirection::RightToLeft
-    } else if cluster
-        .chars()
-        .any(|ch| is_latin(ch) || is_cjk(ch) || is_emoji(ch))
-    {
+    } else if cluster.chars().any(is_ltr) {
         TextDirection::LeftToRight
     } else {
         TextDirection::Neutral
@@ -302,6 +299,12 @@ fn is_emoji(ch: char) -> bool {
         ch as u32,
         0x2600..=0x27bf | 0x1f1e6..=0x1f1ff | 0x1f300..=0x1faff
     )
+}
+
+fn is_ltr(ch: char) -> bool {
+    is_latin(ch)
+        || is_cjk(ch)
+        || (ch.is_alphabetic() && !is_rtl(ch) && !is_emoji(ch))
 }
 
 fn is_rtl(ch: char) -> bool {
