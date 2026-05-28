@@ -349,7 +349,6 @@ image("path/to/image.png")
 | Function | Description |
 |----------|-------------|
 | `image(path)` | From file path |
-| `image_url(url)` | From URL |
 | `Image::from_data(data, w, h)` | From raw pixels |
 | `Image::from_texture(id)` | From GPU texture |
 

@@ -238,12 +238,6 @@ fn primitive_line(index: usize, primitive: &Primitive) -> Result<String, Primiti
                     source: "file",
                 });
             }
-            ImageSource::Url(_) => {
-                return Err(PrimitiveSnapshotError::UnsupportedImageSource {
-                    index,
-                    source: "url",
-                });
-            }
             ImageSource::Texture(_) => {
                 return Err(PrimitiveSnapshotError::UnsupportedImageSource {
                     index,

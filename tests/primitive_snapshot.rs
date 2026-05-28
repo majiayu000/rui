@@ -1,7 +1,7 @@
 use rui::core::color::Rgba;
 use rui::core::geometry::{Bounds, Edges, Size};
 use rui::core::style::Corners;
-use rui::elements::{div, image_url, text};
+use rui::elements::{div, image, text};
 use rui::renderer::Primitive;
 use rui::testing::{
     PrimitiveSnapshot, PrimitiveSnapshotError, assert_primitive_snapshot_text, mount,
@@ -57,14 +57,14 @@ fn primitive_snapshot_reports_inline_diff() {
 fn primitive_snapshot_rejects_unstable_image_sources() {
     let primitives = [Primitive::Image {
         bounds: Bounds::from_xywh(0.0, 0.0, 20.0, 20.0),
-        source: ImageSource::Url(String::from("https://example.invalid/image.png")),
+        source: ImageSource::File(String::from("assets/image.png")),
         fit: ImageFit::Contain,
         corner_radii: Corners::ZERO,
         opacity: 1.0,
     }];
 
     let error = match primitive_snapshot(&primitives) {
-        Ok(_) => panic!("url image snapshots should be rejected"),
+        Ok(_) => panic!("file image snapshots should be rejected"),
         Err(err) => err,
     };
 
@@ -72,7 +72,7 @@ fn primitive_snapshot_rejects_unstable_image_sources() {
         error,
         PrimitiveSnapshotError::UnsupportedImageSource {
             index: 0,
-            source: "url"
+            source: "file"
         }
     );
 }
@@ -125,24 +125,22 @@ fn primitive_snapshot_keeps_manual_primitives_stable() {
 }
 
 #[test]
-fn primitive_snapshot_rejects_image_url_element_output() {
+fn primitive_snapshot_rejects_file_image_element_output() {
     let session = match mount(Size::new(40.0, 40.0), |_cx| {
-        image_url("https://example.invalid/image.png")
-            .w(40.0)
-            .h(40.0)
+        image("assets/image.png").w(40.0).h(40.0)
     }) {
         Ok(session) => session,
         Err(err) => panic!("headless image fixture should mount: {err}"),
     };
 
     let error = match session.primitive_snapshot() {
-        Ok(_) => panic!("url image element snapshot should fail explicitly"),
+        Ok(_) => panic!("file image element snapshot should fail explicitly"),
         Err(err) => err,
     };
 
     match error {
         PrimitiveSnapshotError::UnsupportedImageSource { source, .. } => {
-            assert_eq!(source, "url");
+            assert_eq!(source, "file");
         }
         other => panic!("expected unsupported image source, got {other}"),
     }
