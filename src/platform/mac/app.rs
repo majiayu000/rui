@@ -366,11 +366,8 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
     }
 }
 
-fn schedule_platform_redraw<W: PlatformWindow>(window: &W, context: &mut AppContext) {
+fn schedule_platform_redraw<W: PlatformWindow>(_window: &W, context: &mut AppContext) {
     context.request_redraw();
-    if let Err(err) = window.request_redraw() {
-        panic!("failed to schedule platform redraw: {}", err);
-    }
 }
 
 fn modifiers_from_event(event: &NSEvent) -> Modifiers {
