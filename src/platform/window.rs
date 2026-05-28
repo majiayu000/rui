@@ -180,7 +180,22 @@ pub enum PlatformWindowEvent {
     Resized(Size),
     ScaleFactorChanged(f32),
     FocusChanged(bool),
+    RedrawRequested,
     Input(PlatformInputEvent),
+}
+
+impl PlatformWindowEvent {
+    pub fn requests_redraw(&self) -> bool {
+        matches!(
+            self,
+            Self::Created
+                | Self::Resized(_)
+                | Self::ScaleFactorChanged(_)
+                | Self::FocusChanged(_)
+                | Self::RedrawRequested
+                | Self::Input(_)
+        )
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -256,6 +271,13 @@ pub trait PlatformWindow {
 
     fn state(&self) -> Result<PlatformWindowState, PlatformWindowError>;
 
+    fn show(&mut self) -> Result<(), PlatformWindowError> {
+        Err(PlatformWindowError::unsupported(
+            self.platform_name(),
+            PlatformWindowFeature::Lifecycle,
+        ))
+    }
+
     fn set_title(&mut self, _title: &str) -> Result<(), PlatformWindowError> {
         Err(PlatformWindowError::unsupported(
             self.platform_name(),
@@ -302,6 +324,13 @@ pub trait PlatformWindow {
         Err(PlatformWindowError::unsupported(
             self.platform_name(),
             PlatformWindowFeature::RendererAttachment,
+        ))
+    }
+
+    fn request_redraw(&self) -> Result<(), PlatformWindowError> {
+        Err(PlatformWindowError::unsupported(
+            self.platform_name(),
+            PlatformWindowFeature::Lifecycle,
         ))
     }
 
