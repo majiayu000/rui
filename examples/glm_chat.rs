@@ -4,14 +4,16 @@
 
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::io::{self, Write};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
-use std::fs;
-use std::path::Path;
 use unicode_width::UnicodeWidthStr;
+
+#[path = "glm_chat/file_tools.rs"]
+mod glm_chat_file_tools;
+use glm_chat_file_tools::{FILE_TOOL_ENABLE_ENV, ToolSandbox, execute_tool, get_tools};
 
 const API_URL: &str = "https://open.bigmodel.cn/api/anthropic/v1/messages";
 
@@ -104,124 +106,6 @@ enum ResponseBlock {
     Thinking { thinking: String },
 }
 
-fn get_tools() -> Vec<Tool> {
-    vec![
-        Tool {
-            name: "read_file".to_string(),
-            description: "读取指定路径的文件内容".to_string(),
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "文件路径"
-                    }
-                },
-                "required": ["path"]
-            }),
-        },
-        Tool {
-            name: "list_files".to_string(),
-            description: "列出指定目录下的文件和文件夹".to_string(),
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "目录路径"
-                    }
-                },
-                "required": ["path"]
-            }),
-        },
-        Tool {
-            name: "search_files".to_string(),
-            description: "在当前目录搜索匹配的文件名".to_string(),
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "pattern": {
-                        "type": "string",
-                        "description": "搜索模式（支持通配符）"
-                    }
-                },
-                "required": ["pattern"]
-            }),
-        },
-    ]
-}
-
-fn execute_tool(name: &str, input: &Value) -> String {
-    match name {
-        "read_file" => {
-            let path = input["path"].as_str().unwrap_or("");
-            match fs::read_to_string(path) {
-                Ok(content) => {
-                    let lines: Vec<&str> = content.lines().take(100).collect();
-                    format!("Read {} lines\n\n{}", lines.len(), lines.join("\n"))
-                }
-                Err(e) => format!("Error: {}", e),
-            }
-        }
-        "list_files" => {
-            let path = input["path"].as_str().unwrap_or(".");
-            match fs::read_dir(path) {
-                Ok(entries) => {
-                    let mut files: Vec<String> = entries
-                        .filter_map(|e| e.ok())
-                        .map(|e| {
-                            let name = e.file_name().to_string_lossy().to_string();
-                            if e.path().is_dir() {
-                                format!("{}/", name)
-                            } else {
-                                name
-                            }
-                        })
-                        .collect();
-                    files.sort();
-                    files.join("\n")
-                }
-                Err(e) => format!("Error: {}", e),
-            }
-        }
-        "search_files" => {
-            let pattern = input["pattern"].as_str().unwrap_or("*");
-            let mut results = Vec::new();
-            search_recursive(Path::new("."), pattern, &mut results, 0, 3);
-            if results.is_empty() {
-                "No files found".to_string()
-            } else {
-                results.join("\n")
-            }
-        }
-        _ => format!("Unknown tool: {}", name),
-    }
-}
-
-fn search_recursive(dir: &Path, pattern: &str, results: &mut Vec<String>, depth: usize, max_depth: usize) {
-    if depth > max_depth {
-        return;
-    }
-    if let Ok(entries) = fs::read_dir(dir) {
-        for entry in entries.filter_map(|e| e.ok()) {
-            let path = entry.path();
-            let name = entry.file_name().to_string_lossy().to_string();
-
-            if name.contains(pattern) || pattern == "*" {
-                results.push(path.display().to_string());
-            }
-
-            if path.is_dir() && !name.starts_with('.') {
-                search_recursive(&path, pattern, results, depth + 1, max_depth);
-            }
-
-            if results.len() >= 20 {
-                return;
-            }
-        }
-    }
-}
-
 fn print_banner() {
     const BOX_WIDTH: usize = 45;
 
@@ -234,7 +118,15 @@ fn print_banner() {
     let line1 = format!("  {}{}{}  {}{}{}", BOLD, title, RESET, DIM, subtitle, RESET);
     let line1_width = 2 + title.width() + 2 + subtitle.width();
     let pad1 = BOX_WIDTH - line1_width;
-    println!("{}{}│{}{}{}│{}", BOLD, CYAN, RESET, line1, " ".repeat(pad1), CYAN, );
+    println!(
+        "{}{}│{}{}{}│{}",
+        BOLD,
+        CYAN,
+        RESET,
+        line1,
+        " ".repeat(pad1),
+        CYAN,
+    );
     println!("{}│{}", CYAN, RESET);
 
     // 第二行：提示
@@ -242,7 +134,15 @@ fn print_banner() {
     let line2 = format!("  {}{}{}", DIM, hint, RESET);
     let line2_width = 2 + hint.width();
     let pad2 = BOX_WIDTH - line2_width;
-    println!("{}{}│{}{}{}│{}", BOLD, CYAN, RESET, line2, " ".repeat(pad2), CYAN);
+    println!(
+        "{}{}│{}{}{}│{}",
+        BOLD,
+        CYAN,
+        RESET,
+        line2,
+        " ".repeat(pad2),
+        CYAN
+    );
 
     println!("{}{}╰{}╯{}", BOLD, CYAN, "─".repeat(BOX_WIDTH), RESET);
     println!();
@@ -259,7 +159,7 @@ fn print_tool_call(name: &str, input: &Value) {
     };
 
     println!();
-    println!("{}{} {}{}({}){}",MAGENTA, BULLET, BOLD, name, RESET, RESET);
+    println!("{}{} {}{}({}){}", MAGENTA, BULLET, BOLD, name, RESET, RESET);
 }
 
 fn print_tool_result(result: &str) {
@@ -272,20 +172,33 @@ fn print_tool_result(result: &str) {
     }
 
     if result.lines().count() > 3 {
-        println!("  {}{}  {}...({} more lines){}", MAGENTA, ARROW, DIM, result.lines().count() - 3, RESET);
+        println!(
+            "  {}{}  {}...({} more lines){}",
+            MAGENTA,
+            ARROW,
+            DIM,
+            result.lines().count() - 3,
+            RESET
+        );
     }
 }
 
 fn print_thinking(text: &str) {
     println!();
-    println!("{}{}┌─ Thinking ─────────────────────────────{}", DIM, YELLOW, RESET);
+    println!(
+        "{}{}┌─ Thinking ─────────────────────────────{}",
+        DIM, YELLOW, RESET
+    );
     for line in text.lines().take(5) {
         println!("{}{}│ {}{}", DIM, YELLOW, line, RESET);
     }
     if text.lines().count() > 5 {
         println!("{}{}│ ...{}", DIM, YELLOW, RESET);
     }
-    println!("{}{}└─────────────────────────────────────────{}", DIM, YELLOW, RESET);
+    println!(
+        "{}{}└─────────────────────────────────────────{}",
+        DIM, YELLOW, RESET
+    );
 }
 
 struct Spinner {
@@ -339,11 +252,16 @@ async fn send_request(
     messages: &[MessageParam],
     tools: &[Tool],
 ) -> Result<ChatResponse, Box<dyn std::error::Error>> {
+    let tools = if tools.is_empty() {
+        None
+    } else {
+        Some(tools.to_vec())
+    };
     let request = ChatRequest {
         model: "claude-3-5-sonnet-20241022".to_string(),
         max_tokens: 8192,
         messages: messages.to_vec(),
-        tools: Some(tools.to_vec()),
+        tools,
     };
 
     let response = client
@@ -366,14 +284,28 @@ async fn send_request(
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let api_key = std::env::var("GLM_API_KEY")
-        .expect("请设置环境变量 GLM_API_KEY");
+    let api_key = std::env::var("GLM_API_KEY").expect("请设置环境变量 GLM_API_KEY");
 
     let client = Client::new();
     let mut messages: Vec<MessageParam> = Vec::new();
-    let tools = get_tools();
+    let tool_sandbox =
+        ToolSandbox::from_env().map_err(|e| format!("GLM file tool sandbox error: {}", e))?;
+    let tools = get_tools(tool_sandbox.is_some());
 
     print_banner();
+    if let Some(sandbox) = &tool_sandbox {
+        println!(
+            "{}Local file tools enabled inside {}{}",
+            DIM,
+            sandbox.root.display(),
+            RESET
+        );
+    } else {
+        println!(
+            "{}Local file tools disabled. Set {}=1 to opt in.{}",
+            DIM, FILE_TOOL_ENABLE_ENV, RESET
+        );
+    }
 
     loop {
         print!("{}{}❯{} ", BOLD, GREEN, RESET);
@@ -430,7 +362,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 print_tool_call(name, input);
 
                                 // 执行工具
-                                let tool_result = execute_tool(name, input);
+                                let tool_result = execute_tool(name, input, tool_sandbox.as_ref());
                                 print_tool_result(&tool_result);
 
                                 tool_uses.push((id.clone(), tool_result));
@@ -439,17 +371,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
 
                     // 保存助手消息
-                    let assistant_content: Vec<ContentBlock> = response.content.iter().filter_map(|b| {
-                        match b {
-                            ResponseBlock::Text { text } => Some(ContentBlock::Text { text: text.clone() }),
-                            ResponseBlock::ToolUse { id, name, input } => Some(ContentBlock::ToolUse {
-                                id: id.clone(),
-                                name: name.clone(),
-                                input: input.clone(),
-                            }),
+                    let assistant_content: Vec<ContentBlock> = response
+                        .content
+                        .iter()
+                        .filter_map(|b| match b {
+                            ResponseBlock::Text { text } => {
+                                Some(ContentBlock::Text { text: text.clone() })
+                            }
+                            ResponseBlock::ToolUse { id, name, input } => {
+                                Some(ContentBlock::ToolUse {
+                                    id: id.clone(),
+                                    name: name.clone(),
+                                    input: input.clone(),
+                                })
+                            }
                             _ => None,
-                        }
-                    }).collect();
+                        })
+                        .collect();
 
                     messages.push(MessageParam {
                         role: "assistant".to_string(),
