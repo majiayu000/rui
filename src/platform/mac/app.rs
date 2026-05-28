@@ -8,7 +8,7 @@ use crate::core::window::WindowOptions;
 use crate::elements::element::{
     Element, EventContext, LayoutContext, PaintContext, PointerEvent, PointerEventKind,
 };
-use crate::platform::mac::window::create_window;
+use crate::platform::mac::window::{MAC_REDRAW_EVENT_DATA, create_window};
 use crate::platform::window::PlatformWindow;
 use crate::renderer::RendererError;
 use crate::renderer::Scene;
@@ -104,7 +104,8 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
                 | NSEventMask::RightMouseDragged
                 | NSEventMask::ScrollWheel
                 | NSEventMask::KeyDown
-                | NSEventMask::KeyUp;
+                | NSEventMask::KeyUp
+                | NSEventMask::ApplicationDefined;
 
             viewport_size = match window.content_size() {
                 Ok(size) => size,
@@ -115,6 +116,7 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
             let mut scroll_events = Vec::new();
             let mut key_events = Vec::new();
             let mut had_event = false;
+            let mut had_redraw_event = false;
 
             let window_number = window.window_number();
             let mut expiration = if context.dirty || context.needs_rebuild {
@@ -134,6 +136,12 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
                 let event_type = event.r#type();
                 if event.windowNumber() != window_number {
                     app.sendEvent(&event);
+                    continue;
+                }
+                if event_type == NSEventType::ApplicationDefined
+                    && event.data1() == MAC_REDRAW_EVENT_DATA
+                {
+                    had_redraw_event = true;
                     continue;
                 }
                 had_event = true;
@@ -203,6 +211,9 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
 
             if had_event {
                 schedule_platform_redraw(&window, &mut context);
+            }
+            if had_redraw_event {
+                context.request_redraw();
             }
 
             if viewport_size != last_viewport_size {
