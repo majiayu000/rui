@@ -221,7 +221,7 @@ fn classify_script(cluster: &str) -> TextScript {
     if cluster.chars().any(is_rtl) {
         return TextScript::Rtl;
     }
-    if cluster.chars().all(|ch| ch.is_ascii_digit()) {
+    if cluster.chars().all(char::is_numeric) {
         return TextScript::Number;
     }
     if cluster.chars().any(is_latin) {
@@ -308,10 +308,11 @@ fn is_ltr(ch: char) -> bool {
 }
 
 fn is_rtl(ch: char) -> bool {
-    matches!(
-        ch as u32,
-        0x0590..=0x08ff | 0xfb1d..=0xfdff | 0xfe70..=0xfeff
-    )
+    ch.is_alphabetic()
+        && matches!(
+            ch as u32,
+            0x0590..=0x08ff | 0xfb1d..=0xfdff | 0xfe70..=0xfeff
+        )
 }
 
 fn is_default_ignorable(ch: char) -> bool {

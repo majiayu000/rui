@@ -482,6 +482,32 @@ mod tests {
     }
 
     #[test]
+    fn shaping_treats_arabic_indic_digits_as_numeric_neutral() {
+        let mut cache = TextMeasureCache::new();
+
+        let digits = shape(&mut cache, request("١٢٣"));
+        assert_eq!(digits.direction(), TextDirection::Neutral);
+        assert!(
+            digits
+                .clusters()
+                .iter()
+                .all(|cluster| cluster.script == TextScript::Number)
+        );
+
+        let latin_with_digits = shape(&mut cache, request("abc ١٢٣"));
+        assert_eq!(latin_with_digits.direction(), TextDirection::LeftToRight);
+        assert!(
+            !latin_with_digits
+                .diagnostics()
+                .iter()
+                .any(|diagnostic| matches!(
+                    diagnostic,
+                    TextShapeDiagnostic::MixedDirection { .. }
+                ))
+        );
+    }
+
+    #[test]
     fn rasterization_filters_control_characters_like_measurement() {
         let mut cache = TextRasterCache::new();
         let with_control = match cache.resolve(request("A\tW")) {
