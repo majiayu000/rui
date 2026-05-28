@@ -1,10 +1,10 @@
 use rui::advanced_ui::{container, hoverable};
-use rui::core::event::{Cursor, MouseButton};
+use rui::core::event::{Cursor, Modifiers, MouseButton, ScrollEvent};
 use rui::elements::element::{
     Element, EventContext, EventResult, LayoutContext, PaintContext, PointerEvent, PointerEventKind,
 };
 use rui::renderer::Scene;
-use rui::{div, Bounds, Color, Div, ElementId, Point, Size, Style};
+use rui::{Bounds, Color, Div, ElementId, Point, Size, Style, div, scroll_view};
 use std::cell::RefCell;
 use std::rc::Rc;
 use taffy::prelude::{AvailableSpace, NodeId, TaffyTree};
@@ -108,6 +108,15 @@ fn pointer_move(position: Point) -> PointerEvent {
         kind: PointerEventKind::Move,
         position,
         button: None,
+    }
+}
+
+fn scroll_at(position: Point) -> ScrollEvent {
+    ScrollEvent {
+        position,
+        delta_x: 0.0,
+        delta_y: 10.0,
+        modifiers: Modifiers::none(),
     }
 }
 
@@ -259,4 +268,32 @@ fn hoverable_delegates_pointer_events_to_child() {
     assert_eq!(result, EventResult::Stop);
     assert_eq!(scene.hit_test(position), Some(hover_id));
     assert_eq!(&*log.borrow(), &["child"]);
+}
+
+#[test]
+fn scroll_forwarding_uses_child_bounds_for_nested_scroll_views() {
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let scroll_log = Rc::clone(&log);
+    let mut root = div().w(40.0).h(40.0).child(
+        scroll_view()
+            .w(20.0)
+            .h(20.0)
+            .child(div().w(20.0).h(80.0))
+            .on_scroll(move |_x, _y| scroll_log.borrow_mut().push("scroll")),
+    );
+
+    let (taffy, root_bounds, _scene) = layout_and_paint(&mut root);
+    let mut focused = None;
+
+    let outside_child = Point::new(30.0, 30.0);
+    let mut cx = EventContext::new(root_bounds, &taffy, &mut focused);
+    let handled = root.handle_scroll_event(&mut cx, &scroll_at(outside_child));
+    assert!(!handled);
+    assert!(log.borrow().is_empty());
+
+    let inside_child = Point::new(5.0, 5.0);
+    let mut cx = EventContext::new(root_bounds, &taffy, &mut focused);
+    let handled = root.handle_scroll_event(&mut cx, &scroll_at(inside_child));
+    assert!(handled);
+    assert_eq!(&*log.borrow(), &["scroll"]);
 }
