@@ -333,8 +333,9 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
             }
 
             for (is_down, event) in &key_events {
-                let _ = is_down;
-                root.handle_key_event(&mut event_cx, event);
+                if should_forward_key_event_to_tree(*is_down) {
+                    root.handle_key_event(&mut event_cx, event);
+                }
             }
 
             if context.consume_runtime_view_notification() {
@@ -399,6 +400,21 @@ fn key_event_from_event(event: &NSEvent) -> KeyEvent {
     }
 
     key_event
+}
+
+fn should_forward_key_event_to_tree(is_down: bool) -> bool {
+    is_down
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_key_down_events_are_forwarded_to_elements() {
+        assert!(should_forward_key_event_to_tree(true));
+        assert!(!should_forward_key_event_to_tree(false));
+    }
 }
 
 fn keycode_from_char(ch: char) -> KeyCode {
