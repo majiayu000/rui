@@ -166,13 +166,15 @@ impl TextEditLayout {
     pub fn caret_primitive(
         &self,
         offset: usize,
+        paint_origin: impl Into<Point>,
         style: TextEditPaintStyle,
     ) -> Result<Primitive, TextEditError> {
+        let paint_origin = paint_origin.into();
         let caret = self.caret_for_offset(offset)?;
         Ok(Primitive::Quad {
             bounds: Bounds::from_xywh(
-                caret.position.x,
-                caret.position.y,
+                paint_origin.x + caret.position.x,
+                paint_origin.y + caret.position.y,
                 style.caret_width,
                 caret.height,
             ),
@@ -186,13 +188,20 @@ impl TextEditLayout {
     pub fn selection_primitives(
         &self,
         range: TextRange,
+        paint_origin: impl Into<Point>,
         style: TextEditPaintStyle,
     ) -> Result<Vec<Primitive>, TextEditError> {
+        let paint_origin = paint_origin.into();
         Ok(self
             .selection_rects(range)?
             .into_iter()
             .map(|rect| Primitive::Quad {
-                bounds: rect.bounds,
+                bounds: Bounds::from_xywh(
+                    paint_origin.x + rect.bounds.x(),
+                    paint_origin.y + rect.bounds.y(),
+                    rect.bounds.width(),
+                    rect.bounds.height(),
+                ),
                 background: style.selection_color,
                 border_color: Rgba::TRANSPARENT,
                 border_widths: Edges::ZERO,
