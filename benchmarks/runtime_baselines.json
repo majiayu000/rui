@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "generated_at": "2026-05-26T23:36:00+08:00",
   "baseline_revision": "b31da25",
   "environment": {
@@ -14,6 +14,12 @@
     "blocking_median_percent": 25.0,
     "blocking_p95_percent": 30.0,
     "enforcement_enabled": false
+  },
+  "calibration": {
+    "min_samples_per_benchmark": 9,
+    "min_calibration_runs_before_enforcement": 3,
+    "threshold_rationale": "Initial thresholds separate median drift from p95-only noise; require repeated local and CI calibration before tightening.",
+    "enforcement_rationale": "Enforcement remains disabled until the benchmark suite has at least three comparable CI runs on stable hardware."
   },
   "benchmarks": [
     {

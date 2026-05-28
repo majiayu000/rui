@@ -11,9 +11,9 @@ pub use crate::core::{
         StandardAction,
     },
     accessibility::{
-        AccessibilityAnnouncement, AccessibilityAnnouncementKind, AccessibilityBridge,
-        AccessibilityContext, AccessibilityError, AccessibilityNode, AccessibilityRole,
-        AccessibilityTree, UnsupportedAccessibilityBridge,
+        AccessibilityAction, AccessibilityAnnouncement, AccessibilityAnnouncementKind,
+        AccessibilityBridge, AccessibilityContext, AccessibilityError, AccessibilityNode,
+        AccessibilityRole, AccessibilityTree, UnsupportedAccessibilityBridge,
     },
     text_editing::{
         CaretGeometry, Clipboard, ClipboardError, MemoryClipboard, SelectionRect, TextComposition,

@@ -12,9 +12,14 @@ use objc2::MainThreadMarker;
 use objc2::MainThreadOnly;
 use objc2::msg_send;
 use objc2::rc::Retained;
-use objc2_app_kit::{NSWindow, NSWindowStyleMask};
-use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
+use objc2_app_kit::{
+    NSApplication, NSEvent, NSEventModifierFlags, NSEventType, NSWindow, NSWindowStyleMask,
+};
+use objc2_foundation::{NSDate, NSPoint, NSRect, NSSize, NSString};
 use objc2_quartz_core::CAMetalLayer;
+
+pub(crate) const MAC_REDRAW_EVENT_DATA: isize = 0x5255_4952;
+const MAC_REDRAW_EVENT_SUBTYPE: i16 = 0;
 
 pub struct MacWindow {
     window: Retained<NSWindow>,
@@ -101,6 +106,11 @@ impl PlatformWindow for MacWindow {
         })
     }
 
+    fn show(&mut self) -> Result<(), PlatformWindowError> {
+        self.make_key_and_order_front();
+        Ok(())
+    }
+
     fn set_title(&mut self, title: &str) -> Result<(), PlatformWindowError> {
         let title = NSString::from_str(title);
         self.window.setTitle(&title);
@@ -138,6 +148,35 @@ impl PlatformWindow for MacWindow {
             viewport_size: self.content_size()?,
             scale_factor: self.scale_factor(),
         })
+    }
+
+    fn request_redraw(&self) -> Result<(), PlatformWindowError> {
+        let content_view = self
+            .window
+            .contentView()
+            .ok_or_else(|| PlatformWindowError::backend("macos", "window has no content view"))?;
+        let mtm = MainThreadMarker::new().ok_or_else(|| {
+            PlatformWindowError::backend("macos", "redraw requested off the main thread")
+        })?;
+        let app = NSApplication::sharedApplication(mtm);
+        unsafe {
+            let _: () = msg_send![&*content_view, setNeedsDisplay: true];
+        }
+        let event =
+            NSEvent::otherEventWithType_location_modifierFlags_timestamp_windowNumber_context_subtype_data1_data2(
+                NSEventType::ApplicationDefined,
+                NSPoint::new(0.0, 0.0),
+                NSEventModifierFlags::empty(),
+                NSDate::timeIntervalSinceReferenceDate_class(),
+                self.window_number(),
+                None,
+                MAC_REDRAW_EVENT_SUBTYPE,
+                MAC_REDRAW_EVENT_DATA,
+                0,
+            )
+            .ok_or_else(|| PlatformWindowError::backend("macos", "failed to create redraw event"))?;
+        app.postEvent_atStart(&event, false);
+        Ok(())
     }
 
     fn close(&mut self) -> Result<(), PlatformWindowError> {

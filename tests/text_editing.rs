@@ -245,6 +245,34 @@ fn text_editing_layout_exposes_renderer_primitives_for_caret_and_selection() {
 }
 
 #[test]
+fn text_editing_layout_maps_combining_and_emoji_clusters_to_columns() {
+    let text = "e\u{301} 🧑‍💻";
+    let layout = TextEditLayout::new(text, 10.0, 20.0);
+
+    let after_combining = "e\u{301}".len();
+    let caret = match layout.caret_for_offset(after_combining) {
+        Ok(caret) => caret,
+        Err(err) => panic!("combining caret geometry failed: {err}"),
+    };
+    assert_eq!(caret.column, 1);
+    assert_eq!(caret.position.x, 10.0);
+
+    let caret = match layout.caret_for_offset(text.len()) {
+        Ok(caret) => caret,
+        Err(err) => panic!("emoji caret geometry failed: {err}"),
+    };
+    assert_eq!(caret.column, 3);
+    assert_eq!(caret.position.x, 30.0);
+
+    let rects = match layout.selection_rects(range(0, after_combining)) {
+        Ok(rects) => rects,
+        Err(err) => panic!("combining selection geometry failed: {err}"),
+    };
+    assert_eq!(rects.len(), 1);
+    assert_eq!(rects[0].bounds.width(), 10.0);
+}
+
+#[test]
 fn text_editing_invalid_offsets_and_multiline_policy_return_errors() {
     let mut buffer = TextEditBuffer::with_text("é");
     let error = match buffer.set_cursor(1) {

@@ -130,6 +130,12 @@ fn keymap_maps_standard_actions_from_key_events() {
             Modifiers::alt(),
             StandardAction::MoveWordRight,
         ),
+        (KeyCode::Tab, Modifiers::none(), StandardAction::FocusNext),
+        (
+            KeyCode::Tab,
+            Modifiers::shift(),
+            StandardAction::FocusPrevious,
+        ),
         (
             KeyCode::Backspace,
             Modifiers::none(),
@@ -141,6 +147,12 @@ fn keymap_maps_standard_actions_from_key_events() {
             StandardAction::DeleteForward,
         ),
         (KeyCode::Enter, Modifiers::none(), StandardAction::Activate),
+        (
+            KeyCode::Enter,
+            Modifiers::shift(),
+            StandardAction::InsertNewline,
+        ),
+        (KeyCode::Enter, Modifiers::meta(), StandardAction::Submit),
         (KeyCode::Escape, Modifiers::none(), StandardAction::Cancel),
         (KeyCode::A, Modifiers::meta(), StandardAction::SelectAll),
         (

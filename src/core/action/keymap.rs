@@ -75,6 +75,12 @@ impl Keymap {
             Modifiers::alt(),
             StandardAction::MoveWordRight,
         )?;
+        keymap.bind(KeyCode::Tab, Modifiers::none(), StandardAction::FocusNext)?;
+        keymap.bind(
+            KeyCode::Tab,
+            Modifiers::shift(),
+            StandardAction::FocusPrevious,
+        )?;
         keymap.bind(
             KeyCode::Backspace,
             Modifiers::none(),
@@ -86,6 +92,12 @@ impl Keymap {
             StandardAction::DeleteForward,
         )?;
         keymap.bind(KeyCode::Enter, Modifiers::none(), StandardAction::Activate)?;
+        keymap.bind(
+            KeyCode::Enter,
+            Modifiers::shift(),
+            StandardAction::InsertNewline,
+        )?;
+        keymap.bind(KeyCode::Enter, Modifiers::meta(), StandardAction::Submit)?;
         keymap.bind(KeyCode::Escape, Modifiers::none(), StandardAction::Cancel)?;
         keymap.bind(KeyCode::A, Modifiers::meta(), StandardAction::SelectAll)?;
         keymap.bind(

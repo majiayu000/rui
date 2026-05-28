@@ -6,7 +6,8 @@ use crate::advanced_ui::tokens::{
 };
 use crate::core::ElementId;
 use crate::core::accessibility::{
-    AccessibilityContext, AccessibilityError, AccessibilityNode, AccessibilityRole,
+    AccessibilityAction, AccessibilityContext, AccessibilityError, AccessibilityNode,
+    AccessibilityRole,
 };
 use crate::core::geometry::{Bounds, Edges};
 use crate::core::style::{Corners, Style};
@@ -282,7 +283,7 @@ impl Element for SegmentedControl {
                 .with_focused(cx.a11y_has_focus(self.id));
 
         for (option, id) in self.options.iter().zip(self.option_ids.iter().copied()) {
-            let child = AccessibilityNode::label_required(
+            let mut child = AccessibilityNode::label_required(
                 id,
                 AccessibilityRole::SegmentedOption,
                 &option.label,
@@ -290,6 +291,9 @@ impl Element for SegmentedControl {
             .value_required(&option.value)?
             .with_selected(option.value == self.selected)
             .with_enabled(!self.state.disabled());
+            if self.state.can_activate() {
+                child = child.with_action(AccessibilityAction::Activate);
+            }
             node = node.with_child(child);
         }
 

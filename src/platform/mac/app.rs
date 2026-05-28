@@ -8,7 +8,8 @@ use crate::core::window::WindowOptions;
 use crate::elements::element::{
     Element, EventContext, LayoutContext, PaintContext, PointerEvent, PointerEventKind,
 };
-use crate::platform::mac::window::create_window;
+use crate::platform::mac::window::{MAC_REDRAW_EVENT_DATA, create_window};
+use crate::platform::window::PlatformWindow;
 use crate::renderer::RendererError;
 use crate::renderer::Scene;
 use crate::renderer::metal::MetalRenderer;
@@ -65,13 +66,14 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
         };
 
         // Create the window with Metal layer
-        let window = match create_window(&options, renderer.device(), mtm) {
+        let mut window = match create_window(&options, renderer.device(), mtm) {
             Ok(window) => window,
             Err(err) => panic!("failed to create platform window: {}", err),
         };
 
-        // Make key and order front
-        window.make_key_and_order_front();
+        if let Err(err) = window.show() {
+            panic!("failed to show platform window: {}", err);
+        }
 
         // Activate the application
         app.activate();
@@ -102,7 +104,8 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
                 | NSEventMask::RightMouseDragged
                 | NSEventMask::ScrollWheel
                 | NSEventMask::KeyDown
-                | NSEventMask::KeyUp;
+                | NSEventMask::KeyUp
+                | NSEventMask::ApplicationDefined;
 
             viewport_size = match window.content_size() {
                 Ok(size) => size,
@@ -113,6 +116,7 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
             let mut scroll_events = Vec::new();
             let mut key_events = Vec::new();
             let mut had_event = false;
+            let mut had_redraw_event = false;
 
             let window_number = window.window_number();
             let mut expiration = if context.dirty || context.needs_rebuild {
@@ -132,6 +136,12 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
                 let event_type = event.r#type();
                 if event.windowNumber() != window_number {
                     app.sendEvent(&event);
+                    continue;
+                }
+                if event_type == NSEventType::ApplicationDefined
+                    && event.data1() == MAC_REDRAW_EVENT_DATA
+                {
+                    had_redraw_event = true;
                     continue;
                 }
                 had_event = true;
@@ -200,11 +210,14 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
             }
 
             if had_event {
+                schedule_platform_redraw(&window, &mut context);
+            }
+            if had_redraw_event {
                 context.request_redraw();
             }
 
             if viewport_size != last_viewport_size {
-                context.request_redraw();
+                schedule_platform_redraw(&window, &mut context);
             }
 
             context.consume_runtime_view_notification();
@@ -270,7 +283,7 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
                 };
                 root.handle_window_event(&evt);
                 last_focused = is_focused;
-                context.request_redraw();
+                schedule_platform_redraw(&window, &mut context);
             }
 
             let is_visible = window.is_visible();
@@ -278,7 +291,7 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
                 root.handle_window_event(&Event::WindowClose);
                 context.quit();
                 window_visible = false;
-                context.request_redraw();
+                schedule_platform_redraw(&window, &mut context);
             }
 
             let mut event_cx = EventContext::new(root_bounds, &taffy, &mut focused_element);
@@ -312,7 +325,7 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
             }
 
             if event_cx.redraw_requested() {
-                context.request_redraw();
+                schedule_platform_redraw(&window, &mut context);
             }
 
             for event in &scroll_events {
@@ -325,7 +338,7 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
             }
 
             if context.consume_runtime_view_notification() {
-                context.request_redraw();
+                schedule_platform_redraw(&window, &mut context);
             }
 
             // Paint phase
@@ -351,6 +364,10 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
             }
         }
     }
+}
+
+fn schedule_platform_redraw<W: PlatformWindow>(_window: &W, context: &mut AppContext) {
+    context.request_redraw();
 }
 
 fn modifiers_from_event(event: &NSEvent) -> Modifiers {

@@ -1,4 +1,6 @@
-use super::config::{classify_regression, percent_delta, RegressionStatus, RuntimeBaseline};
+use super::config::{
+    BenchmarkCalibration, RegressionStatus, RuntimeBaseline, classify_regression, percent_delta,
+};
 use super::measure::BenchmarkMeasurement;
 use serde::Serialize;
 use std::error::Error;
@@ -9,6 +11,7 @@ struct BenchmarkReport<'a> {
     baseline_revision: &'a str,
     environment: ReportEnvironment,
     thresholds: super::config::RegressionThresholds,
+    calibration: &'a BenchmarkCalibration,
     results: Vec<BenchmarkResult<'a>>,
     enforcement_enabled: bool,
 }
@@ -53,6 +56,7 @@ pub fn print_report(
             arch: std::env::consts::ARCH,
         },
         thresholds: baseline.thresholds,
+        calibration: &baseline.calibration,
         results,
         enforcement_enabled: baseline.thresholds.enforcement_enabled,
     };
