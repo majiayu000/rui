@@ -3,8 +3,8 @@
 use crate::core::color::Rgba;
 use crate::core::geometry::{Bounds, Edges};
 use crate::core::style::Corners;
-use crate::{ImageFit, ImageSource};
 use crate::elements::text::TextAlign;
+use crate::{ImageFit, ImageSource};
 use bytemuck::{Pod, Zeroable};
 
 /// GPU-renderable primitives
@@ -84,6 +84,63 @@ pub enum Primitive {
 
     /// Clipping mask pop
     PopClip,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PrimitiveKind {
+    Quad,
+    Shadow,
+    LinearGradient,
+    RadialGradient,
+    Text,
+    Image,
+    Path,
+    PushClip,
+    PopClip,
+}
+
+impl PrimitiveKind {
+    pub const ALL: [Self; 9] = [
+        Self::Quad,
+        Self::Shadow,
+        Self::LinearGradient,
+        Self::RadialGradient,
+        Self::Text,
+        Self::Image,
+        Self::Path,
+        Self::PushClip,
+        Self::PopClip,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Quad => "quad",
+            Self::Shadow => "shadow",
+            Self::LinearGradient => "linear_gradient",
+            Self::RadialGradient => "radial_gradient",
+            Self::Text => "text",
+            Self::Image => "image",
+            Self::Path => "path",
+            Self::PushClip => "push_clip",
+            Self::PopClip => "pop_clip",
+        }
+    }
+}
+
+impl Primitive {
+    pub fn kind(&self) -> PrimitiveKind {
+        match self {
+            Self::Quad { .. } => PrimitiveKind::Quad,
+            Self::Shadow { .. } => PrimitiveKind::Shadow,
+            Self::LinearGradient { .. } => PrimitiveKind::LinearGradient,
+            Self::RadialGradient { .. } => PrimitiveKind::RadialGradient,
+            Self::Text { .. } => PrimitiveKind::Text,
+            Self::Image { .. } => PrimitiveKind::Image,
+            Self::Path { .. } => PrimitiveKind::Path,
+            Self::PushClip { .. } => PrimitiveKind::PushClip,
+            Self::PopClip => PrimitiveKind::PopClip,
+        }
+    }
 }
 
 /// Vertex for path rendering

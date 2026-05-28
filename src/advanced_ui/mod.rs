@@ -7,6 +7,7 @@ mod scrollable;
 mod segmented_control;
 mod state;
 mod tokens;
+mod toolbar;
 mod tooltip;
 
 use crate::core::ElementId;
@@ -34,6 +35,7 @@ pub use state::{
     require_finite, require_finite_non_negative, require_non_empty, validation_border_color,
 };
 pub use tokens::{ControlColors, ControlSize, ControlState, ControlVariant};
+pub use toolbar::{Toolbar, toolbar};
 pub use tooltip::{Tooltip, tooltip};
 
 macro_rules! impl_div_wrapper_element {

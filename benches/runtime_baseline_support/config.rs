@@ -29,6 +29,7 @@ pub struct RuntimeBaseline {
     pub baseline_revision: String,
     pub environment: BenchmarkEnvironment,
     pub thresholds: RegressionThresholds,
+    pub calibration: BenchmarkCalibration,
     pub benchmarks: Vec<BenchmarkBaseline>,
 }
 
@@ -57,6 +58,14 @@ pub struct RegressionThresholds {
     pub blocking_median_percent: f64,
     pub blocking_p95_percent: f64,
     pub enforcement_enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BenchmarkCalibration {
+    pub min_samples_per_benchmark: usize,
+    pub min_calibration_runs_before_enforcement: usize,
+    pub threshold_rationale: String,
+    pub enforcement_rationale: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
