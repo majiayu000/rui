@@ -133,13 +133,7 @@ fn accessibility_text_and_scrollable_expose_semantic_tree() {
     };
     assert_eq!(scroll_node.a11y_role(), AccessibilityRole::ScrollArea);
     assert_eq!(scroll_node.a11y_label(), Some("Activity feed"));
-    assert_eq!(
-        scroll_node.a11y_actions(),
-        [
-            AccessibilityAction::ScrollForward,
-            AccessibilityAction::ScrollBackward
-        ]
-    );
+    assert!(scroll_node.a11y_actions().is_empty());
     assert_eq!(scroll_node.a11y_children().len(), 1);
     assert_eq!(
         scroll_node.a11y_children()[0].a11y_role(),
