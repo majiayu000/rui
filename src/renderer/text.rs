@@ -5,9 +5,15 @@ use crate::renderer::resources::{
     GlyphResourceKey, RendererResourceCache, RendererResourceError, RendererResourceKind,
     RendererResourceStats,
 };
+use crate::renderer::text_shaping::shape_with_font;
 use rusttype::{Font, Scale, point};
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
+
+pub use crate::renderer::text_shaping::{
+    TextCluster, TextDirection, TextRun, TextScript, TextShapeDiagnostic, TextShapePlan,
+};
 
 pub const TEXT_BOUNDS_TOLERANCE: f32 = 1.0;
 
@@ -132,6 +138,19 @@ impl TextMeasureCache {
         self.metrics.insert(key, metrics);
         Ok(metrics)
     }
+
+    pub fn shape_single_line(
+        &mut self,
+        request: TextRequest<'_>,
+    ) -> Result<TextShapePlan, TextError> {
+        if request.content.is_empty() || request.font_size <= 0.0 || request.line_height <= 0.0 {
+            return Ok(TextShapePlan::empty());
+        }
+
+        resolve_font_family(request.font_family)?;
+        let font = self.font.as_ref().ok_or(TextError::MissingFont)?;
+        Ok(shape_with_font(font, request))
+    }
 }
 
 impl Default for TextMeasureCache {
@@ -236,48 +255,7 @@ impl Default for TextRasterCache {
 }
 
 fn measure_with_font(font: &Font<'static>, request: TextRequest<'_>) -> TextMetrics {
-    let scale = Scale::uniform(request.font_size);
-    let v_metrics = font.v_metrics(scale);
-    let glyphs: Vec<_> = font
-        .layout(request.content, scale, point(0.0, v_metrics.ascent))
-        .collect();
-
-    let advance_width = glyphs
-        .last()
-        .map(|glyph| glyph.position().x + glyph.unpositioned().h_metrics().advance_width)
-        .unwrap_or(0.0);
-
-    let mut min_x = i32::MAX;
-    let mut min_y = i32::MAX;
-    let mut max_x = i32::MIN;
-    let mut max_y = i32::MIN;
-
-    for glyph in &glyphs {
-        if let Some(bb) = glyph.pixel_bounding_box() {
-            min_x = min_x.min(bb.min.x);
-            min_y = min_y.min(bb.min.y);
-            max_x = max_x.max(bb.max.x);
-            max_y = max_y.max(bb.max.y);
-        }
-    }
-
-    let ink_bounds = if min_x < max_x && min_y < max_y {
-        Bounds::from_xywh(
-            min_x as f32,
-            min_y as f32,
-            (max_x - min_x) as f32,
-            (max_y - min_y) as f32,
-        )
-    } else {
-        Bounds::from_xywh(0.0, 0.0, 0.0, 0.0)
-    };
-
-    let width = advance_width.max(ink_bounds.width()).ceil();
-    TextMetrics {
-        size: Size::new(width, request.font_size * request.line_height),
-        ink_bounds,
-        advance_width,
-    }
+    shape_with_font(font, request).metrics()
 }
 
 fn rasterize_with_font(
@@ -291,7 +269,8 @@ fn rasterize_with_font(
 
     let scale = Scale::uniform(request.font_size);
     let v_metrics = font.v_metrics(scale);
-    for glyph in font.layout(request.content, scale, point(0.0, v_metrics.ascent)) {
+    let raster_content = rasterizable_text(request.content);
+    for glyph in font.layout(&raster_content, scale, point(0.0, v_metrics.ascent)) {
         if let Some(bb) = glyph.pixel_bounding_box() {
             glyph.draw(|x, y, v| {
                 let px = x as i32 + bb.min.x - metrics.ink_bounds.x() as i32;
@@ -314,6 +293,14 @@ fn rasterize_with_font(
     }
 
     pixels
+}
+
+fn rasterizable_text(content: &str) -> Cow<'_, str> {
+    if content.chars().any(char::is_control) {
+        Cow::Owned(content.chars().filter(|ch| !ch.is_control()).collect())
+    } else {
+        Cow::Borrowed(content)
+    }
 }
 
 fn resolve_font_family(font_family: Option<&str>) -> Result<(), TextError> {
@@ -363,6 +350,13 @@ mod tests {
         match cache.measure_single_line(request) {
             Ok(metrics) => metrics,
             Err(err) => panic!("text measurement failed: {:?}", err),
+        }
+    }
+
+    fn shape(cache: &mut TextMeasureCache, request: TextRequest<'_>) -> TextShapePlan {
+        match cache.shape_single_line(request) {
+            Ok(plan) => plan,
+            Err(err) => panic!("text shaping failed: {:?}", err),
         }
     }
 
@@ -418,6 +412,160 @@ mod tests {
 
         assert_eq!(compact.size.width, loose.size.width);
         assert!((loose.size.height - 32.4).abs() < 0.01);
+    }
+
+    #[test]
+    fn shaping_splits_mixed_script_runs_and_keeps_grapheme_clusters() {
+        let mut cache = TextMeasureCache::new();
+        let plan = shape(&mut cache, request("A界e\u{301}"));
+
+        assert_eq!(plan.clusters().len(), 3);
+        assert_eq!(plan.clusters()[0].script, TextScript::Latin);
+        assert_eq!(plan.clusters()[1].script, TextScript::Cjk);
+        assert_eq!(plan.clusters()[2].text, "e\u{301}");
+        assert_eq!(plan.clusters()[2].script, TextScript::Latin);
+        assert!(plan.runs().iter().any(|run| run.script == TextScript::Cjk));
+        assert_eq!(measure(&mut cache, request("A界e\u{301}")), plan.metrics());
+    }
+
+    #[test]
+    fn shaping_marks_emoji_clusters_without_splitting_zwj_sequences() {
+        let mut cache = TextMeasureCache::new();
+        let plan = shape(&mut cache, request("build 🧑‍💻"));
+
+        assert!(plan.clusters().iter().any(|cluster| {
+            cluster.text == "🧑‍💻" && cluster.script == TextScript::Emoji
+        }));
+    }
+
+    #[test]
+    fn shaping_reports_mixed_direction_as_observable_diagnostic() {
+        let mut cache = TextMeasureCache::new();
+        let plan = shape(&mut cache, request("abc שלום"));
+
+        assert_eq!(plan.direction(), TextDirection::Mixed);
+        assert!(plan.runs().iter().any(|run| {
+            run.direction == TextDirection::RightToLeft && run.script == TextScript::Rtl
+        }));
+        assert!(plan.diagnostics().iter().any(|diagnostic| matches!(
+            diagnostic,
+            TextShapeDiagnostic::MixedDirection {
+                direction: TextDirection::Mixed
+            }
+        )));
+    }
+
+    #[test]
+    fn shaping_recognizes_non_latin_ltr_scripts() {
+        let mut cache = TextMeasureCache::new();
+
+        let cyrillic = shape(&mut cache, request("Привет"));
+        assert_eq!(cyrillic.direction(), TextDirection::LeftToRight);
+
+        let mixed = shape(&mut cache, request("Привет שלום"));
+        assert_eq!(mixed.direction(), TextDirection::Mixed);
+    }
+
+    #[test]
+    fn shaping_treats_emoji_as_neutral_for_bidi_diagnostics() {
+        let mut cache = TextMeasureCache::new();
+        let plan = shape(&mut cache, request("שלום 🙂"));
+
+        assert_eq!(plan.direction(), TextDirection::RightToLeft);
+        assert!(plan.clusters().iter().any(|cluster| {
+            cluster.text == "🙂" && cluster.direction == TextDirection::Neutral
+        }));
+        assert!(
+            !plan
+                .diagnostics()
+                .iter()
+                .any(|diagnostic| matches!(diagnostic, TextShapeDiagnostic::MixedDirection { .. }))
+        );
+    }
+
+    #[test]
+    fn shaping_treats_arabic_indic_digits_as_numeric_neutral() {
+        let mut cache = TextMeasureCache::new();
+
+        let digits = shape(&mut cache, request("١٢٣"));
+        assert_eq!(digits.direction(), TextDirection::Neutral);
+        assert!(
+            digits
+                .clusters()
+                .iter()
+                .all(|cluster| cluster.script == TextScript::Number)
+        );
+
+        let latin_with_digits = shape(&mut cache, request("abc ١٢٣"));
+        assert_eq!(latin_with_digits.direction(), TextDirection::LeftToRight);
+        assert!(
+            !latin_with_digits
+                .diagnostics()
+                .iter()
+                .any(|diagnostic| matches!(diagnostic, TextShapeDiagnostic::MixedDirection { .. }))
+        );
+    }
+
+    #[test]
+    fn shaping_recognizes_rtl_scripts_from_bidi_properties() {
+        let mut cache = TextMeasureCache::new();
+
+        let adlam = shape(&mut cache, request("\u{1e900}\u{1e901}"));
+        assert_eq!(adlam.direction(), TextDirection::RightToLeft);
+        assert!(
+            adlam
+                .clusters()
+                .iter()
+                .all(|cluster| cluster.script == TextScript::Rtl)
+        );
+
+        let old_hungarian = shape(&mut cache, request("\u{10c80}\u{10c81}"));
+        assert_eq!(old_hungarian.direction(), TextDirection::RightToLeft);
+
+        let mixed = shape(&mut cache, request("abc \u{1e900}"));
+        assert_eq!(mixed.direction(), TextDirection::Mixed);
+        assert!(mixed.diagnostics().iter().any(|diagnostic| matches!(
+            diagnostic,
+            TextShapeDiagnostic::MixedDirection {
+                direction: TextDirection::Mixed
+            }
+        )));
+    }
+
+    #[test]
+    fn rasterization_filters_control_characters_like_measurement() {
+        let mut cache = TextRasterCache::new();
+        let with_control = match cache.resolve(request("A\tW")) {
+            Ok(Some(entry)) => entry,
+            Ok(None) => panic!("expected rasterized control-character text entry"),
+            Err(err) => panic!("text rasterization failed: {:?}", err),
+        };
+        let without_control = match cache.resolve(request("AW")) {
+            Ok(Some(entry)) => entry,
+            Ok(None) => panic!("expected rasterized filtered text entry"),
+            Err(err) => panic!("text rasterization failed: {:?}", err),
+        };
+
+        assert_eq!(with_control.metrics, without_control.metrics);
+        assert_eq!(with_control.pixels, without_control.pixels);
+    }
+
+    #[test]
+    fn shaping_reports_missing_glyph_and_required_fallback() {
+        let mut cache = TextMeasureCache::new();
+        let plan = shape(&mut cache, request("\u{10ffff}"));
+
+        assert!(
+            plan.diagnostics()
+                .iter()
+                .any(|diagnostic| matches!(diagnostic, TextShapeDiagnostic::MissingGlyph { .. }))
+        );
+        assert!(
+            plan.diagnostics().iter().any(|diagnostic| matches!(
+                diagnostic,
+                TextShapeDiagnostic::FallbackRequired { .. }
+            ))
+        );
     }
 
     #[test]
