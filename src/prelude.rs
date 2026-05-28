@@ -24,7 +24,7 @@ pub use crate::core::{
 };
 
 pub use crate::elements::{
-    div, text, button, input, scroll_view, image, image_url,
+    div, text, button, input, scroll_view, image,
     Div, Text, Button, Input, ScrollView, Image,
     Element, EventResult, IntoElement, Render,
     ButtonVariant, ButtonSize, InputType, ScrollDirection, ImageFit,

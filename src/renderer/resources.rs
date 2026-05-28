@@ -457,10 +457,6 @@ impl ImageResourceKey {
                     height: *height,
                 })
             }
-            ImageSource::Url(url) => Err(RendererResourceError::unsupported(
-                RendererResourceKind::Image,
-                format!("URL image loading is not implemented: {url}"),
-            )),
             ImageSource::Texture(id) => Err(RendererResourceError::unsupported(
                 RendererResourceKind::Image,
                 format!("external texture {id} is resolved by the renderer backend"),
@@ -578,7 +574,7 @@ fn load_image_pixels(source: &ImageSource) -> Result<(Size, Vec<u8>), RendererRe
             width,
             height,
         } => Ok((Size::new(*width as f32, *height as f32), data.clone())),
-        ImageSource::Url(_) | ImageSource::Texture(_) => {
+        ImageSource::Texture(_) => {
             let _ = ImageResourceKey::from_source(source)?;
             Err(RendererResourceError::invalid(
                 RendererResourceKind::Image,
