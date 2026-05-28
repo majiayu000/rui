@@ -238,6 +238,22 @@ impl ScrollView {
         self
     }
 
+    pub fn can_scroll_forward(&self) -> bool {
+        match self.direction {
+            ScrollDirection::Vertical => self.state.can_scroll_down(),
+            ScrollDirection::Horizontal => self.state.can_scroll_right(),
+            ScrollDirection::Both => self.state.can_scroll_down() || self.state.can_scroll_right(),
+        }
+    }
+
+    pub fn can_scroll_backward(&self) -> bool {
+        match self.direction {
+            ScrollDirection::Vertical => self.state.can_scroll_up(),
+            ScrollDirection::Horizontal => self.state.can_scroll_left(),
+            ScrollDirection::Both => self.state.can_scroll_up() || self.state.can_scroll_left(),
+        }
+    }
+
     fn should_show_scrollbar(&self) -> (bool, bool) {
         let show_y = match self.scrollbar_visibility {
             ScrollbarVisibility::Always => true,

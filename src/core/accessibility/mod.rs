@@ -8,4 +8,7 @@ mod node;
 pub use announcement::{AccessibilityAnnouncement, AccessibilityAnnouncementKind};
 pub use bridge::{AccessibilityBridge, UnsupportedAccessibilityBridge};
 pub use error::AccessibilityError;
-pub use node::{AccessibilityContext, AccessibilityNode, AccessibilityRole, AccessibilityTree};
+pub use node::{
+    AccessibilityAction, AccessibilityContext, AccessibilityNode, AccessibilityRole,
+    AccessibilityTree,
+};
