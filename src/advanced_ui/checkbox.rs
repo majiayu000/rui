@@ -5,7 +5,8 @@ use crate::advanced_ui::tokens::{
 };
 use crate::core::ElementId;
 use crate::core::accessibility::{
-    AccessibilityContext, AccessibilityError, AccessibilityNode, AccessibilityRole,
+    AccessibilityAction, AccessibilityContext, AccessibilityError, AccessibilityNode,
+    AccessibilityRole,
 };
 use crate::core::geometry::{Bounds, Edges};
 use crate::core::style::{Corners, Style};
@@ -187,12 +188,15 @@ impl Element for Checkbox {
         cx: &AccessibilityContext,
     ) -> Result<Option<AccessibilityNode>, AccessibilityError> {
         let value = if self.checked { "checked" } else { "unchecked" };
-        let node =
+        let mut node =
             AccessibilityNode::label_required(self.id, AccessibilityRole::Checkbox, &self.label)?
                 .value_required(value)?
                 .with_checked(self.checked)
                 .with_enabled(!self.state.disabled())
                 .with_focused(cx.a11y_has_focus(self.id));
+        if self.state.can_activate() {
+            node = node.with_action(AccessibilityAction::Activate);
+        }
         Ok(Some(node))
     }
 

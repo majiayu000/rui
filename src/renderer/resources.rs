@@ -1,7 +1,8 @@
 //! Renderer-owned resource lifecycle management.
 
-use crate::ImageSource;
 use crate::core::geometry::Size;
+use crate::renderer::primitives::PrimitiveKind;
+use crate::ImageSource;
 use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::error::Error;
@@ -81,6 +82,26 @@ impl RendererResourceError {
             message: message.into(),
         }
     }
+
+    pub fn kind(&self) -> RendererResourceKind {
+        match self {
+            Self::InvalidResource { kind, .. }
+            | Self::MissingResource { kind, .. }
+            | Self::UnsupportedResource { kind, .. }
+            | Self::ResourcePressure { kind, .. } => *kind,
+        }
+    }
+
+    pub fn resource_id(&self) -> Option<u32> {
+        match self {
+            Self::MissingResource { id, .. } => Some(*id),
+            _ => None,
+        }
+    }
+
+    pub fn is_pressure(&self) -> bool {
+        matches!(self, Self::ResourcePressure { .. })
+    }
 }
 
 impl fmt::Display for RendererResourceError {
@@ -142,21 +163,84 @@ impl RendererDeviceDiagnostics {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RendererUnsupportedPrimitive {
+    pub backend: String,
+    pub primitive: PrimitiveKind,
+    pub reason: String,
+}
+
+impl RendererUnsupportedPrimitive {
+    pub fn new(
+        backend: impl Into<String>,
+        primitive: PrimitiveKind,
+        reason: impl Into<String>,
+    ) -> Self {
+        Self {
+            backend: backend.into(),
+            primitive,
+            reason: reason.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RendererDiagnostics {
     pub device: RendererDeviceDiagnostics,
     pub resources: Vec<RendererResourceStats>,
+    pub unsupported_primitives: Vec<RendererUnsupportedPrimitive>,
 }
 
 impl RendererDiagnostics {
     pub fn new(device: RendererDeviceDiagnostics, resources: Vec<RendererResourceStats>) -> Self {
-        Self { device, resources }
+        Self {
+            device,
+            resources,
+            unsupported_primitives: Vec::new(),
+        }
     }
 
     pub fn headless(backend: impl Into<String>) -> Self {
         Self {
             device: RendererDeviceDiagnostics::headless(backend),
             resources: Vec::new(),
+            unsupported_primitives: Vec::new(),
         }
+    }
+
+    pub fn with_unsupported_primitives(
+        mut self,
+        unsupported_primitives: Vec<RendererUnsupportedPrimitive>,
+    ) -> Self {
+        self.unsupported_primitives = unsupported_primitives;
+        self
+    }
+
+    pub fn resource(&self, kind: RendererResourceKind) -> Option<&RendererResourceStats> {
+        self.resources.iter().find(|stats| stats.kind == kind)
+    }
+
+    pub fn unsupported_primitive(
+        &self,
+        primitive: PrimitiveKind,
+    ) -> Option<&RendererUnsupportedPrimitive> {
+        self.unsupported_primitives
+            .iter()
+            .find(|unsupported| unsupported.primitive == primitive)
+    }
+
+    pub fn total_live_entries(&self) -> usize {
+        self.resources.iter().map(|stats| stats.live_entries).sum()
+    }
+
+    pub fn total_live_bytes(&self) -> usize {
+        self.resources.iter().map(|stats| stats.live_bytes).sum()
+    }
+
+    pub fn total_pressure_events(&self) -> usize {
+        self.resources
+            .iter()
+            .map(|stats| stats.pressure_events)
+            .sum()
     }
 }
 

@@ -1,8 +1,11 @@
+use rui::core::color::Rgba;
 use rui::core::event::{KeyCode, KeyEvent, Modifiers};
+use rui::core::geometry::Point;
 use rui::core::text_editing::{
-    ClipboardError, MemoryClipboard, TextEditBuffer, TextEditError, TextEditLayout, TextInputEvent,
-    TextRange, TextSelection,
+    ClipboardError, MemoryClipboard, TextEditBuffer, TextEditError, TextEditLayout,
+    TextEditPaintStyle, TextInputEvent, TextRange, TextSelection,
 };
+use rui::renderer::Primitive;
 
 fn range(start: usize, end: usize) -> TextRange {
     match TextRange::new(start, end) {
@@ -171,6 +174,102 @@ fn text_editing_layout_reports_caret_and_selection_geometry() {
     assert_eq!(rects[0].bounds.width(), 10.0);
     assert_eq!(rects[1].range, range(3, 5));
     assert_eq!(rects[1].bounds.width(), 20.0);
+}
+
+#[test]
+fn text_editing_layout_exposes_renderer_primitives_for_caret_and_selection() {
+    let layout = TextEditLayout::new("ab\ncde", 10.0, 20.0);
+    let style = TextEditPaintStyle::new(2.0, Rgba::RED, Rgba::BLUE.with_alpha(0.25));
+    let paint_origin = Point::new(100.0, 50.0);
+
+    let caret = match layout.caret_primitive(1, paint_origin, style) {
+        Ok(primitive) => primitive,
+        Err(err) => panic!("caret primitive failed: {err}"),
+    };
+
+    match caret {
+        Primitive::Quad {
+            bounds,
+            background,
+            border_color,
+            border_widths,
+            corner_radii,
+        } => {
+            assert_eq!(bounds.x(), 110.0);
+            assert_eq!(bounds.y(), 50.0);
+            assert_eq!(bounds.width(), 2.0);
+            assert_eq!(bounds.height(), 20.0);
+            assert_eq!(background, Rgba::RED);
+            assert_eq!(border_color, Rgba::TRANSPARENT);
+            assert_eq!(border_widths, rui::Edges::ZERO);
+            assert_eq!(corner_radii, rui::Corners::ZERO);
+        }
+        other => panic!("expected caret quad primitive, got {other:?}"),
+    }
+
+    let selection = match layout.selection_primitives(range(1, 5), paint_origin, style) {
+        Ok(primitives) => primitives,
+        Err(err) => panic!("selection primitives failed: {err}"),
+    };
+    assert_eq!(selection.len(), 2);
+
+    match &selection[0] {
+        Primitive::Quad {
+            bounds, background, ..
+        } => {
+            assert_eq!(bounds.x(), 110.0);
+            assert_eq!(bounds.y(), 50.0);
+            assert_eq!(bounds.width(), 10.0);
+            assert_eq!(*background, Rgba::BLUE.with_alpha(0.25));
+        }
+        other => panic!("expected selection quad primitive, got {other:?}"),
+    }
+
+    match &selection[1] {
+        Primitive::Quad {
+            bounds, background, ..
+        } => {
+            assert_eq!(bounds.x(), 100.0);
+            assert_eq!(bounds.y(), 70.0);
+            assert_eq!(bounds.width(), 20.0);
+            assert_eq!(*background, Rgba::BLUE.with_alpha(0.25));
+        }
+        other => panic!("expected selection quad primitive, got {other:?}"),
+    }
+
+    let empty = match layout.selection_primitives(range(2, 2), paint_origin, style) {
+        Ok(primitives) => primitives,
+        Err(err) => panic!("empty selection primitives failed: {err}"),
+    };
+    assert!(empty.is_empty());
+}
+
+#[test]
+fn text_editing_layout_maps_combining_and_emoji_clusters_to_columns() {
+    let text = "e\u{301} 🧑‍💻";
+    let layout = TextEditLayout::new(text, 10.0, 20.0);
+
+    let after_combining = "e\u{301}".len();
+    let caret = match layout.caret_for_offset(after_combining) {
+        Ok(caret) => caret,
+        Err(err) => panic!("combining caret geometry failed: {err}"),
+    };
+    assert_eq!(caret.column, 1);
+    assert_eq!(caret.position.x, 10.0);
+
+    let caret = match layout.caret_for_offset(text.len()) {
+        Ok(caret) => caret,
+        Err(err) => panic!("emoji caret geometry failed: {err}"),
+    };
+    assert_eq!(caret.column, 3);
+    assert_eq!(caret.position.x, 30.0);
+
+    let rects = match layout.selection_rects(range(0, after_combining)) {
+        Ok(rects) => rects,
+        Err(err) => panic!("combining selection geometry failed: {err}"),
+    };
+    assert_eq!(rects.len(), 1);
+    assert_eq!(rects[0].bounds.width(), 10.0);
 }
 
 #[test]

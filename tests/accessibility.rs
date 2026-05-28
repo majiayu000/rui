@@ -1,8 +1,9 @@
 use rui::advanced_ui::{Button, Checkbox, Scrollable, SegmentedControl, text};
 use rui::core::ElementId;
 use rui::core::accessibility::{
-    AccessibilityAnnouncementKind, AccessibilityBridge, AccessibilityContext, AccessibilityError,
-    AccessibilityNode, AccessibilityRole, AccessibilityTree, UnsupportedAccessibilityBridge,
+    AccessibilityAction, AccessibilityAnnouncementKind, AccessibilityBridge, AccessibilityContext,
+    AccessibilityError, AccessibilityNode, AccessibilityRole, AccessibilityTree,
+    UnsupportedAccessibilityBridge,
 };
 use rui::core::event::MouseButton;
 use rui::core::geometry::{Bounds, Point};
@@ -44,6 +45,7 @@ fn accessibility_button_exposes_role_label_enabled_and_focus() {
     assert_eq!(node.a11y_label(), Some("Save"));
     assert!(!node.a11y_enabled());
     assert!(node.a11y_focused());
+    assert!(node.a11y_actions().is_empty());
 }
 
 #[test]
@@ -56,6 +58,7 @@ fn accessibility_checkbox_exposes_checked_value_and_action_feedback() {
     assert_eq!(node.a11y_role(), AccessibilityRole::Checkbox);
     assert_eq!(node.a11y_value(), Some("unchecked"));
     assert_eq!(node.a11y_checked(), Some(false));
+    assert_eq!(node.a11y_actions(), [AccessibilityAction::Activate]);
 
     let taffy = TaffyTree::<ElementId>::new();
     let mut focused = None;
@@ -103,6 +106,14 @@ fn accessibility_segmented_control_exposes_selected_option_tree() {
     assert_eq!(node.a11y_children().len(), 2);
     assert_eq!(node.a11y_children()[0].a11y_selected(), Some(false));
     assert_eq!(node.a11y_children()[1].a11y_selected(), Some(true));
+    assert_eq!(
+        node.a11y_children()[0].a11y_actions(),
+        [AccessibilityAction::Activate]
+    );
+    assert_eq!(
+        node.a11y_children()[1].a11y_actions(),
+        [AccessibilityAction::Activate]
+    );
 }
 
 #[test]
@@ -122,6 +133,7 @@ fn accessibility_text_and_scrollable_expose_semantic_tree() {
     };
     assert_eq!(scroll_node.a11y_role(), AccessibilityRole::ScrollArea);
     assert_eq!(scroll_node.a11y_label(), Some("Activity feed"));
+    assert!(scroll_node.a11y_actions().is_empty());
     assert_eq!(scroll_node.a11y_children().len(), 1);
     assert_eq!(
         scroll_node.a11y_children()[0].a11y_role(),

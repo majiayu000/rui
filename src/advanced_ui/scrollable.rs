@@ -1,7 +1,8 @@
 use crate::advanced_ui::state::{InteractionState, require_non_empty};
 use crate::core::ElementId;
 use crate::core::accessibility::{
-    AccessibilityContext, AccessibilityError, AccessibilityNode, AccessibilityRole,
+    AccessibilityAction, AccessibilityContext, AccessibilityError, AccessibilityNode,
+    AccessibilityRole,
 };
 use crate::core::color::Color;
 use crate::core::geometry::Size;
@@ -162,6 +163,16 @@ impl Element for Scrollable {
         let mut node = AccessibilityNode::new(self.id, AccessibilityRole::ScrollArea)
             .with_enabled(!self.state.disabled())
             .with_focused(cx.a11y_has_focus(self.id));
+        if self.state.can_activate() {
+            let mut actions = Vec::new();
+            if self.inner.can_scroll_forward() {
+                actions.push(AccessibilityAction::ScrollForward);
+            }
+            if self.inner.can_scroll_backward() {
+                actions.push(AccessibilityAction::ScrollBackward);
+            }
+            node = node.with_actions(actions);
+        }
         if let Some(label) = &self.accessibility_label {
             node = node.with_label(label.clone());
         }
@@ -219,9 +230,33 @@ mod tests {
     use crate::advanced_ui::container;
     use crate::core::event::{Modifiers, ScrollEvent};
     use crate::core::geometry::{Bounds, Point};
+    use crate::renderer::Scene;
     use std::cell::Cell;
     use std::rc::Rc;
     use taffy::TaffyTree;
+
+    fn paint_for_accessibility_state(scrollable: &mut Scrollable, size: Size) {
+        let mut taffy = TaffyTree::<ElementId>::new();
+        let mut layout_cx = LayoutContext::new(&mut taffy, size);
+        let node = scrollable.layout(&mut layout_cx);
+        if let Err(err) = taffy.compute_layout(
+            node,
+            taffy::Size {
+                width: taffy::prelude::AvailableSpace::Definite(size.width),
+                height: taffy::prelude::AvailableSpace::Definite(size.height),
+            },
+        ) {
+            panic!("layout should compute: {}", err);
+        }
+
+        let mut scene = Scene::new();
+        let mut paint_cx = PaintContext::new(
+            &mut scene,
+            Bounds::from_xywh(0.0, 0.0, size.width, size.height),
+            &taffy,
+        );
+        scrollable.paint(&mut paint_cx);
+    }
 
     #[test]
     fn advanced_ui_scrollable_forwards_scroll_events() {
@@ -304,6 +339,37 @@ mod tests {
             ));
             assert!(!did_scroll.get());
         }
+    }
+
+    #[test]
+    fn advanced_ui_scrollable_accessibility_actions_follow_scroll_range() {
+        let mut overflowing = Scrollable::new(container().w(100.0).h(300.0)).h(100.0);
+        let before_paint = match overflowing.accessibility(&AccessibilityContext::default()) {
+            Ok(Some(node)) => node,
+            Ok(None) => panic!("scrollable should expose an accessibility node"),
+            Err(err) => panic!("accessibility failed: {}", err),
+        };
+        assert!(before_paint.a11y_actions().is_empty());
+
+        paint_for_accessibility_state(&mut overflowing, Size::new(100.0, 100.0));
+        let after_paint = match overflowing.accessibility(&AccessibilityContext::default()) {
+            Ok(Some(node)) => node,
+            Ok(None) => panic!("scrollable should expose an accessibility node"),
+            Err(err) => panic!("accessibility failed: {}", err),
+        };
+        assert_eq!(
+            after_paint.a11y_actions(),
+            [AccessibilityAction::ScrollForward]
+        );
+
+        let mut empty = Scrollable::empty().h(100.0);
+        paint_for_accessibility_state(&mut empty, Size::new(100.0, 100.0));
+        let empty_node = match empty.accessibility(&AccessibilityContext::default()) {
+            Ok(Some(node)) => node,
+            Ok(None) => panic!("scrollable should expose an accessibility node"),
+            Err(err) => panic!("accessibility failed: {}", err),
+        };
+        assert!(empty_node.a11y_actions().is_empty());
     }
 
     #[test]

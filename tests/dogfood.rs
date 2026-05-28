@@ -3,11 +3,16 @@
 mod advanced_ui_controls;
 
 use advanced_ui_controls::{
-    DOGFOOD_CLAIM_GATE_ID, DOGFOOD_PANEL_CONTROL_ID, DOGFOOD_REFRESH_BUTTON_ID,
-    DogfoodControlsView, DogfoodPanel, LocalDogfoodData, LocalVerificationCheck,
-    controls_panel_from_data, load_local_dogfood_data,
+    controls_panel_from_data, load_local_dogfood_data, DogfoodControlsView, DogfoodPanel,
+    LocalDogfoodData, LocalVerificationCheck, DOGFOOD_CLAIM_GATE_ID, DOGFOOD_PANEL_CONTROL_ID,
+    DOGFOOD_REFRESH_BUTTON_ID,
 };
 use rui::core::accessibility::AccessibilityNode;
+use rui::core::action::{
+    ActionHandler, ActionId, ActionOutcome, ActionRouter, Keymap, StandardAction,
+};
+use rui::core::event::{KeyCode, KeyEvent, Modifiers};
+use rui::core::text_editing::{TextEditBuffer, TextInputEvent};
 use rui::core::{ElementId, Point, Size};
 use rui::testing::{mount, mount_view};
 
@@ -47,12 +52,10 @@ fn dogfood_controls_mount_real_data_headlessly() {
         Err(err) => panic!("dogfood primitives should snapshot: {err}"),
     };
     assert!(snapshot.as_str().contains("rui local dogfood"));
-    assert!(
-        snapshot.as_str().contains("working tree")
-            || snapshot
-                .as_str()
-                .contains("examples/advanced_ui_controls.rs")
-    );
+    assert!(data
+        .git_changes
+        .iter()
+        .any(|change| snapshot.as_str().contains(change)));
 }
 
 #[test]
@@ -100,6 +103,70 @@ fn dogfood_view_dispatches_controls_and_rebuilds() {
     assert!(snapshot.as_str().contains("Refresh local scan (1)"));
 }
 
+#[test]
+fn dogfood_workflow_routes_actions_and_edits_repository_filter() {
+    let data = match load_local_dogfood_data() {
+        Ok(data) => data,
+        Err(err) => panic!("dogfood data should load from this checkout: {err}"),
+    };
+    let mut workflow = DogfoodWorkflow::new(data.clone());
+
+    workflow.apply_text_input(TextInputEvent::InsertText(data.package_name.clone()));
+    assert_eq!(workflow.filter_query(), data.package_name);
+    assert!(workflow
+        .visible_lines()
+        .iter()
+        .any(|line| line.contains(&data.package_name)));
+
+    let mut keymap = match Keymap::with_standard_bindings() {
+        Ok(keymap) => keymap,
+        Err(err) => panic!("dogfood keymap should build: {err}"),
+    };
+    if let Err(err) = keymap.bind(
+        KeyCode::Key1,
+        Modifiers::meta(),
+        ActionId::custom(DOGFOOD_PANEL_CHANGES_ACTION),
+    ) {
+        panic!("dogfood panel action should bind: {err}");
+    }
+    if let Err(err) = keymap.bind(
+        KeyCode::R,
+        Modifiers::meta(),
+        ActionId::custom(DOGFOOD_REFRESH_ACTION),
+    ) {
+        panic!("dogfood refresh action should bind: {err}");
+    }
+
+    let changes_action = mapped_action(&keymap, KeyCode::Key1, Modifiers::meta());
+    assert_eq!(
+        route_dogfood_action(&mut workflow, &changes_action),
+        ActionOutcome::handled(DOGFOOD_WORKFLOW_HANDLER)
+    );
+    assert_eq!(workflow.selected_panel(), DogfoodPanel::Changes);
+
+    let refresh_action = mapped_action(&keymap, KeyCode::R, Modifiers::meta());
+    assert_eq!(
+        route_dogfood_action(&mut workflow, &refresh_action),
+        ActionOutcome::handled(DOGFOOD_WORKFLOW_HANDLER)
+    );
+    assert_eq!(workflow.refresh_count(), 1);
+
+    let submit_action = mapped_action(&keymap, KeyCode::Enter, Modifiers::meta());
+    assert_eq!(
+        route_dogfood_action(&mut workflow, &submit_action),
+        ActionOutcome::handled(DOGFOOD_WORKFLOW_HANDLER)
+    );
+    assert_eq!(workflow.selected_panel(), DogfoodPanel::Verification);
+
+    let cancel_action = mapped_action(&keymap, KeyCode::Escape, Modifiers::none());
+    assert_eq!(
+        route_dogfood_action(&mut workflow, &cancel_action),
+        ActionOutcome::handled(DOGFOOD_WORKFLOW_HANDLER)
+    );
+    assert_eq!(workflow.filter_query(), "");
+    assert_eq!(workflow.selected_panel(), DogfoodPanel::Overview);
+}
+
 fn fixture_data() -> LocalDogfoodData {
     LocalDogfoodData {
         package_name: String::from("rui"),
@@ -119,6 +186,117 @@ fn fixture_data() -> LocalDogfoodData {
             },
         ],
     }
+}
+
+const DOGFOOD_WORKFLOW_HANDLER: &str = "dogfood-workflow";
+const DOGFOOD_PANEL_CHANGES_ACTION: &str = "dogfood.panel.changes";
+const DOGFOOD_REFRESH_ACTION: &str = "dogfood.refresh";
+
+struct DogfoodWorkflow {
+    data: LocalDogfoodData,
+    selected_panel: DogfoodPanel,
+    filter: TextEditBuffer,
+    refresh_count: u32,
+}
+
+impl DogfoodWorkflow {
+    fn new(data: LocalDogfoodData) -> Self {
+        Self {
+            data,
+            selected_panel: DogfoodPanel::Overview,
+            filter: TextEditBuffer::new(),
+            refresh_count: 0,
+        }
+    }
+
+    fn apply_text_input(&mut self, event: TextInputEvent) {
+        match self.filter.apply_text_input_event(event) {
+            Ok(outcome) => assert!(outcome.changed),
+            Err(err) => panic!("dogfood filter text edit should apply: {err}"),
+        }
+    }
+
+    fn filter_query(&self) -> &str {
+        self.filter.text()
+    }
+
+    fn selected_panel(&self) -> DogfoodPanel {
+        self.selected_panel
+    }
+
+    fn refresh_count(&self) -> u32 {
+        self.refresh_count
+    }
+
+    fn visible_lines(&self) -> Vec<String> {
+        let mut lines = vec![
+            format!("package {}", self.data.package_name),
+            format!("version {}", self.data.package_version),
+            format!("advanced UI files {}", self.data.advanced_ui_files),
+        ];
+        lines.extend(
+            self.data
+                .git_changes
+                .iter()
+                .map(|change| format!("change {change}")),
+        );
+        lines.extend(
+            self.data
+                .verification_checks
+                .iter()
+                .map(|check| format!("check {} {}", check.label, check.passed)),
+        );
+
+        let query = self.filter.text().trim();
+        if query.is_empty() {
+            return lines;
+        }
+        lines
+            .into_iter()
+            .filter(|line| line.contains(query))
+            .collect()
+    }
+}
+
+impl ActionHandler for DogfoodWorkflow {
+    fn action_handler_name(&self) -> &str {
+        DOGFOOD_WORKFLOW_HANDLER
+    }
+
+    fn run_action(&mut self, action: &ActionId) -> ActionOutcome {
+        match action {
+            ActionId::Custom(name) if name == DOGFOOD_PANEL_CHANGES_ACTION => {
+                self.selected_panel = DogfoodPanel::Changes;
+                ActionOutcome::handled(self.action_handler_name())
+            }
+            ActionId::Custom(name) if name == DOGFOOD_REFRESH_ACTION => {
+                self.refresh_count = self.refresh_count.saturating_add(1);
+                ActionOutcome::handled(self.action_handler_name())
+            }
+            ActionId::Standard(StandardAction::Submit) => {
+                self.selected_panel = DogfoodPanel::Verification;
+                ActionOutcome::handled(self.action_handler_name())
+            }
+            ActionId::Standard(StandardAction::Cancel) => {
+                self.filter = TextEditBuffer::new();
+                self.selected_panel = DogfoodPanel::Overview;
+                ActionOutcome::handled(self.action_handler_name())
+            }
+            _ => ActionOutcome::Ignored,
+        }
+    }
+}
+
+fn mapped_action(keymap: &Keymap, key: KeyCode, modifiers: Modifiers) -> ActionId {
+    let event = KeyEvent::new(key, modifiers);
+    match keymap.action_for_event(&event) {
+        Some(action) => action.clone(),
+        None => panic!("dogfood keymap should bind {key:?}"),
+    }
+}
+
+fn route_dogfood_action(workflow: &mut DogfoodWorkflow, action: &ActionId) -> ActionOutcome {
+    ActionRouter::new().focused(workflow).route_action(action)
 }
 
 fn click_element<F, E>(session: &mut rui::testing::HeadlessSession<F, E>, id: ElementId)

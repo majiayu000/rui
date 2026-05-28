@@ -1,6 +1,9 @@
 use super::error::TextEditError;
 use super::types::TextRange;
-use crate::core::geometry::{Bounds, Point, Size};
+use crate::core::color::Rgba;
+use crate::core::geometry::{Bounds, Edges, Point, Size};
+use crate::core::style::Corners;
+use crate::renderer::Primitive;
 use unicode_segmentation::UnicodeSegmentation;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -36,6 +39,33 @@ pub struct CaretGeometry {
 pub struct SelectionRect {
     pub bounds: Bounds,
     pub range: TextRange,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TextEditPaintStyle {
+    pub caret_width: f32,
+    pub caret_color: Rgba,
+    pub selection_color: Rgba,
+}
+
+impl TextEditPaintStyle {
+    pub const fn new(caret_width: f32, caret_color: Rgba, selection_color: Rgba) -> Self {
+        Self {
+            caret_width,
+            caret_color,
+            selection_color,
+        }
+    }
+}
+
+impl Default for TextEditPaintStyle {
+    fn default() -> Self {
+        Self {
+            caret_width: 1.5,
+            caret_color: Rgba::new(0.388, 0.4, 0.945, 1.0),
+            selection_color: Rgba::new(0.388, 0.4, 0.945, 0.28),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -131,6 +161,53 @@ impl TextEditLayout {
             });
         }
         Ok(rects)
+    }
+
+    pub fn caret_primitive(
+        &self,
+        offset: usize,
+        paint_origin: impl Into<Point>,
+        style: TextEditPaintStyle,
+    ) -> Result<Primitive, TextEditError> {
+        let paint_origin = paint_origin.into();
+        let caret = self.caret_for_offset(offset)?;
+        Ok(Primitive::Quad {
+            bounds: Bounds::from_xywh(
+                paint_origin.x + caret.position.x,
+                paint_origin.y + caret.position.y,
+                style.caret_width,
+                caret.height,
+            ),
+            background: style.caret_color,
+            border_color: Rgba::TRANSPARENT,
+            border_widths: Edges::ZERO,
+            corner_radii: Corners::ZERO,
+        })
+    }
+
+    pub fn selection_primitives(
+        &self,
+        range: TextRange,
+        paint_origin: impl Into<Point>,
+        style: TextEditPaintStyle,
+    ) -> Result<Vec<Primitive>, TextEditError> {
+        let paint_origin = paint_origin.into();
+        Ok(self
+            .selection_rects(range)?
+            .into_iter()
+            .map(|rect| Primitive::Quad {
+                bounds: Bounds::from_xywh(
+                    paint_origin.x + rect.bounds.x(),
+                    paint_origin.y + rect.bounds.y(),
+                    rect.bounds.width(),
+                    rect.bounds.height(),
+                ),
+                background: style.selection_color,
+                border_color: Rgba::TRANSPARENT,
+                border_widths: Edges::ZERO,
+                corner_radii: Corners::ZERO,
+            })
+            .collect())
     }
 
     fn ensure_layout_range(&self, range: TextRange) -> Result<(), TextEditError> {
