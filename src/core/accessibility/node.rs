@@ -10,6 +10,7 @@ pub enum AccessibilityRole {
     SegmentedOption,
     Text,
     ScrollArea,
+    Toolbar,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

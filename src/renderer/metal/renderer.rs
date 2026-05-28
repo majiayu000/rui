@@ -5,7 +5,8 @@ use crate::renderer::primitives::{GpuQuad, GpuShadow, Primitive};
 use crate::renderer::text::{TextRasterCache, TextRequest};
 use crate::renderer::{
     Renderer, RendererDeviceDiagnostics, RendererDiagnostics, RendererError, RendererImageCache,
-    RendererResourceCache, RendererResourceError, RendererResourceKind, Scene,
+    RendererPrimitiveSupport, RendererResourceCache, RendererResourceError, RendererResourceKind,
+    Scene,
 };
 use crate::{ImageFit, ImageSource};
 use metal::*;
@@ -201,6 +202,8 @@ impl MetalRenderer {
         drawable: &MetalDrawableRef,
         viewport_size: Size,
     ) -> Result<(), RendererError> {
+        RendererPrimitiveSupport::metal().validate_scene(scene)?;
+
         self.texture_resources.begin_frame();
         self.image_cache.begin_frame();
         self.text_cache.begin_frame();
@@ -340,7 +343,11 @@ impl MetalRenderer {
                     )?;
                 }
                 Primitive::Path { .. } => {
-                    // TODO: path rendering
+                    return Err(RendererError::unsupported_primitive(
+                        RendererPrimitiveSupport::metal().backend(),
+                        primitive.kind(),
+                        "path primitives are not implemented by the Metal backend",
+                    ));
                 }
                 Primitive::PushClip { bounds, .. } => {
                     let new_clip = if let Some(prev) = clip_stack.last() {
@@ -697,6 +704,7 @@ impl Renderer for MetalRenderer {
                 self.text_cache.resource_stats(),
             ],
         )
+        .with_unsupported_primitives(RendererPrimitiveSupport::metal().unsupported_primitives())
     }
 }
 

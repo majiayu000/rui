@@ -2,8 +2,8 @@
 mod runtime_baselines_config;
 
 use runtime_baselines_config::{
-    classify_regression, BenchmarkBaseline, RegressionStatus, RuntimeBaseline, BENCHMARK_IDS,
-    REQUIRED_CATEGORIES,
+    BENCHMARK_IDS, BenchmarkBaseline, REQUIRED_CATEGORIES, RegressionStatus, RuntimeBaseline,
+    classify_regression,
 };
 use std::collections::HashSet;
 
@@ -18,7 +18,7 @@ fn load_baseline() -> RuntimeBaseline {
 fn benchmark_config_baseline_schema_and_thresholds_are_valid() {
     let baseline = load_baseline();
 
-    assert_eq!(baseline.schema_version, 1);
+    assert_eq!(baseline.schema_version, 2);
     assert_eq!(baseline.thresholds.warning_median_percent, 15.0);
     assert_eq!(baseline.thresholds.blocking_median_percent, 25.0);
     assert_eq!(baseline.thresholds.blocking_p95_percent, 30.0);
@@ -26,6 +26,25 @@ fn benchmark_config_baseline_schema_and_thresholds_are_valid() {
         baseline.thresholds.warning_median_percent < baseline.thresholds.blocking_median_percent
     );
     assert!(!baseline.thresholds.enforcement_enabled);
+}
+
+#[test]
+fn benchmark_config_documents_calibration_before_enforcement() {
+    let baseline = load_baseline();
+
+    assert_eq!(baseline.calibration.min_samples_per_benchmark, 9);
+    assert!(baseline.calibration.min_calibration_runs_before_enforcement >= 3);
+    assert!(!baseline.calibration.threshold_rationale.trim().is_empty());
+    assert!(!baseline.calibration.enforcement_rationale.trim().is_empty());
+    if !baseline.thresholds.enforcement_enabled {
+        assert!(
+            baseline
+                .calibration
+                .enforcement_rationale
+                .contains("disabled"),
+            "disabled enforcement should explain why it remains opt-in"
+        );
+    }
 }
 
 #[test]
@@ -86,6 +105,11 @@ fn benchmark_config_baseline_values_are_positive_and_consistent() {
         assert!(
             benchmark.samples >= 3,
             "{} should have multiple samples",
+            benchmark.id
+        );
+        assert!(
+            benchmark.samples >= baseline.calibration.min_samples_per_benchmark,
+            "{} should meet the documented calibration sample floor",
             benchmark.id
         );
     }
