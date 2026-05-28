@@ -1,6 +1,7 @@
 use crate::core::geometry::{Bounds, Size};
 use crate::renderer::text::{TextMetrics, TextRequest};
 use rusttype::{Font, Scale, point};
+use unicode_bidi::{BidiClass, bidi_class};
 use unicode_segmentation::UnicodeSegmentation;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -302,17 +303,11 @@ fn is_emoji(ch: char) -> bool {
 }
 
 fn is_ltr(ch: char) -> bool {
-    is_latin(ch)
-        || is_cjk(ch)
-        || (ch.is_alphabetic() && !is_rtl(ch) && !is_emoji(ch))
+    ch.is_alphabetic() && bidi_class(ch) == BidiClass::L
 }
 
 fn is_rtl(ch: char) -> bool {
-    ch.is_alphabetic()
-        && matches!(
-            ch as u32,
-            0x0590..=0x08ff | 0xfb1d..=0xfdff | 0xfe70..=0xfeff
-        )
+    ch.is_alphabetic() && matches!(bidi_class(ch), BidiClass::R | BidiClass::AL)
 }
 
 fn is_default_ignorable(ch: char) -> bool {

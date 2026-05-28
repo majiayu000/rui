@@ -475,10 +475,12 @@ mod tests {
         assert!(plan.clusters().iter().any(|cluster| {
             cluster.text == "🙂" && cluster.direction == TextDirection::Neutral
         }));
-        assert!(!plan.diagnostics().iter().any(|diagnostic| matches!(
-            diagnostic,
-            TextShapeDiagnostic::MixedDirection { .. }
-        )));
+        assert!(
+            !plan
+                .diagnostics()
+                .iter()
+                .any(|diagnostic| matches!(diagnostic, TextShapeDiagnostic::MixedDirection { .. }))
+        );
     }
 
     #[test]
@@ -500,11 +502,34 @@ mod tests {
             !latin_with_digits
                 .diagnostics()
                 .iter()
-                .any(|diagnostic| matches!(
-                    diagnostic,
-                    TextShapeDiagnostic::MixedDirection { .. }
-                ))
+                .any(|diagnostic| matches!(diagnostic, TextShapeDiagnostic::MixedDirection { .. }))
         );
+    }
+
+    #[test]
+    fn shaping_recognizes_rtl_scripts_from_bidi_properties() {
+        let mut cache = TextMeasureCache::new();
+
+        let adlam = shape(&mut cache, request("\u{1e900}\u{1e901}"));
+        assert_eq!(adlam.direction(), TextDirection::RightToLeft);
+        assert!(
+            adlam
+                .clusters()
+                .iter()
+                .all(|cluster| cluster.script == TextScript::Rtl)
+        );
+
+        let old_hungarian = shape(&mut cache, request("\u{10c80}\u{10c81}"));
+        assert_eq!(old_hungarian.direction(), TextDirection::RightToLeft);
+
+        let mixed = shape(&mut cache, request("abc \u{1e900}"));
+        assert_eq!(mixed.direction(), TextDirection::Mixed);
+        assert!(mixed.diagnostics().iter().any(|diagnostic| matches!(
+            diagnostic,
+            TextShapeDiagnostic::MixedDirection {
+                direction: TextDirection::Mixed
+            }
+        )));
     }
 
     #[test]
