@@ -1,8 +1,8 @@
 use rui::ImageSource;
 use rui::renderer::{
-    GlyphResourceKey, RecordingRenderer, Renderer, RendererDeviceDiagnostics, RendererDiagnostics,
-    RendererImageCache, RendererResourceCache, RendererResourceError, RendererResourceKind,
-    RendererResourceStats,
+    GlyphResourceKey, PrimitiveKind, RecordingRenderer, Renderer, RendererDeviceDiagnostics,
+    RendererDiagnostics, RendererImageCache, RendererResourceCache, RendererResourceError,
+    RendererResourceKind, RendererResourceStats, RendererUnsupportedPrimitive,
 };
 
 #[test]
@@ -187,6 +187,33 @@ fn renderer_diagnostics_reports_resource_totals_by_kind() {
 }
 
 #[test]
+fn renderer_diagnostics_reports_unsupported_primitive_reasons() {
+    let diagnostics = RendererDiagnostics::new(
+        RendererDeviceDiagnostics::headless("metal-test"),
+        Vec::new(),
+    )
+    .with_unsupported_primitives(vec![RendererUnsupportedPrimitive::new(
+        "metal-test",
+        PrimitiveKind::Path,
+        "path primitives are not implemented by this backend",
+    )]);
+
+    let unsupported = match diagnostics.unsupported_primitive(PrimitiveKind::Path) {
+        Some(unsupported) => unsupported,
+        None => panic!("path unsupported reason should be reported"),
+    };
+    assert_eq!(unsupported.backend, "metal-test");
+    assert_eq!(
+        unsupported.reason,
+        "path primitives are not implemented by this backend"
+    );
+    assert_eq!(
+        diagnostics.unsupported_primitive(PrimitiveKind::Text),
+        None
+    );
+}
+
+#[test]
 fn renderer_resource_glyphs_have_deterministic_lifetime() {
     let mut cache = RendererResourceCache::new(RendererResourceKind::Glyph, 1, 64);
     let title = GlyphResourceKey::new("Title", 14.0, 400, None, 1.2);
@@ -216,4 +243,5 @@ fn renderer_resource_recording_renderer_reports_headless_diagnostics() {
     assert_eq!(diagnostics.device.backend, "recording");
     assert!(diagnostics.device.is_headless);
     assert!(diagnostics.resources.is_empty());
+    assert!(diagnostics.unsupported_primitives.is_empty());
 }
