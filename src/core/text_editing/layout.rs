@@ -4,6 +4,7 @@ use crate::core::color::Rgba;
 use crate::core::geometry::{Bounds, Edges, Point, Size};
 use crate::core::style::Corners;
 use crate::renderer::Primitive;
+use crate::renderer::text::TextShapePlan;
 use unicode_segmentation::UnicodeSegmentation;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -42,6 +43,15 @@ pub struct SelectionRect {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
+struct EditClusterGeometry {
+    byte_start: usize,
+    byte_end: usize,
+    line_index: usize,
+    x_offset: f32,
+    advance_width: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TextEditPaintStyle {
     pub caret_width: f32,
     pub caret_color: Rgba,
@@ -72,7 +82,7 @@ impl Default for TextEditPaintStyle {
 pub struct TextEditLayout {
     text: String,
     lines: Vec<TextLine>,
-    grapheme_width: f32,
+    clusters: Vec<EditClusterGeometry>,
     line_height: f32,
 }
 
@@ -82,33 +92,76 @@ impl TextEditLayout {
         let grapheme_width = grapheme_width.max(0.0);
         let line_height = line_height.max(0.0);
         let mut lines = Vec::new();
+        let mut clusters = Vec::new();
         let mut start = 0;
         let mut y = 0.0;
 
         for part in text.split_inclusive('\n') {
             let end = start + part.trim_end_matches('\n').len();
-            lines.push(line_for(&text, start, end, y, grapheme_width, line_height));
+            let line = line_for(&text, start, end, y, grapheme_width, line_height);
+            push_fixed_clusters(
+                &text,
+                line.text_range(),
+                lines.len(),
+                grapheme_width,
+                &mut clusters,
+            );
+            lines.push(line);
             start += part.len();
             y += line_height;
         }
 
         if lines.is_empty() || text.ends_with('\n') {
-            lines.push(line_for(
-                &text,
-                start,
-                start,
-                y,
-                grapheme_width,
-                line_height,
-            ));
+            let line = line_for(&text, start, start, y, grapheme_width, line_height);
+            lines.push(line);
         }
 
         Self {
             text,
             lines,
-            grapheme_width,
+            clusters,
             line_height,
         }
+    }
+
+    pub fn from_shape_plan(
+        text: impl Into<String>,
+        plan: &TextShapePlan,
+    ) -> Result<Self, TextEditError> {
+        let text = text.into();
+        let line_height = plan.metrics().size.height;
+        let line = TextLine {
+            range: TextRange::ordered(0, text.len()),
+            origin: Point::new(0.0, 0.0),
+            size: Size::new(plan.metrics().size.width, line_height),
+        };
+        let mut clusters = Vec::new();
+        for cluster in plan.clusters() {
+            if cluster.byte_end > text.len()
+                || !text.is_char_boundary(cluster.byte_start)
+                || !text.is_char_boundary(cluster.byte_end)
+                || text[cluster.byte_start..cluster.byte_end] != cluster.text
+            {
+                return Err(TextEditError::InvalidRange {
+                    start: cluster.byte_start,
+                    end: cluster.byte_end,
+                });
+            }
+            clusters.push(EditClusterGeometry {
+                byte_start: cluster.byte_start,
+                byte_end: cluster.byte_end,
+                line_index: 0,
+                x_offset: cluster.x_offset,
+                advance_width: cluster.advance_width,
+            });
+        }
+
+        Ok(Self {
+            text,
+            lines: vec![line],
+            clusters,
+            line_height,
+        })
     }
 
     pub fn lines(&self) -> &[TextLine] {
@@ -125,7 +178,7 @@ impl TextEditLayout {
             .count();
         Ok(CaretGeometry {
             position: Point::new(
-                line.origin.x + column as f32 * self.grapheme_width,
+                self.x_for_offset_on_line(line_index, clamped),
                 line.origin.y,
             ),
             height: self.line_height,
@@ -141,20 +194,20 @@ impl TextEditLayout {
         }
 
         let mut rects = Vec::new();
-        for line in &self.lines {
+        for (line_index, line) in self.lines.iter().enumerate() {
             let start = range.start().max(line.range.start());
             let end = range.end().min(line.range.end());
             if start >= end {
                 continue;
             }
 
-            let start_column = self.text[line.range.start()..start].graphemes(true).count();
-            let selected = self.text[start..end].graphemes(true).count();
+            let start_x = self.x_for_offset_on_line(line_index, start);
+            let end_x = self.x_for_offset_on_line(line_index, end);
             rects.push(SelectionRect {
                 bounds: Bounds::from_xywh(
-                    line.origin.x + start_column as f32 * self.grapheme_width,
+                    start_x,
                     line.origin.y,
-                    selected as f32 * self.grapheme_width,
+                    (end_x - start_x).max(0.0),
                     self.line_height,
                 ),
                 range: TextRange::ordered(start, end),
@@ -222,7 +275,20 @@ impl TextEditLayout {
     }
 
     fn ensure_layout_boundary(&self, offset: usize) -> Result<(), TextEditError> {
-        if offset <= self.text.len() && self.text.is_char_boundary(offset) {
+        if offset > self.text.len() || !self.text.is_char_boundary(offset) {
+            return Err(TextEditError::InvalidBoundary { index: offset });
+        }
+
+        if offset == self.text.len()
+            || self
+                .lines
+                .iter()
+                .any(|line| offset == line.range.start() || offset == line.range.end())
+            || self
+                .clusters
+                .iter()
+                .any(|cluster| offset == cluster.byte_start || offset == cluster.byte_end)
+        {
             Ok(())
         } else {
             Err(TextEditError::InvalidBoundary { index: offset })
@@ -234,6 +300,36 @@ impl TextEditLayout {
             .iter()
             .position(|line| offset <= line.range.end())
             .unwrap_or_else(|| self.lines.len().saturating_sub(1))
+    }
+
+    fn x_for_offset_on_line(&self, line_index: usize, offset: usize) -> f32 {
+        let line = self.lines[line_index];
+        if offset <= line.range.start() {
+            return line.origin.x;
+        }
+        if offset >= line.range.end() {
+            return self
+                .clusters
+                .iter()
+                .rev()
+                .find(|cluster| cluster.line_index == line_index)
+                .map(|cluster| line.origin.x + cluster.x_offset + cluster.advance_width)
+                .unwrap_or(line.origin.x + line.size.width);
+        }
+
+        self.clusters
+            .iter()
+            .filter(|cluster| cluster.line_index == line_index)
+            .find_map(|cluster| {
+                if offset == cluster.byte_start {
+                    Some(line.origin.x + cluster.x_offset)
+                } else if offset == cluster.byte_end {
+                    Some(line.origin.x + cluster.x_offset + cluster.advance_width)
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(line.origin.x + line.size.width)
     }
 }
 
@@ -250,5 +346,26 @@ fn line_for(
         range: TextRange::ordered(start, end),
         origin: Point::new(0.0, y),
         size: Size::new(width, line_height),
+    }
+}
+
+fn push_fixed_clusters(
+    text: &str,
+    range: TextRange,
+    line_index: usize,
+    grapheme_width: f32,
+    clusters: &mut Vec<EditClusterGeometry>,
+) {
+    let mut x_offset = 0.0;
+    for (relative_start, grapheme) in text[range.start()..range.end()].grapheme_indices(true) {
+        let byte_start = range.start() + relative_start;
+        clusters.push(EditClusterGeometry {
+            byte_start,
+            byte_end: byte_start + grapheme.len(),
+            line_index,
+            x_offset,
+            advance_width: grapheme_width,
+        });
+        x_offset += grapheme_width;
     }
 }

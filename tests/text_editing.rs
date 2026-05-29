@@ -6,6 +6,7 @@ use rui::core::text_editing::{
     TextEditPaintStyle, TextInputEvent, TextRange, TextSelection,
 };
 use rui::renderer::Primitive;
+use rui::renderer::text::{TextMeasureCache, TextRequest};
 
 fn range(start: usize, end: usize) -> TextRange {
     match TextRange::new(start, end) {
@@ -19,6 +20,13 @@ fn must<T>(result: Result<T, TextEditError>) -> T {
         Ok(value) => value,
         Err(err) => panic!("text edit operation failed: {err}"),
     }
+}
+
+fn assert_close(left: f32, right: f32) {
+    assert!(
+        (left - right).abs() <= 0.01,
+        "{left} should be within 0.01 of {right}"
+    );
 }
 
 #[test]
@@ -270,6 +278,39 @@ fn text_editing_layout_maps_combining_and_emoji_clusters_to_columns() {
     };
     assert_eq!(rects.len(), 1);
     assert_eq!(rects[0].bounds.width(), 10.0);
+}
+
+#[test]
+fn text_editing_layout_can_use_shaped_cluster_positions() {
+    let text = "Wi界";
+    let mut cache = TextMeasureCache::new();
+    let plan = match cache.shape_single_line(TextRequest::new(text, 24.0, 400, None, 1.2)) {
+        Ok(plan) => plan,
+        Err(err) => panic!("text shaping failed: {err:?}"),
+    };
+    let layout = must(TextEditLayout::from_shape_plan(text, &plan));
+
+    let first = &plan.clusters()[0];
+    let second = &plan.clusters()[1];
+    let caret = must(layout.caret_for_offset(first.byte_end));
+    assert_close(caret.position.x, first.advance_width);
+
+    let rects = must(layout.selection_rects(range(first.byte_start, second.byte_end)));
+    assert_eq!(rects.len(), 1);
+    assert_close(
+        rects[0].bounds.width(),
+        first.advance_width + second.advance_width,
+    );
+}
+
+#[test]
+fn text_editing_layout_rejects_mid_grapheme_geometry_offsets() {
+    let layout = TextEditLayout::new("e\u{301}", 10.0, 20.0);
+    let error = match layout.caret_for_offset(1) {
+        Ok(caret) => panic!("mid-grapheme caret should fail, got {caret:?}"),
+        Err(err) => err,
+    };
+    assert_eq!(error, TextEditError::InvalidBoundary { index: 1 });
 }
 
 #[test]
