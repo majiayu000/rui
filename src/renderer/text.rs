@@ -5,9 +5,8 @@ use crate::renderer::resources::{
     GlyphResourceKey, RendererResourceCache, RendererResourceError, RendererResourceKind,
     RendererResourceStats,
 };
-use crate::renderer::text_shaping::shape_with_font;
-use rusttype::{Font, Scale, point};
-use std::borrow::Cow;
+use crate::renderer::text_shaping::{TextShapingFont, rasterize_with_plan, shape_with_fonts};
+use rusttype::Font;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -86,28 +85,31 @@ struct TextMeasureKey {
     content: String,
     size_bits: u32,
     line_height_bits: u32,
+    font_weight: u16,
+    font_family: String,
 }
 
 impl TextMeasureKey {
-    fn from_request(request: TextRequest<'_>) -> Result<Self, TextError> {
-        resolve_font_family(request.font_family)?;
-        Ok(Self {
+    fn from_request(request: TextRequest<'_>, resolved_family: &str) -> Self {
+        Self {
             content: request.content.to_string(),
             size_bits: request.font_size.to_bits(),
             line_height_bits: request.line_height.to_bits(),
-        })
+            font_weight: request.font_weight,
+            font_family: resolved_family.to_string(),
+        }
     }
 }
 
 pub struct TextMeasureCache {
-    font: Option<Font<'static>>,
+    fonts: Vec<TextShapingFont>,
     metrics: HashMap<TextMeasureKey, TextMetrics>,
 }
 
 impl TextMeasureCache {
     pub fn new() -> Self {
         Self {
-            font: load_system_font(),
+            fonts: load_system_fonts(),
             metrics: HashMap::new(),
         }
     }
@@ -115,7 +117,7 @@ impl TextMeasureCache {
     #[cfg(test)]
     pub(crate) fn without_font() -> Self {
         Self {
-            font: None,
+            fonts: Vec::new(),
             metrics: HashMap::new(),
         }
     }
@@ -128,13 +130,13 @@ impl TextMeasureCache {
             return Ok(TextMetrics::empty());
         }
 
-        let key = TextMeasureKey::from_request(request)?;
+        let primary_index = self.primary_font_index(request.font_family)?;
+        let key = TextMeasureKey::from_request(request, &self.fonts[primary_index].family);
         if let Some(metrics) = self.metrics.get(&key) {
             return Ok(*metrics);
         }
 
-        let font = self.font.as_ref().ok_or(TextError::MissingFont)?;
-        let metrics = measure_with_font(font, request);
+        let metrics = self.shape_with_primary(request, primary_index).metrics();
         self.metrics.insert(key, metrics);
         Ok(metrics)
     }
@@ -147,9 +149,34 @@ impl TextMeasureCache {
             return Ok(TextShapePlan::empty());
         }
 
-        resolve_font_family(request.font_family)?;
-        let font = self.font.as_ref().ok_or(TextError::MissingFont)?;
-        Ok(shape_with_font(font, request))
+        let primary_index = self.primary_font_index(request.font_family)?;
+        Ok(self.shape_with_primary(request, primary_index))
+    }
+
+    fn shape_with_primary(&self, request: TextRequest<'_>, primary_index: usize) -> TextShapePlan {
+        shape_with_fonts(&self.fonts, primary_index, request)
+    }
+
+    fn primary_font_index(&self, font_family: Option<&str>) -> Result<usize, TextError> {
+        if self.fonts.is_empty() {
+            return Err(TextError::MissingFont);
+        }
+
+        let Some(family) = font_family
+            .map(str::trim)
+            .filter(|family| !family.is_empty())
+        else {
+            return Ok(0);
+        };
+
+        if matches!(family, "system" | "default") {
+            return Ok(0);
+        }
+
+        self.fonts
+            .iter()
+            .position(|font| font.family.eq_ignore_ascii_case(family))
+            .ok_or_else(|| TextError::UnsupportedFontFamily(family.to_string()))
     }
 }
 
@@ -206,8 +233,7 @@ impl TextRasterCache {
         &mut self,
         request: TextRequest<'_>,
     ) -> Result<Option<Arc<TextRasterEntry>>, TextError> {
-        let metrics = self.measurer.measure_single_line(request)?;
-        if metrics.ink_bounds.is_empty() {
+        if request.content.is_empty() || request.font_size <= 0.0 || request.line_height <= 0.0 {
             return Ok(None);
         }
 
@@ -224,11 +250,14 @@ impl TextRasterCache {
             return Ok(Some(entry));
         }
 
-        let pixels = rasterize_with_font(
-            self.measurer.font.as_ref().ok_or(TextError::MissingFont)?,
-            request,
-            metrics,
-        );
+        let primary_index = self.measurer.primary_font_index(request.font_family)?;
+        let plan = self.measurer.shape_with_primary(request, primary_index);
+        let metrics = plan.metrics();
+        if metrics.ink_bounds.is_empty() {
+            return Ok(None);
+        }
+
+        let pixels = rasterize_with_plan(&self.measurer.fonts, request, metrics, &plan);
         let allocation = self.resources.resolve(key.clone(), pixels.len())?;
         self.drop_evicted(allocation.evicted);
 
@@ -254,88 +283,69 @@ impl Default for TextRasterCache {
     }
 }
 
-fn measure_with_font(font: &Font<'static>, request: TextRequest<'_>) -> TextMetrics {
-    shape_with_font(font, request).metrics()
-}
-
-fn rasterize_with_font(
-    font: &Font<'static>,
-    request: TextRequest<'_>,
-    metrics: TextMetrics,
-) -> Vec<u8> {
-    let width = metrics.ink_bounds.width().ceil().max(1.0) as u32;
-    let height = metrics.ink_bounds.height().ceil().max(1.0) as u32;
-    let mut pixels = vec![0u8; (width * height * 4) as usize];
-
-    let scale = Scale::uniform(request.font_size);
-    let v_metrics = font.v_metrics(scale);
-    let raster_content = rasterizable_text(request.content);
-    for glyph in font.layout(&raster_content, scale, point(0.0, v_metrics.ascent)) {
-        if let Some(bb) = glyph.pixel_bounding_box() {
-            glyph.draw(|x, y, v| {
-                let px = x as i32 + bb.min.x - metrics.ink_bounds.x() as i32;
-                let py = y as i32 + bb.min.y - metrics.ink_bounds.y() as i32;
-                if px < 0 || py < 0 {
-                    return;
-                }
-                let px = px as u32;
-                let py = py as u32;
-                if px >= width || py >= height {
-                    return;
-                }
-                let idx = ((py * width + px) * 4) as usize;
-                pixels[idx] = 255;
-                pixels[idx + 1] = 255;
-                pixels[idx + 2] = 255;
-                pixels[idx + 3] = (v * 255.0) as u8;
-            });
-        }
-    }
-
-    pixels
-}
-
-fn rasterizable_text(content: &str) -> Cow<'_, str> {
-    if content.chars().any(char::is_control) {
-        Cow::Owned(content.chars().filter(|ch| !ch.is_control()).collect())
-    } else {
-        Cow::Borrowed(content)
-    }
-}
-
-fn resolve_font_family(font_family: Option<&str>) -> Result<(), TextError> {
-    match font_family
-        .map(str::trim)
-        .filter(|family| !family.is_empty())
-    {
-        None | Some("system") | Some("default") => Ok(()),
-        Some(family) => Err(TextError::UnsupportedFontFamily(family.to_string())),
-    }
-}
-
-fn load_system_font() -> Option<Font<'static>> {
+fn load_system_fonts() -> Vec<TextShapingFont> {
     let candidates = [
-        "/System/Library/Fonts/Supplemental/Arial.ttf",
-        "/Library/Fonts/Arial Unicode.ttf",
-        "/System/Library/Fonts/Geneva.ttf",
-        "/System/Library/Fonts/Monaco.ttf",
-        "/System/Library/Fonts/SFNS.ttf",
-        "/System/Library/Fonts/SFNSMono.ttf",
-        "/Library/Fonts/Arial.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
-        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        ("Arial", "/System/Library/Fonts/Supplemental/Arial.ttf"),
+        ("Arial", "/Library/Fonts/Arial.ttf"),
+        (
+            "Arial Unicode",
+            "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+        ),
+        ("Arial Unicode", "/Library/Fonts/Arial Unicode.ttf"),
+        ("Helvetica", "/System/Library/Fonts/Helvetica.ttc"),
+        ("Helvetica Neue", "/System/Library/Fonts/HelveticaNeue.ttc"),
+        ("Geneva", "/System/Library/Fonts/Geneva.ttf"),
+        ("SF Pro", "/System/Library/Fonts/SFNS.ttf"),
+        ("SF Mono", "/System/Library/Fonts/SFNSMono.ttf"),
+        ("SF Hebrew", "/System/Library/Fonts/SFHebrew.ttf"),
+        ("SF Arabic", "/System/Library/Fonts/SFArabic.ttf"),
+        ("Geeza Pro", "/System/Library/Fonts/GeezaPro.ttc"),
+        (
+            "Hiragino Sans GB",
+            "/System/Library/Fonts/Hiragino Sans GB.ttc",
+        ),
+        ("STHeiti", "/System/Library/Fonts/STHeiti Medium.ttc"),
+        (
+            "Apple Color Emoji",
+            "/System/Library/Fonts/Apple Color Emoji.ttc",
+        ),
+        ("Apple Symbols", "/System/Library/Fonts/Apple Symbols.ttf"),
+        (
+            "DejaVu Sans",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        ),
+        (
+            "Liberation Sans",
+            "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
+        ),
+        (
+            "Noto Sans CJK",
+            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        ),
     ];
 
-    for path in candidates {
-        if let Ok(bytes) = std::fs::read(path)
-            && let Some(font) = Font::try_from_vec(bytes)
-        {
-            return Some(font);
-        }
+    let mut fonts = Vec::new();
+    for (family, path) in candidates {
+        load_font_faces(family, path, &mut fonts);
     }
+    fonts
+}
 
-    None
+fn load_font_faces(family: &str, path: &str, fonts: &mut Vec<TextShapingFont>) {
+    let Ok(bytes) = std::fs::read(path) else {
+        return;
+    };
+    let data = Arc::new(bytes);
+
+    for index in 0..16 {
+        let Some(font) = Font::try_from_vec_and_index(data.as_ref().clone(), index) else {
+            break;
+        };
+        if rustybuzz::Face::from_slice(data.as_slice(), index).is_none() {
+            break;
+        }
+        fonts.push(TextShapingFont::new(family, index, data.clone(), font));
+    }
 }
 
 #[cfg(test)]
@@ -358,6 +368,13 @@ mod tests {
             Ok(plan) => plan,
             Err(err) => panic!("text shaping failed: {:?}", err),
         }
+    }
+
+    fn assert_close(left: f32, right: f32) {
+        assert!(
+            (left - right).abs() <= TEXT_BOUNDS_TOLERANCE,
+            "{left} should be within {TEXT_BOUNDS_TOLERANCE} of {right}"
+        );
     }
 
     #[test]
@@ -426,6 +443,87 @@ mod tests {
         assert_eq!(plan.clusters()[2].script, TextScript::Latin);
         assert!(plan.runs().iter().any(|run| run.script == TextScript::Cjk));
         assert_eq!(measure(&mut cache, request("A界e\u{301}")), plan.metrics());
+    }
+
+    #[test]
+    fn shaping_records_positioned_glyphs_that_sum_to_the_advance() {
+        let mut cache = TextMeasureCache::new();
+        let plan = shape(&mut cache, request("office"));
+
+        assert!(!plan.glyphs().is_empty());
+        assert!(
+            plan.glyphs()
+                .iter()
+                .all(|glyph| glyph.byte_end > glyph.byte_start)
+        );
+        let glyph_advance = plan
+            .glyphs()
+            .iter()
+            .map(|glyph| glyph.advance_width)
+            .sum::<f32>();
+        assert_close(glyph_advance, plan.metrics().advance_width);
+    }
+
+    #[test]
+    fn shaping_reports_ligature_substitution_when_the_font_applies_one() {
+        let mut cache = TextMeasureCache::new();
+        let plan = shape(&mut cache, request("office"));
+
+        if let Some(TextShapeDiagnostic::LigatureSubstitution {
+            glyph_count,
+            grapheme_count,
+            ..
+        }) = plan.diagnostics().iter().find(|diagnostic| {
+            matches!(diagnostic, TextShapeDiagnostic::LigatureSubstitution { .. })
+        }) {
+            assert!(*glyph_count < *grapheme_count);
+        } else {
+            assert_eq!(plan.glyphs().len(), plan.clusters().len());
+        }
+    }
+
+    #[test]
+    fn shaped_ligature_glyph_ranges_cover_collapsed_clusters() {
+        let mut cache = TextMeasureCache::new();
+        let plan = shape(&mut cache, request("office"));
+
+        if !plan.diagnostics().iter().any(|diagnostic| {
+            matches!(diagnostic, TextShapeDiagnostic::LigatureSubstitution { .. })
+        }) {
+            return;
+        }
+
+        let collapsed = plan.glyphs().iter().any(|glyph| {
+            plan.clusters()
+                .iter()
+                .filter(|cluster| {
+                    cluster.byte_start >= glyph.byte_start && cluster.byte_end <= glyph.byte_end
+                })
+                .count()
+                > 1
+        });
+        assert!(
+            collapsed,
+            "expected one glyph range to cover every cluster collapsed into a ligature"
+        );
+    }
+
+    #[test]
+    fn rtl_cluster_offsets_follow_visual_order() {
+        let mut cache = TextMeasureCache::new();
+        let plan = shape(&mut cache, request("שלום"));
+        let rtl_clusters = plan
+            .clusters()
+            .iter()
+            .filter(|cluster| cluster.direction == TextDirection::RightToLeft)
+            .collect::<Vec<_>>();
+
+        assert!(rtl_clusters.len() > 1);
+        assert!(
+            rtl_clusters
+                .windows(2)
+                .all(|pair| { pair[0].x_offset > pair[1].x_offset })
+        );
     }
 
     #[test]
@@ -551,6 +649,52 @@ mod tests {
     }
 
     #[test]
+    fn empty_raster_requests_do_not_require_fonts() {
+        let mut cache = TextRasterCache {
+            measurer: TextMeasureCache::without_font(),
+            resources: RendererResourceCache::unbounded(RendererResourceKind::Glyph),
+            entries: HashMap::new(),
+        };
+
+        assert!(matches!(cache.resolve(request("")), Ok(None)));
+        assert!(matches!(
+            cache.resolve(TextRequest::new("Hello", 0.0, 400, None, 1.2)),
+            Ok(None)
+        ));
+        assert!(matches!(
+            cache.resolve(TextRequest::new("Hello", 20.0, 400, None, 0.0)),
+            Ok(None)
+        ));
+    }
+
+    #[test]
+    fn raster_cache_hits_do_not_require_reshaping() {
+        let mut cache = TextRasterCache {
+            measurer: TextMeasureCache::without_font(),
+            resources: RendererResourceCache::unbounded(RendererResourceKind::Glyph),
+            entries: HashMap::new(),
+        };
+        let key = GlyphResourceKey::new("Cached", 20.0, 400, None, 1.2);
+        let entry = Arc::new(TextRasterEntry {
+            id: 7,
+            metrics: TextMetrics {
+                size: Size::new(1.0, 1.0),
+                ink_bounds: Bounds::from_xywh(0.0, 0.0, 1.0, 1.0),
+                advance_width: 1.0,
+            },
+            pixels: vec![255, 255, 255, 255],
+        });
+        cache.entries.insert(key, entry.clone());
+
+        let resolved = match cache.resolve(request("Cached")) {
+            Ok(Some(entry)) => entry,
+            Ok(None) => panic!("expected cached raster entry"),
+            Err(err) => panic!("cache hit should not shape text: {:?}", err),
+        };
+        assert!(Arc::ptr_eq(&resolved, &entry));
+    }
+
+    #[test]
     fn shaping_reports_missing_glyph_and_required_fallback() {
         let mut cache = TextMeasureCache::new();
         let plan = shape(&mut cache, request("\u{10ffff}"));
@@ -566,6 +710,40 @@ mod tests {
                 TextShapeDiagnostic::FallbackRequired { .. }
             ))
         );
+        assert!(
+            plan.diagnostics()
+                .iter()
+                .any(|diagnostic| matches!(diagnostic, TextShapeDiagnostic::FallbackFailed { .. }))
+        );
+    }
+
+    #[test]
+    fn shaping_surfaces_font_fallback_when_primary_lacks_a_cluster() {
+        let mut cache = TextMeasureCache::new();
+        let families = cache
+            .fonts
+            .iter()
+            .map(|font| font.family.clone())
+            .collect::<Vec<_>>();
+
+        let fallback_plan = families.into_iter().find_map(|family| {
+            let plan = shape(
+                &mut cache,
+                TextRequest::new("A界", 20.0, 400, Some(&family), 1.2),
+            );
+            plan.diagnostics()
+                .iter()
+                .any(|diagnostic| matches!(diagnostic, TextShapeDiagnostic::FallbackApplied { .. }))
+                .then_some(plan)
+        });
+
+        let plan = match fallback_plan {
+            Some(plan) => plan,
+            None => panic!("expected an installed primary font to need deterministic CJK fallback"),
+        };
+        assert!(plan.clusters().iter().any(|cluster| {
+            cluster.script == TextScript::Cjk && !cluster.font_family.is_empty()
+        }));
     }
 
     #[test]
