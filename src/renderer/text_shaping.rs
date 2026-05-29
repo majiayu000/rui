@@ -533,6 +533,14 @@ fn shape_run_glyphs(
     let v_metrics = font.font.v_metrics(rust_scale);
     let mut cursor_x = start_x;
     let mut glyphs = Vec::new();
+    let run_end = clusters.last().map(|cluster| cluster.byte_end).unwrap_or(0);
+    let mut shaped_cluster_starts = shaped
+        .glyph_infos()
+        .iter()
+        .map(|info| info.cluster as usize)
+        .collect::<Vec<_>>();
+    shaped_cluster_starts.sort_unstable();
+    shaped_cluster_starts.dedup();
 
     for (info, position) in shaped.glyph_infos().iter().zip(shaped.glyph_positions()) {
         let x_offset = cursor_x + position.x_offset as f32 * position_scale;
@@ -551,7 +559,7 @@ fn shape_run_glyphs(
         let byte_start = info.cluster as usize;
         glyphs.push(ShapedGlyph {
             byte_start,
-            byte_end: cluster_end_for_offset(clusters, byte_start),
+            byte_end: glyph_byte_end_for_offset(&shaped_cluster_starts, run_end, byte_start),
             glyph_id,
             font_family: font.family.clone(),
             x_offset,
@@ -583,16 +591,33 @@ fn distribute_cluster_advances(
     } else {
         shaped_advance / clusters.len() as f32
     };
+    let advance_widths = simple_advances
+        .iter()
+        .map(|simple_advance| {
+            if simple_total > 0.0 {
+                simple_advance / simple_total * shaped_advance
+            } else {
+                fallback_advance
+            }
+        })
+        .collect::<Vec<_>>();
 
     let mut cursor_x = start_x;
-    for (cluster, simple_advance) in clusters.iter_mut().zip(simple_advances) {
-        cluster.x_offset = cursor_x;
-        cluster.advance_width = if simple_total > 0.0 {
-            simple_advance / simple_total * shaped_advance
-        } else {
-            fallback_advance
-        };
-        cursor_x += cluster.advance_width;
+    if clusters
+        .first()
+        .is_some_and(|cluster| cluster.direction == TextDirection::RightToLeft)
+    {
+        for index in (0..clusters.len()).rev() {
+            clusters[index].x_offset = cursor_x;
+            clusters[index].advance_width = advance_widths[index];
+            cursor_x += clusters[index].advance_width;
+        }
+    } else {
+        for (cluster, advance_width) in clusters.iter_mut().zip(advance_widths) {
+            cluster.x_offset = cursor_x;
+            cluster.advance_width = advance_width;
+            cursor_x += cluster.advance_width;
+        }
     }
 }
 
@@ -604,12 +629,16 @@ fn simple_cluster_advance(font: &TextShapingFont, scale: Scale, cluster: &str) -
         .sum()
 }
 
-fn cluster_end_for_offset(clusters: &[ClusterDraft], byte_start: usize) -> usize {
-    clusters
+fn glyph_byte_end_for_offset(
+    shaped_cluster_starts: &[usize],
+    run_end: usize,
+    byte_start: usize,
+) -> usize {
+    shaped_cluster_starts
         .iter()
-        .find(|cluster| cluster.byte_start == byte_start)
-        .map(|cluster| cluster.byte_end)
-        .unwrap_or(byte_start)
+        .copied()
+        .find(|cluster_start| *cluster_start > byte_start)
+        .unwrap_or(run_end)
 }
 
 fn classify_script(cluster: &str) -> TextScript {

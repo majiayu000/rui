@@ -304,6 +304,38 @@ fn text_editing_layout_can_use_shaped_cluster_positions() {
 }
 
 #[test]
+fn text_editing_selection_uses_visual_cluster_bounds_for_rtl_shape_plans() {
+    let text = "שלום";
+    let mut cache = TextMeasureCache::new();
+    let plan = match cache.shape_single_line(TextRequest::new(text, 24.0, 400, None, 1.2)) {
+        Ok(plan) => plan,
+        Err(err) => panic!("text shaping failed: {err:?}"),
+    };
+    let layout = must(TextEditLayout::from_shape_plan(text, &plan));
+    let first = &plan.clusters()[0];
+
+    let first_rects = must(layout.selection_rects(range(first.byte_start, first.byte_end)));
+    assert_eq!(first_rects.len(), 1);
+    assert_close(first_rects[0].bounds.x(), first.x_offset);
+    assert_close(first_rects[0].bounds.width(), first.advance_width);
+
+    let min_x = plan
+        .clusters()
+        .iter()
+        .map(|cluster| cluster.x_offset)
+        .fold(f32::INFINITY, f32::min);
+    let max_x = plan
+        .clusters()
+        .iter()
+        .map(|cluster| cluster.x_offset + cluster.advance_width)
+        .fold(f32::NEG_INFINITY, f32::max);
+    let full_rects = must(layout.selection_rects(range(0, text.len())));
+    assert_eq!(full_rects.len(), 1);
+    assert_close(full_rects[0].bounds.x(), min_x);
+    assert_close(full_rects[0].bounds.width(), max_x - min_x);
+}
+
+#[test]
 fn text_editing_layout_rejects_mid_grapheme_geometry_offsets() {
     let layout = TextEditLayout::new("e\u{301}", 10.0, 20.0);
     let error = match layout.caret_for_offset(1) {

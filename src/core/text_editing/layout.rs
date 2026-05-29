@@ -201,8 +201,14 @@ impl TextEditLayout {
                 continue;
             }
 
-            let start_x = self.x_for_offset_on_line(line_index, start);
-            let end_x = self.x_for_offset_on_line(line_index, end);
+            let (start_x, end_x) = self
+                .visual_bounds_for_range_on_line(line_index, start, end)
+                .unwrap_or_else(|| {
+                    (
+                        self.x_for_offset_on_line(line_index, start),
+                        self.x_for_offset_on_line(line_index, end),
+                    )
+                });
             rects.push(SelectionRect {
                 bounds: Bounds::from_xywh(
                     start_x,
@@ -304,20 +310,8 @@ impl TextEditLayout {
 
     fn x_for_offset_on_line(&self, line_index: usize, offset: usize) -> f32 {
         let line = self.lines[line_index];
-        if offset <= line.range.start() {
-            return line.origin.x;
-        }
-        if offset >= line.range.end() {
-            return self
-                .clusters
-                .iter()
-                .rev()
-                .find(|cluster| cluster.line_index == line_index)
-                .map(|cluster| line.origin.x + cluster.x_offset + cluster.advance_width)
-                .unwrap_or(line.origin.x + line.size.width);
-        }
-
-        self.clusters
+        if let Some(x) = self
+            .clusters
             .iter()
             .filter(|cluster| cluster.line_index == line_index)
             .find_map(|cluster| {
@@ -329,7 +323,41 @@ impl TextEditLayout {
                     None
                 }
             })
-            .unwrap_or(line.origin.x + line.size.width)
+        {
+            return x;
+        }
+
+        if offset <= line.range.start() {
+            return line.origin.x;
+        }
+        if offset >= line.range.end() {
+            return line.origin.x + line.size.width;
+        }
+
+        line.origin.x + line.size.width
+    }
+
+    fn visual_bounds_for_range_on_line(
+        &self,
+        line_index: usize,
+        start: usize,
+        end: usize,
+    ) -> Option<(f32, f32)> {
+        let line = self.lines[line_index];
+        let mut min_x = f32::INFINITY;
+        let mut max_x = f32::NEG_INFINITY;
+
+        for cluster in self
+            .clusters
+            .iter()
+            .filter(|cluster| cluster.line_index == line_index)
+            .filter(|cluster| cluster.byte_end > start && cluster.byte_start < end)
+        {
+            min_x = min_x.min(line.origin.x + cluster.x_offset);
+            max_x = max_x.max(line.origin.x + cluster.x_offset + cluster.advance_width);
+        }
+
+        min_x.is_finite().then_some((min_x, max_x))
     }
 }
 

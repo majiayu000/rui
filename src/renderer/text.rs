@@ -233,10 +233,7 @@ impl TextRasterCache {
         &mut self,
         request: TextRequest<'_>,
     ) -> Result<Option<Arc<TextRasterEntry>>, TextError> {
-        let primary_index = self.measurer.primary_font_index(request.font_family)?;
-        let plan = self.measurer.shape_with_primary(request, primary_index);
-        let metrics = plan.metrics();
-        if metrics.ink_bounds.is_empty() {
+        if request.content.is_empty() || request.font_size <= 0.0 || request.line_height <= 0.0 {
             return Ok(None);
         }
 
@@ -251,6 +248,13 @@ impl TextRasterCache {
             let allocation = self.resources.resolve(key.clone(), entry.pixels.len())?;
             self.drop_evicted(allocation.evicted);
             return Ok(Some(entry));
+        }
+
+        let primary_index = self.measurer.primary_font_index(request.font_family)?;
+        let plan = self.measurer.shape_with_primary(request, primary_index);
+        let metrics = plan.metrics();
+        if metrics.ink_bounds.is_empty() {
+            return Ok(None);
         }
 
         let pixels = rasterize_with_plan(&self.measurer.fonts, request, metrics, &plan);
@@ -479,6 +483,50 @@ mod tests {
     }
 
     #[test]
+    fn shaped_ligature_glyph_ranges_cover_collapsed_clusters() {
+        let mut cache = TextMeasureCache::new();
+        let plan = shape(&mut cache, request("office"));
+
+        if !plan.diagnostics().iter().any(|diagnostic| {
+            matches!(diagnostic, TextShapeDiagnostic::LigatureSubstitution { .. })
+        }) {
+            return;
+        }
+
+        let collapsed = plan.glyphs().iter().any(|glyph| {
+            plan.clusters()
+                .iter()
+                .filter(|cluster| {
+                    cluster.byte_start >= glyph.byte_start && cluster.byte_end <= glyph.byte_end
+                })
+                .count()
+                > 1
+        });
+        assert!(
+            collapsed,
+            "expected one glyph range to cover every cluster collapsed into a ligature"
+        );
+    }
+
+    #[test]
+    fn rtl_cluster_offsets_follow_visual_order() {
+        let mut cache = TextMeasureCache::new();
+        let plan = shape(&mut cache, request("שלום"));
+        let rtl_clusters = plan
+            .clusters()
+            .iter()
+            .filter(|cluster| cluster.direction == TextDirection::RightToLeft)
+            .collect::<Vec<_>>();
+
+        assert!(rtl_clusters.len() > 1);
+        assert!(
+            rtl_clusters
+                .windows(2)
+                .all(|pair| { pair[0].x_offset > pair[1].x_offset })
+        );
+    }
+
+    #[test]
     fn shaping_marks_emoji_clusters_without_splitting_zwj_sequences() {
         let mut cache = TextMeasureCache::new();
         let plan = shape(&mut cache, request("build 🧑‍💻"));
@@ -598,6 +646,52 @@ mod tests {
 
         assert_eq!(with_control.metrics, without_control.metrics);
         assert_eq!(with_control.pixels, without_control.pixels);
+    }
+
+    #[test]
+    fn empty_raster_requests_do_not_require_fonts() {
+        let mut cache = TextRasterCache {
+            measurer: TextMeasureCache::without_font(),
+            resources: RendererResourceCache::unbounded(RendererResourceKind::Glyph),
+            entries: HashMap::new(),
+        };
+
+        assert!(matches!(cache.resolve(request("")), Ok(None)));
+        assert!(matches!(
+            cache.resolve(TextRequest::new("Hello", 0.0, 400, None, 1.2)),
+            Ok(None)
+        ));
+        assert!(matches!(
+            cache.resolve(TextRequest::new("Hello", 20.0, 400, None, 0.0)),
+            Ok(None)
+        ));
+    }
+
+    #[test]
+    fn raster_cache_hits_do_not_require_reshaping() {
+        let mut cache = TextRasterCache {
+            measurer: TextMeasureCache::without_font(),
+            resources: RendererResourceCache::unbounded(RendererResourceKind::Glyph),
+            entries: HashMap::new(),
+        };
+        let key = GlyphResourceKey::new("Cached", 20.0, 400, None, 1.2);
+        let entry = Arc::new(TextRasterEntry {
+            id: 7,
+            metrics: TextMetrics {
+                size: Size::new(1.0, 1.0),
+                ink_bounds: Bounds::from_xywh(0.0, 0.0, 1.0, 1.0),
+                advance_width: 1.0,
+            },
+            pixels: vec![255, 255, 255, 255],
+        });
+        cache.entries.insert(key, entry.clone());
+
+        let resolved = match cache.resolve(request("Cached")) {
+            Ok(Some(entry)) => entry,
+            Ok(None) => panic!("expected cached raster entry"),
+            Err(err) => panic!("cache hit should not shape text: {:?}", err),
+        };
+        assert!(Arc::ptr_eq(&resolved, &entry));
     }
 
     #[test]
