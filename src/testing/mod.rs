@@ -16,6 +16,8 @@ use std::error::Error;
 use std::fmt;
 use taffy::prelude::{AvailableSpace, TaffyTree};
 
+#[cfg(target_os = "macos")]
+pub use frame_capture::MetalFrameCaptureBackend;
 pub use frame_capture::{
     CapturedFrame, FrameCaptureBackend, MissingFrameCaptureBackend, capture_frame_with_backend,
 };

@@ -363,3 +363,46 @@ fragment float4 image_fragment(VertexOut in [[stage_in]],
     return float4(color.rgb, out_alpha);
 }
 "#;
+
+/// Metal shader for path rendering
+pub const PATH_SHADER: &str = r#"
+#include <metal_stdlib>
+using namespace metal;
+
+struct PathVertex {
+    float2 position;
+    float4 color;
+};
+
+struct Uniforms {
+    float2 viewport_size;
+};
+
+struct VertexOut {
+    float4 position [[position]];
+    float4 color;
+};
+
+float4 to_clip_space(float2 position, float2 viewport_size) {
+    float2 ndc = (position / viewport_size) * 2.0 - 1.0;
+    ndc.y = -ndc.y;
+    return float4(ndc, 0.0, 1.0);
+}
+
+vertex VertexOut path_vertex(
+    uint vertex_id [[vertex_id]],
+    constant PathVertex* vertices [[buffer(0)]],
+    constant Uniforms& uniforms [[buffer(1)]]
+) {
+    PathVertex path_vertex_data = vertices[vertex_id];
+
+    VertexOut out;
+    out.position = to_clip_space(path_vertex_data.position, uniforms.viewport_size);
+    out.color = path_vertex_data.color;
+    return out;
+}
+
+fragment float4 path_fragment(VertexOut in [[stage_in]]) {
+    return in.color;
+}
+"#;

@@ -105,7 +105,7 @@ impl RendererPrimitiveSupport {
     pub const fn metal() -> Self {
         Self {
             backend: "metal",
-            path_reason: Some("path primitives are not implemented by the Metal backend"),
+            path_reason: None,
         }
     }
 
@@ -299,10 +299,7 @@ mod tests {
             .map(Primitive::kind)
             .collect();
 
-        assert_eq!(
-            kinds,
-            PrimitiveKind::ALL.to_vec()
-        );
+        assert_eq!(kinds, PrimitiveKind::ALL.to_vec());
         assert_eq!(PrimitiveKind::Path.name(), "path");
     }
 
@@ -356,42 +353,20 @@ mod tests {
         assert!(metal.supports(PrimitiveKind::Quad));
         assert!(metal.supports(PrimitiveKind::Text));
         assert!(metal.supports(PrimitiveKind::Image));
+        assert!(metal.supports(PrimitiveKind::Path));
         assert!(metal.supports(PrimitiveKind::PushClip));
-        assert!(!metal.supports(PrimitiveKind::Path));
-        assert_eq!(
-            metal.unsupported_reason(PrimitiveKind::Path),
-            Some("path primitives are not implemented by the Metal backend")
-        );
-        assert_eq!(
-            metal.unsupported_primitives(),
-            vec![RendererUnsupportedPrimitive::new(
-                "metal",
-                PrimitiveKind::Path,
-                "path primitives are not implemented by the Metal backend"
-            )]
-        );
+        assert_eq!(metal.unsupported_reason(PrimitiveKind::Path), None);
+        assert_eq!(metal.unsupported_primitives(), Vec::new());
     }
 
     #[test]
-    fn metal_support_rejects_path_with_explicit_error() {
+    fn metal_support_accepts_path_scene() {
         let mut scene = Scene::new();
         scene.insert(sample_path());
 
         let result = RendererPrimitiveSupport::metal().validate_scene(&scene);
 
-        let error = result.expect_err("path primitive should be rejected by Metal support");
-        assert_eq!(
-            error,
-            RendererError::UnsupportedPrimitive {
-                backend: String::from("metal"),
-                primitive: PrimitiveKind::Path,
-                reason: String::from("path primitives are not implemented by the Metal backend"),
-            }
-        );
-        assert_eq!(
-            error.to_string(),
-            "metal renderer does not support path primitive: path primitives are not implemented by the Metal backend"
-        );
+        assert_eq!(result, Ok(()));
     }
 
     #[test]
