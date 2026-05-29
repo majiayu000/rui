@@ -246,10 +246,11 @@ impl PlatformWindow for MacWindow {
 
     fn read_clipboard_text(&mut self) -> Result<String, PlatformWindowError> {
         let pasteboard = NSPasteboard::generalPasteboard();
-        Ok(pasteboard
-            .stringForType(unsafe { NSPasteboardTypeString })
-            .map(|value| value.to_string())
-            .unwrap_or_default())
+        clipboard_text_or_error(
+            pasteboard
+                .stringForType(unsafe { NSPasteboardTypeString })
+                .map(|value| value.to_string()),
+        )
     }
 
     fn write_clipboard_text(&mut self, text: &str) -> Result<(), PlatformWindowError> {
@@ -357,11 +358,21 @@ fn append_platform_events_from_native_event(
     }
 
     if event_type == NSEventType::KeyDown {
-        let key_event = key_event_from_native_event(event);
+        let mut key_event = key_event_from_native_event(event);
+        let committed_text = committed_text_from_native_event(event);
+        let commit_represented_by_key = committed_text
+            .as_deref()
+            .is_some_and(|text| committed_text_matches_key_event(text, &key_event));
+        if committed_text.is_some() && !commit_represented_by_key {
+            key_event.char = None;
+        }
         events.push(PlatformWindowEvent::Input(PlatformInputEvent::KeyDown(
             key_event,
         )));
-        if let Some(text) = committed_text_from_native_event(event) {
+        if let Some(text) = committed_text {
+            if commit_represented_by_key {
+                return;
+            }
             events.push(PlatformWindowEvent::Input(PlatformInputEvent::Ime(
                 PlatformImeEvent::Commit(text),
             )));
@@ -483,6 +494,20 @@ fn committed_text_from_native_event(event: &NSEvent) -> Option<String> {
         return None;
     }
     Some(text)
+}
+
+fn committed_text_matches_key_event(text: &str, event: &KeyEvent) -> bool {
+    let mut chars = text.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    chars.next().is_none() && event.char == Some(first)
+}
+
+fn clipboard_text_or_error(text: Option<String>) -> Result<String, PlatformWindowError> {
+    text.ok_or_else(|| {
+        PlatformWindowError::backend("macos", "general pasteboard does not contain text")
+    })
 }
 
 fn keycode_from_char(ch: char) -> KeyCode {
@@ -646,5 +671,40 @@ impl MacWindowBackend {
             clipboard: true,
             renderer_attachment: true,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clipboard_text_or_error_rejects_missing_text() {
+        assert_eq!(
+            clipboard_text_or_error(None),
+            Err(PlatformWindowError::backend(
+                "macos",
+                "general pasteboard does not contain text",
+            ))
+        );
+        assert_eq!(
+            clipboard_text_or_error(Some(String::new())),
+            Ok(String::new())
+        );
+        assert_eq!(
+            clipboard_text_or_error(Some("copied".to_string())),
+            Ok("copied".to_string())
+        );
+    }
+
+    #[test]
+    fn committed_text_only_matches_single_char_key_events() {
+        let a_key = KeyEvent::new(KeyCode::A, Modifiers::none()).with_char('a');
+        assert!(committed_text_matches_key_event("a", &a_key));
+        assert!(!committed_text_matches_key_event("ab", &a_key));
+        assert!(!committed_text_matches_key_event("", &a_key));
+
+        let ime_key = KeyEvent::new(KeyCode::Unknown(0), Modifiers::none());
+        assert!(!committed_text_matches_key_event("好", &ime_key));
     }
 }

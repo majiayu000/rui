@@ -1,7 +1,7 @@
 //! macOS application runner
 
 use crate::core::app::AppContext;
-use crate::core::event::{Event, KeyEvent, ScrollEvent};
+use crate::core::event::{Event, KeyCode, KeyEvent, Modifiers, ScrollEvent};
 use crate::core::geometry::Bounds;
 use crate::core::window::WindowOptions;
 use crate::elements::element::{
@@ -9,8 +9,8 @@ use crate::elements::element::{
 };
 use crate::platform::mac::window::create_window;
 use crate::platform::window::{
-    PlatformInputEvent, PlatformMouseEventKind, PlatformRendererTarget, PlatformWindow,
-    PlatformWindowError, PlatformWindowEvent,
+    PlatformImeEvent, PlatformInputEvent, PlatformMouseEventKind, PlatformRendererTarget,
+    PlatformWindow, PlatformWindowError, PlatformWindowEvent,
 };
 use crate::renderer::RendererError;
 use crate::renderer::Scene;
@@ -310,7 +310,9 @@ fn append_input_event(
     match input {
         PlatformInputEvent::KeyDown(event) => key_events.push((true, event)),
         PlatformInputEvent::KeyUp(event) => key_events.push((false, event)),
-        PlatformInputEvent::Ime(_) => {}
+        PlatformInputEvent::Ime(PlatformImeEvent::Commit(text)) => {
+            append_committed_text_events(&text, key_events);
+        }
         PlatformInputEvent::Mouse(event) => {
             let kind = match event.kind {
                 PlatformMouseEventKind::Down => PointerEventKind::Down,
@@ -327,6 +329,15 @@ fn append_input_event(
     }
 }
 
+fn append_committed_text_events(text: &str, key_events: &mut Vec<(bool, KeyEvent)>) {
+    for ch in text.chars().filter(|ch| !ch.is_control()) {
+        key_events.push((
+            true,
+            KeyEvent::new(KeyCode::Unknown(0), Modifiers::none()).with_char(ch),
+        ));
+    }
+}
+
 fn should_forward_key_event_to_tree(is_down: bool) -> bool {
     is_down
 }
@@ -339,5 +350,26 @@ mod tests {
     fn only_key_down_events_are_forwarded_to_elements() {
         assert!(should_forward_key_event_to_tree(true));
         assert!(!should_forward_key_event_to_tree(false));
+    }
+
+    #[test]
+    fn ime_commit_events_are_forwarded_as_text_key_events() {
+        let mut pointer_events = Vec::new();
+        let mut scroll_events = Vec::new();
+        let mut key_events = Vec::new();
+
+        append_input_event(
+            PlatformInputEvent::Ime(PlatformImeEvent::Commit("你好".to_string())),
+            &mut pointer_events,
+            &mut scroll_events,
+            &mut key_events,
+        );
+
+        assert!(pointer_events.is_empty());
+        assert!(scroll_events.is_empty());
+        assert_eq!(key_events.len(), 2);
+        assert!(key_events.iter().all(|(is_down, _)| *is_down));
+        assert_eq!(key_events[0].1.char, Some('你'));
+        assert_eq!(key_events[1].1.char, Some('好'));
     }
 }
