@@ -1,16 +1,28 @@
 //! Text input element
 
 use crate::core::ElementId;
-use crate::core::color::Color;
-use crate::core::event::Cursor;
-use crate::core::geometry::{Bounds, Edges};
+use crate::core::color::{Color, Rgba};
+use crate::core::event::{Cursor, KeyCode, KeyEvent};
+use crate::core::geometry::{Bounds, Edges, Point};
 use crate::core::style::{Corners, Style};
+use crate::core::text_editing::{
+    Clipboard, TextEditBuffer, TextEditError, TextEditLayout, TextEditOutcome, TextEditPaintStyle,
+    TextInputEvent, TextRange, TextSelection,
+};
 use crate::elements::element::{
     Element, EventContext, LayoutContext, PaintContext, PointerEvent, PointerEventKind,
     style_to_taffy,
 };
 use crate::renderer::Primitive;
 use taffy::prelude::*;
+use unicode_segmentation::UnicodeSegmentation;
+
+const INPUT_HORIZONTAL_PADDING: f32 = 12.0;
+const INPUT_CARET_TOP_PADDING: f32 = 10.0;
+const INPUT_GRAPHEME_WIDTH: f32 = 7.0;
+const INPUT_CARET_WIDTH: f32 = 1.5;
+const INPUT_MARKED_UNDERLINE_HEIGHT: f32 = 2.0;
+const PASSWORD_MASK: &str = "\u{2022}";
 
 /// Input type variants
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -30,6 +42,8 @@ pub struct InputState {
     pub cursor_position: usize,
     pub selection_start: Option<usize>,
     pub selection_end: Option<usize>,
+    pub composition_range: Option<TextRange>,
+    pub marked_text: Option<String>,
     pub focused: bool,
     pub hovered: bool,
 }
@@ -41,6 +55,7 @@ pub struct Input {
     input_type: InputType,
     style: Style,
     state: InputState,
+    editor: TextEditBuffer,
     width: Option<f32>,
     on_change: Option<Box<dyn Fn(&str)>>,
     on_submit: Option<Box<dyn Fn(&str)>>,
@@ -62,6 +77,7 @@ impl Input {
             input_type: InputType::default(),
             style,
             state: InputState::default(),
+            editor: TextEditBuffer::new(),
             width: None,
             on_change: None,
             on_submit: None,
@@ -82,8 +98,8 @@ impl Input {
     }
 
     pub fn value(mut self, value: impl Into<String>) -> Self {
-        self.state.value = value.into();
-        self.state.cursor_position = self.state.value.len();
+        self.editor = TextEditBuffer::with_text(value.into());
+        self.sync_state_from_editor();
         self
     }
 
@@ -150,7 +166,7 @@ impl Input {
     /// Get display text (masked for password)
     fn display_text(&self) -> String {
         if self.input_type == InputType::Password {
-            "•".repeat(self.state.value.len())
+            PASSWORD_MASK.repeat(self.state.value.graphemes(true).count())
         } else {
             self.state.value.clone()
         }
@@ -177,6 +193,65 @@ impl Input {
         Cursor::Text
     }
 
+    pub fn apply_text_input_event(
+        &mut self,
+        event: TextInputEvent,
+    ) -> Result<TextEditOutcome, TextEditError> {
+        self.sync_editor_from_public_state_if_needed()?;
+        let outcome = self.editor.apply_text_input_event(event)?;
+        self.sync_state_from_editor();
+        self.emit_change_if_needed(outcome.changed);
+        Ok(outcome)
+    }
+
+    pub fn apply_key_event(&mut self, event: &KeyEvent) -> Result<TextEditOutcome, TextEditError> {
+        self.sync_editor_from_public_state_if_needed()?;
+        let outcome = if matches!(event.char, Some('\n' | '\r')) {
+            TextEditOutcome {
+                changed: false,
+                submitted: true,
+            }
+        } else {
+            self.editor.apply_key_event(event)?
+        };
+        self.sync_state_from_editor();
+        self.emit_change_if_needed(outcome.changed);
+        if outcome.submitted {
+            self.emit_submit();
+        }
+        Ok(outcome)
+    }
+
+    pub fn copy_selection_to<C: Clipboard>(
+        &mut self,
+        clipboard: &mut C,
+    ) -> Result<bool, TextEditError> {
+        self.sync_editor_from_public_state_if_needed()?;
+        self.editor.copy_selection_to(clipboard)
+    }
+
+    pub fn cut_selection_to<C: Clipboard>(
+        &mut self,
+        clipboard: &mut C,
+    ) -> Result<TextEditOutcome, TextEditError> {
+        self.sync_editor_from_public_state_if_needed()?;
+        let outcome = self.editor.cut_selection_to(clipboard)?;
+        self.sync_state_from_editor();
+        self.emit_change_if_needed(outcome.changed);
+        Ok(outcome)
+    }
+
+    pub fn paste_from<C: Clipboard>(
+        &mut self,
+        clipboard: &mut C,
+    ) -> Result<TextEditOutcome, TextEditError> {
+        self.sync_editor_from_public_state_if_needed()?;
+        let outcome = self.editor.paste_from(clipboard)?;
+        self.sync_state_from_editor();
+        self.emit_change_if_needed(outcome.changed);
+        Ok(outcome)
+    }
+
     fn normalize_cursor_position(&self) -> usize {
         let mut cursor = self.state.cursor_position.min(self.state.value.len());
         while cursor > 0 && !self.state.value.is_char_boundary(cursor) {
@@ -185,35 +260,248 @@ impl Input {
         cursor
     }
 
-    fn previous_cursor_position(&self) -> usize {
+    fn state_selection(&self) -> TextSelection {
         let cursor = self.normalize_cursor_position();
-        if cursor == 0 {
-            return 0;
+        match (self.state.selection_start, self.state.selection_end) {
+            (Some(start), Some(end)) if start != end => {
+                let head = if cursor == start || cursor == end {
+                    cursor
+                } else {
+                    end
+                };
+                let anchor = if head == start {
+                    end
+                } else if head == end {
+                    start
+                } else {
+                    start
+                };
+                TextSelection::new(anchor, head)
+            }
+            _ => TextSelection::collapsed(cursor),
         }
-
-        self.state.value[..cursor]
-            .char_indices()
-            .last()
-            .map(|(idx, _)| idx)
-            .unwrap_or(0)
     }
 
-    fn next_cursor_position(&self) -> usize {
-        let cursor = self.normalize_cursor_position();
-        if cursor >= self.state.value.len() {
-            return self.state.value.len();
+    fn sync_editor_from_public_state_if_needed(&mut self) -> Result<(), TextEditError> {
+        if self.public_state_matches_editor() {
+            return Ok(());
         }
 
-        self.state.value[cursor..]
-            .chars()
-            .next()
-            .map(|ch| cursor + ch.len_utf8())
-            .unwrap_or(self.state.value.len())
+        let mut editor = TextEditBuffer::with_text(self.state.value.clone());
+        editor.set_selection(self.state_selection())?;
+        self.editor = editor;
+        self.sync_state_from_editor();
+        Ok(())
     }
 
-    fn cursor_visual_column(&self) -> usize {
-        let cursor = self.normalize_cursor_position();
-        self.state.value[..cursor].chars().count()
+    fn public_state_matches_editor(&self) -> bool {
+        if self.state.value != self.editor.text() {
+            return false;
+        }
+
+        let selection = self.editor.selection();
+        if self.normalize_cursor_position() != selection.head() {
+            return false;
+        }
+
+        let range = selection.normalized_range();
+        let (selection_start, selection_end) = if range.is_empty() {
+            (None, None)
+        } else {
+            (Some(range.start()), Some(range.end()))
+        };
+        if self.state.selection_start != selection_start
+            || self.state.selection_end != selection_end
+        {
+            return false;
+        }
+
+        match self.editor.composition() {
+            Some(composition) => {
+                self.state.composition_range == Some(composition.replacement_range())
+                    && self.state.marked_text.as_deref() == Some(composition.text())
+            }
+            None => self.state.composition_range.is_none() && self.state.marked_text.is_none(),
+        }
+    }
+
+    fn sync_state_from_editor(&mut self) {
+        self.state.value = self.editor.text().to_string();
+        self.state.cursor_position = self.editor.selection().head();
+
+        let range = self.editor.selection().normalized_range();
+        if range.is_empty() {
+            self.state.selection_start = None;
+            self.state.selection_end = None;
+        } else {
+            self.state.selection_start = Some(range.start());
+            self.state.selection_end = Some(range.end());
+        }
+
+        if let Some(composition) = self.editor.composition() {
+            self.state.composition_range = Some(composition.replacement_range());
+            self.state.marked_text = Some(composition.text().to_string());
+        } else {
+            self.state.composition_range = None;
+            self.state.marked_text = None;
+        }
+    }
+
+    fn emit_change_if_needed(&self, changed: bool) {
+        if changed && let Some(handler) = &self.on_change {
+            handler(&self.state.value);
+        }
+    }
+
+    fn emit_submit(&self) {
+        if let Some(handler) = &self.on_submit {
+            handler(&self.state.value);
+        }
+    }
+
+    fn key_event_is_text_editing(event: &KeyEvent) -> bool {
+        matches!(
+            event.key,
+            KeyCode::Backspace
+                | KeyCode::Delete
+                | KeyCode::ArrowLeft
+                | KeyCode::ArrowRight
+                | KeyCode::ArrowUp
+                | KeyCode::ArrowDown
+                | KeyCode::Home
+                | KeyCode::End
+                | KeyCode::Enter
+        ) || event
+            .char
+            .is_some_and(|ch| !ch.is_control() || matches!(ch, '\n' | '\r'))
+    }
+
+    fn display_offset_for_value_offset(&self, offset: usize) -> Option<usize> {
+        if offset > self.state.value.len() || !self.state.value.is_char_boundary(offset) {
+            return None;
+        }
+
+        if self.input_type == InputType::Password {
+            Some(self.state.value[..offset].graphemes(true).count() * PASSWORD_MASK.len())
+        } else {
+            Some(offset)
+        }
+    }
+
+    fn display_range_for_value_range(&self, range: TextRange) -> Option<TextRange> {
+        let start = self.display_offset_for_value_offset(range.start())?;
+        let end = self.display_offset_for_value_offset(range.end())?;
+        TextRange::new(start, end).ok()
+    }
+
+    fn input_layout_text(&self) -> String {
+        if self.state.value.is_empty() {
+            String::new()
+        } else {
+            self.display_text()
+        }
+    }
+
+    fn text_layout(&self) -> TextEditLayout {
+        TextEditLayout::new(
+            self.input_layout_text(),
+            INPUT_GRAPHEME_WIDTH,
+            self.cursor_height(),
+        )
+    }
+
+    fn text_origin(&self, bounds: Bounds) -> Point {
+        Point::new(
+            bounds.x() + INPUT_HORIZONTAL_PADDING,
+            bounds.y() + INPUT_CARET_TOP_PADDING,
+        )
+    }
+
+    fn text_width(&self, bounds: Bounds) -> f32 {
+        bounds.width() - (INPUT_HORIZONTAL_PADDING * 2.0)
+    }
+
+    fn cursor_height(&self) -> f32 {
+        20.0
+    }
+
+    fn paint_selection_and_marked_text(&self, cx: &mut PaintContext, bounds: Bounds) {
+        if !self.state.focused {
+            return;
+        }
+
+        let layout = self.text_layout();
+        let style = TextEditPaintStyle::new(
+            INPUT_CARET_WIDTH,
+            Color::hex(0x6366f1).to_rgba(),
+            Color::hex(0x6366f1).with_alpha(0.22).to_rgba(),
+        );
+        let paint_origin = self.text_origin(bounds);
+
+        if let (Some(start), Some(end)) = (self.state.selection_start, self.state.selection_end)
+            && let Ok(range) = TextRange::new(start, end)
+            && let Some(display_range) = self.display_range_for_value_range(range)
+        {
+            match layout.selection_primitives(display_range, paint_origin, style) {
+                Ok(primitives) => {
+                    for primitive in primitives {
+                        cx.paint(primitive);
+                    }
+                }
+                Err(err) => log::error!("input selection paint failed: {err}"),
+            }
+        }
+
+        if let Some(range) = self.state.composition_range
+            && let Some(display_range) = self.display_range_for_value_range(range)
+        {
+            match layout.selection_rects(display_range) {
+                Ok(rects) => {
+                    for rect in rects {
+                        cx.paint(Primitive::Quad {
+                            bounds: Bounds::from_xywh(
+                                paint_origin.x + rect.bounds.x(),
+                                paint_origin.y + rect.bounds.y() + rect.bounds.height()
+                                    - INPUT_MARKED_UNDERLINE_HEIGHT,
+                                rect.bounds.width(),
+                                INPUT_MARKED_UNDERLINE_HEIGHT,
+                            ),
+                            background: Color::hex(0x6366f1).to_rgba(),
+                            border_color: Rgba::TRANSPARENT,
+                            border_widths: Edges::ZERO,
+                            corner_radii: Corners::ZERO,
+                        });
+                    }
+                }
+                Err(err) => log::error!("input marked text paint failed: {err}"),
+            }
+        }
+    }
+
+    fn paint_cursor(&self, cx: &mut PaintContext, bounds: Bounds) {
+        if !self.state.focused {
+            return;
+        }
+
+        let Some(cursor) = self.display_offset_for_value_offset(self.normalize_cursor_position())
+        else {
+            log::error!(
+                "input cursor paint failed: cursor {} is not a valid display offset",
+                self.state.cursor_position
+            );
+            return;
+        };
+
+        let layout = self.text_layout();
+        let style = TextEditPaintStyle::new(
+            INPUT_CARET_WIDTH,
+            Color::hex(0x6366f1).to_rgba(),
+            Color::hex(0x6366f1).with_alpha(0.22).to_rgba(),
+        );
+        match layout.caret_primitive(cursor, self.text_origin(bounds), style) {
+            Ok(primitive) => cx.paint(primitive),
+            Err(err) => log::error!("input caret paint failed: {err}"),
+        }
     }
 }
 
@@ -285,6 +573,8 @@ impl Element for Input {
             });
         }
 
+        self.paint_selection_and_marked_text(cx, bounds);
+
         // Paint text or placeholder
         let display = if self.state.value.is_empty() {
             &self.placeholder
@@ -293,9 +583,9 @@ impl Element for Input {
         };
 
         if !display.is_empty() {
-            let text_x = bounds.x() + 12.0;
+            let text_x = bounds.x() + INPUT_HORIZONTAL_PADDING;
             let text_y = bounds.y() + (bounds.height() - 14.0) / 2.0;
-            let text_width = bounds.width() - 24.0;
+            let text_width = self.text_width(bounds);
 
             cx.paint(Primitive::Text {
                 bounds: Bounds::from_xywh(text_x, text_y, text_width, 14.0),
@@ -309,20 +599,7 @@ impl Element for Input {
             });
         }
 
-        // Paint cursor when focused
-        if self.state.focused {
-            let cursor_x = bounds.x() + 12.0 + (self.cursor_visual_column() as f32 * 7.0);
-            let cursor_y = bounds.y() + 10.0;
-            let cursor_height = bounds.height() - 20.0;
-
-            cx.paint(Primitive::Quad {
-                bounds: Bounds::from_xywh(cursor_x, cursor_y, 1.5, cursor_height),
-                background: Color::hex(0x6366f1).to_rgba(),
-                border_color: crate::core::color::Rgba::TRANSPARENT,
-                border_widths: Edges::ZERO,
-                corner_radii: Corners::ZERO,
-            });
-        }
+        self.paint_cursor(cx, bounds);
     }
 
     fn handle_pointer_event(&mut self, cx: &mut EventContext, event: &PointerEvent) -> bool {
@@ -378,79 +655,20 @@ impl Element for Input {
             return false;
         }
 
-        let mut handled = false;
-        match event.key {
-            crate::core::event::KeyCode::Backspace => {
-                let cursor = self.normalize_cursor_position();
-                if cursor > 0 && !self.state.value.is_empty() {
-                    let idx = self.previous_cursor_position();
-                    self.state.value.remove(idx);
-                    self.state.cursor_position = idx;
-                    handled = true;
-                }
-            }
-            crate::core::event::KeyCode::Delete => {
-                let cursor = self.normalize_cursor_position();
-                if cursor < self.state.value.len() {
-                    self.state.value.remove(cursor);
-                    self.state.cursor_position = cursor;
-                    handled = true;
-                }
-            }
-            crate::core::event::KeyCode::ArrowLeft => {
-                let cursor = self.normalize_cursor_position();
-                if cursor > 0 {
-                    self.state.cursor_position = self.previous_cursor_position();
-                    handled = true;
-                }
-            }
-            crate::core::event::KeyCode::ArrowRight => {
-                let cursor = self.normalize_cursor_position();
-                if cursor < self.state.value.len() {
-                    self.state.cursor_position = self.next_cursor_position();
-                    handled = true;
-                }
-            }
-            crate::core::event::KeyCode::Home => {
-                self.state.cursor_position = 0;
-                handled = true;
-            }
-            crate::core::event::KeyCode::End => {
-                self.state.cursor_position = self.state.value.len();
-                handled = true;
-            }
-            crate::core::event::KeyCode::Enter => {
-                if let Some(handler) = &self.on_submit {
-                    handler(&self.state.value);
-                }
-                handled = true;
-            }
-            _ => {}
+        if !Self::key_event_is_text_editing(event) {
+            return false;
         }
 
-        if !handled {
-            if let Some(ch) = event.char {
-                if ch == '\n' || ch == '\r' {
-                    if let Some(handler) = &self.on_submit {
-                        handler(&self.state.value);
-                    }
-                    handled = true;
-                } else if !ch.is_control() {
-                    let idx = self.normalize_cursor_position();
-                    self.state.value.insert(idx, ch);
-                    self.state.cursor_position = idx + ch.len_utf8();
-                    handled = true;
-                }
+        match self.apply_key_event(event) {
+            Ok(_) => {
+                cx.request_redraw();
+                true
+            }
+            Err(err) => {
+                log::error!("input key event failed: {err}");
+                false
             }
         }
-
-        if handled {
-            if let Some(handler) = &self.on_change {
-                handler(&self.state.value);
-            }
-        }
-
-        handled
     }
 }
 
