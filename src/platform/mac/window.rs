@@ -1,10 +1,12 @@
 //! macOS window creation
 
-use crate::core::geometry::Size;
+use crate::core::event::{KeyCode, KeyEvent, Modifiers, MouseButton, ScrollEvent};
+use crate::core::geometry::{Point, Size};
 use crate::core::window::WindowOptions;
 use crate::platform::window::{
+    PlatformImeEvent, PlatformInputEvent, PlatformMouseEvent, PlatformMouseEventKind,
     PlatformRendererAttachment, PlatformRendererTarget, PlatformWindow, PlatformWindowError,
-    PlatformWindowFeature, PlatformWindowFeatures, PlatformWindowState, validate_window_options,
+    PlatformWindowEvent, PlatformWindowFeatures, PlatformWindowState, validate_window_options,
 };
 use metal::Device;
 use metal::foreign_types::ForeignType;
@@ -13,9 +15,10 @@ use objc2::MainThreadOnly;
 use objc2::msg_send;
 use objc2::rc::Retained;
 use objc2_app_kit::{
-    NSApplication, NSEvent, NSEventModifierFlags, NSEventType, NSWindow, NSWindowStyleMask,
+    NSApplication, NSEvent, NSEventMask, NSEventModifierFlags, NSEventType, NSPasteboard,
+    NSPasteboardTypeString, NSWindow, NSWindowStyleMask,
 };
-use objc2_foundation::{NSDate, NSPoint, NSRect, NSSize, NSString};
+use objc2_foundation::{NSDate, NSDefaultRunLoopMode, NSPoint, NSRect, NSSize, NSString};
 use objc2_quartz_core::CAMetalLayer;
 
 pub(crate) const MAC_REDRAW_EVENT_DATA: isize = 0x5255_4952;
@@ -24,6 +27,11 @@ const MAC_REDRAW_EVENT_SUBTYPE: i16 = 0;
 pub struct MacWindow {
     window: Retained<NSWindow>,
     metal_layer: Retained<CAMetalLayer>,
+    last_content_size: Size,
+    last_scale_factor: f32,
+    last_focused: bool,
+    last_visible: bool,
+    created_event_pending: bool,
 }
 
 impl MacWindow {
@@ -77,6 +85,99 @@ impl MacWindow {
         let scale_factor: f64 = unsafe { msg_send![&*self.window, backingScaleFactor] };
         scale_factor as f32
     }
+
+    fn update_metal_layer_size(&self, content_size: Size, scale_factor: f32) {
+        let drawable_size = NSSize::new(
+            content_size.width as f64 * scale_factor as f64,
+            content_size.height as f64 * scale_factor as f64,
+        );
+        unsafe {
+            let _: () = msg_send![&*self.metal_layer, setDrawableSize: drawable_size];
+            let _: () = msg_send![&*self.metal_layer, setContentsScale: scale_factor as f64];
+        }
+    }
+
+    pub(crate) fn poll_events_for_app(
+        &mut self,
+        app: &NSApplication,
+        wait_for_event: bool,
+    ) -> Result<Vec<PlatformWindowEvent>, PlatformWindowError> {
+        let mut events = Vec::new();
+        self.push_lifecycle_events(&mut events)?;
+
+        let mask = platform_event_mask();
+        let mut expiration = if wait_for_event {
+            NSDate::distantFuture()
+        } else {
+            NSDate::distantPast()
+        };
+        let window_number = self.window_number();
+
+        while let Some(event) = app.nextEventMatchingMask_untilDate_inMode_dequeue(
+            mask,
+            Some(&expiration),
+            unsafe { NSDefaultRunLoopMode },
+            true,
+        ) {
+            expiration = NSDate::distantPast();
+
+            if event.windowNumber() != window_number {
+                app.sendEvent(&event);
+                continue;
+            }
+
+            let event_type = event.r#type();
+            if event_type == NSEventType::ApplicationDefined
+                && event.data1() == MAC_REDRAW_EVENT_DATA
+            {
+                events.push(PlatformWindowEvent::RedrawRequested);
+                continue;
+            }
+
+            append_platform_events_from_native_event(&event, self.last_content_size, &mut events);
+            app.sendEvent(&event);
+        }
+
+        self.push_lifecycle_events(&mut events)?;
+        Ok(events)
+    }
+
+    fn push_lifecycle_events(
+        &mut self,
+        events: &mut Vec<PlatformWindowEvent>,
+    ) -> Result<(), PlatformWindowError> {
+        if self.created_event_pending {
+            events.push(PlatformWindowEvent::Created);
+            self.created_event_pending = false;
+        }
+
+        let content_size = self.content_size()?;
+        let scale_factor = self.scale_factor();
+        if content_size != self.last_content_size {
+            self.update_metal_layer_size(content_size, scale_factor);
+            self.last_content_size = content_size;
+            events.push(PlatformWindowEvent::Resized(content_size));
+        }
+        if (scale_factor - self.last_scale_factor).abs() > f32::EPSILON {
+            self.update_metal_layer_size(content_size, scale_factor);
+            self.last_scale_factor = scale_factor;
+            events.push(PlatformWindowEvent::ScaleFactorChanged(scale_factor));
+        }
+
+        let focused = self.is_focused();
+        if focused != self.last_focused {
+            self.last_focused = focused;
+            events.push(PlatformWindowEvent::FocusChanged(focused));
+        }
+
+        let visible = self.is_visible();
+        if self.last_visible && !visible {
+            events.push(PlatformWindowEvent::CloseRequested);
+        }
+        self.last_visible = visible;
+
+        Ok(())
+    }
 }
 
 impl PlatformWindow for MacWindow {
@@ -91,7 +192,7 @@ impl PlatformWindow for MacWindow {
             dpi: true,
             resizing: true,
             focus: true,
-            clipboard: false,
+            clipboard: true,
             renderer_attachment: true,
         }
     }
@@ -128,6 +229,7 @@ impl PlatformWindow for MacWindow {
         unsafe {
             let _: () = msg_send![&*self.window, setContentSize: content_size];
         }
+        self.update_metal_layer_size(size, self.scale_factor());
         Ok(())
     }
 
@@ -140,6 +242,36 @@ impl PlatformWindow for MacWindow {
             }
         }
         Ok(())
+    }
+
+    fn read_clipboard_text(&mut self) -> Result<String, PlatformWindowError> {
+        let pasteboard = NSPasteboard::generalPasteboard();
+        Ok(pasteboard
+            .stringForType(unsafe { NSPasteboardTypeString })
+            .map(|value| value.to_string())
+            .unwrap_or_default())
+    }
+
+    fn write_clipboard_text(&mut self, text: &str) -> Result<(), PlatformWindowError> {
+        let pasteboard = NSPasteboard::generalPasteboard();
+        pasteboard.clearContents();
+        let value = NSString::from_str(text);
+        if pasteboard.setString_forType(&value, unsafe { NSPasteboardTypeString }) {
+            Ok(())
+        } else {
+            Err(PlatformWindowError::backend(
+                "macos",
+                "failed to write text to the general pasteboard",
+            ))
+        }
+    }
+
+    fn poll_events(&mut self) -> Result<Vec<PlatformWindowEvent>, PlatformWindowError> {
+        let mtm = MainThreadMarker::new().ok_or_else(|| {
+            PlatformWindowError::backend("macos", "event polling must run on the main thread")
+        })?;
+        let app = NSApplication::sharedApplication(mtm);
+        self.poll_events_for_app(&app, false)
     }
 
     fn renderer_attachment(&self) -> Result<PlatformRendererAttachment, PlatformWindowError> {
@@ -184,6 +316,233 @@ impl PlatformWindow for MacWindow {
             let _: () = msg_send![&*self.window, close];
         }
         Ok(())
+    }
+}
+
+fn platform_event_mask() -> NSEventMask {
+    NSEventMask::MouseMoved
+        | NSEventMask::LeftMouseDown
+        | NSEventMask::LeftMouseUp
+        | NSEventMask::LeftMouseDragged
+        | NSEventMask::RightMouseDown
+        | NSEventMask::RightMouseUp
+        | NSEventMask::RightMouseDragged
+        | NSEventMask::OtherMouseDown
+        | NSEventMask::OtherMouseUp
+        | NSEventMask::OtherMouseDragged
+        | NSEventMask::ScrollWheel
+        | NSEventMask::KeyDown
+        | NSEventMask::KeyUp
+        | NSEventMask::ApplicationDefined
+}
+
+fn append_platform_events_from_native_event(
+    event: &NSEvent,
+    viewport_size: Size,
+    events: &mut Vec<PlatformWindowEvent>,
+) {
+    let event_type = event.r#type();
+    if let Some(mouse_event) = mouse_event_from_native_event(event, event_type, viewport_size) {
+        events.push(PlatformWindowEvent::Input(PlatformInputEvent::Mouse(
+            mouse_event,
+        )));
+        return;
+    }
+
+    if event_type == NSEventType::ScrollWheel {
+        events.push(PlatformWindowEvent::Input(PlatformInputEvent::Scroll(
+            scroll_event_from_native_event(event, viewport_size),
+        )));
+        return;
+    }
+
+    if event_type == NSEventType::KeyDown {
+        let key_event = key_event_from_native_event(event);
+        events.push(PlatformWindowEvent::Input(PlatformInputEvent::KeyDown(
+            key_event,
+        )));
+        if let Some(text) = committed_text_from_native_event(event) {
+            events.push(PlatformWindowEvent::Input(PlatformInputEvent::Ime(
+                PlatformImeEvent::Commit(text),
+            )));
+        }
+    } else if event_type == NSEventType::KeyUp {
+        events.push(PlatformWindowEvent::Input(PlatformInputEvent::KeyUp(
+            key_event_from_native_event(event),
+        )));
+    }
+}
+
+fn mouse_event_from_native_event(
+    event: &NSEvent,
+    event_type: NSEventType,
+    viewport_size: Size,
+) -> Option<PlatformMouseEvent> {
+    let position = event_position(event, viewport_size);
+    let (kind, button) = if event_type == NSEventType::LeftMouseDown {
+        (PlatformMouseEventKind::Down, Some(MouseButton::Left))
+    } else if event_type == NSEventType::LeftMouseUp {
+        (PlatformMouseEventKind::Up, Some(MouseButton::Left))
+    } else if event_type == NSEventType::RightMouseDown {
+        (PlatformMouseEventKind::Down, Some(MouseButton::Right))
+    } else if event_type == NSEventType::RightMouseUp {
+        (PlatformMouseEventKind::Up, Some(MouseButton::Right))
+    } else if event_type == NSEventType::OtherMouseDown {
+        (
+            PlatformMouseEventKind::Down,
+            Some(other_mouse_button(event)),
+        )
+    } else if event_type == NSEventType::OtherMouseUp {
+        (PlatformMouseEventKind::Up, Some(other_mouse_button(event)))
+    } else if event_type == NSEventType::LeftMouseDragged {
+        (PlatformMouseEventKind::Move, Some(MouseButton::Left))
+    } else if event_type == NSEventType::RightMouseDragged {
+        (PlatformMouseEventKind::Move, Some(MouseButton::Right))
+    } else if event_type == NSEventType::OtherMouseDragged {
+        (
+            PlatformMouseEventKind::Move,
+            Some(other_mouse_button(event)),
+        )
+    } else if event_type == NSEventType::MouseMoved {
+        (PlatformMouseEventKind::Move, None)
+    } else {
+        return None;
+    };
+
+    Some(PlatformMouseEvent {
+        kind,
+        position,
+        button,
+    })
+}
+
+fn other_mouse_button(event: &NSEvent) -> MouseButton {
+    match event.buttonNumber() {
+        0 => MouseButton::Left,
+        1 => MouseButton::Right,
+        2 => MouseButton::Middle,
+        number => MouseButton::Other(number.clamp(0, u8::MAX as isize) as u8),
+    }
+}
+
+fn scroll_event_from_native_event(event: &NSEvent, viewport_size: Size) -> ScrollEvent {
+    ScrollEvent {
+        position: event_position(event, viewport_size),
+        delta_x: event.scrollingDeltaX() as f32,
+        delta_y: event.scrollingDeltaY() as f32,
+        modifiers: modifiers_from_native_event(event),
+    }
+}
+
+fn event_position(event: &NSEvent, viewport_size: Size) -> Point {
+    let location: NSPoint = event.locationInWindow();
+    Point::new(
+        location.x as f32,
+        (viewport_size.height as f64 - location.y) as f32,
+    )
+}
+
+fn modifiers_from_native_event(event: &NSEvent) -> Modifiers {
+    let flags = event.modifierFlags();
+    Modifiers {
+        shift: flags.contains(NSEventModifierFlags::Shift),
+        ctrl: flags.contains(NSEventModifierFlags::Control),
+        alt: flags.contains(NSEventModifierFlags::Option),
+        meta: flags.contains(NSEventModifierFlags::Command),
+    }
+}
+
+fn key_event_from_native_event(event: &NSEvent) -> KeyEvent {
+    let modifiers = modifiers_from_native_event(event);
+    let mut key_event = KeyEvent::new(KeyCode::Unknown(event.keyCode() as u32), modifiers);
+    key_event.is_repeat = event.isARepeat();
+
+    if let Some(chars) = event.charactersIgnoringModifiers()
+        && let Some(ch) = chars.to_string().chars().next()
+    {
+        key_event.key = keycode_from_char(ch);
+    }
+
+    if let Some(chars) = event.characters()
+        && let Some(ch) = chars.to_string().chars().next()
+        && !ch.is_control()
+    {
+        key_event.char = Some(ch);
+    }
+
+    key_event
+}
+
+fn committed_text_from_native_event(event: &NSEvent) -> Option<String> {
+    if event.isARepeat() {
+        return None;
+    }
+
+    let text = event.characters()?.to_string();
+    if text.is_empty() || text.chars().all(char::is_control) {
+        return None;
+    }
+    Some(text)
+}
+
+fn keycode_from_char(ch: char) -> KeyCode {
+    match ch {
+        '\r' | '\n' => KeyCode::Enter,
+        '\u{7f}' => KeyCode::Backspace,
+        '\u{1b}' => KeyCode::Escape,
+        '\t' => KeyCode::Tab,
+        ' ' => KeyCode::Space,
+        '0' => KeyCode::Key0,
+        '1' => KeyCode::Key1,
+        '2' => KeyCode::Key2,
+        '3' => KeyCode::Key3,
+        '4' => KeyCode::Key4,
+        '5' => KeyCode::Key5,
+        '6' => KeyCode::Key6,
+        '7' => KeyCode::Key7,
+        '8' => KeyCode::Key8,
+        '9' => KeyCode::Key9,
+        'a' | 'A' => KeyCode::A,
+        'b' | 'B' => KeyCode::B,
+        'c' | 'C' => KeyCode::C,
+        'd' | 'D' => KeyCode::D,
+        'e' | 'E' => KeyCode::E,
+        'f' | 'F' => KeyCode::F,
+        'g' | 'G' => KeyCode::G,
+        'h' | 'H' => KeyCode::H,
+        'i' | 'I' => KeyCode::I,
+        'j' | 'J' => KeyCode::J,
+        'k' | 'K' => KeyCode::K,
+        'l' | 'L' => KeyCode::L,
+        'm' | 'M' => KeyCode::M,
+        'n' | 'N' => KeyCode::N,
+        'o' | 'O' => KeyCode::O,
+        'p' | 'P' => KeyCode::P,
+        'q' | 'Q' => KeyCode::Q,
+        'r' | 'R' => KeyCode::R,
+        's' | 'S' => KeyCode::S,
+        't' | 'T' => KeyCode::T,
+        'u' | 'U' => KeyCode::U,
+        'v' | 'V' => KeyCode::V,
+        'w' | 'W' => KeyCode::W,
+        'x' | 'X' => KeyCode::X,
+        'y' | 'Y' => KeyCode::Y,
+        'z' | 'Z' => KeyCode::Z,
+        _ => {
+            let code = ch as u32;
+            match code {
+                0xF700 => KeyCode::ArrowUp,
+                0xF701 => KeyCode::ArrowDown,
+                0xF702 => KeyCode::ArrowLeft,
+                0xF703 => KeyCode::ArrowRight,
+                0xF729 => KeyCode::Home,
+                0xF72B => KeyCode::End,
+                0xF72C => KeyCode::PageUp,
+                0xF72D => KeyCode::PageDown,
+                0xF728 => KeyCode::Delete,
+                _ => KeyCode::Unknown(code),
+            }
+        }
     }
 }
 
@@ -237,15 +596,17 @@ pub unsafe fn create_window(
     let _: () = msg_send![&*metal_layer, setPixelFormat: 80u64]; // MTLPixelFormatBGRA8Unorm = 80
     let _: () = msg_send![&*metal_layer, setFramebufferOnly: true];
 
+    let scale_factor: f64 = unsafe { msg_send![&*window, backingScaleFactor] };
+
     // Set layer size
     let drawable_size = NSSize::new(
-        options.size.width as f64 * 2.0, // Retina scale
-        options.size.height as f64 * 2.0,
+        options.size.width as f64 * scale_factor,
+        options.size.height as f64 * scale_factor,
     );
     let _: () = msg_send![&*metal_layer, setDrawableSize: drawable_size];
 
     // Set content scale factor
-    let _: () = msg_send![&*metal_layer, setContentsScale: 2.0f64];
+    let _: () = msg_send![&*metal_layer, setContentsScale: scale_factor];
 
     // Set layer on view
     let _: () = msg_send![&*content_view, setWantsLayer: true];
@@ -259,6 +620,11 @@ pub unsafe fn create_window(
     Ok(MacWindow {
         window,
         metal_layer,
+        last_content_size: options.size,
+        last_scale_factor: scale_factor as f32,
+        last_focused: false,
+        last_visible: false,
+        created_event_pending: true,
     })
 }
 
@@ -277,12 +643,8 @@ impl MacWindowBackend {
             dpi: true,
             resizing: true,
             focus: true,
-            clipboard: false,
+            clipboard: true,
             renderer_attachment: true,
         }
-    }
-
-    pub fn unsupported_clipboard_error(&self) -> PlatformWindowError {
-        PlatformWindowError::unsupported("macos", PlatformWindowFeature::Clipboard)
     }
 }

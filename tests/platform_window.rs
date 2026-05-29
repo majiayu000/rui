@@ -1,7 +1,8 @@
 use rui::core::{Size, WindowOptions};
 use rui::platform::{
-    PlatformWindow, PlatformWindowError, PlatformWindowEvent, PlatformWindowFeature,
-    PlatformWindowFeatures, UnsupportedPlatformWindow, validate_window_options,
+    PlatformImeEvent, PlatformInputEvent, PlatformWindow, PlatformWindowError, PlatformWindowEvent,
+    PlatformWindowFeature, PlatformWindowFeatures, UnsupportedPlatformWindow,
+    validate_window_options,
 };
 use rui::renderer::RendererError;
 use std::fs;
@@ -70,6 +71,13 @@ fn unsupported_platform_window_returns_explicit_errors() {
         ))
     );
     assert_eq!(
+        window.write_clipboard_text("copied"),
+        Err(PlatformWindowError::unsupported(
+            "linux",
+            PlatformWindowFeature::Clipboard,
+        ))
+    );
+    assert_eq!(
         window.renderer_attachment(),
         Err(PlatformWindowError::unsupported(
             "linux",
@@ -100,6 +108,18 @@ fn platform_window_option_validation_rejects_invalid_sizes() {
         Err(PlatformWindowError::InvalidOptions { .. })
     ));
 
+    let invalid_min_size = WindowOptions::default().min_size(0.0, 480.0);
+    assert!(matches!(
+        validate_window_options(&invalid_min_size),
+        Err(PlatformWindowError::InvalidOptions { .. })
+    ));
+
+    let invalid_max_size = WindowOptions::default().max_size(640.0, -1.0);
+    assert!(matches!(
+        validate_window_options(&invalid_max_size),
+        Err(PlatformWindowError::InvalidOptions { .. })
+    ));
+
     let inverted_bounds = WindowOptions::default()
         .min_size(640.0, 480.0)
         .max_size(320.0, 240.0);
@@ -116,6 +136,12 @@ fn platform_window_events_identify_redraw_work() {
     assert!(PlatformWindowEvent::ScaleFactorChanged(2.0).requests_redraw());
     assert!(PlatformWindowEvent::FocusChanged(true).requests_redraw());
     assert!(PlatformWindowEvent::RedrawRequested.requests_redraw());
+    assert!(
+        PlatformWindowEvent::Input(PlatformInputEvent::Ime(PlatformImeEvent::Commit(
+            String::from("text")
+        )))
+        .requests_redraw()
+    );
     assert!(!PlatformWindowEvent::CloseRequested.requests_redraw());
 }
 
@@ -175,13 +201,8 @@ fn platform_macos_backend_reports_implemented_window_features() {
     assert!(features.dpi);
     assert!(features.resizing);
     assert!(features.focus);
+    assert!(features.clipboard);
     assert!(features.renderer_attachment);
-    assert!(!features.clipboard);
-
-    assert_eq!(
-        backend.unsupported_clipboard_error(),
-        PlatformWindowError::unsupported("macos", PlatformWindowFeature::Clipboard)
-    );
 }
 
 fn collect_rs_files(dir: &Path, files: &mut Vec<PathBuf>) {

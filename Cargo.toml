@@ -31,6 +31,7 @@ objc2-app-kit = { version = "0.3", features = [
     "NSResponder",
     "NSRunningApplication",
     "NSColor",
+    "NSPasteboard",
 ], optional = true }
 objc2-quartz-core = { version = "0.3", features = ["CAMetalLayer", "CALayer"], optional = true }
 
