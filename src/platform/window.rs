@@ -155,8 +155,14 @@ pub struct PlatformRendererAttachment {
 pub enum PlatformInputEvent {
     KeyDown(KeyEvent),
     KeyUp(KeyEvent),
+    Ime(PlatformImeEvent),
     Mouse(PlatformMouseEvent),
     Scroll(ScrollEvent),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PlatformImeEvent {
+    Commit(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

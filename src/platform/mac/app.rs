@@ -1,24 +1,22 @@
 //! macOS application runner
 
 use crate::core::app::AppContext;
-use crate::core::event::{Event, KeyCode, KeyEvent, Modifiers, MouseButton, ScrollEvent};
+use crate::core::event::{Event, KeyCode, KeyEvent, Modifiers, ScrollEvent};
 use crate::core::geometry::Bounds;
-use crate::core::geometry::Point;
 use crate::core::window::WindowOptions;
 use crate::elements::element::{
     Element, EventContext, LayoutContext, PaintContext, PointerEvent, PointerEventKind,
 };
-use crate::platform::mac::window::{MAC_REDRAW_EVENT_DATA, create_window};
-use crate::platform::window::PlatformWindow;
+use crate::platform::mac::window::create_window;
+use crate::platform::window::{
+    PlatformImeEvent, PlatformInputEvent, PlatformMouseEventKind, PlatformRendererTarget,
+    PlatformWindow, PlatformWindowError, PlatformWindowEvent,
+};
 use crate::renderer::RendererError;
 use crate::renderer::Scene;
 use crate::renderer::metal::MetalRenderer;
 use objc2::MainThreadMarker;
-use objc2_app_kit::{
-    NSApplication, NSApplicationActivationPolicy, NSEvent, NSEventMask, NSEventModifierFlags,
-    NSEventType,
-};
-use objc2_foundation::{NSDate, NSDefaultRunLoopMode, NSPoint};
+use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
 use taffy::prelude::*;
 
 /// Run the application with default window options
@@ -70,6 +68,19 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
             Ok(window) => window,
             Err(err) => panic!("failed to create platform window: {}", err),
         };
+        let attachment = match window.renderer_attachment() {
+            Ok(attachment) => attachment,
+            Err(err) => panic!("failed to attach renderer to platform window: {}", err),
+        };
+        if attachment.target != PlatformRendererTarget::MetalLayer {
+            panic!(
+                "{}",
+                PlatformWindowError::backend(
+                    "macos",
+                    "Metal renderer requires a Metal layer attachment"
+                )
+            );
+        }
 
         if let Err(err) = window.show() {
             panic!("failed to show platform window: {}", err);
@@ -87,26 +98,12 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
         // Main run loop
         let mut viewport_size = options.size;
         let mut last_viewport_size = viewport_size;
-        let mut last_focused = false;
         let mut focused_element: Option<crate::core::ElementId> = None;
         let mut last_pointer_hit_target: Option<crate::core::ElementId> = None;
         let mut pointer_capture_target: Option<crate::core::ElementId> = None;
-        let mut window_visible = true;
 
         // Render loop (event-driven)
         loop {
-            let mask = NSEventMask::MouseMoved
-                | NSEventMask::LeftMouseDown
-                | NSEventMask::LeftMouseUp
-                | NSEventMask::LeftMouseDragged
-                | NSEventMask::RightMouseDown
-                | NSEventMask::RightMouseUp
-                | NSEventMask::RightMouseDragged
-                | NSEventMask::ScrollWheel
-                | NSEventMask::KeyDown
-                | NSEventMask::KeyUp
-                | NSEventMask::ApplicationDefined;
-
             viewport_size = match window.content_size() {
                 Ok(size) => size,
                 Err(err) => panic!("failed to read platform window size: {}", err),
@@ -115,105 +112,42 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
             let mut pointer_events = Vec::new();
             let mut scroll_events = Vec::new();
             let mut key_events = Vec::new();
-            let mut had_event = false;
-            let mut had_redraw_event = false;
-
-            let window_number = window.window_number();
-            let mut expiration = if context.dirty || context.needs_rebuild {
-                NSDate::distantPast()
-            } else {
-                NSDate::distantFuture()
+            let mut focus_changed = None;
+            let mut close_requested = false;
+            let wait_for_event =
+                !context.dirty && !context.needs_rebuild && context.pending_updates.is_empty();
+            let platform_events = match window.poll_events_for_app(&app, wait_for_event) {
+                Ok(events) => events,
+                Err(err) => panic!("failed to poll platform window events: {}", err),
             };
 
-            while let Some(event) = app.nextEventMatchingMask_untilDate_inMode_dequeue(
-                mask,
-                Some(&expiration),
-                NSDefaultRunLoopMode,
-                true,
-            ) {
-                expiration = NSDate::distantPast();
-
-                let event_type = event.r#type();
-                if event.windowNumber() != window_number {
-                    app.sendEvent(&event);
-                    continue;
-                }
-                if event_type == NSEventType::ApplicationDefined
-                    && event.data1() == MAC_REDRAW_EVENT_DATA
-                {
-                    had_redraw_event = true;
-                    continue;
-                }
-                had_event = true;
-
-                let location: NSPoint = event.locationInWindow();
-                let position = Point::new(
-                    location.x as f32,
-                    (viewport_size.height as f64 - location.y) as f32,
-                );
-
-                if event_type == NSEventType::LeftMouseDown {
-                    pointer_events.push(PointerEvent {
-                        kind: PointerEventKind::Down,
-                        position,
-                        button: Some(MouseButton::Left),
-                    });
-                } else if event_type == NSEventType::LeftMouseUp {
-                    pointer_events.push(PointerEvent {
-                        kind: PointerEventKind::Up,
-                        position,
-                        button: Some(MouseButton::Left),
-                    });
-                } else if event_type == NSEventType::RightMouseDown {
-                    pointer_events.push(PointerEvent {
-                        kind: PointerEventKind::Down,
-                        position,
-                        button: Some(MouseButton::Right),
-                    });
-                } else if event_type == NSEventType::RightMouseUp {
-                    pointer_events.push(PointerEvent {
-                        kind: PointerEventKind::Up,
-                        position,
-                        button: Some(MouseButton::Right),
-                    });
-                } else if event_type == NSEventType::MouseMoved
-                    || event_type == NSEventType::LeftMouseDragged
-                    || event_type == NSEventType::RightMouseDragged
-                {
-                    let button = if event_type == NSEventType::LeftMouseDragged {
-                        Some(MouseButton::Left)
-                    } else if event_type == NSEventType::RightMouseDragged {
-                        Some(MouseButton::Right)
-                    } else {
-                        None
-                    };
-                    pointer_events.push(PointerEvent {
-                        kind: PointerEventKind::Move,
-                        position,
-                        button,
-                    });
-                } else if event_type == NSEventType::ScrollWheel {
-                    let delta_x = event.scrollingDeltaX() as f32;
-                    let delta_y = event.scrollingDeltaY() as f32;
-                    scroll_events.push(ScrollEvent {
-                        position,
-                        delta_x,
-                        delta_y,
-                        modifiers: modifiers_from_event(&event),
-                    });
-                } else if event_type == NSEventType::KeyDown || event_type == NSEventType::KeyUp {
-                    let key_event = key_event_from_event(&event);
-                    key_events.push((event_type == NSEventType::KeyDown, key_event));
+            for event in platform_events {
+                if event.requests_redraw() {
+                    schedule_platform_redraw(&window, &mut context);
                 }
 
-                app.sendEvent(&event);
-            }
-
-            if had_event {
-                schedule_platform_redraw(&window, &mut context);
-            }
-            if had_redraw_event {
-                context.request_redraw();
+                match event {
+                    PlatformWindowEvent::Created | PlatformWindowEvent::RedrawRequested => {
+                        context.request_redraw();
+                    }
+                    PlatformWindowEvent::Resized(size) => {
+                        viewport_size = size;
+                    }
+                    PlatformWindowEvent::ScaleFactorChanged(_) => {}
+                    PlatformWindowEvent::FocusChanged(focused) => {
+                        focus_changed = Some(focused);
+                    }
+                    PlatformWindowEvent::CloseRequested => {
+                        close_requested = true;
+                        context.request_redraw();
+                    }
+                    PlatformWindowEvent::Input(input) => append_input_event(
+                        input,
+                        &mut pointer_events,
+                        &mut scroll_events,
+                        &mut key_events,
+                    ),
+                }
             }
 
             if viewport_size != last_viewport_size {
@@ -273,8 +207,7 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
                 last_viewport_size = viewport_size;
             }
 
-            let is_focused = window.is_focused();
-            if is_focused != last_focused {
+            if let Some(is_focused) = focus_changed {
                 let evt = if is_focused {
                     Event::Focus(crate::core::event::FocusEvent { focused: true })
                 } else {
@@ -282,15 +215,12 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
                     Event::Blur(crate::core::event::FocusEvent { focused: false })
                 };
                 root.handle_window_event(&evt);
-                last_focused = is_focused;
                 schedule_platform_redraw(&window, &mut context);
             }
 
-            let is_visible = window.is_visible();
-            if window_visible && !is_visible {
+            if close_requested {
                 root.handle_window_event(&Event::WindowClose);
                 context.quit();
-                window_visible = false;
                 schedule_platform_redraw(&window, &mut context);
             }
 
@@ -371,35 +301,41 @@ fn schedule_platform_redraw<W: PlatformWindow>(_window: &W, context: &mut AppCon
     context.request_redraw();
 }
 
-fn modifiers_from_event(event: &NSEvent) -> Modifiers {
-    let flags = event.modifierFlags();
-    Modifiers {
-        shift: flags.contains(NSEventModifierFlags::Shift),
-        ctrl: flags.contains(NSEventModifierFlags::Control),
-        alt: flags.contains(NSEventModifierFlags::Option),
-        meta: flags.contains(NSEventModifierFlags::Command),
+fn append_input_event(
+    input: PlatformInputEvent,
+    pointer_events: &mut Vec<PointerEvent>,
+    scroll_events: &mut Vec<ScrollEvent>,
+    key_events: &mut Vec<(bool, KeyEvent)>,
+) {
+    match input {
+        PlatformInputEvent::KeyDown(event) => key_events.push((true, event)),
+        PlatformInputEvent::KeyUp(event) => key_events.push((false, event)),
+        PlatformInputEvent::Ime(PlatformImeEvent::Commit(text)) => {
+            append_committed_text_events(&text, key_events);
+        }
+        PlatformInputEvent::Mouse(event) => {
+            let kind = match event.kind {
+                PlatformMouseEventKind::Down => PointerEventKind::Down,
+                PlatformMouseEventKind::Up => PointerEventKind::Up,
+                PlatformMouseEventKind::Move => PointerEventKind::Move,
+            };
+            pointer_events.push(PointerEvent {
+                kind,
+                position: event.position,
+                button: event.button,
+            });
+        }
+        PlatformInputEvent::Scroll(event) => scroll_events.push(event),
     }
 }
 
-fn key_event_from_event(event: &NSEvent) -> KeyEvent {
-    let modifiers = modifiers_from_event(event);
-    let mut key_event = KeyEvent::new(KeyCode::Unknown(event.keyCode() as u32), modifiers);
-    key_event.is_repeat = event.isARepeat();
-
-    if let Some(chars) = event.charactersIgnoringModifiers()
-        && let Some(ch) = chars.to_string().chars().next()
-    {
-        key_event.key = keycode_from_char(ch);
+fn append_committed_text_events(text: &str, key_events: &mut Vec<(bool, KeyEvent)>) {
+    for ch in text.chars().filter(|ch| !ch.is_control()) {
+        key_events.push((
+            true,
+            KeyEvent::new(KeyCode::Unknown(0), Modifiers::none()).with_char(ch),
+        ));
     }
-
-    if let Some(chars) = event.characters()
-        && let Some(ch) = chars.to_string().chars().next()
-        && !ch.is_control()
-    {
-        key_event.char = Some(ch);
-    }
-
-    key_event
 }
 
 fn should_forward_key_event_to_tree(is_down: bool) -> bool {
@@ -415,65 +351,25 @@ mod tests {
         assert!(should_forward_key_event_to_tree(true));
         assert!(!should_forward_key_event_to_tree(false));
     }
-}
 
-fn keycode_from_char(ch: char) -> KeyCode {
-    match ch {
-        '\r' | '\n' => KeyCode::Enter,
-        '\u{7f}' => KeyCode::Backspace,
-        '\u{1b}' => KeyCode::Escape,
-        '\t' => KeyCode::Tab,
-        ' ' => KeyCode::Space,
-        '0' => KeyCode::Key0,
-        '1' => KeyCode::Key1,
-        '2' => KeyCode::Key2,
-        '3' => KeyCode::Key3,
-        '4' => KeyCode::Key4,
-        '5' => KeyCode::Key5,
-        '6' => KeyCode::Key6,
-        '7' => KeyCode::Key7,
-        '8' => KeyCode::Key8,
-        '9' => KeyCode::Key9,
-        'a' | 'A' => KeyCode::A,
-        'b' | 'B' => KeyCode::B,
-        'c' | 'C' => KeyCode::C,
-        'd' | 'D' => KeyCode::D,
-        'e' | 'E' => KeyCode::E,
-        'f' | 'F' => KeyCode::F,
-        'g' | 'G' => KeyCode::G,
-        'h' | 'H' => KeyCode::H,
-        'i' | 'I' => KeyCode::I,
-        'j' | 'J' => KeyCode::J,
-        'k' | 'K' => KeyCode::K,
-        'l' | 'L' => KeyCode::L,
-        'm' | 'M' => KeyCode::M,
-        'n' | 'N' => KeyCode::N,
-        'o' | 'O' => KeyCode::O,
-        'p' | 'P' => KeyCode::P,
-        'q' | 'Q' => KeyCode::Q,
-        'r' | 'R' => KeyCode::R,
-        's' | 'S' => KeyCode::S,
-        't' | 'T' => KeyCode::T,
-        'u' | 'U' => KeyCode::U,
-        'v' | 'V' => KeyCode::V,
-        'w' | 'W' => KeyCode::W,
-        'x' | 'X' => KeyCode::X,
-        'y' | 'Y' => KeyCode::Y,
-        'z' | 'Z' => KeyCode::Z,
-        _ => {
-            let code = ch as u32;
-            match code {
-                0xF700 => KeyCode::ArrowUp,
-                0xF701 => KeyCode::ArrowDown,
-                0xF702 => KeyCode::ArrowLeft,
-                0xF703 => KeyCode::ArrowRight,
-                0xF729 => KeyCode::Home,
-                0xF72B => KeyCode::End,
-                0xF72C => KeyCode::PageUp,
-                0xF72D => KeyCode::PageDown,
-                0xF728 => KeyCode::Delete,
-                _ => KeyCode::Unknown(code),
-            }
-        }
+    #[test]
+    fn ime_commit_events_are_forwarded_as_text_key_events() {
+        let mut pointer_events = Vec::new();
+        let mut scroll_events = Vec::new();
+        let mut key_events = Vec::new();
+
+        append_input_event(
+            PlatformInputEvent::Ime(PlatformImeEvent::Commit("你好".to_string())),
+            &mut pointer_events,
+            &mut scroll_events,
+            &mut key_events,
+        );
+
+        assert!(pointer_events.is_empty());
+        assert!(scroll_events.is_empty());
+        assert_eq!(key_events.len(), 2);
+        assert!(key_events.iter().all(|(is_down, _)| *is_down));
+        assert_eq!(key_events[0].1.char, Some('你'));
+        assert_eq!(key_events[1].1.char, Some('好'));
     }
 }

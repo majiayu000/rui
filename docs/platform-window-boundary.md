@@ -25,8 +25,9 @@ must not report success by dropping the operation or returning placeholder data.
 
 macOS is the only active runtime backend. Its AppKit window wrapper owns the
 native window and Metal layer, and the app loop translates native events inside
-`src/platform/mac`. Clipboard support is still not wired to a native pasteboard,
-so the shared contract reports that capability as unsupported.
+`src/platform/mac` into backend-neutral `PlatformWindowEvent` values. Clipboard
+support is wired to the AppKit general pasteboard and is reported as a native
+backend capability.
 
 Non-macOS platforms intentionally use explicit unsupported errors until a real
 backend is implemented and covered by the shared platform contract tests.

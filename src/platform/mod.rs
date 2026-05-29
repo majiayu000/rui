@@ -6,8 +6,8 @@ pub mod window;
 pub mod mac;
 
 pub use window::{
-    validate_window_options, PlatformInputEvent, PlatformMouseEvent, PlatformMouseEventKind,
+    PlatformImeEvent, PlatformInputEvent, PlatformMouseEvent, PlatformMouseEventKind,
     PlatformRendererAttachment, PlatformRendererTarget, PlatformWindow, PlatformWindowError,
     PlatformWindowEvent, PlatformWindowFeature, PlatformWindowFeatures, PlatformWindowState,
-    UnsupportedPlatformWindow,
+    UnsupportedPlatformWindow, validate_window_options,
 };
