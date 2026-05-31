@@ -280,6 +280,8 @@ impl Element for SegmentedControl {
             AccessibilityNode::label_required(self.id, AccessibilityRole::SegmentedControl, label)?
                 .value_required(&self.selected)?
                 .with_enabled(!self.state.disabled())
+                .with_read_only(self.state.read_only())
+                .with_invalid(self.state.invalid())
                 .with_focused(cx.a11y_has_focus(self.id));
 
         for (option, id) in self.options.iter().zip(self.option_ids.iter().copied()) {
@@ -290,7 +292,9 @@ impl Element for SegmentedControl {
             )?
             .value_required(&option.value)?
             .with_selected(option.value == self.selected)
-            .with_enabled(!self.state.disabled());
+            .with_enabled(!self.state.disabled())
+            .with_read_only(self.state.read_only())
+            .with_invalid(self.state.invalid());
             if self.state.can_activate() {
                 child = child.with_action(AccessibilityAction::Activate);
             }

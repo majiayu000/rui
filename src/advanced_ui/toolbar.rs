@@ -102,6 +102,8 @@ impl Element for Toolbar {
         Ok(Some(
             AccessibilityNode::label_required(self.id, AccessibilityRole::Toolbar, &self.label)?
                 .with_enabled(!self.state.disabled())
+                .with_read_only(self.state.read_only())
+                .with_invalid(self.state.invalid())
                 .with_focused(cx.a11y_has_focus(self.id)),
         ))
     }

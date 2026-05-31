@@ -185,6 +185,8 @@ impl Element for Button {
         let mut node =
             AccessibilityNode::label_required(self.id, AccessibilityRole::Button, &self.label)?
                 .with_enabled(!self.state.disabled())
+                .with_read_only(self.state.read_only())
+                .with_invalid(self.state.invalid())
                 .with_focused(cx.a11y_has_focus(self.id));
         if self.state.can_activate() {
             node = node.with_action(AccessibilityAction::Activate);

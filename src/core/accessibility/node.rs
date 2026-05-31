@@ -6,9 +6,11 @@ use super::error::AccessibilityError;
 pub enum AccessibilityRole {
     Button,
     Checkbox,
+    ProgressIndicator,
     SegmentedControl,
     SegmentedOption,
     Text,
+    TextInput,
     ScrollArea,
     Toolbar,
 }
@@ -16,6 +18,7 @@ pub enum AccessibilityRole {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AccessibilityAction {
     Activate,
+    SetValue,
     ScrollForward,
     ScrollBackward,
 }
@@ -39,16 +42,77 @@ impl AccessibilityContext {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AccessibilityTextRange {
+    start: usize,
+    end: usize,
+}
+
+impl AccessibilityTextRange {
+    pub fn new(start: usize, end: usize) -> Self {
+        Self { start, end }
+    }
+
+    pub fn start(&self) -> usize {
+        self.start
+    }
+
+    pub fn end(&self) -> usize {
+        self.end
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AccessibilityScrollPosition {
+    offset_x: f32,
+    offset_y: f32,
+    max_x: f32,
+    max_y: f32,
+}
+
+impl AccessibilityScrollPosition {
+    pub fn new(offset_x: f32, offset_y: f32, max_x: f32, max_y: f32) -> Self {
+        Self {
+            offset_x,
+            offset_y,
+            max_x,
+            max_y,
+        }
+    }
+
+    pub fn offset_x(&self) -> f32 {
+        self.offset_x
+    }
+
+    pub fn offset_y(&self) -> f32 {
+        self.offset_y
+    }
+
+    pub fn max_x(&self) -> f32 {
+        self.max_x
+    }
+
+    pub fn max_y(&self) -> f32 {
+        self.max_y
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct AccessibilityNode {
     id: ElementId,
     role: AccessibilityRole,
     label: Option<String>,
     value: Option<String>,
     enabled: bool,
+    read_only: bool,
+    invalid: bool,
     focused: bool,
     selected: Option<bool>,
     checked: Option<bool>,
+    text_caret: Option<usize>,
+    text_selection: Option<AccessibilityTextRange>,
+    text_composition: Option<AccessibilityTextRange>,
+    scroll_position: Option<AccessibilityScrollPosition>,
     actions: Vec<AccessibilityAction>,
     children: Vec<AccessibilityNode>,
 }
@@ -61,9 +125,15 @@ impl AccessibilityNode {
             label: None,
             value: None,
             enabled: true,
+            read_only: false,
+            invalid: false,
             focused: false,
             selected: None,
             checked: None,
+            text_caret: None,
+            text_selection: None,
+            text_composition: None,
+            scroll_position: None,
             actions: Vec::new(),
             children: Vec::new(),
         }
@@ -89,6 +159,14 @@ impl AccessibilityNode {
         self.enabled
     }
 
+    pub fn a11y_read_only(&self) -> bool {
+        self.read_only
+    }
+
+    pub fn a11y_invalid(&self) -> bool {
+        self.invalid
+    }
+
     pub fn a11y_focused(&self) -> bool {
         self.focused
     }
@@ -99,6 +177,22 @@ impl AccessibilityNode {
 
     pub fn a11y_checked(&self) -> Option<bool> {
         self.checked
+    }
+
+    pub fn a11y_text_caret(&self) -> Option<usize> {
+        self.text_caret
+    }
+
+    pub fn a11y_text_selection(&self) -> Option<AccessibilityTextRange> {
+        self.text_selection
+    }
+
+    pub fn a11y_text_composition(&self) -> Option<AccessibilityTextRange> {
+        self.text_composition
+    }
+
+    pub fn a11y_scroll_position(&self) -> Option<AccessibilityScrollPosition> {
+        self.scroll_position
     }
 
     pub fn a11y_actions(&self) -> &[AccessibilityAction] {
@@ -145,6 +239,16 @@ impl AccessibilityNode {
         self
     }
 
+    pub fn with_read_only(mut self, read_only: bool) -> Self {
+        self.read_only = read_only;
+        self
+    }
+
+    pub fn with_invalid(mut self, invalid: bool) -> Self {
+        self.invalid = invalid;
+        self
+    }
+
     pub fn with_focused(mut self, focused: bool) -> Self {
         self.focused = focused;
         self
@@ -157,6 +261,26 @@ impl AccessibilityNode {
 
     pub fn with_checked(mut self, checked: bool) -> Self {
         self.checked = Some(checked);
+        self
+    }
+
+    pub fn with_text_caret(mut self, caret: usize) -> Self {
+        self.text_caret = Some(caret);
+        self
+    }
+
+    pub fn with_text_selection(mut self, range: AccessibilityTextRange) -> Self {
+        self.text_selection = Some(range);
+        self
+    }
+
+    pub fn with_text_composition(mut self, range: AccessibilityTextRange) -> Self {
+        self.text_composition = Some(range);
+        self
+    }
+
+    pub fn with_scroll_position(mut self, position: AccessibilityScrollPosition) -> Self {
+        self.scroll_position = Some(position);
         self
     }
 
@@ -187,7 +311,7 @@ impl AccessibilityNode {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct AccessibilityTree {
     roots: Vec<AccessibilityNode>,
 }

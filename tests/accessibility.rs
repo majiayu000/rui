@@ -1,14 +1,16 @@
-use rui::advanced_ui::{Button, Checkbox, Scrollable, SegmentedControl, text};
+use rui::advanced_ui::{Button, Checkbox, ProgressBar, Scrollable, SegmentedControl, text};
 use rui::core::ElementId;
 use rui::core::accessibility::{
     AccessibilityAction, AccessibilityAnnouncementKind, AccessibilityBridge, AccessibilityContext,
-    AccessibilityError, AccessibilityNode, AccessibilityRole, AccessibilityTree,
-    UnsupportedAccessibilityBridge,
+    AccessibilityError, AccessibilityNode, AccessibilityRole, AccessibilityTextRange,
+    AccessibilityTree, UnsupportedAccessibilityBridge,
 };
-use rui::core::event::MouseButton;
+use rui::core::event::{KeyCode, KeyEvent, Modifiers, MouseButton};
 use rui::core::geometry::{Bounds, Point};
+use rui::core::text_editing::TextInputEvent;
 use rui::elements::Element;
 use rui::elements::element::{EventContext, PointerEvent, PointerEventKind};
+use rui::elements::Input;
 use taffy::TaffyTree;
 
 fn accessibility_result<T>(result: Result<T, AccessibilityError>) -> T {
@@ -36,7 +38,11 @@ fn accessibility_pointer(kind: PointerEventKind) -> PointerEvent {
 #[test]
 fn accessibility_button_exposes_role_label_enabled_and_focus() {
     let id = ElementId::new();
-    let button = Button::new("Save").id(id).disabled(true);
+    let button = Button::new("Save")
+        .id(id)
+        .disabled(true)
+        .read_only(true)
+        .invalid(true);
     let cx = AccessibilityContext::new(Some(id));
 
     let node = first_node(accessibility_result(button.accessibility_nodes(&cx)));
@@ -44,6 +50,8 @@ fn accessibility_button_exposes_role_label_enabled_and_focus() {
     assert_eq!(node.a11y_role(), AccessibilityRole::Button);
     assert_eq!(node.a11y_label(), Some("Save"));
     assert!(!node.a11y_enabled());
+    assert!(node.a11y_read_only());
+    assert!(node.a11y_invalid());
     assert!(node.a11y_focused());
     assert!(node.a11y_actions().is_empty());
 }
@@ -146,6 +154,71 @@ fn accessibility_text_and_scrollable_expose_semantic_tree() {
 }
 
 #[test]
+fn accessibility_input_exposes_text_editing_semantics() {
+    let id = ElementId::new();
+    let mut input = Input::new()
+        .id(id)
+        .accessibility_label("Search")
+        .value("alpha");
+    input
+        .apply_key_event(&KeyEvent::new(KeyCode::ArrowLeft, Modifiers::shift()))
+        .expect("shift-left should create a selection");
+
+    let node = first_node(accessibility_result(
+        input.accessibility_nodes(&AccessibilityContext::new(Some(id))),
+    ));
+    assert_eq!(node.a11y_role(), AccessibilityRole::TextInput);
+    assert_eq!(node.a11y_label(), Some("Search"));
+    assert_eq!(node.a11y_value(), Some("alpha"));
+    assert_eq!(node.a11y_text_caret(), Some(4));
+    assert_eq!(
+        node.a11y_text_selection(),
+        Some(AccessibilityTextRange::new(4, 5))
+    );
+    assert!(node.a11y_focused());
+    assert_eq!(node.a11y_actions(), [AccessibilityAction::SetValue]);
+}
+
+#[test]
+fn accessibility_input_exposes_composition_range() {
+    let id = ElementId::new();
+    let mut input = Input::new()
+        .id(id)
+        .placeholder("Message")
+        .value("Hi ");
+    input
+        .apply_text_input_event(TextInputEvent::BeginComposition("你".to_string()))
+        .expect("composition should begin");
+
+    let node = first_node(accessibility_result(
+        input.accessibility_nodes(&AccessibilityContext::default()),
+    ));
+    assert_eq!(node.a11y_label(), Some("Message"));
+    assert_eq!(node.a11y_value(), Some("Hi 你"));
+    assert_eq!(
+        node.a11y_text_composition(),
+        Some(AccessibilityTextRange::new(3, 6))
+    );
+}
+
+#[test]
+fn accessibility_progress_bar_exposes_value_and_validation_state() {
+    let id = ElementId::new();
+    let bar = ProgressBar::new(0.42)
+        .id(id)
+        .accessibility_label("Load progress")
+        .invalid(true);
+
+    let node = first_node(accessibility_result(
+        bar.accessibility_nodes(&AccessibilityContext::default()),
+    ));
+    assert_eq!(node.a11y_role(), AccessibilityRole::ProgressIndicator);
+    assert_eq!(node.a11y_label(), Some("Load progress"));
+    assert_eq!(node.a11y_value(), Some("42%"));
+    assert!(node.a11y_invalid());
+}
+
+#[test]
 fn accessibility_missing_required_labels_are_errors() {
     let button_panic = std::panic::catch_unwind(|| drop(Button::new(" ")));
     assert!(button_panic.is_err());
@@ -161,6 +234,24 @@ fn accessibility_missing_required_labels_are_errors() {
             role: AccessibilityRole::SegmentedControl
         }
     );
+
+    let id = ElementId::new();
+    let input = Input::new().id(id);
+    let error = match input.accessibility_nodes(&AccessibilityContext::default()) {
+        Ok(_) => panic!("input without accessibility label or placeholder should fail"),
+        Err(err) => err,
+    };
+    assert_eq!(
+        error,
+        AccessibilityError::MissingLabel {
+            role: AccessibilityRole::TextInput
+        }
+    );
+
+    let node = first_node(accessibility_result(
+        ProgressBar::new(0.5).accessibility_nodes(&AccessibilityContext::default()),
+    ));
+    assert_eq!(node.a11y_label(), Some("Progress"));
 }
 
 #[test]
