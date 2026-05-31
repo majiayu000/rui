@@ -37,3 +37,31 @@ pub fn capture_frame_with_backend(
 ) -> Result<CapturedFrame, RendererError> {
     backend.capture_frame(scene, viewport_size)
 }
+
+#[cfg(target_os = "macos")]
+pub struct MetalFrameCaptureBackend {
+    renderer: crate::renderer::metal::MetalRenderer,
+}
+
+#[cfg(target_os = "macos")]
+impl MetalFrameCaptureBackend {
+    pub fn new() -> Result<Self, RendererError> {
+        Ok(Self {
+            renderer: crate::renderer::metal::MetalRenderer::new()?,
+        })
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl FrameCaptureBackend for MetalFrameCaptureBackend {
+    fn capture_frame(
+        &mut self,
+        scene: &Scene,
+        viewport_size: Size,
+    ) -> Result<CapturedFrame, RendererError> {
+        Ok(CapturedFrame {
+            viewport_size,
+            pixels: self.renderer.capture_frame_pixels(scene, viewport_size)?,
+        })
+    }
+}

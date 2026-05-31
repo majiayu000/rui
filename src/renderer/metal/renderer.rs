@@ -1,5 +1,8 @@
 //! Metal renderer implementation
 
+use super::capture::{create_capture_texture, read_texture_rgba, texture_extent};
+use super::image_primitive::{GpuImage, calculate_fit_bounds};
+use super::path::build_path_mesh;
 use crate::core::geometry::{Bounds, Size};
 use crate::renderer::primitives::{GpuQuad, GpuShadow, Primitive};
 use crate::renderer::text::{TextRasterCache, TextRequest};
@@ -20,38 +23,6 @@ struct Uniforms {
     viewport_size: [f32; 2],
 }
 
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct GpuImage {
-    bounds: [f32; 4],
-    corner_radii: [f32; 4],
-    color: [f32; 4],
-    opacity: f32,
-    _padding: [f32; 3],
-}
-
-impl GpuImage {
-    fn new(
-        bounds: Bounds,
-        corner_radii: crate::core::style::Corners,
-        color: [f32; 4],
-        opacity: f32,
-    ) -> Self {
-        Self {
-            bounds: [bounds.x(), bounds.y(), bounds.width(), bounds.height()],
-            corner_radii: [
-                corner_radii.top_left,
-                corner_radii.top_right,
-                corner_radii.bottom_right,
-                corner_radii.bottom_left,
-            ],
-            color,
-            opacity,
-            _padding: [0.0; 3],
-        }
-    }
-}
-
 /// Metal-based renderer
 pub struct MetalRenderer {
     device: Device,
@@ -59,6 +30,7 @@ pub struct MetalRenderer {
     quad_pipeline: RenderPipelineState,
     shadow_pipeline: RenderPipelineState,
     image_pipeline: RenderPipelineState,
+    path_pipeline: RenderPipelineState,
     sampler: SamplerState,
     textures: HashMap<u32, Texture>,
     texture_resources: RendererResourceCache<u32>,
@@ -84,6 +56,12 @@ impl MetalRenderer {
         let image_library = device
             .new_library_with_source(super::shaders::IMAGE_SHADER, &CompileOptions::new())
             .expect("Failed to compile image shader");
+
+        let path_library = device
+            .new_library_with_source(super::shaders::PATH_SHADER, &CompileOptions::new())
+            .map_err(|err| {
+                RendererError::render_failed(format!("failed to compile path shader: {err}"))
+            })?;
 
         // Create quad pipeline
         let quad_vertex = library.get_function("quad_vertex", None).unwrap();
@@ -112,7 +90,9 @@ impl MetalRenderer {
 
         // Create shadow pipeline
         let shadow_vertex = shadow_library.get_function("shadow_vertex", None).unwrap();
-        let shadow_fragment = shadow_library.get_function("shadow_fragment", None).unwrap();
+        let shadow_fragment = shadow_library
+            .get_function("shadow_fragment", None)
+            .unwrap();
 
         let shadow_pipeline_desc = RenderPipelineDescriptor::new();
         shadow_pipeline_desc.set_vertex_function(Some(&shadow_vertex));
@@ -164,6 +144,39 @@ impl MetalRenderer {
             .new_render_pipeline_state(&image_pipeline_desc)
             .expect("Failed to create image pipeline");
 
+        let path_vertex = path_library
+            .get_function("path_vertex", None)
+            .map_err(|err| {
+                RendererError::render_failed(format!("missing path vertex shader: {err}"))
+            })?;
+        let path_fragment = path_library
+            .get_function("path_fragment", None)
+            .map_err(|err| {
+                RendererError::render_failed(format!("missing path fragment shader: {err}"))
+            })?;
+
+        let path_pipeline_desc = RenderPipelineDescriptor::new();
+        path_pipeline_desc.set_vertex_function(Some(&path_vertex));
+        path_pipeline_desc.set_fragment_function(Some(&path_fragment));
+        path_pipeline_desc
+            .color_attachments()
+            .object_at(0)
+            .unwrap()
+            .set_pixel_format(MTLPixelFormat::BGRA8Unorm);
+
+        let path_color = path_pipeline_desc.color_attachments().object_at(0).unwrap();
+        path_color.set_blending_enabled(true);
+        path_color.set_source_rgb_blend_factor(MTLBlendFactor::SourceAlpha);
+        path_color.set_destination_rgb_blend_factor(MTLBlendFactor::OneMinusSourceAlpha);
+        path_color.set_source_alpha_blend_factor(MTLBlendFactor::One);
+        path_color.set_destination_alpha_blend_factor(MTLBlendFactor::OneMinusSourceAlpha);
+
+        let path_pipeline = device
+            .new_render_pipeline_state(&path_pipeline_desc)
+            .map_err(|err| {
+                RendererError::render_failed(format!("failed to create path pipeline: {err}"))
+            })?;
+
         // Sampler for images/text
         let sampler_desc = SamplerDescriptor::new();
         sampler_desc.set_min_filter(MTLSamplerMinMagFilter::Linear);
@@ -178,6 +191,7 @@ impl MetalRenderer {
             quad_pipeline,
             shadow_pipeline,
             image_pipeline,
+            path_pipeline,
             sampler,
             textures: HashMap::new(),
             texture_resources: RendererResourceCache::unbounded(RendererResourceKind::Texture),
@@ -195,12 +209,42 @@ impl MetalRenderer {
         <Self as Renderer>::diagnostics(self)
     }
 
+    pub fn capture_frame_pixels(
+        &mut self,
+        scene: &Scene,
+        viewport_size: Size,
+    ) -> Result<Vec<u8>, RendererError> {
+        let width = texture_extent(viewport_size.width, "width")?;
+        let height = texture_extent(viewport_size.height, "height")?;
+        let texture = create_capture_texture(&self.device, width, height);
+
+        self.render_to_texture(scene, &texture, viewport_size, None, true)?;
+        Ok(read_texture_rgba(&texture, width, height))
+    }
+
     /// Render a scene to a drawable
     pub fn render(
         &mut self,
         scene: &Scene,
         drawable: &MetalDrawableRef,
         viewport_size: Size,
+    ) -> Result<(), RendererError> {
+        self.render_to_texture(
+            scene,
+            drawable.texture(),
+            viewport_size,
+            Some(drawable),
+            false,
+        )
+    }
+
+    fn render_to_texture(
+        &mut self,
+        scene: &Scene,
+        texture: &TextureRef,
+        viewport_size: Size,
+        present_drawable: Option<&MetalDrawableRef>,
+        wait_until_completed: bool,
     ) -> Result<(), RendererError> {
         RendererPrimitiveSupport::metal().validate_scene(scene)?;
 
@@ -213,7 +257,7 @@ impl MetalRenderer {
 
         let render_pass_desc = RenderPassDescriptor::new();
         let color_attachment = render_pass_desc.color_attachments().object_at(0).unwrap();
-        color_attachment.set_texture(Some(drawable.texture()));
+        color_attachment.set_texture(Some(texture));
         color_attachment.set_load_action(MTLLoadAction::Clear);
         color_attachment.set_store_action(MTLStoreAction::Store);
         color_attachment.set_clear_color(MTLClearColor::new(0.1, 0.1, 0.1, 1.0));
@@ -224,11 +268,8 @@ impl MetalRenderer {
             viewport_size: [viewport_size.width, viewport_size.height],
         };
 
-        let scale_factor = drawable.texture().width() as f32 / viewport_size.width.max(1.0);
-        let drawable_size = Size::new(
-            drawable.texture().width() as f32,
-            drawable.texture().height() as f32,
-        );
+        let scale_factor = texture.width() as f32 / viewport_size.width.max(1.0);
+        let drawable_size = Size::new(texture.width() as f32, texture.height() as f32);
 
         let mut clip_stack: Vec<Bounds> = Vec::new();
         self.set_scissor_rect(encoder, None, scale_factor, drawable_size);
@@ -342,12 +383,13 @@ impl MetalRenderer {
                         &uniforms,
                     )?;
                 }
-                Primitive::Path { .. } => {
-                    return Err(RendererError::unsupported_primitive(
-                        RendererPrimitiveSupport::metal().backend(),
-                        primitive.kind(),
-                        "path primitives are not implemented by the Metal backend",
-                    ));
+                Primitive::Path {
+                    vertices,
+                    color,
+                    stroke_width,
+                } => {
+                    let mesh = build_path_mesh(vertices, *color, *stroke_width)?;
+                    self.draw_path(encoder, &mesh.vertices, &uniforms);
                 }
                 Primitive::PushClip { bounds, .. } => {
                     let new_clip = if let Some(prev) = clip_stack.last() {
@@ -377,8 +419,18 @@ impl MetalRenderer {
         }
 
         encoder.end_encoding();
-        command_buffer.present_drawable(drawable);
+        if let Some(drawable) = present_drawable {
+            command_buffer.present_drawable(drawable);
+        }
         command_buffer.commit();
+        if wait_until_completed {
+            command_buffer.wait_until_completed();
+            if command_buffer.status() == MTLCommandBufferStatus::Error {
+                return Err(RendererError::render_failed(
+                    "metal command buffer failed during offscreen capture",
+                ));
+            }
+        }
         Ok(())
     }
 
@@ -456,6 +508,30 @@ impl MetalRenderer {
         encoder.set_fragment_sampler_state(0, Some(&self.sampler));
 
         encoder.draw_primitives_instanced(MTLPrimitiveType::Triangle, 0, 6, 1);
+    }
+
+    fn draw_path(
+        &self,
+        encoder: &RenderCommandEncoderRef,
+        vertices: &[super::path::GpuPathVertex],
+        uniforms: &Uniforms,
+    ) {
+        encoder.set_render_pipeline_state(&self.path_pipeline);
+
+        let vertex_buffer = self.device.new_buffer_with_data(
+            vertices.as_ptr() as *const _,
+            std::mem::size_of_val(vertices) as u64,
+            MTLResourceOptions::CPUCacheModeDefaultCache,
+        );
+        let uniform_buffer = self.device.new_buffer_with_data(
+            uniforms as *const _ as *const _,
+            mem::size_of::<Uniforms>() as u64,
+            MTLResourceOptions::CPUCacheModeDefaultCache,
+        );
+
+        encoder.set_vertex_buffer(0, Some(&vertex_buffer), 0);
+        encoder.set_vertex_buffer(1, Some(&uniform_buffer), 0);
+        encoder.draw_primitives(MTLPrimitiveType::Triangle, 0, vertices.len() as u64);
     }
 
     fn draw_image_primitive(
@@ -705,55 +781,5 @@ impl Renderer for MetalRenderer {
             ],
         )
         .with_unsupported_primitives(RendererPrimitiveSupport::metal().unsupported_primitives())
-    }
-}
-
-fn calculate_fit_bounds(container: Bounds, image_size: Size, fit: ImageFit) -> Bounds {
-    if image_size.width <= 0.0 || image_size.height <= 0.0 {
-        return container;
-    }
-    match fit {
-        ImageFit::Fill => container,
-        ImageFit::Contain => {
-            let scale_x = container.width() / image_size.width;
-            let scale_y = container.height() / image_size.height;
-            let scale = scale_x.min(scale_y);
-            let width = image_size.width * scale;
-            let height = image_size.height * scale;
-            let x = container.x() + (container.width() - width) / 2.0;
-            let y = container.y() + (container.height() - height) / 2.0;
-            Bounds::from_xywh(x, y, width, height)
-        }
-        ImageFit::Cover => {
-            let scale_x = container.width() / image_size.width;
-            let scale_y = container.height() / image_size.height;
-            let scale = scale_x.max(scale_y);
-            let width = image_size.width * scale;
-            let height = image_size.height * scale;
-            let x = container.x() + (container.width() - width) / 2.0;
-            let y = container.y() + (container.height() - height) / 2.0;
-            Bounds::from_xywh(x, y, width, height)
-        }
-        ImageFit::None => {
-            let x = container.x() + (container.width() - image_size.width) / 2.0;
-            let y = container.y() + (container.height() - image_size.height) / 2.0;
-            Bounds::from_xywh(x, y, image_size.width, image_size.height)
-        }
-        ImageFit::ScaleDown => {
-            if image_size.width <= container.width() && image_size.height <= container.height() {
-                let x = container.x() + (container.width() - image_size.width) / 2.0;
-                let y = container.y() + (container.height() - image_size.height) / 2.0;
-                Bounds::from_xywh(x, y, image_size.width, image_size.height)
-            } else {
-                let scale_x = container.width() / image_size.width;
-                let scale_y = container.height() / image_size.height;
-                let scale = scale_x.min(scale_y);
-                let width = image_size.width * scale;
-                let height = image_size.height * scale;
-                let x = container.x() + (container.width() - width) / 2.0;
-                let y = container.y() + (container.height() - height) / 2.0;
-                Bounds::from_xywh(x, y, width, height)
-            }
-        }
     }
 }
