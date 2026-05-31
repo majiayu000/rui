@@ -354,6 +354,13 @@ fn text_editing_invalid_offsets_and_multiline_policy_return_errors() {
     };
     assert_eq!(error, TextEditError::InvalidBoundary { index: 1 });
 
+    let mut buffer = TextEditBuffer::with_text("e\u{301}");
+    let error = match buffer.set_cursor(1) {
+        Ok(_) => panic!("mid-grapheme cursor should fail"),
+        Err(err) => err,
+    };
+    assert_eq!(error, TextEditError::InvalidBoundary { index: 1 });
+
     let error = match buffer.insert_text("a\nb") {
         Ok(_) => panic!("single-line newline insertion should fail"),
         Err(err) => err,

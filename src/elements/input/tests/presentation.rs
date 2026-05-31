@@ -185,6 +185,49 @@ fn test_cursor_type_all_input_types() {
     }
 }
 
+#[test]
+fn input_paints_selection_marked_text_and_layout_caret() {
+    let mut inp = Input::new().value("hello");
+    inp.state.focused = true;
+    inp.state.selection_start = Some(1);
+    inp.state.selection_end = Some(4);
+    inp.state.composition_range = Some(range(2, 4));
+    inp.state.marked_text = Some("ll".to_string());
+
+    let primitives = painted_primitives(inp);
+    let quads: Vec<_> = primitives
+        .iter()
+        .filter_map(|primitive| match primitive {
+            Primitive::Quad {
+                bounds, background, ..
+            } => Some((*bounds, *background)),
+            _ => None,
+        })
+        .collect();
+
+    assert!(
+        quads
+            .iter()
+            .any(|(bounds, background)| background.a == 0.22 && bounds.width() == 21.0),
+        "selection paint primitive should cover the selected grapheme range"
+    );
+    assert!(
+        quads.iter().any(|(bounds, background)| {
+            *background == Color::hex(0x6366f1).to_rgba()
+                && bounds.height() == INPUT_MARKED_UNDERLINE_HEIGHT
+        }),
+        "marked text primitive should paint an underline"
+    );
+    assert!(
+        quads.iter().any(|(bounds, background)| {
+            *background == Color::hex(0x6366f1).to_rgba()
+                && bounds.width() == INPUT_CARET_WIDTH
+                && bounds.height() == 20.0
+        }),
+        "caret primitive should come from the text edit layout"
+    );
+}
+
 // ==================== Element Trait Tests ====================
 
 #[test]
