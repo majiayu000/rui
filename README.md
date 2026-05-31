@@ -4,7 +4,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Test Coverage](https://img.shields.io/badge/coverage-66.23%25-green.svg)]()
-[![Rust](https://img.shields.io/badge/rust-1.75%2B-orange.svg)]()
+[![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)]()
 
 RUI is a high-performance UI framework inspired by [GPUI](https://github.com/zed-industries/zed) and [Warp](https://www.warp.dev/). It renders directly to the GPU using Metal (macOS) for smooth 120fps rendering.
 
@@ -16,6 +16,16 @@ RUI is a high-performance UI framework inspired by [GPUI](https://github.com/zed
 - **React-like Hooks** - `use_mouse`, `use_paste`, `use_window_focus` and more
 - **Rich Component Library** - Div, Text, Button, Input, Image, Table, List, Progress, Spinner
 - **Animation System** - Built-in support for smooth animations with easing functions
+
+## Status and Limitations
+
+RUI is an early-stage, pre-1.0 framework. APIs, component behavior, and renderer internals may change before the first stable release.
+
+- macOS is the only supported runtime platform today, using the Metal renderer.
+- Windows, Linux, and Web support are roadmap items, not working backends.
+- Accessibility semantics and advanced component interactions are still active development areas.
+- Visual behavior should be verified on a local macOS desktop session; CI covers compile and automated tests, but not full end-to-end visual QA.
+- The recommended install path is the Git dependency shown below until crates.io package ownership or naming is resolved.
 
 ## Quick Start
 
@@ -115,13 +125,13 @@ fn main() {
                 div()
                     .flex_row()
                     .gap(16.0)
-                    .child(button("-").bg(Color::hex(0xd63031)))
-                    .child(button("+").bg(Color::hex(0x00b894)))
+                    .child(counter_button("-").bg(Color::hex(0xd63031)))
+                    .child(counter_button("+").bg(Color::hex(0x00b894)))
             )
     });
 }
 
-fn button(label: &str) -> Button {
+fn counter_button(label: &str) -> Button {
     button(label)
         .w(60.0)
         .h(60.0)
@@ -286,6 +296,13 @@ Color::hsla(180.0, 0.5, 0.5, 0.8)
 | Linux | Planned | Vulkan |
 | Web | Planned | WebGPU |
 
+## Release Status
+
+- Current repository version: `0.2.3`.
+- GitHub release tags are published for recent changes, but crates.io publishing is blocked until the `rui` package name ownership or package naming is resolved.
+- Install from Git and pin a commit or release tag for reproducible builds.
+- Release history and unreleased launch-readiness changes are tracked in [CHANGELOG.md](CHANGELOG.md).
+
 ## Running Examples
 
 ```bash
@@ -304,7 +321,7 @@ cargo run --example animation_demo
 
 ## Requirements
 
-- Rust 1.75 or later
+- Rust 1.85 or later, for Rust 2024 edition support
 - macOS 10.15+ (Catalina or later)
 - Metal-compatible GPU
 

@@ -1,7 +1,8 @@
 [package]
 name = "rui"
-version = "0.2.2"
+version = "0.2.3"
 edition = "2024"
+rust-version = "1.85"
 description = "A GPU-accelerated UI framework for Rust"
 license = "MIT"
 
