@@ -269,13 +269,7 @@ impl Input {
                 } else {
                     end
                 };
-                let anchor = if head == start {
-                    end
-                } else if head == end {
-                    start
-                } else {
-                    start
-                };
+                let anchor = if head == start { end } else { start };
                 TextSelection::new(anchor, head)
             }
             _ => TextSelection::collapsed(cursor),
