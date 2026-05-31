@@ -12,6 +12,7 @@ pub const DOGFOOD_REFRESH_BUTTON_ID: ElementId = ElementId(28_001);
 pub const DOGFOOD_PANEL_CONTROL_ID: ElementId = ElementId(28_002);
 pub const DOGFOOD_CLAIM_GATE_ID: ElementId = ElementId(28_003);
 pub const DOGFOOD_ACTIVITY_SCROLL_ID: ElementId = ElementId(28_004);
+pub const DOGFOOD_PACKAGE_FIELD_ID: ElementId = ElementId(28_005);
 
 fn main() {
     let finite = std::env::var_os("RUI_ADVANCED_UI_HOLD").is_none();
@@ -224,7 +225,7 @@ fn controls_panel_with_events(
                 .spacing(18.0)
                 .child(controls_header(data))
                 .child(metric_row(data))
-                .child(action_row(refresh_count, events.as_ref()))
+                .child(action_row(data, refresh_count, events.as_ref()))
                 .child(setting_row(claim_gate_acknowledged, events.as_ref()))
                 .child(
                     ui::progress_bar(verification_progress(data, claim_gate_acknowledged))
@@ -319,11 +320,21 @@ fn metric_row(data: &LocalDogfoodData) -> impl Element {
         ))
 }
 
-fn action_row(refresh_count: u32, events: Option<&DogfoodEvents>) -> impl Element {
+fn action_row(
+    data: &LocalDogfoodData,
+    refresh_count: u32,
+    events: Option<&DogfoodEvents>,
+) -> impl Element {
     ui::row()
         .spacing(10.0)
+        .child(
+            ui::text_field("Package")
+                .id(DOGFOOD_PACKAGE_FIELD_ID)
+                .value(format!("{} {}", data.package_name, data.package_version))
+                .read_only(true)
+                .w(220.0),
+        )
         .child(refresh_button(refresh_count, events))
-        .child(ui::button("Open issue #28").outline().read_only(true))
         .child(ui::tooltip(
             ui::button("Local proof").ghost().read_only(true),
             "Uses Cargo.toml, file counts, and git status from this checkout",

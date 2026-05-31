@@ -1,4 +1,5 @@
-use crate::advanced_ui::state::{require_non_empty, InteractionState};
+use crate::advanced_ui::state::{InteractionState, require_non_empty};
+use crate::core::ElementId;
 use crate::core::accessibility::{
     AccessibilityAction, AccessibilityContext, AccessibilityError, AccessibilityNode,
     AccessibilityRole, AccessibilityScrollPosition,
@@ -6,7 +7,6 @@ use crate::core::accessibility::{
 use crate::core::color::Color;
 use crate::core::geometry::Size;
 use crate::core::style::Style;
-use crate::core::ElementId;
 use crate::elements::element::{
     AnyElement, Element, EventContext, LayoutContext, PaintContext, PointerEvent,
 };

@@ -62,6 +62,7 @@ pub struct Input {
     state: InputState,
     editor: TextEditBuffer,
     width: Option<f32>,
+    height: Option<f32>,
     on_change: Option<Box<dyn Fn(&str)>>,
     on_submit: Option<Box<dyn Fn(&str)>>,
     on_focus: Option<Box<dyn Fn()>>,
@@ -85,6 +86,7 @@ impl Input {
             state: InputState::default(),
             editor: TextEditBuffer::new(),
             width: None,
+            height: None,
             on_change: None,
             on_submit: None,
             on_focus: None,
@@ -141,6 +143,11 @@ impl Input {
 
     pub fn w(mut self, width: f32) -> Self {
         self.width = Some(width);
+        self
+    }
+
+    pub fn h(mut self, height: f32) -> Self {
+        self.height = Some(height);
         self
     }
 
@@ -202,6 +209,10 @@ impl Input {
 
     pub fn cursor(&self) -> Cursor {
         Cursor::Text
+    }
+
+    pub fn get_value(&self) -> &str {
+        &self.state.value
     }
 
     pub fn apply_text_input_event(
@@ -527,7 +538,7 @@ impl Element for Input {
 
     fn layout(&mut self, cx: &mut LayoutContext) -> NodeId {
         let mut style = style_to_taffy(&self.style);
-        style.size.height = Dimension::Length(40.0);
+        style.size.height = Dimension::Length(self.height.unwrap_or(40.0));
         if let Some(w) = self.width {
             style.size.width = Dimension::Length(w);
         } else {
@@ -701,10 +712,8 @@ impl Element for Input {
             node = node.with_text_selection(AccessibilityTextRange::new(start, end));
         }
         if let Some(range) = self.state.composition_range {
-            node = node.with_text_composition(AccessibilityTextRange::new(
-                range.start(),
-                range.end(),
-            ));
+            node =
+                node.with_text_composition(AccessibilityTextRange::new(range.start(), range.end()));
         }
 
         Ok(Some(node))
