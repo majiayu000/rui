@@ -2,6 +2,9 @@ use crate::advanced_ui::state::{
     InteractionState, require_finite, require_finite_non_negative, validation_border_color,
 };
 use crate::advanced_ui::tokens::{CONTROL_RADIUS, ControlSize, control_border_color};
+use crate::core::accessibility::{
+    AccessibilityContext, AccessibilityError, AccessibilityNode, AccessibilityRole,
+};
 use crate::core::ElementId;
 use crate::core::color::Color;
 use crate::core::geometry::{Bounds, Edges};
@@ -16,6 +19,7 @@ pub struct ProgressBar {
     size: ControlSize,
     width: f32,
     show_label: bool,
+    accessibility_label: Option<String>,
     color: Color,
     background: Color,
     state: InteractionState,
@@ -35,6 +39,7 @@ impl ProgressBar {
             size: ControlSize::default(),
             width: 220.0,
             show_label: true,
+            accessibility_label: None,
             color: Color::hex(0x2563eb),
             background: Color::hex(0xe5e7eb),
             state: InteractionState::default(),
@@ -69,6 +74,16 @@ impl ProgressBar {
 
     pub fn show_label(mut self, show_label: bool) -> Self {
         self.show_label = show_label;
+        self
+    }
+
+    pub fn accessibility_label(mut self, label: impl Into<String>) -> Self {
+        let label = label.into();
+        crate::advanced_ui::state::require_non_empty(
+            &label,
+            "progress bar accessibility label must not be empty",
+        );
+        self.accessibility_label = Some(label);
         self
     }
 
@@ -159,6 +174,18 @@ impl Element for ProgressBar {
                 align: crate::elements::text::TextAlign::Center,
             });
         }
+    }
+
+    fn accessibility(
+        &self,
+        _cx: &AccessibilityContext,
+    ) -> Result<Option<AccessibilityNode>, AccessibilityError> {
+        let label = self.accessibility_label.as_deref().unwrap_or("Progress");
+        Ok(Some(
+            AccessibilityNode::label_required(self.id, AccessibilityRole::ProgressIndicator, label)?
+                .with_value(format!("{}%", (self.value * 100.0).round() as u32))
+                .with_invalid(self.state.invalid()),
+        ))
     }
 }
 

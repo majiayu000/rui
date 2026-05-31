@@ -1,6 +1,10 @@
 //! Text input element
 
 use crate::core::ElementId;
+use crate::core::accessibility::{
+    AccessibilityAction, AccessibilityContext, AccessibilityError, AccessibilityNode,
+    AccessibilityRole, AccessibilityTextRange,
+};
 use crate::core::color::{Color, Rgba};
 use crate::core::event::{Cursor, KeyCode, KeyEvent};
 use crate::core::geometry::{Bounds, Edges, Point};
@@ -52,6 +56,7 @@ pub struct InputState {
 pub struct Input {
     id: Option<ElementId>,
     placeholder: String,
+    accessibility_label: Option<String>,
     input_type: InputType,
     style: Style,
     state: InputState,
@@ -74,6 +79,7 @@ impl Input {
         Self {
             id: None,
             placeholder: String::new(),
+            accessibility_label: None,
             input_type: InputType::default(),
             style,
             state: InputState::default(),
@@ -94,6 +100,11 @@ impl Input {
 
     pub fn placeholder(mut self, placeholder: impl Into<String>) -> Self {
         self.placeholder = placeholder.into();
+        self
+    }
+
+    pub fn accessibility_label(mut self, label: impl Into<String>) -> Self {
+        self.accessibility_label = Some(label.into());
         self
     }
 
@@ -663,6 +674,40 @@ impl Element for Input {
                 false
             }
         }
+    }
+
+    fn accessibility(
+        &self,
+        cx: &AccessibilityContext,
+    ) -> Result<Option<AccessibilityNode>, AccessibilityError> {
+        let Some(id) = self.id else {
+            return Ok(None);
+        };
+        let label = self
+            .accessibility_label
+            .as_deref()
+            .or_else(|| (!self.placeholder.trim().is_empty()).then_some(self.placeholder.as_str()))
+            .ok_or(AccessibilityError::MissingLabel {
+                role: AccessibilityRole::TextInput,
+            })?;
+
+        let mut node = AccessibilityNode::label_required(id, AccessibilityRole::TextInput, label)?
+            .with_value(self.display_text())
+            .with_text_caret(self.normalize_cursor_position())
+            .with_focused(cx.a11y_has_focus(id))
+            .with_action(AccessibilityAction::SetValue);
+
+        if let (Some(start), Some(end)) = (self.state.selection_start, self.state.selection_end) {
+            node = node.with_text_selection(AccessibilityTextRange::new(start, end));
+        }
+        if let Some(range) = self.state.composition_range {
+            node = node.with_text_composition(AccessibilityTextRange::new(
+                range.start(),
+                range.end(),
+            ));
+        }
+
+        Ok(Some(node))
     }
 }
 

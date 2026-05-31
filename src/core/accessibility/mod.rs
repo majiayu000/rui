@@ -10,5 +10,5 @@ pub use bridge::{AccessibilityBridge, UnsupportedAccessibilityBridge};
 pub use error::AccessibilityError;
 pub use node::{
     AccessibilityAction, AccessibilityContext, AccessibilityNode, AccessibilityRole,
-    AccessibilityTree,
+    AccessibilityScrollPosition, AccessibilityTextRange, AccessibilityTree,
 };

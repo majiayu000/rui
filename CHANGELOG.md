@@ -6,6 +6,14 @@ All notable project changes should be recorded here.
 
 - No unreleased changes yet.
 
+## 0.2.5 - 2026-05-31
+
+### Accessibility
+
+- Added accessibility node contract fields for read-only, invalid, text input ranges, and scroll positions.
+- Exposed text input accessibility semantics for value, caret, selection, and composition state.
+- Added progress indicator accessibility semantics with label overrides and value reporting.
+
 ## 0.2.4 - 2026-05-31
 
 ### Documentation
