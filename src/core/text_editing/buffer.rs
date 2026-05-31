@@ -433,11 +433,23 @@ impl TextEditBuffer {
     }
 
     fn ensure_offset_boundary(&self, index: usize) -> Result<(), TextEditError> {
-        if index <= self.text.len() && self.text.is_char_boundary(index) {
+        if index <= self.text.len()
+            && self.text.is_char_boundary(index)
+            && self.is_grapheme_boundary(index)
+        {
             Ok(())
         } else {
             Err(TextEditError::InvalidBoundary { index })
         }
+    }
+
+    fn is_grapheme_boundary(&self, index: usize) -> bool {
+        index == 0
+            || index == self.text.len()
+            || self
+                .text
+                .grapheme_indices(true)
+                .any(|(byte_index, _)| byte_index == index)
     }
 
     fn previous_boundary(&self, index: usize) -> usize {
