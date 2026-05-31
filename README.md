@@ -298,12 +298,14 @@ Color::hsla(180.0, 0.5, 0.5, 0.8)
 
 ## Release Status
 
-- Current repository version: `0.2.3`.
+- Current repository version: `0.2.4`.
 - GitHub release tags are published for recent changes, but crates.io publishing is blocked until the `rui` package name ownership or package naming is resolved.
 - Install from Git and pin a commit or release tag for reproducible builds.
 - Release history and unreleased launch-readiness changes are tracked in [CHANGELOG.md](CHANGELOG.md).
 
 ## Running Examples
+
+Build the project with `cargo build`, then run examples with `cargo run --example <name>` from the repository root on macOS.
 
 ```bash
 # Hello World - Basic layout

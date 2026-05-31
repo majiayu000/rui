@@ -6,6 +6,12 @@ All notable project changes should be recorded here.
 
 - No unreleased changes yet.
 
+## 0.2.4 - 2026-05-31
+
+### Documentation
+
+- Added a README build/run clarification for local example workflows.
+
 ## 0.2.3 - 2026-05-31
 
 ### Launch Readiness
