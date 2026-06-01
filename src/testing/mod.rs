@@ -125,6 +125,7 @@ where
     F: FnMut(&mut AppContext) -> E,
     E: Element,
 {
+    context.set_viewport_size(viewport_size);
     let root = build_root(&mut context);
     context.needs_rebuild = false;
     context.dirty = true;
@@ -251,11 +252,12 @@ where
 
     pub fn resize(&mut self, viewport_size: Size) -> bool {
         self.viewport_size = viewport_size;
+        self.context.set_viewport_size(viewport_size);
         let handled = self.root.handle_window_event(&Event::WindowResize {
             width: viewport_size.width,
             height: viewport_size.height,
         });
-        self.context.request_redraw();
+        self.context.request_rebuild();
         handled
     }
 
