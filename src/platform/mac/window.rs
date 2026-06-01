@@ -36,6 +36,15 @@ pub struct MacWindow {
 
 impl MacWindow {
     pub(crate) fn make_key_and_order_front(&self) {
+        if self.is_minimized() {
+            unsafe {
+                let _: () = msg_send![
+                    &*self.window,
+                    deminiaturize: std::ptr::null::<objc2::runtime::AnyObject>()
+                ];
+            }
+        }
+
         unsafe {
             let _: () = msg_send![
                 &*self.window,
@@ -66,6 +75,10 @@ impl MacWindow {
 
     pub(crate) fn is_visible(&self) -> bool {
         unsafe { msg_send![&*self.window, isVisible] }
+    }
+
+    pub(crate) fn is_minimized(&self) -> bool {
+        unsafe { msg_send![&*self.window, isMiniaturized] }
     }
 
     pub(crate) fn next_drawable(&self) -> Option<&metal::MetalDrawableRef> {
@@ -135,7 +148,9 @@ impl MacWindow {
             }
 
             append_platform_events_from_native_event(&event, self.last_content_size, &mut events);
-            app.sendEvent(&event);
+            if should_send_native_event_to_app(event_type) {
+                app.sendEvent(&event);
+            }
         }
 
         self.push_lifecycle_events(&mut events)?;
@@ -171,10 +186,11 @@ impl MacWindow {
         }
 
         let visible = self.is_visible();
-        if self.last_visible && !visible {
+        let minimized = self.is_minimized();
+        if close_requested_from_visibility(self.last_visible, visible, minimized) {
             events.push(PlatformWindowEvent::CloseRequested);
         }
-        self.last_visible = visible;
+        self.last_visible = visible || minimized;
 
         Ok(())
     }
@@ -334,7 +350,13 @@ fn platform_event_mask() -> NSEventMask {
         | NSEventMask::ScrollWheel
         | NSEventMask::KeyDown
         | NSEventMask::KeyUp
+        | NSEventMask::AppKitDefined
+        | NSEventMask::SystemDefined
         | NSEventMask::ApplicationDefined
+}
+
+fn should_send_native_event_to_app(event_type: NSEventType) -> bool {
+    !matches!(event_type, NSEventType::KeyDown | NSEventType::KeyUp)
 }
 
 fn append_platform_events_from_native_event(
@@ -510,6 +532,14 @@ fn clipboard_text_or_error(text: Option<String>) -> Result<String, PlatformWindo
     })
 }
 
+fn close_requested_from_visibility(
+    was_visible_or_minimized: bool,
+    is_visible: bool,
+    is_minimized: bool,
+) -> bool {
+    was_visible_or_minimized && !is_visible && !is_minimized
+}
+
 fn keycode_from_char(ch: char) -> KeyCode {
     match ch {
         '\r' | '\n' => KeyCode::Enter,
@@ -606,6 +636,7 @@ pub unsafe fn create_window(
     // Set title
     let title = NSString::from_str(&options.title);
     window.setTitle(&title);
+    let _: () = msg_send![&*window, setReleasedWhenClosed: false];
 
     // Get content view
     let content_view = window.contentView().expect("No content view");
@@ -695,6 +726,30 @@ mod tests {
             clipboard_text_or_error(Some("copied".to_string())),
             Ok("copied".to_string())
         );
+    }
+
+    #[test]
+    fn minimized_window_is_not_treated_as_close_requested() {
+        assert!(!close_requested_from_visibility(true, false, true));
+        assert!(close_requested_from_visibility(true, false, false));
+        assert!(!close_requested_from_visibility(false, false, false));
+        assert!(!close_requested_from_visibility(true, true, false));
+    }
+
+    #[test]
+    fn platform_event_mask_includes_app_activation_events() {
+        let mask = platform_event_mask();
+
+        assert!(mask.contains(NSEventMask::AppKitDefined));
+        assert!(mask.contains(NSEventMask::SystemDefined));
+    }
+
+    #[test]
+    fn key_events_are_not_sent_back_to_appkit_after_rui_handles_them() {
+        assert!(!should_send_native_event_to_app(NSEventType::KeyDown));
+        assert!(!should_send_native_event_to_app(NSEventType::KeyUp));
+        assert!(should_send_native_event_to_app(NSEventType::LeftMouseDown));
+        assert!(should_send_native_event_to_app(NSEventType::AppKitDefined));
     }
 
     #[test]

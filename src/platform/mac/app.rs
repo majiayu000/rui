@@ -87,7 +87,8 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
         }
 
         // Activate the application
-        app.activate();
+        #[allow(deprecated)]
+        app.activateIgnoringOtherApps(true);
 
         // Create layout engine
         let mut taffy: TaffyTree<crate::core::ElementId> = TaffyTree::new();
@@ -98,9 +99,11 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
         // Main run loop
         let mut viewport_size = options.size;
         let mut last_viewport_size = viewport_size;
+        context.set_viewport_size(viewport_size);
         let mut focused_element: Option<crate::core::ElementId> = None;
         let mut last_pointer_hit_target: Option<crate::core::ElementId> = None;
         let mut pointer_capture_target: Option<crate::core::ElementId> = None;
+        let mut last_app_active = app.isActive();
 
         // Render loop (event-driven)
         loop {
@@ -120,6 +123,20 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
                 Ok(events) => events,
                 Err(err) => panic!("failed to poll platform window events: {}", err),
             };
+
+            let app_active = app.isActive();
+            if should_restore_window_for_app_activation(
+                last_app_active,
+                app_active,
+                window.is_visible(),
+                window.is_minimized(),
+            ) {
+                if let Err(err) = window.show() {
+                    panic!("failed to restore platform window: {}", err);
+                }
+                context.request_redraw();
+            }
+            last_app_active = app_active;
 
             for event in platform_events {
                 if event.requests_redraw() {
@@ -151,6 +168,8 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
             }
 
             if viewport_size != last_viewport_size {
+                context.set_viewport_size(viewport_size);
+                context.request_rebuild();
                 schedule_platform_redraw(&window, &mut context);
             }
 
@@ -263,6 +282,11 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
             }
 
             for (is_down, event) in &key_events {
+                if should_quit_app_from_key_event(*is_down, event) {
+                    context.quit();
+                    schedule_platform_redraw(&window, &mut context);
+                    continue;
+                }
                 if should_forward_key_event_to_tree(*is_down) {
                     root.handle_key_event(&mut event_cx, event);
                 }
@@ -342,6 +366,19 @@ fn should_forward_key_event_to_tree(is_down: bool) -> bool {
     is_down
 }
 
+fn should_quit_app_from_key_event(is_down: bool, event: &KeyEvent) -> bool {
+    is_down && event.modifiers.meta && event.key == KeyCode::Q
+}
+
+fn should_restore_window_for_app_activation(
+    was_app_active: bool,
+    app_active: bool,
+    window_visible: bool,
+    window_minimized: bool,
+) -> bool {
+    !was_app_active && app_active && !window_visible && window_minimized
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -350,6 +387,41 @@ mod tests {
     fn only_key_down_events_are_forwarded_to_elements() {
         assert!(should_forward_key_event_to_tree(true));
         assert!(!should_forward_key_event_to_tree(false));
+    }
+
+    #[test]
+    fn command_q_requests_app_quit() {
+        assert!(should_quit_app_from_key_event(
+            true,
+            &KeyEvent::new(KeyCode::Q, Modifiers::meta())
+        ));
+        assert!(!should_quit_app_from_key_event(
+            false,
+            &KeyEvent::new(KeyCode::Q, Modifiers::meta())
+        ));
+        assert!(!should_quit_app_from_key_event(
+            true,
+            &KeyEvent::new(KeyCode::Q, Modifiers::none())
+        ));
+    }
+
+    #[test]
+    fn app_activation_restores_minimized_hidden_window() {
+        assert!(should_restore_window_for_app_activation(
+            false, true, false, true
+        ));
+        assert!(!should_restore_window_for_app_activation(
+            true, true, false, true
+        ));
+        assert!(!should_restore_window_for_app_activation(
+            false, false, false, true
+        ));
+        assert!(!should_restore_window_for_app_activation(
+            false, true, true, true
+        ));
+        assert!(!should_restore_window_for_app_activation(
+            false, true, false, false
+        ));
     }
 
     #[test]
