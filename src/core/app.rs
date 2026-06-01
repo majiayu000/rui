@@ -2,6 +2,7 @@
 
 use crate::core::action::{ActionHandler, ActionId, ActionOutcome, Keymap};
 use crate::core::entity::{Entity, EntityId, EntityStore};
+use crate::core::geometry::Size;
 use crate::core::view::{View, ViewContext, ViewNotifier};
 use crate::core::window::{Window, WindowId, WindowOptions};
 use crate::elements::Element;
@@ -22,6 +23,7 @@ pub struct AppContext {
     redraw_scheduler: RedrawScheduler,
     keymap: Keymap,
     app_action_handlers: Vec<Box<dyn ActionHandler>>,
+    viewport_size: Size,
     runtime_view_notifier: Option<(EntityId, ViewNotifier)>,
 }
 
@@ -109,6 +111,7 @@ impl AppContext {
             redraw_scheduler: RedrawScheduler::default(),
             keymap,
             app_action_handlers: Vec::new(),
+            viewport_size: Size::ZERO,
             runtime_view_notifier: None,
         }
     }
@@ -199,6 +202,15 @@ impl AppContext {
         ActionOutcome::Ignored
     }
 
+    /// Current drawable viewport size for the main window.
+    pub fn viewport_size(&self) -> Size {
+        self.viewport_size
+    }
+
+    pub(crate) fn set_viewport_size(&mut self, size: Size) {
+        self.viewport_size = size;
+    }
+
     pub(crate) fn set_runtime_view_notifier(
         &mut self,
         entity_id: EntityId,
@@ -231,6 +243,7 @@ impl AppContext {
         }
 
         let id = WindowId::new(WINDOW_ID_COUNTER.fetch_add(1, Ordering::Relaxed));
+        self.viewport_size = options.size;
         let window = Window::new(id, options);
         self.windows.push(window);
         Ok(id)
@@ -491,6 +504,19 @@ mod tests {
         assert!(context.pending_updates.contains(&marker.id()));
         assert!(context.needs_rebuild);
         assert!(context.dirty);
+    }
+
+    #[test]
+    fn viewport_size_tracks_open_window_and_updates() {
+        let mut context = AppContext::new();
+
+        assert_eq!(context.viewport_size(), Size::ZERO);
+
+        context.open_window(WindowOptions::new().size(320.0, 240.0));
+        assert_eq!(context.viewport_size(), Size::new(320.0, 240.0));
+
+        context.set_viewport_size(Size::new(640.0, 480.0));
+        assert_eq!(context.viewport_size(), Size::new(640.0, 480.0));
     }
 
     #[test]

@@ -240,6 +240,26 @@ fn headless_view_keeps_external_local_and_read_only_state_contracts() {
 }
 
 #[test]
+fn headless_resize_rebuilds_with_latest_viewport_size() {
+    let render_width = Rc::new(Cell::new(0));
+    let render_width_ref = Rc::clone(&render_width);
+    let mut session = mount_or_panic(Size::new(160.0, 80.0), move |cx| {
+        let width = cx.viewport_size().width as u32;
+        render_width_ref.set(width);
+        Button::new(format!("Width {width}"))
+    });
+
+    assert_eq!(render_width.get(), 160);
+
+    session.resize(Size::new(240.0, 80.0));
+    if let Err(err) = session.frame() {
+        panic!("headless frame should rebuild after resize: {err}");
+    }
+
+    assert_eq!(render_width.get(), 240);
+}
+
+#[test]
 fn headless_record_frame_and_capture_errors_are_explicit() {
     let session = mount_or_panic(Size::new(160.0, 80.0), |_cx| Button::new("Capture"));
     let recorded = match session.record_frame() {
