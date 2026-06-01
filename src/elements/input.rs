@@ -64,6 +64,7 @@ pub struct Input {
     width: Option<f32>,
     on_change: Option<Box<dyn Fn(&str)>>,
     on_submit: Option<Box<dyn Fn(&str)>>,
+    on_cancel: Option<Box<dyn Fn()>>,
     on_focus: Option<Box<dyn Fn()>>,
     on_blur: Option<Box<dyn Fn()>>,
     layout_node: Option<NodeId>,
@@ -87,6 +88,7 @@ impl Input {
             width: None,
             on_change: None,
             on_submit: None,
+            on_cancel: None,
             on_focus: None,
             on_blur: None,
             layout_node: None,
@@ -164,6 +166,11 @@ impl Input {
         self
     }
 
+    pub fn on_cancel(mut self, handler: impl Fn() + 'static) -> Self {
+        self.on_cancel = Some(Box::new(handler));
+        self
+    }
+
     pub fn on_focus(mut self, handler: impl Fn() + 'static) -> Self {
         self.on_focus = Some(Box::new(handler));
         self
@@ -217,7 +224,12 @@ impl Input {
 
     pub fn apply_key_event(&mut self, event: &KeyEvent) -> Result<TextEditOutcome, TextEditError> {
         self.sync_editor_from_public_state_if_needed()?;
-        let outcome = if matches!(event.char, Some('\n' | '\r')) {
+        let outcome = if event.key == KeyCode::Escape {
+            TextEditOutcome {
+                changed: false,
+                submitted: false,
+            }
+        } else if matches!(event.char, Some('\n' | '\r')) {
             TextEditOutcome {
                 changed: false,
                 submitted: true,
@@ -227,6 +239,9 @@ impl Input {
         };
         self.sync_state_from_editor();
         self.emit_change_if_needed(outcome.changed);
+        if event.key == KeyCode::Escape {
+            self.emit_cancel();
+        }
         if outcome.submitted {
             self.emit_submit();
         }
@@ -364,6 +379,12 @@ impl Input {
         }
     }
 
+    fn emit_cancel(&self) {
+        if let Some(handler) = &self.on_cancel {
+            handler();
+        }
+    }
+
     fn key_event_is_text_editing(event: &KeyEvent) -> bool {
         matches!(
             event.key,
@@ -376,6 +397,7 @@ impl Input {
                 | KeyCode::Home
                 | KeyCode::End
                 | KeyCode::Enter
+                | KeyCode::Escape
         ) || event
             .char
             .is_some_and(|ch| !ch.is_control() || matches!(ch, '\n' | '\r'))
