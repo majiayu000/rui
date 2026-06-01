@@ -2,6 +2,8 @@
 
 mod button;
 mod checkbox;
+mod menu;
+mod popover;
 mod progress_bar;
 mod scrollable;
 mod segmented_control;
@@ -28,6 +30,8 @@ use taffy::prelude::NodeId;
 
 pub use button::{Button, button};
 pub use checkbox::{Checkbox, checkbox};
+pub use menu::{Menu, MenuItem, menu};
+pub use popover::{Dialog, Popover, dialog, popover};
 pub use progress_bar::{ProgressBar, progress_bar};
 pub use scrollable::{Scrollable, scrollable};
 pub use segmented_control::{SegmentedControl, SegmentedOption, segmented_control};
