@@ -89,6 +89,39 @@ fn test_on_submit_receives_value() {
     assert_eq!(*received_value.borrow(), "submitted text");
 }
 
+// ==================== on_cancel Callback Tests ====================
+
+#[test]
+fn test_on_cancel_not_set() {
+    let inp = Input::new();
+    assert!(inp.on_cancel.is_none());
+}
+
+#[test]
+fn test_on_cancel_set() {
+    let inp = Input::new().on_cancel(|| {});
+    assert!(inp.on_cancel.is_some());
+}
+
+#[test]
+fn test_on_cancel_callback_called_by_escape_key() {
+    let called = Rc::new(RefCell::new(false));
+    let called_clone = called.clone();
+
+    let mut inp = Input::new().value("draft").on_cancel(move || {
+        *called_clone.borrow_mut() = true;
+    });
+
+    let outcome = inp
+        .apply_key_event(&key_event(KeyCode::Escape))
+        .expect("escape cancel should be handled");
+
+    assert!(!outcome.changed);
+    assert!(!outcome.submitted);
+    assert_eq!(inp.state.value, "draft");
+    assert!(*called.borrow());
+}
+
 // ==================== on_focus Callback Tests ====================
 
 #[test]
