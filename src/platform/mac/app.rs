@@ -15,9 +15,47 @@ use crate::platform::window::{
 use crate::renderer::RendererError;
 use crate::renderer::Scene;
 use crate::renderer::metal::MetalRenderer;
-use objc2::MainThreadMarker;
-use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
+use objc2::rc::Retained;
+use objc2::runtime::{NSObject, NSObjectProtocol, ProtocolObject};
+use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send};
+use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use taffy::prelude::*;
+
+struct MacAppDelegateState {
+    reopen_requested: Arc<AtomicBool>,
+}
+
+define_class!(
+    // SAFETY:
+    // - NSObject has no extra subclassing requirements.
+    // - This delegate only touches AppKit from the main thread.
+    // - The delegate does not implement Drop.
+    #[unsafe(super(NSObject))]
+    #[thread_kind = MainThreadOnly]
+    #[ivars = MacAppDelegateState]
+    struct MacAppDelegate;
+
+    unsafe impl NSObjectProtocol for MacAppDelegate {}
+
+    unsafe impl NSApplicationDelegate for MacAppDelegate {
+        #[unsafe(method(applicationShouldHandleReopen:hasVisibleWindows:))]
+        fn should_handle_reopen(&self, _sender: &NSApplication, has_visible_windows: bool) -> bool {
+            self.ivars().reopen_requested.store(true, Ordering::Release);
+            has_visible_windows
+        }
+    }
+);
+
+impl MacAppDelegate {
+    fn new(reopen_requested: Arc<AtomicBool>, mtm: MainThreadMarker) -> Retained<Self> {
+        let delegate = mtm
+            .alloc()
+            .set_ivars(MacAppDelegateState { reopen_requested });
+        unsafe { msg_send![super(delegate), init] }
+    }
+}
 
 /// Run the application with default window options
 pub fn run_app<F, E>(context: AppContext, build_root: F)
@@ -56,6 +94,8 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
         // Initialize NSApplication
         let app = NSApplication::sharedApplication(mtm);
         app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
+        let (app_delegate, reopen_requested) = install_app_delegate(&app, mtm);
+        app.finishLaunching();
 
         // Create the renderer
         let mut renderer = match create_renderer() {
@@ -137,6 +177,17 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
                 context.request_redraw();
             }
             last_app_active = app_active;
+
+            if should_restore_window_for_app_reopen(
+                reopen_requested.swap(false, Ordering::AcqRel),
+                window.is_visible(),
+                window.is_minimized(),
+            ) {
+                if let Err(err) = window.show() {
+                    panic!("failed to reopen platform window: {}", err);
+                }
+                context.request_redraw();
+            }
 
             for event in platform_events {
                 if event.requests_redraw() {
@@ -318,7 +369,20 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
                 break;
             }
         }
+
+        app.setDelegate(None);
+        drop(app_delegate);
     }
+}
+
+fn install_app_delegate(
+    app: &NSApplication,
+    mtm: MainThreadMarker,
+) -> (Retained<MacAppDelegate>, Arc<AtomicBool>) {
+    let reopen_requested = Arc::new(AtomicBool::new(false));
+    let delegate = MacAppDelegate::new(Arc::clone(&reopen_requested), mtm);
+    app.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
+    (delegate, reopen_requested)
 }
 
 fn schedule_platform_redraw<W: PlatformWindow>(_window: &W, context: &mut AppContext) {
@@ -379,6 +443,14 @@ fn should_restore_window_for_app_activation(
     !was_app_active && app_active && !window_visible && window_minimized
 }
 
+fn should_restore_window_for_app_reopen(
+    reopen_requested: bool,
+    window_visible: bool,
+    window_minimized: bool,
+) -> bool {
+    reopen_requested && (!window_visible || window_minimized)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -422,6 +494,15 @@ mod tests {
         assert!(!should_restore_window_for_app_activation(
             false, true, false, false
         ));
+    }
+
+    #[test]
+    fn app_reopen_restores_hidden_or_minimized_window() {
+        assert!(should_restore_window_for_app_reopen(true, false, false));
+        assert!(should_restore_window_for_app_reopen(true, false, true));
+        assert!(should_restore_window_for_app_reopen(true, true, true));
+        assert!(!should_restore_window_for_app_reopen(false, false, true));
+        assert!(!should_restore_window_for_app_reopen(true, true, false));
     }
 
     #[test]
