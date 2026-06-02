@@ -6,6 +6,13 @@ repository. The plan is incremental: each workstream should land with
 observable contracts, tests, and examples before higher-level readiness claims
 are made.
 
+Related WarpUI-aligned planning:
+
+- `docs/warpui-runtime-gap-analysis.md` documents the current design gaps
+  between RUI and the public WarpUI runtime anchors.
+- `docs/warpui-runtime-implementation-spec.md` turns those gaps into staged
+  runtime workstreams and validation gates.
+
 ## Goals
 
 - Preserve the lightweight RUI architecture: `View` builds elements, elements
