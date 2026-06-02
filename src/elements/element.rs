@@ -18,7 +18,12 @@ use taffy::prelude::*;
 pub struct LayoutContext<'a> {
     pub(crate) taffy: &'a mut TaffyTree<ElementId>,
     pub(crate) available_space: Size,
-    text_measurer: TextMeasureCache,
+    text_measurer: LayoutTextMeasurer<'a>,
+}
+
+enum LayoutTextMeasurer<'a> {
+    Owned(TextMeasureCache),
+    Borrowed(&'a mut TextMeasureCache),
 }
 
 impl<'a> LayoutContext<'a> {
@@ -26,12 +31,27 @@ impl<'a> LayoutContext<'a> {
         Self {
             taffy,
             available_space,
-            text_measurer: TextMeasureCache::new(),
+            text_measurer: LayoutTextMeasurer::Owned(TextMeasureCache::new()),
+        }
+    }
+
+    pub fn with_text_measurer(
+        taffy: &'a mut TaffyTree<ElementId>,
+        available_space: Size,
+        text_measurer: &'a mut TextMeasureCache,
+    ) -> Self {
+        Self {
+            taffy,
+            available_space,
+            text_measurer: LayoutTextMeasurer::Borrowed(text_measurer),
         }
     }
 
     pub fn text_measurer(&mut self) -> &mut TextMeasureCache {
-        &mut self.text_measurer
+        match &mut self.text_measurer {
+            LayoutTextMeasurer::Owned(cache) => cache,
+            LayoutTextMeasurer::Borrowed(cache) => cache,
+        }
     }
 }
 

@@ -15,12 +15,15 @@ use crate::platform::window::{
 use crate::renderer::RendererError;
 use crate::renderer::Scene;
 use crate::renderer::metal::MetalRenderer;
+use crate::renderer::text::TextMeasureCache;
 use objc2::rc::Retained;
 use objc2::runtime::{NSObject, NSObjectProtocol, ProtocolObject};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send};
 use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate};
+use std::env;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 use taffy::prelude::*;
 
 struct MacAppDelegateState {
@@ -57,6 +60,206 @@ impl MacAppDelegate {
     }
 }
 
+struct FrameProfiler {
+    period_start: Instant,
+    report_every: u64,
+    frames: u64,
+    platform_events: u64,
+    pointer_events: u64,
+    scroll_events: u64,
+    key_events: u64,
+    poll_now: ProfileStats,
+    active_total: ProfileStats,
+    rebuild: ProfileStats,
+    layout: ProfileStats,
+    dispatch: ProfileStats,
+    paint: ProfileStats,
+    next_drawable: ProfileStats,
+    render: ProfileStats,
+}
+
+impl FrameProfiler {
+    fn from_env() -> Option<Self> {
+        if !profile_env_enabled(env::var("RUI_PROFILE").ok().as_deref()) {
+            return None;
+        }
+
+        Some(Self {
+            period_start: Instant::now(),
+            report_every: env::var("RUI_PROFILE_EVERY")
+                .ok()
+                .and_then(|value| value.parse().ok())
+                .filter(|value| *value > 0)
+                .unwrap_or(30),
+            frames: 0,
+            platform_events: 0,
+            pointer_events: 0,
+            scroll_events: 0,
+            key_events: 0,
+            poll_now: ProfileStats::default(),
+            active_total: ProfileStats::default(),
+            rebuild: ProfileStats::default(),
+            layout: ProfileStats::default(),
+            dispatch: ProfileStats::default(),
+            paint: ProfileStats::default(),
+            next_drawable: ProfileStats::default(),
+            render: ProfileStats::default(),
+        })
+    }
+
+    fn record(&mut self, sample: FrameProfileSample) {
+        self.frames += 1;
+        self.platform_events += sample.platform_events as u64;
+        self.pointer_events += sample.pointer_events as u64;
+        self.scroll_events += sample.scroll_events as u64;
+        self.key_events += sample.key_events as u64;
+
+        if let Some(duration) = sample.poll_now {
+            self.poll_now.record(duration);
+        }
+        self.active_total.record(sample.active_total);
+        self.rebuild.record(sample.rebuild);
+        self.layout.record(sample.layout);
+        self.dispatch.record(sample.dispatch);
+        self.paint.record(sample.paint);
+        self.next_drawable.record(sample.next_drawable);
+        self.render.record(sample.render);
+
+        if self.frames >= self.report_every || self.period_start.elapsed() >= Duration::from_secs(3)
+        {
+            self.report();
+        }
+    }
+
+    fn report(&mut self) {
+        if self.frames == 0 {
+            return;
+        }
+
+        eprintln!(
+            "RUI_PROFILE frames={} events={} keys={} pointer={} scroll={} {} {} {} {} {} {} {} {}",
+            self.frames,
+            self.platform_events,
+            self.key_events,
+            self.pointer_events,
+            self.scroll_events,
+            self.active_total.summary("active"),
+            self.layout.summary("layout"),
+            self.dispatch.summary("dispatch"),
+            self.paint.summary("paint"),
+            self.next_drawable.summary("drawable"),
+            self.render.summary("render"),
+            self.rebuild.summary("rebuild"),
+            self.poll_now.summary("poll_now"),
+        );
+
+        self.reset();
+    }
+
+    fn reset(&mut self) {
+        self.period_start = Instant::now();
+        self.frames = 0;
+        self.platform_events = 0;
+        self.pointer_events = 0;
+        self.scroll_events = 0;
+        self.key_events = 0;
+        self.poll_now.clear();
+        self.active_total.clear();
+        self.rebuild.clear();
+        self.layout.clear();
+        self.dispatch.clear();
+        self.paint.clear();
+        self.next_drawable.clear();
+        self.render.clear();
+    }
+}
+
+impl Drop for FrameProfiler {
+    fn drop(&mut self) {
+        self.report();
+    }
+}
+
+#[derive(Default)]
+struct FrameProfileSample {
+    platform_events: usize,
+    pointer_events: usize,
+    scroll_events: usize,
+    key_events: usize,
+    poll_now: Option<Duration>,
+    active_total: Duration,
+    rebuild: Duration,
+    layout: Duration,
+    dispatch: Duration,
+    paint: Duration,
+    next_drawable: Duration,
+    render: Duration,
+}
+
+#[derive(Default)]
+struct ProfileStats {
+    samples_us: Vec<u128>,
+    total_us: u128,
+    max_us: u128,
+}
+
+impl ProfileStats {
+    fn record(&mut self, duration: Duration) {
+        let micros = duration.as_micros();
+        self.samples_us.push(micros);
+        self.total_us += micros;
+        self.max_us = self.max_us.max(micros);
+    }
+
+    fn clear(&mut self) {
+        self.samples_us.clear();
+        self.total_us = 0;
+        self.max_us = 0;
+    }
+
+    fn summary(&self, label: &str) -> String {
+        if self.samples_us.is_empty() {
+            return format!("{label}=n/a");
+        }
+
+        let avg = self.total_us as f64 / self.samples_us.len() as f64;
+        format!(
+            "{label}:avg={:.2}ms,p50={:.2}ms,p95={:.2}ms,max={:.2}ms",
+            micros_to_millis(avg),
+            micros_to_millis(self.percentile_us(50) as f64),
+            micros_to_millis(self.percentile_us(95) as f64),
+            micros_to_millis(self.max_us as f64),
+        )
+    }
+
+    fn percentile_us(&self, percentile: usize) -> u128 {
+        debug_assert!(!self.samples_us.is_empty());
+        let mut samples = self.samples_us.clone();
+        samples.sort_unstable();
+        let index = ((samples.len() - 1) * percentile).div_ceil(100);
+        samples[index]
+    }
+}
+
+fn profile_env_enabled(value: Option<&str>) -> bool {
+    value.is_some_and(|value| {
+        let value = value.trim();
+        !value.is_empty() && value != "0" && !value.eq_ignore_ascii_case("false")
+    })
+}
+
+fn profile_mark(enabled: bool) -> Option<Instant> {
+    enabled.then(Instant::now)
+}
+
+fn elapsed_since(mark: Option<Instant>) -> Duration {
+    mark.map(|instant| instant.elapsed()).unwrap_or_default()
+}
+
+fn micros_to_millis(micros: f64) -> f64 {
+    micros / 1_000.0
+}
+
 /// Run the application with default window options
 pub fn run_app<F, E>(context: AppContext, build_root: F)
 where
@@ -86,6 +289,8 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
 {
     let mut context = context;
     let mut root = build_root(&mut context);
+    let mut profiler = FrameProfiler::from_env();
+    let profiling = profiler.is_some();
 
     // Get main thread marker
     let mtm = MainThreadMarker::new().expect("Must be called from main thread");
@@ -132,6 +337,7 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
 
         // Create layout engine
         let mut taffy: TaffyTree<crate::core::ElementId> = TaffyTree::new();
+        let mut text_measurer = TextMeasureCache::new();
 
         // Create scene
         let mut scene = Scene::new();
@@ -159,10 +365,14 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
             let mut close_requested = false;
             let wait_for_event =
                 !context.dirty && !context.needs_rebuild && context.pending_updates.is_empty();
+            let poll_start = profile_mark(profiling);
             let platform_events = match window.poll_events_for_app(&app, wait_for_event) {
                 Ok(events) => events,
                 Err(err) => panic!("failed to poll platform window events: {}", err),
             };
+            let poll_duration = elapsed_since(poll_start);
+            let active_start = profile_mark(profiling);
+            let platform_event_count = platform_events.len();
 
             let app_active = app.isActive();
             if should_restore_window_for_app_activation(
@@ -224,6 +434,12 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
                 schedule_platform_redraw(&window, &mut context);
             }
 
+            let mut profile_sample = FrameProfileSample {
+                platform_events: platform_event_count,
+                poll_now: (!wait_for_event).then_some(poll_duration),
+                ..FrameProfileSample::default()
+            };
+
             context.consume_runtime_view_notification();
 
             if !context.dirty && !context.needs_rebuild && context.pending_updates.is_empty() {
@@ -233,6 +449,7 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
                 continue;
             }
 
+            let rebuild_start = profile_mark(profiling);
             if context.needs_rebuild || !context.pending_updates.is_empty() {
                 context.pending_updates.clear();
                 context.needs_rebuild = false;
@@ -241,12 +458,15 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
                     context.needs_rebuild = true;
                 }
             }
+            profile_sample.rebuild = elapsed_since(rebuild_start);
 
             // Rebuild layout tree each frame we render to avoid unbounded growth
             taffy.clear();
 
+            let layout_start = profile_mark(profiling);
             // Layout phase
-            let mut layout_cx = LayoutContext::new(&mut taffy, viewport_size);
+            let mut layout_cx =
+                LayoutContext::with_text_measurer(&mut taffy, viewport_size, &mut text_measurer);
             let root_node = root.layout(&mut layout_cx);
 
             // Compute layout
@@ -268,7 +488,9 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
                 layout.size.width,
                 layout.size.height,
             );
+            profile_sample.layout = elapsed_since(layout_start);
 
+            let dispatch_start = profile_mark(profiling);
             if viewport_size != last_viewport_size {
                 root.handle_window_event(&Event::WindowResize {
                     width: viewport_size.width,
@@ -342,26 +564,43 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
                     root.handle_key_event(&mut event_cx, event);
                 }
             }
+            profile_sample.pointer_events = pointer_events.len();
+            profile_sample.scroll_events = scroll_events.len();
+            profile_sample.key_events = key_events.len();
+            profile_sample.dispatch = elapsed_since(dispatch_start);
 
             if context.consume_runtime_view_notification() {
                 schedule_platform_redraw(&window, &mut context);
             }
 
+            let paint_start = profile_mark(profiling);
             // Paint phase
             scene.clear();
             let mut paint_cx = PaintContext::new(&mut scene, root_bounds, &taffy);
             root.paint(&mut paint_cx);
             scene.finish();
+            profile_sample.paint = elapsed_since(paint_start);
 
             // Get next drawable from the platform window renderer attachment
-            if let Some(metal_drawable) = window.next_drawable()
-                && let Err(err) = renderer.render(&scene, metal_drawable, viewport_size)
-            {
-                panic!("renderer failed: {}", err);
+            let drawable_start = profile_mark(profiling);
+            if let Some(metal_drawable) = window.next_drawable() {
+                profile_sample.next_drawable = elapsed_since(drawable_start);
+                let render_start = profile_mark(profiling);
+                if let Err(err) = renderer.render(&scene, metal_drawable, viewport_size) {
+                    panic!("renderer failed: {}", err);
+                }
+                profile_sample.render = elapsed_since(render_start);
+            } else {
+                profile_sample.next_drawable = elapsed_since(drawable_start);
             }
 
             if !context.needs_rebuild && context.pending_updates.is_empty() {
                 context.dirty = false;
+            }
+
+            profile_sample.active_total = elapsed_since(active_start);
+            if let Some(profiler) = profiler.as_mut() {
+                profiler.record(profile_sample);
             }
 
             // Check if we should quit
@@ -503,6 +742,29 @@ mod tests {
         assert!(should_restore_window_for_app_reopen(true, true, true));
         assert!(!should_restore_window_for_app_reopen(false, false, true));
         assert!(!should_restore_window_for_app_reopen(true, true, false));
+    }
+
+    #[test]
+    fn profile_env_accepts_explicit_truthy_values() {
+        assert!(profile_env_enabled(Some("1")));
+        assert!(profile_env_enabled(Some("true")));
+        assert!(profile_env_enabled(Some("yes")));
+        assert!(!profile_env_enabled(None));
+        assert!(!profile_env_enabled(Some("")));
+        assert!(!profile_env_enabled(Some("0")));
+        assert!(!profile_env_enabled(Some("false")));
+    }
+
+    #[test]
+    fn profile_stats_report_percentiles() {
+        let mut stats = ProfileStats::default();
+        stats.record(Duration::from_micros(100));
+        stats.record(Duration::from_micros(200));
+        stats.record(Duration::from_micros(300));
+
+        assert_eq!(stats.percentile_us(50), 200);
+        assert_eq!(stats.percentile_us(95), 300);
+        assert!(stats.summary("stage").contains("stage:avg=0.20ms"));
     }
 
     #[test]

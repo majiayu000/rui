@@ -417,6 +417,33 @@ fn test_empty_text_layout_is_empty_and_paint_emits_no_primitive() {
 }
 
 #[test]
+fn test_layout_context_can_reuse_text_measurer() {
+    let viewport = crate::core::geometry::Size::new(100.0, 40.0);
+    let mut text_measurer = TextMeasureCache::new();
+
+    let mut first_text = Text::new("Repeated content").size(16.0);
+    let mut first_taffy = TaffyTree::<ElementId>::new();
+    {
+        let mut layout_cx =
+            LayoutContext::with_text_measurer(&mut first_taffy, viewport, &mut text_measurer);
+        first_text.layout(&mut layout_cx);
+    }
+
+    let cached_metrics = text_measurer.cached_metrics_len();
+    assert_eq!(cached_metrics, 1);
+
+    let mut second_text = Text::new("Repeated content").size(16.0);
+    let mut second_taffy = TaffyTree::<ElementId>::new();
+    {
+        let mut layout_cx =
+            LayoutContext::with_text_measurer(&mut second_taffy, viewport, &mut text_measurer);
+        second_text.layout(&mut layout_cx);
+    }
+
+    assert_eq!(text_measurer.cached_metrics_len(), cached_metrics);
+}
+
+#[test]
 fn test_text_estimate_width_single_char() {
     let t = Text::new("A");
     assert!(t.estimate_width() > 0.0);

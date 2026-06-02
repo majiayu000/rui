@@ -8,7 +8,7 @@ use crate::renderer::resources::{
 use crate::renderer::text_shaping::{TextShapingFont, rasterize_with_plan, shape_with_fonts};
 use rusttype::Font;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 pub use crate::renderer::text_shaping::{
     TextCluster, TextDirection, TextRun, TextScript, TextShapeDiagnostic, TextShapePlan,
@@ -102,7 +102,7 @@ impl TextMeasureKey {
 }
 
 pub struct TextMeasureCache {
-    fonts: Vec<TextShapingFont>,
+    fonts: Arc<Vec<TextShapingFont>>,
     metrics: HashMap<TextMeasureKey, TextMetrics>,
 }
 
@@ -117,9 +117,14 @@ impl TextMeasureCache {
     #[cfg(test)]
     pub(crate) fn without_font() -> Self {
         Self {
-            fonts: Vec::new(),
+            fonts: Arc::new(Vec::new()),
             metrics: HashMap::new(),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn cached_metrics_len(&self) -> usize {
+        self.metrics.len()
     }
 
     pub fn measure_single_line(
@@ -154,7 +159,7 @@ impl TextMeasureCache {
     }
 
     fn shape_with_primary(&self, request: TextRequest<'_>, primary_index: usize) -> TextShapePlan {
-        shape_with_fonts(&self.fonts, primary_index, request)
+        shape_with_fonts(self.fonts.as_slice(), primary_index, request)
     }
 
     fn primary_font_index(&self, font_family: Option<&str>) -> Result<usize, TextError> {
@@ -257,7 +262,7 @@ impl TextRasterCache {
             return Ok(None);
         }
 
-        let pixels = rasterize_with_plan(&self.measurer.fonts, request, metrics, &plan);
+        let pixels = rasterize_with_plan(self.measurer.fonts.as_slice(), request, metrics, &plan);
         let allocation = self.resources.resolve(key.clone(), pixels.len())?;
         self.drop_evicted(allocation.evicted);
 
@@ -283,7 +288,14 @@ impl Default for TextRasterCache {
     }
 }
 
-fn load_system_fonts() -> Vec<TextShapingFont> {
+fn load_system_fonts() -> Arc<Vec<TextShapingFont>> {
+    static SYSTEM_TEXT_FONTS: OnceLock<Arc<Vec<TextShapingFont>>> = OnceLock::new();
+    SYSTEM_TEXT_FONTS
+        .get_or_init(load_system_fonts_uncached)
+        .clone()
+}
+
+fn load_system_fonts_uncached() -> Arc<Vec<TextShapingFont>> {
     let candidates = [
         ("Arial", "/System/Library/Fonts/Supplemental/Arial.ttf"),
         ("Arial", "/Library/Fonts/Arial.ttf"),
@@ -328,7 +340,7 @@ fn load_system_fonts() -> Vec<TextShapingFont> {
     for (family, path) in candidates {
         load_font_faces(family, path, &mut fonts);
     }
-    fonts
+    Arc::new(fonts)
 }
 
 fn load_font_faces(family: &str, path: &str, fonts: &mut Vec<TextShapingFont>) {
