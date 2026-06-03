@@ -1,6 +1,6 @@
 //! macOS application runner
 
-use crate::core::app::AppContext;
+use crate::core::app::{AppContext, RedrawSource};
 use crate::core::event::{Event, KeyCode, KeyEvent, Modifiers, ScrollEvent};
 use crate::core::geometry::Bounds;
 use crate::core::window::WindowOptions;
@@ -71,6 +71,7 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
             Ok(window) => window,
             Err(err) => panic!("failed to create platform window: {}", err),
         };
+        window.install_application_delegate(&app);
         let attachment = match window.renderer_attachment() {
             Ok(attachment) => attachment,
             Err(err) => panic!("failed to attach renderer to platform window: {}", err),
@@ -132,24 +133,26 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
             };
 
             for event in platform_events {
-                if event.requests_redraw() {
-                    schedule_platform_redraw(&window, &mut context);
-                }
+                mark_platform_event_redraw(&event, &mut context);
 
                 match event {
-                    PlatformWindowEvent::Created | PlatformWindowEvent::RedrawRequested => {
-                        context.request_redraw();
-                    }
+                    PlatformWindowEvent::Created | PlatformWindowEvent::RedrawRequested => {}
                     PlatformWindowEvent::Resized(size) => {
                         viewport_size = size;
                     }
                     PlatformWindowEvent::ScaleFactorChanged(_) => {}
+                    PlatformWindowEvent::ApplicationActivated(_) => {}
+                    PlatformWindowEvent::Minimized(_) => {}
+                    PlatformWindowEvent::ReopenRequested => {
+                        if let Err(err) = window.show() {
+                            panic!("failed to reopen platform window: {}", err);
+                        }
+                    }
                     PlatformWindowEvent::FocusChanged(focused) => {
                         focus_changed = Some(focused);
                     }
-                    PlatformWindowEvent::CloseRequested => {
+                    PlatformWindowEvent::CloseRequested | PlatformWindowEvent::QuitRequested => {
                         close_requested = true;
-                        context.request_redraw();
                     }
                     PlatformWindowEvent::Input(input) => append_input_event(
                         input,
@@ -161,7 +164,7 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
             }
 
             if viewport_size != last_viewport_size {
-                schedule_platform_redraw(&window, &mut context);
+                schedule_platform_redraw(&window, &mut context, RedrawSource::PlatformResize);
             }
 
             context.consume_runtime_view_notification();
@@ -228,13 +231,13 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
                     Event::Blur(crate::core::event::FocusEvent { focused: false })
                 };
                 root.handle_window_event(&evt);
-                schedule_platform_redraw(&window, &mut context);
+                schedule_platform_redraw(&window, &mut context, RedrawSource::PlatformFocus);
             }
 
             if close_requested {
                 root.handle_window_event(&Event::WindowClose);
                 context.quit();
-                schedule_platform_redraw(&window, &mut context);
+                schedule_platform_redraw(&window, &mut context, RedrawSource::PlatformLifecycle);
             }
 
             let mut event_cx = EventContext::new(root_bounds, &taffy, &mut focused_element);
@@ -268,7 +271,7 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
             }
 
             if event_cx.redraw_requested() {
-                schedule_platform_redraw(&window, &mut context);
+                schedule_platform_redraw(&window, &mut context, RedrawSource::Element);
             }
 
             for event in &scroll_events {
@@ -282,7 +285,7 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
             }
 
             if context.consume_runtime_view_notification() {
-                schedule_platform_redraw(&window, &mut context);
+                schedule_platform_redraw(&window, &mut context, RedrawSource::ViewNotification);
             }
             phases.dispatch_ns = dispatch_started_at.elapsed().as_nanos();
 
@@ -324,9 +327,7 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
                 eprintln!("{}", telemetry.to_json_line());
             }
 
-            if !context.needs_rebuild && context.pending_updates.is_empty() {
-                context.dirty = false;
-            }
+            context.complete_redraw_frame();
 
             // Check if we should quit
             if !context.is_running() {
@@ -336,8 +337,35 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
     }
 }
 
-fn schedule_platform_redraw<W: PlatformWindow>(_window: &W, context: &mut AppContext) {
-    context.request_redraw();
+fn mark_platform_event_redraw(event: &PlatformWindowEvent, context: &mut AppContext) {
+    let source = match event {
+        PlatformWindowEvent::Created
+        | PlatformWindowEvent::Minimized(false)
+        | PlatformWindowEvent::ReopenRequested => RedrawSource::PlatformLifecycle,
+        PlatformWindowEvent::CloseRequested
+        | PlatformWindowEvent::Minimized(true)
+        | PlatformWindowEvent::QuitRequested => return,
+        PlatformWindowEvent::Resized(_) => RedrawSource::PlatformResize,
+        PlatformWindowEvent::ScaleFactorChanged(_) => RedrawSource::PlatformScaleFactor,
+        PlatformWindowEvent::FocusChanged(_) | PlatformWindowEvent::ApplicationActivated(_) => {
+            RedrawSource::PlatformFocus
+        }
+        PlatformWindowEvent::RedrawRequested => RedrawSource::PlatformRedraw,
+        PlatformWindowEvent::Input(_) => RedrawSource::PlatformInput,
+    };
+    context.mark_redraw_from(source);
+}
+
+fn schedule_platform_redraw<W: PlatformWindow>(
+    window: &W,
+    context: &mut AppContext,
+    source: RedrawSource,
+) {
+    if context.request_platform_redraw_from(source)
+        && let Err(err) = window.request_redraw()
+    {
+        panic!("failed to request platform redraw: {}", err);
+    }
 }
 
 fn append_input_event(

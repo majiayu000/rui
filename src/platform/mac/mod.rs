@@ -2,6 +2,7 @@
 
 mod accessibility;
 mod app;
+mod lifecycle;
 mod window;
 
 pub use accessibility::MacAccessibilityBridge;

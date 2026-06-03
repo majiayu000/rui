@@ -28,6 +28,7 @@ fn platform_required_features_are_complete() {
             .missing_required()
             .is_empty()
     );
+    assert!(PlatformWindowFeatures::supported().supports(PlatformWindowFeature::MultiWindow));
 }
 
 #[test]
@@ -135,6 +136,9 @@ fn platform_window_events_identify_redraw_work() {
     assert!(PlatformWindowEvent::Resized(Size::new(640.0, 480.0)).requests_redraw());
     assert!(PlatformWindowEvent::ScaleFactorChanged(2.0).requests_redraw());
     assert!(PlatformWindowEvent::FocusChanged(true).requests_redraw());
+    assert!(PlatformWindowEvent::ApplicationActivated(true).requests_redraw());
+    assert!(PlatformWindowEvent::Minimized(false).requests_redraw());
+    assert!(PlatformWindowEvent::ReopenRequested.requests_redraw());
     assert!(PlatformWindowEvent::RedrawRequested.requests_redraw());
     assert!(
         PlatformWindowEvent::Input(PlatformInputEvent::Ime(PlatformImeEvent::Commit(
@@ -143,6 +147,8 @@ fn platform_window_events_identify_redraw_work() {
         .requests_redraw()
     );
     assert!(!PlatformWindowEvent::CloseRequested.requests_redraw());
+    assert!(!PlatformWindowEvent::Minimized(true).requests_redraw());
+    assert!(!PlatformWindowEvent::QuitRequested.requests_redraw());
 }
 
 #[test]
@@ -203,6 +209,7 @@ fn platform_macos_backend_reports_implemented_window_features() {
     assert!(features.focus);
     assert!(features.clipboard);
     assert!(features.renderer_attachment);
+    assert!(!features.multi_window);
 }
 
 fn collect_rs_files(dir: &Path, files: &mut Vec<PathBuf>) {
