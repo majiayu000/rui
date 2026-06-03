@@ -182,6 +182,7 @@ fn native_dogfood_script_contract_launches_example_and_profile() {
     let mac_window = include_str!("../src/platform/mac/window.rs");
 
     for required in [
+        "cargo build --example native_dogfood",
         "cargo run --example native_dogfood",
         "RUI_NATIVE_DOGFOOD_PROFILE",
         "RUI_NATIVE_DOGFOOD_INTERACTIVE=1",

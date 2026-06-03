@@ -4,6 +4,7 @@ use super::tab_panel::TabPanel;
 use crate::advanced_ui::tokens::{ControlSize, Theme};
 use crate::core::ElementId;
 use crate::core::accessibility::{AccessibilityContext, AccessibilityError, AccessibilityNode};
+use crate::core::event::ScrollEvent;
 use crate::core::geometry::Size;
 use crate::core::style::{AlignItems, FlexDirection, Style};
 use crate::elements::element::{
@@ -227,6 +228,18 @@ impl Element for Tabs {
         {
             let mut panel_cx = cx.with_bounds(bounds);
             return self.panels[panel_index].handle_pointer_event(&mut panel_cx, event);
+        }
+
+        false
+    }
+
+    fn handle_scroll_event(&mut self, cx: &mut EventContext, event: &ScrollEvent) -> bool {
+        if let (Some(panel_node), Some(panel_index)) =
+            (self.selected_panel_node, self.selected_panel_index)
+            && let Some(bounds) = cx.child_bounds(panel_node)
+        {
+            let mut panel_cx = cx.with_bounds(bounds);
+            return self.panels[panel_index].handle_scroll_event(&mut panel_cx, event);
         }
 
         false

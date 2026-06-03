@@ -45,12 +45,7 @@ fn main() {
                     .items_center()
                     .gap(16.0)
                     .mt(24.0)
-                    .child(
-                        text("Transforms")
-                            .size(24.0)
-                            .semibold()
-                            .color(Color::WHITE),
-                    )
+                    .child(text("Transforms").size(24.0).semibold().color(Color::WHITE))
                     .child(
                         div()
                             .flex_row()
@@ -99,6 +94,12 @@ fn easing_card(name: &str, _easing: Easing) -> Div {
 
 /// Transform demonstration
 fn transform_demo(name: &str, color: Color) -> Div {
+    let initial = name
+        .chars()
+        .next()
+        .map(|character| character.to_string())
+        .unwrap_or_default();
+
     div()
         .flex_col()
         .items_center()
@@ -113,7 +114,7 @@ fn transform_demo(name: &str, color: Color) -> Div {
                 .flex()
                 .items_center()
                 .justify_center()
-                .child(text(name.chars().next().unwrap().to_string()).size(24.0).bold().color(Color::WHITE)),
+                .child(text(initial).size(24.0).bold().color(Color::WHITE)),
         )
         .child(text(name).size(12.0).color(Color::hex(0x94a3b8)))
 }

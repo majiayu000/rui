@@ -27,19 +27,31 @@ impl Modifiers {
     }
 
     pub fn shift() -> Self {
-        Self { shift: true, ..Default::default() }
+        Self {
+            shift: true,
+            ..Default::default()
+        }
     }
 
     pub fn ctrl() -> Self {
-        Self { ctrl: true, ..Default::default() }
+        Self {
+            ctrl: true,
+            ..Default::default()
+        }
     }
 
     pub fn alt() -> Self {
-        Self { alt: true, ..Default::default() }
+        Self {
+            alt: true,
+            ..Default::default()
+        }
     }
 
     pub fn meta() -> Self {
-        Self { meta: true, ..Default::default() }
+        Self {
+            meta: true,
+            ..Default::default()
+        }
     }
 }
 
@@ -76,26 +88,101 @@ pub struct ScrollEvent {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum KeyCode {
     // Letters
-    A, B, C, D, E, F, G, H, I, J, K, L, M,
-    N, O, P, Q, R, S, T, U, V, W, X, Y, Z,
+    A,
+    B,
+    C,
+    D,
+    E,
+    F,
+    G,
+    H,
+    I,
+    J,
+    K,
+    L,
+    M,
+    N,
+    O,
+    P,
+    Q,
+    R,
+    S,
+    T,
+    U,
+    V,
+    W,
+    X,
+    Y,
+    Z,
 
     // Numbers
-    Key0, Key1, Key2, Key3, Key4, Key5, Key6, Key7, Key8, Key9,
+    Key0,
+    Key1,
+    Key2,
+    Key3,
+    Key4,
+    Key5,
+    Key6,
+    Key7,
+    Key8,
+    Key9,
 
     // Function keys (F1-F20)
-    F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11, F12,
-    F13, F14, F15, F16, F17, F18, F19, F20,
+    F1,
+    F2,
+    F3,
+    F4,
+    F5,
+    F6,
+    F7,
+    F8,
+    F9,
+    F10,
+    F11,
+    F12,
+    F13,
+    F14,
+    F15,
+    F16,
+    F17,
+    F18,
+    F19,
+    F20,
 
     // Special keys
-    Escape, Tab, CapsLock, Shift, Control, Alt, Meta,
-    Space, Enter, Backspace, Delete,
-    ArrowUp, ArrowDown, ArrowLeft, ArrowRight,
-    Home, End, PageUp, PageDown,
+    Escape,
+    Tab,
+    CapsLock,
+    Shift,
+    Control,
+    Alt,
+    Meta,
+    Space,
+    Enter,
+    Backspace,
+    Delete,
+    ArrowUp,
+    ArrowDown,
+    ArrowLeft,
+    ArrowRight,
+    Home,
+    End,
+    PageUp,
+    PageDown,
     Insert,
 
     // Punctuation
-    Minus, Equal, BracketLeft, BracketRight, Backslash,
-    Semicolon, Quote, Comma, Period, Slash, Backquote,
+    Minus,
+    Equal,
+    BracketLeft,
+    BracketRight,
+    Backslash,
+    Semicolon,
+    Quote,
+    Comma,
+    Period,
+    Slash,
+    Backquote,
 
     // Other
     Unknown(u32),
@@ -387,8 +474,14 @@ impl Key {
 
     /// Check if this is a navigation key (arrows, home, end, page up/down)
     pub fn is_navigation(&self) -> bool {
-        self.up_arrow || self.down_arrow || self.left_arrow || self.right_arrow
-            || self.home || self.end || self.page_up || self.page_down
+        self.up_arrow
+            || self.down_arrow
+            || self.left_arrow
+            || self.right_arrow
+            || self.home
+            || self.end
+            || self.page_up
+            || self.page_down
     }
 
     /// Check if this is an editing key (insert, delete, backspace)
@@ -403,35 +496,73 @@ impl Key {
 
     /// Check if this is a function key (F1-F20)
     pub fn is_function_key(&self) -> bool {
-        self.f1 || self.f2 || self.f3 || self.f4 || self.f5
-            || self.f6 || self.f7 || self.f8 || self.f9 || self.f10
-            || self.f11 || self.f12 || self.f13 || self.f14 || self.f15
-            || self.f16 || self.f17 || self.f18 || self.f19 || self.f20
+        self.f1
+            || self.f2
+            || self.f3
+            || self.f4
+            || self.f5
+            || self.f6
+            || self.f7
+            || self.f8
+            || self.f9
+            || self.f10
+            || self.f11
+            || self.f12
+            || self.f13
+            || self.f14
+            || self.f15
+            || self.f16
+            || self.f17
+            || self.f18
+            || self.f19
+            || self.f20
     }
 
     /// Returns the function key number (1-20) if a function key is pressed, None otherwise
     pub fn function_key_number(&self) -> Option<u8> {
-        if self.f1 { Some(1) }
-        else if self.f2 { Some(2) }
-        else if self.f3 { Some(3) }
-        else if self.f4 { Some(4) }
-        else if self.f5 { Some(5) }
-        else if self.f6 { Some(6) }
-        else if self.f7 { Some(7) }
-        else if self.f8 { Some(8) }
-        else if self.f9 { Some(9) }
-        else if self.f10 { Some(10) }
-        else if self.f11 { Some(11) }
-        else if self.f12 { Some(12) }
-        else if self.f13 { Some(13) }
-        else if self.f14 { Some(14) }
-        else if self.f15 { Some(15) }
-        else if self.f16 { Some(16) }
-        else if self.f17 { Some(17) }
-        else if self.f18 { Some(18) }
-        else if self.f19 { Some(19) }
-        else if self.f20 { Some(20) }
-        else { None }
+        if self.f1 {
+            Some(1)
+        } else if self.f2 {
+            Some(2)
+        } else if self.f3 {
+            Some(3)
+        } else if self.f4 {
+            Some(4)
+        } else if self.f5 {
+            Some(5)
+        } else if self.f6 {
+            Some(6)
+        } else if self.f7 {
+            Some(7)
+        } else if self.f8 {
+            Some(8)
+        } else if self.f9 {
+            Some(9)
+        } else if self.f10 {
+            Some(10)
+        } else if self.f11 {
+            Some(11)
+        } else if self.f12 {
+            Some(12)
+        } else if self.f13 {
+            Some(13)
+        } else if self.f14 {
+            Some(14)
+        } else if self.f15 {
+            Some(15)
+        } else if self.f16 {
+            Some(16)
+        } else if self.f17 {
+            Some(17)
+        } else if self.f18 {
+            Some(18)
+        } else if self.f19 {
+            Some(19)
+        } else if self.f20 {
+            Some(20)
+        } else {
+            None
+        }
     }
 }
 
@@ -785,7 +916,10 @@ mod tests {
         let event = KeyEvent::new(KeyCode::PageUp, Modifiers::none());
         let key = Key::from_key_event(&event);
 
-        assert!(!key.has_modifier(), "has_modifier should be false without modifiers");
+        assert!(
+            !key.has_modifier(),
+            "has_modifier should be false without modifiers"
+        );
     }
 
     #[test]
@@ -801,7 +935,10 @@ mod tests {
         let event = KeyEvent::new(KeyCode::PageDown, Modifiers::none());
         let key = Key::from_key_event(&event);
 
-        assert!(!key.has_modifier(), "has_modifier should be false without modifiers");
+        assert!(
+            !key.has_modifier(),
+            "has_modifier should be false without modifiers"
+        );
     }
 
     #[test]
@@ -816,42 +953,66 @@ mod tests {
 
     #[test]
     fn test_keycode_page_up_is_navigation() {
-        assert!(KeyCode::PageUp.is_navigation_key(), "PageUp should be a navigation key");
+        assert!(
+            KeyCode::PageUp.is_navigation_key(),
+            "PageUp should be a navigation key"
+        );
     }
 
     #[test]
     fn test_keycode_page_down_is_navigation() {
-        assert!(KeyCode::PageDown.is_navigation_key(), "PageDown should be a navigation key");
+        assert!(
+            KeyCode::PageDown.is_navigation_key(),
+            "PageDown should be a navigation key"
+        );
     }
 
     #[test]
     fn test_keycode_page_up_not_arrow() {
-        assert!(!KeyCode::PageUp.is_arrow_key(), "PageUp should not be an arrow key");
+        assert!(
+            !KeyCode::PageUp.is_arrow_key(),
+            "PageUp should not be an arrow key"
+        );
     }
 
     #[test]
     fn test_keycode_page_down_not_arrow() {
-        assert!(!KeyCode::PageDown.is_arrow_key(), "PageDown should not be an arrow key");
+        assert!(
+            !KeyCode::PageDown.is_arrow_key(),
+            "PageDown should not be an arrow key"
+        );
     }
 
     #[test]
     fn test_keycode_page_up_not_modifier() {
-        assert!(!KeyCode::PageUp.is_modifier_key(), "PageUp should not be a modifier key");
+        assert!(
+            !KeyCode::PageUp.is_modifier_key(),
+            "PageUp should not be a modifier key"
+        );
     }
 
     #[test]
     fn test_keycode_page_down_not_modifier() {
-        assert!(!KeyCode::PageDown.is_modifier_key(), "PageDown should not be a modifier key");
+        assert!(
+            !KeyCode::PageDown.is_modifier_key(),
+            "PageDown should not be a modifier key"
+        );
     }
 
     #[test]
     fn test_keycode_page_up_not_function() {
-        assert!(!KeyCode::PageUp.is_function_key(), "PageUp should not be a function key");
+        assert!(
+            !KeyCode::PageUp.is_function_key(),
+            "PageUp should not be a function key"
+        );
     }
 
     #[test]
     fn test_keycode_page_down_not_function() {
-        assert!(!KeyCode::PageDown.is_function_key(), "PageDown should not be a function key");
+        assert!(
+            !KeyCode::PageDown.is_function_key(),
+            "PageDown should not be a function key"
+        );
     }
 
     // ==================== Key Construction Tests ====================
@@ -965,7 +1126,10 @@ mod tests {
         let key1 = Key::from_key_code_with_modifiers(KeyCode::PageUp, Modifiers::none());
         let key2 = Key::from_key_code_with_modifiers(KeyCode::PageUp, Modifiers::ctrl());
 
-        assert_ne!(key1, key2, "Same key with different modifiers should not be equal");
+        assert_ne!(
+            key1, key2,
+            "Same key with different modifiers should not be equal"
+        );
     }
 
     #[test]
@@ -1046,8 +1210,14 @@ mod tests {
         let key = Key::from_key_code(KeyCode::PageUp);
         let debug_str = format!("{:?}", key);
 
-        assert!(debug_str.contains("page_up: true"), "Debug should show page_up: true");
-        assert!(debug_str.contains("page_down: false"), "Debug should show page_down: false");
+        assert!(
+            debug_str.contains("page_up: true"),
+            "Debug should show page_up: true"
+        );
+        assert!(
+            debug_str.contains("page_down: false"),
+            "Debug should show page_down: false"
+        );
     }
 
     #[test]
@@ -1055,8 +1225,14 @@ mod tests {
         let key = Key::from_key_code(KeyCode::PageDown);
         let debug_str = format!("{:?}", key);
 
-        assert!(debug_str.contains("page_down: true"), "Debug should show page_down: true");
-        assert!(debug_str.contains("page_up: false"), "Debug should show page_up: false");
+        assert!(
+            debug_str.contains("page_down: true"),
+            "Debug should show page_down: true"
+        );
+        assert!(
+            debug_str.contains("page_up: false"),
+            "Debug should show page_up: false"
+        );
     }
 
     #[test]
@@ -1201,13 +1377,19 @@ mod tests {
     #[test]
     fn test_page_up_not_function_key() {
         let key = Key::from_key_code(KeyCode::PageUp);
-        assert!(!key.is_function_key(), "PageUp should not be a function key");
+        assert!(
+            !key.is_function_key(),
+            "PageUp should not be a function key"
+        );
     }
 
     #[test]
     fn test_page_down_not_function_key() {
         let key = Key::from_key_code(KeyCode::PageDown);
-        assert!(!key.is_function_key(), "PageDown should not be a function key");
+        assert!(
+            !key.is_function_key(),
+            "PageDown should not be a function key"
+        );
     }
 
     // ==================== KeyEvent Tests ====================

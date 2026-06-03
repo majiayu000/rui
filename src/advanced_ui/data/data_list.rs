@@ -16,6 +16,7 @@ use crate::elements::element::{
     style_to_taffy,
 };
 use crate::elements::text::TextAlign;
+use std::collections::HashSet;
 use taffy::prelude::*;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -125,9 +126,11 @@ impl DataList {
     {
         let theme = Theme::default();
         let size = ControlSize::default();
+        let items: Vec<DataListItem> = items.into_iter().map(Into::into).collect();
+        validate_unique_item_values(&items);
         Self {
             id: ElementId::new(),
-            items: items.into_iter().map(Into::into).collect(),
+            items,
             selected_value: None,
             accessibility_label: None,
             size,
@@ -154,6 +157,7 @@ impl DataList {
 
     pub fn item(mut self, item: impl Into<DataListItem>) -> Self {
         self.items.push(item.into());
+        validate_unique_item_values(&self.items);
         self
     }
 
@@ -163,6 +167,7 @@ impl DataList {
         O: Into<DataListItem>,
     {
         self.items.extend(items.into_iter().map(Into::into));
+        validate_unique_item_values(&self.items);
         self
     }
 
@@ -396,6 +401,15 @@ impl Element for DataList {
 
     fn contains_id(&self, id: ElementId) -> bool {
         self.id == id || self.items.iter().any(|item| item.id == id)
+    }
+}
+
+fn validate_unique_item_values(items: &[DataListItem]) {
+    let mut seen = HashSet::new();
+    for item in items {
+        if !seen.insert(item.value()) {
+            panic!("data list item values must be unique");
+        }
     }
 }
 

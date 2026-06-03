@@ -378,13 +378,14 @@ impl Element for Menu {
     }
 
     fn handle_pointer_event(&mut self, cx: &mut EventContext, event: &PointerEvent) -> bool {
+        let inside = cx.bounds().contains(event.position);
         let index = self.interactive_index_at(cx.bounds(), event.position);
         match event.kind {
             PointerEventKind::Move => {
                 self.indexed_state.update_hover(index, cx, self.state);
                 false
             }
-            PointerEventKind::Down => self.indexed_state.press(index, cx, self.state),
+            PointerEventKind::Down => self.indexed_state.press(index, cx, self.state) || inside,
             PointerEventKind::Up => {
                 let release = self.indexed_state.release(index, cx, self.state);
                 if release.activated {
@@ -392,13 +393,13 @@ impl Element for Menu {
                         return self.activate_index(index, cx);
                     }
                 }
-                false
+                inside
             }
         }
     }
 
     fn handle_key_event(&mut self, cx: &mut EventContext, event: &KeyEvent) -> bool {
-        if !self.state.can_activate() {
+        if !self.state.can_activate() || !self.has_keyboard_focus(cx) {
             self.indexed_state.clear();
             return false;
         }
@@ -435,6 +436,10 @@ impl Element for Menu {
             _ => false,
         }
     }
+
+    fn contains_id(&self, id: ElementId) -> bool {
+        self.id == id || self.item_ids.contains(&id)
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -452,6 +457,13 @@ fn validate_items(items: &[MenuItem]) {
 fn validate_selected(items: &[MenuItem], selected: &str) {
     if !items.iter().any(|item| item.value == selected) {
         panic!("menu selected value must match an item");
+    }
+}
+
+impl Menu {
+    fn has_keyboard_focus(&self, cx: &EventContext) -> bool {
+        cx.focused_id()
+            .is_some_and(|focused| self.contains_id(focused))
     }
 }
 
@@ -511,18 +523,21 @@ mod tests {
 
     #[test]
     fn advanced_ui_menu_skips_disabled_items_for_pointer_and_keyboard() {
+        let id = ElementId::new();
         let mut menu = Menu::new(
             "File",
             [
                 MenuItem::new("new", "New").disabled(true),
                 MenuItem::new("open", "Open"),
             ],
-        );
+        )
+        .id(id);
         let taffy = TaffyTree::<ElementId>::new();
-        let mut focused = None;
+        let mut focused = Some(id);
         let mut cx = event_context(&taffy, &mut focused);
 
-        assert!(!menu.handle_pointer_event(&mut cx, &pointer(PointerEventKind::Down, 12.0, 12.0)));
+        assert!(menu.handle_pointer_event(&mut cx, &pointer(PointerEventKind::Down, 12.0, 12.0)));
+        assert!(menu.selected_value().is_none());
         assert!(menu.handle_key_event(
             &mut cx,
             &KeyEvent::new(KeyCode::ArrowDown, Modifiers::none())
@@ -543,7 +558,7 @@ mod tests {
             let mut cx = event_context(&taffy, &mut focused);
 
             assert!(
-                !menu.handle_pointer_event(&mut cx, &pointer(PointerEventKind::Down, 12.0, 12.0),)
+                menu.handle_pointer_event(&mut cx, &pointer(PointerEventKind::Down, 12.0, 12.0),)
             );
             assert!(!menu.handle_key_event(
                 &mut cx,

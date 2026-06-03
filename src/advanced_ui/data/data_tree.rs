@@ -16,6 +16,7 @@ use crate::elements::element::{
     style_to_taffy,
 };
 use crate::elements::text::TextAlign;
+use std::collections::HashSet;
 use taffy::prelude::*;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -143,9 +144,11 @@ impl DataTree {
     {
         let theme = Theme::default();
         let size = ControlSize::default();
+        let roots: Vec<DataTreeItem> = roots.into_iter().map(Into::into).collect();
+        validate_unique_tree_values(&roots);
         Self {
             id: ElementId::new(),
-            roots: roots.into_iter().map(Into::into).collect(),
+            roots,
             selected_value: None,
             accessibility_label: None,
             size,
@@ -481,6 +484,20 @@ fn tree_item_accessibility(
         }
     }
     Ok(node)
+}
+
+fn validate_unique_tree_values(items: &[DataTreeItem]) {
+    fn visit<'a>(items: &'a [DataTreeItem], seen: &mut HashSet<&'a str>) {
+        for item in items {
+            if !seen.insert(item.value()) {
+                panic!("data tree item values must be unique");
+            }
+            visit(item.child_items(), seen);
+        }
+    }
+
+    let mut seen = HashSet::new();
+    visit(items, &mut seen);
 }
 
 pub fn data_tree<I, O>(roots: I) -> DataTree

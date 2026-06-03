@@ -1,19 +1,19 @@
 //! Core types and abstractions
 
+pub mod accessibility;
+pub mod action;
+pub mod animation;
+pub mod app;
 pub mod color;
 pub mod color_palette;
+pub mod entity;
+pub mod event;
 pub mod geometry;
 pub mod geometry_ops;
 pub mod style;
-pub mod app;
-pub mod window;
-pub mod entity;
-pub mod view;
-pub mod event;
-pub mod animation;
-pub mod action;
-pub mod accessibility;
 pub mod text_editing;
+pub mod view;
+pub mod window;
 
 pub use app::{App, AppContext, RedrawSource, RedrawSourceCounts};
 pub use color::{Color, Hsla, Rgba};

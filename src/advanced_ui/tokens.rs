@@ -84,6 +84,14 @@ impl ControlColors {
             border: self.border.with_alpha(alpha),
         }
     }
+
+    pub fn with_alpha_preserving_transparency(self, alpha: f32) -> Self {
+        Self {
+            background: color_with_alpha_preserving_transparency(self.background, alpha),
+            foreground: color_with_alpha_preserving_transparency(self.foreground, alpha),
+            border: color_with_alpha_preserving_transparency(self.border, alpha),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -327,12 +335,29 @@ impl Theme {
             Color::hex(0xd1d5db),
             Color::BLACK,
         );
-        theme.colors.outline = outline_palette(Color::WHITE, Color::WHITE);
+        theme.colors.outline = outline_palette_with_surfaces(
+            Color::WHITE,
+            Color::WHITE,
+            Color::hex(0x333333),
+            Color::hex(0x4d4d4d),
+        );
         theme.colors.ghost = ControlVariantPalette::solid(
             Color::TRANSPARENT,
             Color::hex(0x333333),
             Color::hex(0x4d4d4d),
             Color::WHITE,
+        );
+        theme.colors.danger = ControlVariantPalette::solid(
+            Color::hex(0x8b0000),
+            Color::hex(0xa40000),
+            Color::hex(0x660000),
+            Color::WHITE,
+        );
+        theme.colors.success = ControlVariantPalette::solid(
+            Color::hex(0x00ff00),
+            Color::hex(0x00cc00),
+            Color::hex(0x009900),
+            Color::BLACK,
         );
         theme.colors.progress_track = Color::BLACK;
         theme.colors.progress_fill = Color::hex(0xffff00);
@@ -343,6 +368,7 @@ impl Theme {
         theme.state.focus_ring = Color::hex(0x00ffff);
         theme.state.hover_surface = Color::hex(0x333333);
         theme.state.pressed_surface = Color::hex(0x4d4d4d);
+        theme.state.loading_surface = Color::hex(0x1a1a1a);
         theme.state.error = Color::hex(0xff0000);
         theme
     }
@@ -376,12 +402,13 @@ impl Theme {
         let mut colors = self.variant_palette(variant).resolve(state);
         if state.loading {
             colors.background = self.state.loading_surface;
+            colors.foreground = self.colors.text;
         }
         colors.border = self.state_border_color(state, colors.border);
         if state.disabled {
-            colors.with_alpha(self.state.disabled_opacity)
+            colors.with_alpha_preserving_transparency(self.state.disabled_opacity)
         } else if state.read_only {
-            colors.with_alpha(self.state.read_only_opacity)
+            colors.with_alpha_preserving_transparency(self.state.read_only_opacity)
         } else {
             colors
         }
@@ -410,10 +437,10 @@ impl Theme {
     pub fn surface_color_for_state(self, state: ControlState) -> Color {
         let color = if state.disabled || state.loading {
             self.colors.surface_muted
-        } else if state.hovered {
-            self.state.hover_surface
         } else if state.pressed {
             self.state.pressed_surface
+        } else if state.hovered {
+            self.state.hover_surface
         } else {
             self.colors.surface
         };
@@ -477,6 +504,20 @@ impl Default for Theme {
 }
 
 fn outline_palette(foreground: Color, border: Color) -> ControlVariantPalette {
+    outline_palette_with_surfaces(
+        foreground,
+        border,
+        Color::hex(0xeff6ff),
+        Color::hex(0xdbeafe),
+    )
+}
+
+fn outline_palette_with_surfaces(
+    foreground: Color,
+    border: Color,
+    hovered_background: Color,
+    pressed_background: Color,
+) -> ControlVariantPalette {
     ControlVariantPalette::new(
         ControlColors {
             background: Color::TRANSPARENT,
@@ -484,14 +525,22 @@ fn outline_palette(foreground: Color, border: Color) -> ControlVariantPalette {
             border,
         },
         ControlColors {
-            background: Color::hex(0xeff6ff),
+            background: hovered_background,
             foreground,
             border: foreground,
         },
         ControlColors {
-            background: Color::hex(0xdbeafe),
+            background: pressed_background,
             foreground,
             border: foreground,
         },
     )
+}
+
+fn color_with_alpha_preserving_transparency(color: Color, alpha: f32) -> Color {
+    if color.to_rgba().a == 0.0 {
+        color
+    } else {
+        color.with_alpha(alpha)
+    }
 }

@@ -32,7 +32,11 @@ pub(crate) fn route_key_event<E: Element>(
 }
 
 fn key_event_has_text_editing_details(event: &KeyEvent) -> bool {
-    matches!(event.key, KeyCode::Home | KeyCode::End)
+    event.key.is_navigation_key()
+        || matches!(
+            event.key,
+            KeyCode::Backspace | KeyCode::Delete | KeyCode::Enter
+        )
         || event
             .char
             .is_some_and(|ch| !ch.is_control() || matches!(ch, '\n' | '\r'))

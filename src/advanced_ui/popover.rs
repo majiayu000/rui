@@ -5,7 +5,7 @@ use crate::core::accessibility::{
     AccessibilityContext, AccessibilityError, AccessibilityNode, AccessibilityRole,
 };
 use crate::core::color::Color;
-use crate::core::event::{KeyCode, KeyEvent};
+use crate::core::event::{KeyCode, KeyEvent, ScrollEvent};
 use crate::core::geometry::{Bounds, Edges};
 use crate::core::style::{
     AlignItems, Corners, Display, FlexDirection, JustifyContent, Position, Style,
@@ -186,6 +186,27 @@ impl Element for Popover {
             if self.children[index].handle_pointer_event(&mut child_cx, event) {
                 return true;
             }
+            if index == 1 && bounds.contains(event.position) {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn handle_scroll_event(&mut self, cx: &mut EventContext, event: &ScrollEvent) -> bool {
+        if !self.open || !self.state.can_activate() {
+            return false;
+        }
+
+        for index in (0..self.visible_child_count()).rev() {
+            let node = self.child_nodes.get(index).copied();
+            let bounds = node
+                .and_then(|node| cx.child_bounds(node))
+                .unwrap_or(cx.bounds());
+            let mut child_cx = cx.with_bounds(bounds);
+            if self.children[index].handle_scroll_event(&mut child_cx, event) {
+                return true;
+            }
         }
         false
     }
@@ -193,6 +214,14 @@ impl Element for Popover {
     fn handle_key_event(&mut self, cx: &mut EventContext, event: &KeyEvent) -> bool {
         if matches!(event.key, KeyCode::Escape) && self.dismiss(cx) {
             return true;
+        }
+
+        if !self.state.can_activate() {
+            return self
+                .open
+                .then_some(())
+                .and(cx.focused_id())
+                .is_some_and(|focused| self.contains_id(focused));
         }
 
         for index in (0..self.visible_child_count()).rev() {
@@ -356,8 +385,8 @@ impl Element for Dialog {
             return;
         }
 
-        cx.register_hit_region(self.id, cx.bounds());
         if self.modal {
+            cx.register_hit_region(self.id, cx.bounds());
             cx.paint(Primitive::Quad {
                 bounds: cx.bounds(),
                 background: Color::rgba(0.0, 0.0, 0.0, 0.32).to_rgba(),
@@ -371,6 +400,7 @@ impl Element for Dialog {
             .content_node
             .and_then(|node| cx.child_bounds(node))
             .unwrap_or(cx.bounds());
+        cx.register_hit_region(self.id, content_bounds);
         paint_panel(cx, content_bounds, self.state.invalid(), self.theme);
         let mut content_cx = cx.with_bounds(content_bounds);
         self.content[0].paint(&mut content_cx);
@@ -394,6 +424,28 @@ impl Element for Dialog {
     }
 
     fn handle_pointer_event(&mut self, cx: &mut EventContext, event: &PointerEvent) -> bool {
+        if !self.open {
+            return false;
+        }
+
+        let content_bounds = self
+            .content_node
+            .and_then(|node| cx.child_bounds(node))
+            .unwrap_or(cx.bounds());
+        let inside_content = content_bounds.contains(event.position);
+        let inside_modal_region = self.modal && cx.bounds().contains(event.position);
+
+        if self.state.can_activate() {
+            let mut content_cx = cx.with_bounds(content_bounds);
+            if self.content[0].handle_pointer_event(&mut content_cx, event) {
+                return true;
+            }
+        }
+
+        inside_content || inside_modal_region
+    }
+
+    fn handle_scroll_event(&mut self, cx: &mut EventContext, event: &ScrollEvent) -> bool {
         if !self.open || !self.state.can_activate() {
             return false;
         }
@@ -403,19 +455,30 @@ impl Element for Dialog {
             .and_then(|node| cx.child_bounds(node))
             .unwrap_or(cx.bounds());
         let mut content_cx = cx.with_bounds(content_bounds);
-        if self.content[0].handle_pointer_event(&mut content_cx, event) {
-            return true;
-        }
-
-        self.modal && cx.bounds().contains(event.position)
+        self.content[0].handle_scroll_event(&mut content_cx, event)
     }
 
     fn handle_key_event(&mut self, cx: &mut EventContext, event: &KeyEvent) -> bool {
+        if !self.open {
+            return false;
+        }
+
         if matches!(event.key, KeyCode::Escape) && self.dismiss(cx) {
             return true;
         }
 
-        self.open && self.content[0].handle_key_event(cx, event)
+        if !self.state.can_activate() {
+            return self.modal
+                || cx
+                    .focused_id()
+                    .is_some_and(|focused| self.content[0].contains_id(focused));
+        }
+
+        if self.content[0].handle_key_event(cx, event) {
+            return true;
+        }
+
+        self.modal
     }
 
     fn children(&self) -> &[AnyElement] {
@@ -628,7 +691,7 @@ mod tests {
         );
 
         assert!(
-            !dialog.handle_key_event(&mut cx, &KeyEvent::new(KeyCode::Escape, Modifiers::none()),)
+            dialog.handle_key_event(&mut cx, &KeyEvent::new(KeyCode::Escape, Modifiers::none()),)
         );
         assert!(dialog.is_open());
     }

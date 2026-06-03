@@ -60,12 +60,7 @@ fn feature_card(title: &str, description: &str, color: u32) -> Div {
         .p(20.0)
         .flex_col()
         .gap(8.0)
-        .child(
-            text(title)
-                .size(20.0)
-                .bold()
-                .color(Color::WHITE),
-        )
+        .child(text(title).size(20.0).bold().color(Color::WHITE))
         .child(
             text(description)
                 .size(14.0)

@@ -25,7 +25,6 @@ use taffy::prelude::*;
 use unicode_segmentation::UnicodeSegmentation;
 
 const INPUT_HORIZONTAL_PADDING: f32 = 12.0;
-const INPUT_CARET_TOP_PADDING: f32 = 10.0;
 const INPUT_GRAPHEME_WIDTH: f32 = 7.0;
 const INPUT_CARET_WIDTH: f32 = 1.5;
 const INPUT_MARKED_UNDERLINE_HEIGHT: f32 = 2.0;
@@ -58,6 +57,16 @@ pub struct InputState {
     pub invalid: bool,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct InputPaintTokens {
+    pub background: Color,
+    pub text: Color,
+    pub placeholder: Color,
+    pub border: Color,
+    pub focus_ring: Color,
+    pub font_size: f32,
+}
+
 /// Text input component
 pub struct Input {
     id: Option<ElementId>,
@@ -74,6 +83,7 @@ pub struct Input {
     on_focus: Option<Box<dyn Fn()>>,
     on_blur: Option<Box<dyn Fn()>>,
     layout_node: Option<NodeId>,
+    paint_tokens: Option<InputPaintTokens>,
 }
 
 impl Input {
@@ -98,6 +108,7 @@ impl Input {
             on_focus: None,
             on_blur: None,
             layout_node: None,
+            paint_tokens: None,
         }
     }
 
@@ -184,6 +195,20 @@ impl Input {
     pub fn border_color(mut self, color: impl Into<Color>) -> Self {
         self.style.border.color = color.into();
         self
+    }
+
+    pub(crate) fn set_interaction_flags(&mut self, disabled: bool, read_only: bool, invalid: bool) {
+        self.state.disabled = disabled;
+        self.state.read_only = read_only;
+        self.state.invalid = invalid;
+        if disabled {
+            self.state.focused = false;
+            self.state.hovered = false;
+        }
+    }
+
+    pub(crate) fn set_paint_tokens(&mut self, tokens: InputPaintTokens) {
+        self.paint_tokens = Some(tokens);
     }
 
     pub fn on_change(mut self, handler: impl Fn(&str) + 'static) -> Self {
@@ -406,7 +431,7 @@ impl Input {
             .is_some_and(|ch| !ch.is_control() || matches!(ch, '\n' | '\r'))
     }
 
-    fn key_event_would_mutate(event: &KeyEvent) -> bool {
+    pub(crate) fn key_event_would_mutate(event: &KeyEvent) -> bool {
         matches!(
             event.key,
             KeyCode::Backspace | KeyCode::Delete | KeyCode::Enter
@@ -496,12 +521,17 @@ impl Element for Input {
             cx.paint(Primitive::Quad {
                 bounds: ring_bounds,
                 background: crate::core::color::Rgba::TRANSPARENT,
-                border_color: Color::hex(0x6366f1).with_alpha(0.3).to_rgba(),
+                border_color: self
+                    .paint_tokens
+                    .map(|tokens| tokens.focus_ring.with_alpha(0.3))
+                    .unwrap_or_else(|| Color::hex(0x6366f1).with_alpha(0.3))
+                    .to_rgba(),
                 border_widths: Edges::all(2.0),
                 corner_radii: Corners::all(8.0),
             });
         }
 
+        cx.scene.push_layer(bounds);
         self.paint_selection_and_marked_text(cx, bounds);
 
         // Paint text or placeholder
@@ -513,14 +543,15 @@ impl Element for Input {
 
         if !display.is_empty() {
             let text_x = bounds.x() + INPUT_HORIZONTAL_PADDING;
-            let text_y = bounds.y() + (bounds.height() - 14.0) / 2.0;
+            let font_size = self.font_size(bounds);
+            let text_y = bounds.y() + (bounds.height() - font_size).max(0.0) / 2.0;
             let text_width = self.text_width(bounds);
 
             cx.paint(Primitive::Text {
-                bounds: Bounds::from_xywh(text_x, text_y, text_width, 14.0),
+                bounds: Bounds::from_xywh(text_x, text_y, text_width, font_size),
                 content: display.to_string(),
                 color: text_color.to_rgba(),
-                font_size: 14.0,
+                font_size,
                 font_weight: 400,
                 font_family: None,
                 line_height: 1.0,
@@ -529,6 +560,7 @@ impl Element for Input {
         }
 
         self.paint_cursor(cx, bounds);
+        cx.scene.pop_layer();
     }
 
     fn handle_pointer_event(&mut self, cx: &mut EventContext, event: &PointerEvent) -> bool {
@@ -701,8 +733,10 @@ impl Element for Input {
             .with_read_only(self.state.read_only)
             .with_invalid(self.state.invalid)
             .with_text_caret(self.normalize_cursor_position())
-            .with_focused(cx.a11y_has_focus(id))
-            .with_action(AccessibilityAction::SetValue);
+            .with_focused(cx.a11y_has_focus(id));
+        if !self.state.disabled && !self.state.read_only {
+            node = node.with_action(AccessibilityAction::SetValue);
+        }
 
         if let (Some(start), Some(end)) = (self.state.selection_start, self.state.selection_end) {
             node = node.with_text_selection(AccessibilityTextRange::new(start, end));

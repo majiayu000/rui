@@ -17,7 +17,7 @@ Complete API documentation for the RUI framework.
 
 ## Drift-Checked Public Surface
 
-`cargo test docs_api_drift` verifies that this section stays aligned with the public source API.
+`cargo test --test docs_api_drift` verifies that this section stays aligned with the public source API.
 
 Builders: `div()`, `text(content)`, `button(label)`, `input()`, `image(path)`, `scroll_view()`, `table()`, `row()`, `header_row()`, `cell(content)`, `list()`, `ordered_list()`, `unordered_list()`, `progress()`, `spinner()`.
 
@@ -25,7 +25,7 @@ Advanced UI builders: `advanced_ui::container()`, `advanced_ui::row()`, `advance
 
 Enum variants: `ButtonVariant::Primary`, `ButtonVariant::Secondary`, `ButtonVariant::Outline`, `ButtonVariant::Ghost`, `ButtonVariant::Danger`, `ButtonVariant::Success`; `ButtonSize::Small`, `ButtonSize::Medium`, `ButtonSize::Large`; `InputType::Text`, `InputType::Password`, `InputType::Email`, `InputType::Number`, `InputType::Search`; `ImageFit::Cover`, `ImageFit::Contain`, `ImageFit::Fill`, `ImageFit::None`, `ImageFit::ScaleDown`; `ScrollDirection::Vertical`, `ScrollDirection::Horizontal`, `ScrollDirection::Both`; `ScrollbarVisibility::Auto`, `ScrollbarVisibility::Always`, `ScrollbarVisibility::Never`, `ScrollbarVisibility::Hover`; `ListStyle::Bullet`, `ListStyle::Numbered`, `ListStyle::LowercaseAlpha`, `ListStyle::UppercaseAlpha`, `ListStyle::LowercaseRoman`, `ListStyle::UppercaseRoman`, `ListStyle::None`; `SpinnerType::Dots`, `SpinnerType::Line`, `SpinnerType::Circle`, `SpinnerType::Arrow`, `SpinnerType::Box`, `SpinnerType::Bounce`, `SpinnerType::Grow`, `SpinnerType::Star`; `TextAlign::Left`, `TextAlign::Center`, `TextAlign::Right`; `ControlSize::Small`, `ControlSize::Medium`, `ControlSize::Large`; `ControlVariant::Primary`, `ControlVariant::Secondary`, `ControlVariant::Outline`, `ControlVariant::Ghost`, `ControlVariant::Danger`, `ControlVariant::Success`; `MainAxisAlignment::Start`, `MainAxisAlignment::End`, `MainAxisAlignment::Center`, `MainAxisAlignment::SpaceBetween`, `MainAxisAlignment::SpaceAround`; `CrossAxisAlignment::Start`, `CrossAxisAlignment::End`, `CrossAxisAlignment::Center`, `CrossAxisAlignment::Stretch`; `Easing::Linear`, `Easing::EaseIn`, `Easing::EaseOut`, `Easing::EaseInOut`, `Easing::EaseInQuad`, `Easing::EaseOutQuad`, `Easing::EaseInOutQuad`, `Easing::EaseInCubic`, `Easing::EaseOutCubic`, `Easing::EaseInOutCubic`, `Easing::EaseInQuart`, `Easing::EaseOutQuart`, `Easing::EaseInOutQuart`, `Easing::EaseInExpo`, `Easing::EaseOutExpo`, `Easing::EaseInOutExpo`, `Easing::EaseInBack`, `Easing::EaseOutBack`, `Easing::EaseInOutBack`, `Easing::EaseInElastic`, `Easing::EaseOutElastic`, `Easing::EaseInOutElastic`, `Easing::EaseInBounce`, `Easing::EaseOutBounce`, `Easing::EaseInOutBounce`, `Easing::Spring`, `Easing::Custom`.
 
-Validation: CI-safe checks are `cargo test docs_api_drift`, `cargo test example_smoke`, `cargo test dogfood`, `cargo check`, and `cargo test`. The native macOS GUI smoke is local-only: `scripts/native_dogfood_macos.sh`.
+Validation: CI-safe checks are `cargo test --test docs_api_drift`, `cargo test example_smoke`, `cargo test dogfood`, `cargo check`, and `cargo test`. The native macOS GUI smoke is local-only: `scripts/native_dogfood_macos.sh`.
 
 ---
 

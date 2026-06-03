@@ -282,7 +282,12 @@ pub struct GpuShadow {
 }
 
 impl GpuShadow {
-    pub fn from_primitive(bounds: Bounds, corner_radii: Corners, blur_radius: f32, color: Rgba) -> Self {
+    pub fn from_primitive(
+        bounds: Bounds,
+        corner_radii: Corners,
+        blur_radius: f32,
+        color: Rgba,
+    ) -> Self {
         Self {
             bounds: [bounds.x(), bounds.y(), bounds.width(), bounds.height()],
             corner_radii: [

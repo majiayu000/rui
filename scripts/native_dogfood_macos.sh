@@ -21,7 +21,13 @@ RUI_NATIVE_DOGFOOD_PROFILE="$PROFILE" \
 RUI_NATIVE_DOGFOOD_TEXT="$TEXT" \
 RUI_NATIVE_DOGFOOD_INTERACTIVE=1 \
 RUI_NATIVE_DOGFOOD_AUTOMATION=1 \
-cargo run --example native_dogfood >"$LOG" 2>&1 &
+cargo build --example native_dogfood >"$LOG" 2>&1
+
+RUI_NATIVE_DOGFOOD_PROFILE="$PROFILE" \
+RUI_NATIVE_DOGFOOD_TEXT="$TEXT" \
+RUI_NATIVE_DOGFOOD_INTERACTIVE=1 \
+RUI_NATIVE_DOGFOOD_AUTOMATION=1 \
+cargo run --example native_dogfood >>"$LOG" 2>&1 &
 app_pid=$!
 
 cleanup() {

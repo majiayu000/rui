@@ -5,6 +5,7 @@ use crate::core::accessibility::{
     AccessibilityContext, AccessibilityError, AccessibilityNode, AccessibilityRole,
 };
 use crate::core::color::Color;
+use crate::core::event::ScrollEvent;
 use crate::core::style::Style;
 use crate::elements::element::{
     AnyElement, Element, EventContext, LayoutContext, PaintContext, PointerEvent,
@@ -18,6 +19,9 @@ pub struct TabPanel {
     accessibility_label: Option<String>,
     inner: Div,
     theme: Theme,
+    custom_background: bool,
+    custom_border: bool,
+    custom_radius: bool,
 }
 
 impl TabPanel {
@@ -32,6 +36,9 @@ impl TabPanel {
             accessibility_label: None,
             inner: base_tab_panel_div(id, theme).child(child),
             theme,
+            custom_background: false,
+            custom_border: false,
+            custom_radius: false,
         }
     }
 
@@ -50,11 +57,15 @@ impl TabPanel {
 
     pub fn theme(mut self, theme: Theme) -> Self {
         self.theme = theme;
-        self.inner = self
-            .inner
-            .bg(theme.colors.surface)
-            .border(1.0, theme.colors.border)
-            .rounded(theme.control_radius());
+        if !self.custom_background {
+            self.inner = self.inner.bg(theme.colors.surface);
+        }
+        if !self.custom_border {
+            self.inner = self.inner.border(1.0, theme.colors.border);
+        }
+        if !self.custom_radius {
+            self.inner = self.inner.rounded(theme.control_radius());
+        }
         self
     }
 
@@ -64,16 +75,19 @@ impl TabPanel {
     }
 
     pub fn background(mut self, color: impl Into<Color>) -> Self {
+        self.custom_background = true;
         self.inner = self.inner.bg(color);
         self
     }
 
     pub fn border(mut self, width: f32, color: impl Into<Color>) -> Self {
+        self.custom_border = true;
         self.inner = self.inner.border(width, color);
         self
     }
 
     pub fn radius(mut self, radius: f32) -> Self {
+        self.custom_radius = true;
         self.inner = self.inner.rounded(radius);
         self
     }
@@ -145,6 +159,10 @@ impl Element for TabPanel {
         event: &crate::core::event::KeyEvent,
     ) -> bool {
         self.inner.handle_key_event(cx, event)
+    }
+
+    fn handle_scroll_event(&mut self, cx: &mut EventContext, event: &ScrollEvent) -> bool {
+        self.inner.handle_scroll_event(cx, event)
     }
 
     fn children(&self) -> &[AnyElement] {

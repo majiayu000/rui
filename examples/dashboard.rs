@@ -35,21 +35,10 @@ fn sidebar() -> Div {
         .child(
             div()
                 .py(16.0)
-                .child(
-                    text("RUI Dashboard")
-                        .size(20.0)
-                        .bold()
-                        .color(Color::WHITE),
-                ),
+                .child(text("RUI Dashboard").size(20.0).bold().color(Color::WHITE)),
         )
         // Divider
-        .child(
-            div()
-                .h(1.0)
-                .w_full()
-                .bg(Color::hex(0x374151))
-                .my(8.0),
-        )
+        .child(div().h(1.0).w_full().bg(Color::hex(0x374151)).my(8.0))
         // Nav items
         .child(nav_item("Home", true))
         .child(nav_item("Analytics", false))
@@ -108,17 +97,11 @@ fn nav_item(label: &str, active: bool) -> Div {
         .py(10.0)
         .rounded(8.0)
         .bg(bg)
-        .child(
-            div()
-                .w(8.0)
-                .h(8.0)
-                .rounded_full()
-                .bg(if active {
-                    Color::hex(0x6366f1)
-                } else {
-                    Color::hex(0x4b5563)
-                }),
-        )
+        .child(div().w(8.0).h(8.0).rounded_full().bg(if active {
+            Color::hex(0x6366f1)
+        } else {
+            Color::hex(0x4b5563)
+        }))
         .child(text(label).size(14.0).color(text_color))
 }
 
@@ -150,19 +133,23 @@ fn header() -> Div {
             div()
                 .flex_col()
                 .gap(4.0)
-                .child(text("Dashboard").size(28.0).bold().color(Color::hex(0x111827)))
-                .child(text("Welcome back, John!").size(14.0).color(Color::hex(0x6b7280))),
+                .child(
+                    text("Dashboard")
+                        .size(28.0)
+                        .bold()
+                        .color(Color::hex(0x111827)),
+                )
+                .child(
+                    text("Welcome back, John!")
+                        .size(14.0)
+                        .color(Color::hex(0x6b7280)),
+                ),
         )
         .child(
             div()
                 .flex_row()
                 .gap(12.0)
-                .child(
-                    input()
-                        .placeholder("Search...")
-                        .w(280.0)
-                        .search(),
-                )
+                .child(input().placeholder("Search...").w(280.0).search())
                 .child(button("+ New Project").primary()),
         )
 }
@@ -234,7 +221,12 @@ fn content_section() -> Div {
                 .shadow_sm()
                 .flex_col()
                 .gap(20.0)
-                .child(text("Create Project").size(18.0).bold().color(Color::hex(0x111827)))
+                .child(
+                    text("Create Project")
+                        .size(18.0)
+                        .bold()
+                        .color(Color::hex(0x111827)),
+                )
                 .child(form_field("Project Name", "Enter project name"))
                 .child(form_field("Description", "Enter description"))
                 .child(form_field("Team Lead", "Select team lead"))
@@ -267,7 +259,12 @@ fn form_field(label: &str, placeholder: &str) -> Div {
     div()
         .flex_col()
         .gap(6.0)
-        .child(text(label).size(14.0).semibold().color(Color::hex(0x374151)))
+        .child(
+            text(label)
+                .size(14.0)
+                .semibold()
+                .color(Color::hex(0x374151)),
+        )
         .child(input().placeholder(placeholder))
 }
 
@@ -280,6 +277,11 @@ fn info_card(title: &str, content: &str) -> Div {
         .shadow_sm()
         .flex_col()
         .gap(8.0)
-        .child(text(title).size(14.0).semibold().color(Color::hex(0x111827)))
+        .child(
+            text(title)
+                .size(14.0)
+                .semibold()
+                .color(Color::hex(0x111827)),
+        )
         .child(text(content).size(14.0).color(Color::hex(0x6b7280)))
 }

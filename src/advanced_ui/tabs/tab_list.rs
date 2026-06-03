@@ -176,11 +176,14 @@ impl TabList {
         (index < self.tabs.len() && !self.tabs[index].disabled).then_some(index)
     }
 
-    fn select_index(&mut self, index: usize, cx: &EventContext) -> bool {
+    fn select_index(&mut self, index: usize, cx: &mut EventContext) -> bool {
         if !self.state.can_activate() || self.tabs[index].disabled {
             return false;
         }
 
+        let focus_was_on_tab = cx
+            .focused_id()
+            .is_some_and(|focused| self.tabs.iter().any(|tab| tab.id == focused));
         if self.tabs[index].value != self.selected {
             self.selected = self.tabs[index].value.clone();
             if let Some(handler) = &self.on_change {
@@ -191,6 +194,9 @@ impl TabList {
                 format!("{} tab selected", self.tabs[index].label),
             );
             cx.request_redraw();
+        }
+        if focus_was_on_tab {
+            cx.request_focus(Some(self.tabs[index].id));
         }
         true
     }
@@ -324,6 +330,9 @@ impl Element for TabList {
         if !self.state.can_activate() || !self.handles_keyboard(cx) {
             return false;
         }
+        if !event.modifiers.is_empty() {
+            return false;
+        }
 
         let selected = self.selected_index();
         let target = match event.key {
@@ -426,4 +435,14 @@ fn paint_tab_list_rule(cx: &mut PaintContext, bounds: Bounds, invalid: bool, the
         },
         corner_radii: Corners::ZERO,
     });
+}
+
+trait ModifiersExt {
+    fn is_empty(self) -> bool;
+}
+
+impl ModifiersExt for crate::core::event::Modifiers {
+    fn is_empty(self) -> bool {
+        !self.shift && !self.ctrl && !self.alt && !self.meta
+    }
 }

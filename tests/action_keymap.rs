@@ -1,4 +1,4 @@
-use rui::advanced_ui::{TabList, button, checkbox};
+use rui::advanced_ui::{TabList, button, checkbox, hoverable};
 use rui::core::action::{
     ActionError, ActionHandler, ActionId, ActionOutcome, ActionRouter, KeyChord, Keymap,
     StandardAction,
@@ -7,7 +7,7 @@ use rui::core::event::{KeyCode, KeyEvent, Modifiers};
 use rui::core::geometry::Bounds;
 use rui::core::{AppContext, ElementId, Size};
 use rui::elements::element::EventContext;
-use rui::elements::{Element, input};
+use rui::elements::{Element, input, list, scroll_view};
 use rui::testing::{HeadlessSession, mount};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -388,4 +388,80 @@ fn action_keymap_runtime_preserves_raw_text_editing_details() {
     assert!(session.dispatch_key_event(&event));
 
     assert_eq!(latest.borrow().as_str(), "r");
+}
+
+#[test]
+fn action_keymap_runtime_forwards_unbound_modified_arrows_to_inputs() {
+    let input_id = ElementId::new();
+    let mut session = mount_or_panic(move |_cx| {
+        input()
+            .id(input_id)
+            .accessibility_label("Search")
+            .value("hello world")
+    });
+    session.request_focus(Some(input_id));
+
+    assert!(session.dispatch_key_event(&KeyEvent::new(KeyCode::ArrowLeft, Modifiers::ctrl())));
+
+    let tree = match session.accessibility_tree() {
+        Ok(tree) => tree,
+        Err(err) => panic!("input accessibility tree should build: {err}"),
+    };
+    let node = match tree.find(input_id) {
+        Some(node) => node,
+        None => panic!("input node should be present"),
+    };
+    assert!(
+        node.a11y_text_caret().unwrap_or(usize::MAX) < "hello world".len(),
+        "ctrl-left should move the caret through the raw input fallback"
+    );
+}
+
+#[test]
+fn action_keymap_select_all_reaches_inputs_inside_wrappers() {
+    fn assert_select_all_reaches<E, B>(build_root: B)
+    where
+        E: Element,
+        B: Fn(ElementId, Rc<RefCell<String>>) -> E,
+    {
+        let input_id = ElementId::new();
+        let latest = Rc::new(RefCell::new(String::from("abc")));
+        let latest_ref = Rc::clone(&latest);
+        let mut session = mount_or_panic(move |_cx| build_root(input_id, Rc::clone(&latest_ref)));
+        session.request_focus(Some(input_id));
+
+        assert!(session.dispatch_key_event(&KeyEvent::new(KeyCode::A, Modifiers::meta())));
+        assert!(session.dispatch_key_event(
+            &KeyEvent::new(KeyCode::Unknown(0), Modifiers::none()).with_char('x')
+        ));
+        assert_eq!(latest.borrow().as_str(), "x");
+    }
+
+    assert_select_all_reaches(|input_id, latest| {
+        scroll_view().child(
+            input()
+                .id(input_id)
+                .accessibility_label("Search")
+                .value("abc")
+                .on_change(move |value| *latest.borrow_mut() = value.to_string()),
+        )
+    });
+    assert_select_all_reaches(|input_id, latest| {
+        list().item(
+            input()
+                .id(input_id)
+                .accessibility_label("Search")
+                .value("abc")
+                .on_change(move |value| *latest.borrow_mut() = value.to_string()),
+        )
+    });
+    assert_select_all_reaches(|input_id, latest| {
+        hoverable(
+            input()
+                .id(input_id)
+                .accessibility_label("Search")
+                .value("abc")
+                .on_change(move |value| *latest.borrow_mut() = value.to_string()),
+        )
+    });
 }

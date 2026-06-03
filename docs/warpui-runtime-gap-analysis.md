@@ -75,8 +75,8 @@ Use focused commands for each workstream and keep `cargo check` plus
 | --- | --- |
 | Runtime ownership and state | `cargo test headless`, `cargo test advanced_ui`, `cargo test action_keymap` |
 | Platform lifecycle | `cargo test platform_window`, `cargo test headless` |
-| Responsive layout | `cargo test headless`, `cargo test advanced_ui_layout_tests` |
-| Renderer telemetry | `cargo test renderer_resource`, `cargo test renderer_backend`, `cargo test benchmark_config` |
+| Responsive layout | `cargo test headless`, `cargo test --test advanced_ui_layout_tests` |
+| Renderer telemetry | `cargo test renderer_resource`, `cargo test --test renderer_backend`, `cargo test benchmark_config` |
 | Action routing | `cargo test action_keymap`, `cargo test event_targeting`, `cargo test text_editing` |
 | Text and IME | `cargo test text_editing`, `cargo test accessibility` |
 | Accessibility bridge | `cargo test accessibility`, `cargo test platform_window` |

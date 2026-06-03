@@ -311,8 +311,8 @@ mod tests {
 
     #[test]
     fn rect_inflate_edges_uses_each_side() {
-        let r = Rect::from_xywh(10.0, 10.0, 20.0, 20.0)
-            .inflate_edges(Edges::new(1.0, 2.0, 3.0, 4.0));
+        let r =
+            Rect::from_xywh(10.0, 10.0, 20.0, 20.0).inflate_edges(Edges::new(1.0, 2.0, 3.0, 4.0));
         assert_eq!(r, Rect::from_xywh(6.0, 9.0, 26.0, 24.0));
     }
 

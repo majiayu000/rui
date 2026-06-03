@@ -712,6 +712,14 @@ impl Element for Hoverable {
         self.inner.handle_key_event(cx, event)
     }
 
+    fn dispatch_action(
+        &mut self,
+        cx: &mut EventContext,
+        action: &crate::core::action::ActionId,
+    ) -> crate::core::action::ActionOutcome {
+        self.inner.dispatch_action(cx, action)
+    }
+
     fn handle_text_input_event(&mut self, cx: &mut EventContext, event: &TextInputEvent) -> bool {
         self.inner.handle_text_input_event(cx, event)
     }
