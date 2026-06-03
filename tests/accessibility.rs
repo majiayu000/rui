@@ -1,6 +1,7 @@
 use rui::advanced_ui::{
-    Button, Checkbox, Dialog, Menu, Popover, ProgressBar, Scrollable, SegmentedControl, Tab,
-    TabPanel, Tabs, TextField, button, container, text,
+    Button, Checkbox, DataList, DataTableRow, DataTree, DataTreeItem, Dialog, Menu, Popover,
+    ProgressBar, Scrollable, SegmentedControl, Tab, TabPanel, Tabs, TextField, button, container,
+    text,
 };
 use rui::core::ElementId;
 use rui::core::accessibility::{
@@ -482,6 +483,76 @@ fn accessibility_missing_required_labels_are_errors() {
         ProgressBar::new(0.5).accessibility_nodes(&AccessibilityContext::default()),
     ));
     assert_eq!(node.a11y_label(), Some("Progress"));
+}
+
+#[test]
+fn accessibility_data_primitives_expose_semantic_trees() {
+    let list_id = ElementId::new();
+    let list = DataList::new([("open", "Open work"), ("done", "Done work")])
+        .id(list_id)
+        .accessibility_label("Work queue")
+        .selected("done");
+    let list_tree = AccessibilityTree::new(accessibility_result(
+        list.accessibility_nodes(&AccessibilityContext::new(Some(list_id))),
+    ));
+    let list_node = match list_tree.find(list_id) {
+        Some(node) => node,
+        None => panic!("data list should be in accessibility tree"),
+    };
+    assert_eq!(list_node.a11y_role(), AccessibilityRole::DataList);
+    assert_eq!(list_node.a11y_label(), Some("Work queue"));
+    assert_eq!(list_node.a11y_value(), Some("done"));
+    assert!(list_node.a11y_focused());
+    assert_eq!(list_node.a11y_children().len(), 2);
+    assert_eq!(
+        list_node.a11y_children()[1].a11y_role(),
+        AccessibilityRole::DataListItem
+    );
+    assert_eq!(list_node.a11y_children()[1].a11y_selected(), Some(true));
+
+    let tree_id = ElementId::new();
+    let child_id = ElementId::new();
+    let tree = DataTree::new([DataTreeItem::new("src", "src")
+        .child(DataTreeItem::new("advanced", "advanced_ui").id(child_id))])
+    .id(tree_id)
+    .accessibility_label("Project tree")
+    .selected("advanced");
+    let data_tree = AccessibilityTree::new(accessibility_result(
+        tree.accessibility_nodes(&AccessibilityContext::default()),
+    ));
+    let tree_node = match data_tree.find(tree_id) {
+        Some(node) => node,
+        None => panic!("data tree should be in accessibility tree"),
+    };
+    assert_eq!(tree_node.a11y_role(), AccessibilityRole::DataTree);
+    assert_eq!(tree_node.a11y_children().len(), 1);
+    let child = match data_tree.find(child_id) {
+        Some(node) => node,
+        None => panic!("data tree child should be in accessibility tree"),
+    };
+    assert_eq!(child.a11y_role(), AccessibilityRole::DataTreeItem);
+    assert_eq!(child.a11y_selected(), Some(true));
+
+    let row_id = ElementId::new();
+    let row = DataTableRow::new(["Name", "Status"])
+        .id(row_id)
+        .accessibility_label("Build row")
+        .selected(true);
+    let row_tree = AccessibilityTree::new(accessibility_result(
+        row.accessibility_nodes(&AccessibilityContext::default()),
+    ));
+    let row_node = match row_tree.find(row_id) {
+        Some(node) => node,
+        None => panic!("data table row should be in accessibility tree"),
+    };
+    assert_eq!(row_node.a11y_role(), AccessibilityRole::DataTableRow);
+    assert_eq!(row_node.a11y_label(), Some("Build row"));
+    assert_eq!(row_node.a11y_selected(), Some(true));
+    assert_eq!(row_node.a11y_children().len(), 2);
+    assert_eq!(
+        row_node.a11y_children()[0].a11y_role(),
+        AccessibilityRole::DataTableCell
+    );
 }
 
 #[test]
