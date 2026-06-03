@@ -2,10 +2,14 @@
 #[path = "../examples/advanced_ui_controls.rs"]
 mod advanced_ui_controls;
 
+#[allow(dead_code)]
+#[path = "../examples/native_dogfood.rs"]
+mod native_dogfood_example;
+
 use advanced_ui_controls::{
-    controls_panel_from_data, load_local_dogfood_data, DogfoodControlsView, DogfoodPanel,
-    LocalDogfoodData, LocalVerificationCheck, DOGFOOD_CLAIM_GATE_ID, DOGFOOD_PANEL_CONTROL_ID,
-    DOGFOOD_REFRESH_BUTTON_ID,
+    DOGFOOD_CLAIM_GATE_ID, DOGFOOD_PANEL_CONTROL_ID, DOGFOOD_REFRESH_BUTTON_ID,
+    DogfoodControlsView, DogfoodPanel, LocalDogfoodData, LocalVerificationCheck,
+    controls_panel_from_data, load_local_dogfood_data,
 };
 use rui::core::accessibility::AccessibilityNode;
 use rui::core::action::{
@@ -52,10 +56,11 @@ fn dogfood_controls_mount_real_data_headlessly() {
         Err(err) => panic!("dogfood primitives should snapshot: {err}"),
     };
     assert!(snapshot.as_str().contains("rui local dogfood"));
-    assert!(data
-        .git_changes
-        .iter()
-        .any(|change| snapshot.as_str().contains(change)));
+    assert!(
+        data.git_changes
+            .iter()
+            .any(|change| snapshot.as_str().contains(change))
+    );
 }
 
 #[test]
@@ -113,10 +118,12 @@ fn dogfood_workflow_routes_actions_and_edits_repository_filter() {
 
     workflow.apply_text_input(TextInputEvent::InsertText(data.package_name.clone()));
     assert_eq!(workflow.filter_query(), data.package_name);
-    assert!(workflow
-        .visible_lines()
-        .iter()
-        .any(|line| line.contains(&data.package_name)));
+    assert!(
+        workflow
+            .visible_lines()
+            .iter()
+            .any(|line| line.contains(&data.package_name))
+    );
 
     let mut keymap = match Keymap::with_standard_bindings() {
         Ok(keymap) => keymap,
@@ -165,6 +172,99 @@ fn dogfood_workflow_routes_actions_and_edits_repository_filter() {
     );
     assert_eq!(workflow.filter_query(), "");
     assert_eq!(workflow.selected_panel(), DogfoodPanel::Overview);
+}
+
+#[test]
+fn native_dogfood_script_contract_launches_example_and_profile() {
+    let script = include_str!("../scripts/native_dogfood_macos.sh");
+    let example = include_str!("../examples/native_dogfood.rs");
+    let mac_runner = include_str!("../src/platform/mac/app.rs");
+    let mac_window = include_str!("../src/platform/mac/window.rs");
+
+    for required in [
+        "cargo run --example native_dogfood",
+        "RUI_NATIVE_DOGFOOD_PROFILE",
+        "RUI_NATIVE_DOGFOOD_INTERACTIVE=1",
+        "RUI_NATIVE_DOGFOOD_AUTOMATION=1",
+        "\"status\":\"passed\"",
+        "\"script_requires_minimize_reopen\":true",
+    ] {
+        assert!(
+            script.contains(required),
+            "native dogfood script should contain `{required}`"
+        );
+    }
+
+    for required in [
+        "RUI_NATIVE_DOGFOOD_PROFILE",
+        "RUI_NATIVE_DOGFOOD_TEXT",
+        "finite_default_exit",
+        "scripts/native_dogfood_macos.sh",
+        "script_requires_minimize_reopen",
+        "cx.app_mut().quit()",
+    ] {
+        assert!(
+            example.contains(required),
+            "native dogfood example should contain `{required}`"
+        );
+    }
+    assert!(
+        !script.contains("RUI_PROFILE"),
+        "native dogfood script should not reuse renderer telemetry RUI_PROFILE"
+    );
+    assert!(
+        !example.contains("RUI_PROFILE"),
+        "native dogfood example should not reuse renderer telemetry RUI_PROFILE"
+    );
+
+    for required in [
+        "NativeDogfoodAutomationPhase::Interact",
+        "NativeDogfoodAutomationPhase::Minimize",
+        "NativeDogfoodAutomationPhase::Reopen",
+        "append_text_keys",
+        "append_pointer_click",
+    ] {
+        assert!(
+            mac_runner.contains(required),
+            "macOS runner should contain `{required}`"
+        );
+    }
+
+    for required in ["set_minimized(true)", "set_minimized(false)"] {
+        assert!(
+            mac_runner.contains(required),
+            "macOS runner should call `{required}`"
+        );
+    }
+    assert!(
+        mac_window.contains("fn set_minimized") && mac_window.contains("deminiaturize"),
+        "macOS window should support native minimize and reopen"
+    );
+}
+
+#[test]
+fn native_dogfood_profile_body_is_valid_json_contract() {
+    let profile = native_dogfood_example::native_dogfood_profile_body(
+        "passed",
+        "typed\nvalue",
+        "typed\nvalue",
+        true,
+        true,
+    );
+    let parsed: serde_json::Value = match serde_json::from_str(&profile) {
+        Ok(parsed) => parsed,
+        Err(err) => panic!("native dogfood profile should be valid JSON: {err}\n{profile}"),
+    };
+
+    assert_eq!(parsed["schema"], "rui.native_dogfood.v1");
+    assert_eq!(parsed["status"], "passed");
+    assert_eq!(parsed["typed_text"], "typed\nvalue");
+    assert_eq!(parsed["expected_text"], "typed\nvalue");
+    assert_eq!(parsed["text_matched"], true);
+    assert_eq!(parsed["submitted"], true);
+    assert_eq!(parsed["interactive"], true);
+    assert_eq!(parsed["script_requires_minimize_reopen"], true);
+    assert_eq!(parsed["driver"], "scripts/native_dogfood_macos.sh");
 }
 
 fn fixture_data() -> LocalDogfoodData {

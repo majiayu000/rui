@@ -11,6 +11,21 @@ Complete API documentation for the RUI framework.
 - [Styling](#styling)
 - [Colors](#colors)
 - [Animation](#animation)
+- [Validation](#validation)
+
+---
+
+## Drift-Checked Public Surface
+
+`cargo test docs_api_drift` verifies that this section stays aligned with the public source API.
+
+Builders: `div()`, `text(content)`, `button(label)`, `input()`, `image(path)`, `scroll_view()`, `table()`, `row()`, `header_row()`, `cell(content)`, `list()`, `ordered_list()`, `unordered_list()`, `progress()`, `spinner()`.
+
+Advanced UI builders: `advanced_ui::container()`, `advanced_ui::row()`, `advanced_ui::column()`, `advanced_ui::text(content)`, `advanced_ui::button(label)`, `advanced_ui::checkbox(label)`, `advanced_ui::progress_bar(value)`, `advanced_ui::scrollable(child)`, `advanced_ui::segmented_control(options, selected)`, `advanced_ui::toolbar(label)`, `advanced_ui::tooltip(child, content)`.
+
+Enum variants: `ButtonVariant::Primary`, `ButtonVariant::Secondary`, `ButtonVariant::Outline`, `ButtonVariant::Ghost`, `ButtonVariant::Danger`, `ButtonVariant::Success`; `ButtonSize::Small`, `ButtonSize::Medium`, `ButtonSize::Large`; `InputType::Text`, `InputType::Password`, `InputType::Email`, `InputType::Number`, `InputType::Search`; `ImageFit::Cover`, `ImageFit::Contain`, `ImageFit::Fill`, `ImageFit::None`, `ImageFit::ScaleDown`; `ScrollDirection::Vertical`, `ScrollDirection::Horizontal`, `ScrollDirection::Both`; `ScrollbarVisibility::Auto`, `ScrollbarVisibility::Always`, `ScrollbarVisibility::Never`, `ScrollbarVisibility::Hover`; `ListStyle::Bullet`, `ListStyle::Numbered`, `ListStyle::LowercaseAlpha`, `ListStyle::UppercaseAlpha`, `ListStyle::LowercaseRoman`, `ListStyle::UppercaseRoman`, `ListStyle::None`; `SpinnerType::Dots`, `SpinnerType::Line`, `SpinnerType::Circle`, `SpinnerType::Arrow`, `SpinnerType::Box`, `SpinnerType::Bounce`, `SpinnerType::Grow`, `SpinnerType::Star`; `TextAlign::Left`, `TextAlign::Center`, `TextAlign::Right`; `ControlSize::Small`, `ControlSize::Medium`, `ControlSize::Large`; `ControlVariant::Primary`, `ControlVariant::Secondary`, `ControlVariant::Outline`, `ControlVariant::Ghost`, `ControlVariant::Danger`, `ControlVariant::Success`; `MainAxisAlignment::Start`, `MainAxisAlignment::End`, `MainAxisAlignment::Center`, `MainAxisAlignment::SpaceBetween`, `MainAxisAlignment::SpaceAround`; `CrossAxisAlignment::Start`, `CrossAxisAlignment::End`, `CrossAxisAlignment::Center`, `CrossAxisAlignment::Stretch`; `Easing::Linear`, `Easing::EaseIn`, `Easing::EaseOut`, `Easing::EaseInOut`, `Easing::EaseInQuad`, `Easing::EaseOutQuad`, `Easing::EaseInOutQuad`, `Easing::EaseInCubic`, `Easing::EaseOutCubic`, `Easing::EaseInOutCubic`, `Easing::EaseInQuart`, `Easing::EaseOutQuart`, `Easing::EaseInOutQuart`, `Easing::EaseInExpo`, `Easing::EaseOutExpo`, `Easing::EaseInOutExpo`, `Easing::EaseInBack`, `Easing::EaseOutBack`, `Easing::EaseInOutBack`, `Easing::EaseInElastic`, `Easing::EaseOutElastic`, `Easing::EaseInOutElastic`, `Easing::EaseInBounce`, `Easing::EaseOutBounce`, `Easing::EaseInOutBounce`, `Easing::Spring`, `Easing::Custom`.
+
+Validation: CI-safe checks are `cargo test docs_api_drift`, `cargo test example_smoke`, `cargo test dogfood`, `cargo check`, and `cargo test`. The native macOS GUI smoke is local-only: `scripts/native_dogfood_macos.sh`.
 
 ---
 
@@ -305,7 +320,8 @@ pub enum ButtonVariant {
     Secondary,
     Outline,
     Ghost,
-    Destructive,
+    Danger,
+    Success,
 }
 ```
 
@@ -342,8 +358,8 @@ input()
 | `.input_type(InputType)` | Input type |
 | `.on_change(handler)` | Change handler |
 | `.on_submit(handler)` | Submit handler |
-| `.disabled(bool)` | Disable input |
-| `.max_length(n)` | Maximum characters |
+| `.on_focus(handler)` | Focus handler |
+| `.on_blur(handler)` | Blur handler |
 
 #### InputType
 
@@ -500,7 +516,7 @@ unordered_list()
     .child(ListItem::new("Second item"))
 
 ordered_list()
-    .style(ListStyle::Decimal)
+    .list_style(ListStyle::Numbered)
     .child(ListItem::new("Step 1"))
     .child(ListItem::new("Step 2"))
 ```
@@ -509,12 +525,13 @@ ordered_list()
 
 ```rust
 pub enum ListStyle {
-    Disc,       // Bullet points
-    Circle,     // Hollow circles
-    Square,     // Squares
-    Decimal,    // 1, 2, 3
-    Alpha,      // a, b, c
-    Roman,      // i, ii, iii
+    Bullet,
+    Numbered,
+    LowercaseAlpha,
+    UppercaseAlpha,
+    LowercaseRoman,
+    UppercaseRoman,
+    None,
 }
 ```
 
@@ -527,8 +544,8 @@ Progress bar element.
 ```rust
 progress()
     .value(0.75)  // 75%
-    .w(200.0)
-    .h(8.0)
+    .width(200.0)
+    .height(8.0)
     .color(Color::GREEN)
 ```
 
@@ -539,8 +556,9 @@ progress()
 | `progress()` | Create progress bar |
 | `.value(0.0-1.0)` | Progress value |
 | `.color(Color)` | Bar color |
-| `.track_color(Color)` | Track background |
-| `.animated(bool)` | Animate changes |
+| `.width(width)` | Bar width |
+| `.height(height)` | Bar height |
+| `.show_percentage(bool)` | Show percentage label |
 
 ---
 
@@ -551,7 +569,7 @@ Loading spinner element.
 ```rust
 spinner()
     .spinner_type(SpinnerType::Dots)
-    .size(24.0)
+    .font_size(24.0)
     .color(Color::BLUE)
 ```
 
@@ -559,10 +577,14 @@ spinner()
 
 ```rust
 pub enum SpinnerType {
-    Circular,
     Dots,
-    Bars,
-    Pulse,
+    Line,
+    Circle,
+    Arrow,
+    Box,
+    Bounce,
+    Grow,
+    Star,
 }
 ```
 
@@ -702,18 +724,9 @@ pub enum Easing {
     EaseInQuart,
     EaseOutQuart,
     EaseInOutQuart,
-    EaseInQuint,
-    EaseOutQuint,
-    EaseInOutQuint,
-    EaseInSine,
-    EaseOutSine,
-    EaseInOutSine,
     EaseInExpo,
     EaseOutExpo,
     EaseInOutExpo,
-    EaseInCirc,
-    EaseOutCirc,
-    EaseInOutCirc,
     EaseInBack,
     EaseOutBack,
     EaseInOutBack,
@@ -723,6 +736,8 @@ pub enum Easing {
     EaseInBounce,
     EaseOutBounce,
     EaseInOutBounce,
+    Spring { stiffness: f32, damping: f32 },
+    Custom(fn(f32) -> f32),
 }
 ```
 
