@@ -2,6 +2,10 @@
 #[path = "../examples/advanced_ui_controls.rs"]
 mod advanced_ui_controls;
 
+#[allow(dead_code)]
+#[path = "../examples/native_dogfood.rs"]
+mod native_dogfood_example;
+
 use advanced_ui_controls::{
     DOGFOOD_CLAIM_GATE_ID, DOGFOOD_PANEL_CONTROL_ID, DOGFOOD_REFRESH_BUTTON_ID,
     DogfoodControlsView, DogfoodPanel, LocalDogfoodData, LocalVerificationCheck,
@@ -179,7 +183,7 @@ fn native_dogfood_script_contract_launches_example_and_profile() {
 
     for required in [
         "cargo run --example native_dogfood",
-        "RUI_PROFILE",
+        "RUI_NATIVE_DOGFOOD_PROFILE",
         "RUI_NATIVE_DOGFOOD_INTERACTIVE=1",
         "RUI_NATIVE_DOGFOOD_AUTOMATION=1",
         "\"status\":\"passed\"",
@@ -192,7 +196,7 @@ fn native_dogfood_script_contract_launches_example_and_profile() {
     }
 
     for required in [
-        "RUI_PROFILE",
+        "RUI_NATIVE_DOGFOOD_PROFILE",
         "RUI_NATIVE_DOGFOOD_TEXT",
         "finite_default_exit",
         "scripts/native_dogfood_macos.sh",
@@ -204,6 +208,14 @@ fn native_dogfood_script_contract_launches_example_and_profile() {
             "native dogfood example should contain `{required}`"
         );
     }
+    assert!(
+        !script.contains("RUI_PROFILE"),
+        "native dogfood script should not reuse renderer telemetry RUI_PROFILE"
+    );
+    assert!(
+        !example.contains("RUI_PROFILE"),
+        "native dogfood example should not reuse renderer telemetry RUI_PROFILE"
+    );
 
     for required in [
         "NativeDogfoodAutomationPhase::Interact",
@@ -228,6 +240,31 @@ fn native_dogfood_script_contract_launches_example_and_profile() {
         mac_window.contains("fn set_minimized") && mac_window.contains("deminiaturize"),
         "macOS window should support native minimize and reopen"
     );
+}
+
+#[test]
+fn native_dogfood_profile_body_is_valid_json_contract() {
+    let profile = native_dogfood_example::native_dogfood_profile_body(
+        "passed",
+        "typed\nvalue",
+        "typed\nvalue",
+        true,
+        true,
+    );
+    let parsed: serde_json::Value = match serde_json::from_str(&profile) {
+        Ok(parsed) => parsed,
+        Err(err) => panic!("native dogfood profile should be valid JSON: {err}\n{profile}"),
+    };
+
+    assert_eq!(parsed["schema"], "rui.native_dogfood.v1");
+    assert_eq!(parsed["status"], "passed");
+    assert_eq!(parsed["typed_text"], "typed\nvalue");
+    assert_eq!(parsed["expected_text"], "typed\nvalue");
+    assert_eq!(parsed["text_matched"], true);
+    assert_eq!(parsed["submitted"], true);
+    assert_eq!(parsed["interactive"], true);
+    assert_eq!(parsed["script_requires_minimize_reopen"], true);
+    assert_eq!(parsed["driver"], "scripts/native_dogfood_macos.sh");
 }
 
 fn fixture_data() -> LocalDogfoodData {

@@ -325,7 +325,7 @@ cargo run --example animation_demo
 
 Most validation is CI-safe and finite: `cargo check`, `cargo test`, `cargo test example_smoke`, `cargo test dogfood`, and `cargo test docs_api_drift`.
 
-The native macOS smoke is local-only because it opens a real window and uses native runner automation to type into an input, minimize and reopen the app window, write `RUI_PROFILE`, and exit:
+The native macOS smoke is local-only because it opens a real window and uses native runner automation to type into an input, minimize and reopen the app window, write `RUI_NATIVE_DOGFOOD_PROFILE`, and exit:
 
 ```bash
 scripts/native_dogfood_macos.sh

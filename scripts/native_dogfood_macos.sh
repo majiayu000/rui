@@ -12,12 +12,12 @@ if [[ "$TEXT" == *[^A-Za-z0-9_-]* ]]; then
   exit 2
 fi
 
-PROFILE="${RUI_PROFILE:-target/rui-native-dogfood-profile.json}"
+PROFILE="${RUI_NATIVE_DOGFOOD_PROFILE:-target/rui-native-dogfood-profile.json}"
 LOG="${RUI_NATIVE_DOGFOOD_LOG:-target/rui-native-dogfood.log}"
 mkdir -p "$(dirname "$PROFILE")" "$(dirname "$LOG")"
 rm -f "$PROFILE" "$LOG"
 
-RUI_PROFILE="$PROFILE" \
+RUI_NATIVE_DOGFOOD_PROFILE="$PROFILE" \
 RUI_NATIVE_DOGFOOD_TEXT="$TEXT" \
 RUI_NATIVE_DOGFOOD_INTERACTIVE=1 \
 RUI_NATIVE_DOGFOOD_AUTOMATION=1 \
@@ -60,7 +60,7 @@ fi
 trap - EXIT
 
 if [[ ! -s "$PROFILE" ]]; then
-  echo "native dogfood did not write RUI_PROFILE at $PROFILE" >&2
+  echo "native dogfood did not write RUI_NATIVE_DOGFOOD_PROFILE at $PROFILE" >&2
   echo "cargo log: $LOG" >&2
   exit 1
 fi

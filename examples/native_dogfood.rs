@@ -30,7 +30,7 @@ impl NativeDogfoodConfig {
         Self {
             expected_text: std::env::var("RUI_NATIVE_DOGFOOD_TEXT")
                 .unwrap_or_else(|_| String::from(DEFAULT_DOGFOOD_TEXT)),
-            profile_path: std::env::var_os("RUI_PROFILE").map(PathBuf::from),
+            profile_path: std::env::var_os("RUI_NATIVE_DOGFOOD_PROFILE").map(PathBuf::from),
             interactive: std::env::var_os("RUI_NATIVE_DOGFOOD_INTERACTIVE").is_some(),
         }
     }
@@ -60,25 +60,25 @@ impl NativeDogfoodView {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).unwrap_or_else(|err| {
                 panic!(
-                    "failed to create RUI_PROFILE directory {}: {err}",
+                    "failed to create RUI_NATIVE_DOGFOOD_PROFILE directory {}: {err}",
                     parent.display()
                 )
             });
         }
 
-        let text_matched = typed_text == self.config.expected_text;
-        let body = format!(
-            "{{\"schema\":\"rui.native_dogfood.v1\",\"status\":\"{}\",\"example\":\"native_dogfood\",\"typed_text\":\"{}\",\"expected_text\":\"{}\",\"text_matched\":{},\"submitted\":{},\"interactive\":{},\"script_requires_minimize_reopen\":{},\"driver\":\"scripts/native_dogfood_macos.sh\"}}\n",
-            json_escape(status),
-            json_escape(typed_text),
-            json_escape(&self.config.expected_text),
-            text_matched,
+        let body = native_dogfood_profile_body(
+            status,
+            typed_text,
+            &self.config.expected_text,
             submitted,
             self.config.interactive,
-            self.config.interactive,
         );
-        std::fs::write(path, body)
-            .unwrap_or_else(|err| panic!("failed to write RUI_PROFILE {}: {err}", path.display()));
+        std::fs::write(path, body).unwrap_or_else(|err| {
+            panic!(
+                "failed to write RUI_NATIVE_DOGFOOD_PROFILE {}: {err}",
+                path.display()
+            )
+        });
     }
 }
 
@@ -156,7 +156,7 @@ impl View for NativeDogfoodView {
                 .color(Color::hex(0x1f2937)),
             )
             .child(
-                text("Profile output is written to RUI_PROFILE after submit.")
+                text("Profile output is written to RUI_NATIVE_DOGFOOD_PROFILE after submit.")
                     .size(12.0)
                     .color(Color::hex(0x6b7280)),
             )
@@ -165,6 +165,26 @@ impl View for NativeDogfoodView {
 
 fn native_dogfood_display_text(value: &str) -> &str {
     if value.is_empty() { "(empty)" } else { value }
+}
+
+pub(crate) fn native_dogfood_profile_body(
+    status: &str,
+    typed_text: &str,
+    expected_text: &str,
+    submitted: bool,
+    interactive: bool,
+) -> String {
+    let text_matched = typed_text == expected_text;
+    format!(
+        "{{\"schema\":\"rui.native_dogfood.v1\",\"status\":\"{}\",\"example\":\"native_dogfood\",\"typed_text\":\"{}\",\"expected_text\":\"{}\",\"text_matched\":{},\"submitted\":{},\"interactive\":{},\"script_requires_minimize_reopen\":{},\"driver\":\"scripts/native_dogfood_macos.sh\"}}\n",
+        json_escape(status),
+        json_escape(typed_text),
+        json_escape(expected_text),
+        text_matched,
+        submitted,
+        interactive,
+        interactive,
+    )
 }
 
 fn json_escape(value: &str) -> String {
