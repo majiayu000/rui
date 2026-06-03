@@ -1,9 +1,12 @@
 use rui::ImageSource;
 use rui::renderer::{
-    GlyphResourceKey, PrimitiveKind, RecordingRenderer, Renderer, RendererDeviceDiagnostics,
-    RendererDiagnostics, RendererImageCache, RendererResourceCache, RendererResourceError,
-    RendererResourceKind, RendererResourceStats, RendererUnsupportedPrimitive,
+    GlyphResourceKey, Primitive, PrimitiveKind, RecordingRenderer, Renderer,
+    RendererBatchDiagnostics, RendererDeviceDiagnostics, RendererDiagnostics,
+    RendererFramePhaseDurations, RendererImageCache, RendererResourceCache, RendererResourceError,
+    RendererResourceKind, RendererResourceLimits, RendererResourceStats, RendererTelemetryRecorder,
+    RendererUnsupportedPrimitive,
 };
+use rui::{Bounds, Color, Corners, Edges, Size};
 
 #[test]
 fn renderer_resource_reuses_live_texture_allocations() {
@@ -24,6 +27,8 @@ fn renderer_resource_reuses_live_texture_allocations() {
     assert!(second.evicted.is_empty());
     assert_eq!(cache.stats().live_entries, 1);
     assert_eq!(cache.stats().live_bytes, 8);
+    assert_eq!(cache.stats().cache_hits, 1);
+    assert_eq!(cache.stats().cache_misses, 1);
 }
 
 #[test]
@@ -50,6 +55,7 @@ fn renderer_resource_pressure_does_not_evict_active_content() {
         }
     ));
     assert_eq!(cache.stats().pressure_events, 1);
+    assert_eq!(cache.stats().cache_misses, 2);
 }
 
 #[test]
@@ -71,6 +77,7 @@ fn renderer_resource_evicts_inactive_entries_under_pressure() {
     assert!(!cache.contains(&1_u32));
     assert!(cache.contains(&2_u32));
     assert_eq!(cache.stats().disposed_entries, 1);
+    assert_eq!(cache.stats().evicted_entries, 1);
 }
 
 #[test]
@@ -163,6 +170,9 @@ fn renderer_diagnostics_reports_resource_totals_by_kind() {
                 live_entries: 2,
                 live_bytes: 96,
                 disposed_entries: 1,
+                evicted_entries: 1,
+                cache_hits: 4,
+                cache_misses: 2,
                 pressure_events: 0,
             },
             RendererResourceStats {
@@ -170,6 +180,9 @@ fn renderer_diagnostics_reports_resource_totals_by_kind() {
                 live_entries: 1,
                 live_bytes: 32,
                 disposed_entries: 0,
+                evicted_entries: 0,
+                cache_hits: 3,
+                cache_misses: 1,
                 pressure_events: 2,
             },
         ],
@@ -184,6 +197,9 @@ fn renderer_diagnostics_reports_resource_totals_by_kind() {
     assert_eq!(diagnostics.total_live_entries(), 3);
     assert_eq!(diagnostics.total_live_bytes(), 128);
     assert_eq!(diagnostics.total_pressure_events(), 2);
+    assert_eq!(diagnostics.total_evicted_entries(), 1);
+    assert_eq!(diagnostics.total_cache_hits(), 7);
+    assert_eq!(diagnostics.total_cache_misses(), 3);
 }
 
 #[test]
@@ -207,10 +223,7 @@ fn renderer_diagnostics_reports_unsupported_primitive_reasons() {
         unsupported.reason,
         "path primitives are not implemented by this backend"
     );
-    assert_eq!(
-        diagnostics.unsupported_primitive(PrimitiveKind::Text),
-        None
-    );
+    assert_eq!(diagnostics.unsupported_primitive(PrimitiveKind::Text), None);
 }
 
 #[test]
@@ -244,4 +257,100 @@ fn renderer_resource_recording_renderer_reports_headless_diagnostics() {
     assert!(diagnostics.device.is_headless);
     assert!(diagnostics.resources.is_empty());
     assert!(diagnostics.unsupported_primitives.is_empty());
+}
+
+#[test]
+fn renderer_resource_limits_default_to_unbounded_cache_capacity() {
+    let limits = RendererResourceLimits::default();
+
+    assert_eq!(limits.texture_max_entries, usize::MAX);
+    assert_eq!(limits.image_max_bytes, usize::MAX);
+    assert_eq!(limits.glyph_max_entries, usize::MAX);
+}
+
+#[test]
+fn renderer_resource_profile_json_exposes_frame_and_cache_fields() {
+    let mut recorder = RendererTelemetryRecorder::new();
+    let diagnostics = RendererDiagnostics::new(
+        RendererDeviceDiagnostics::headless("profile-test"),
+        vec![RendererResourceStats {
+            kind: RendererResourceKind::Texture,
+            live_entries: 1,
+            live_bytes: 64,
+            disposed_entries: 0,
+            evicted_entries: 1,
+            cache_hits: 2,
+            cache_misses: 3,
+            pressure_events: 1,
+        }],
+    );
+    let mut scene = SceneBuilder::new();
+    scene.push_quad();
+    scene.push_quad();
+
+    let telemetry = recorder.capture_telemetry(
+        "profile-test",
+        Size::new(320.0, 200.0),
+        RendererFramePhaseDurations {
+            render_ns: 20_000_000,
+            paint_ns: 700,
+            ..RendererFramePhaseDurations::default()
+        },
+        &diagnostics,
+        RendererBatchDiagnostics::from_scene(scene.scene()),
+    );
+    let json = match serde_json::from_str::<serde_json::Value>(&telemetry.to_json_line()) {
+        Ok(value) => value,
+        Err(err) => panic!("profile JSON should parse: {err}"),
+    };
+
+    assert_eq!(json["schema"], "rui.renderer.profile.v1");
+    assert_eq!(json["backend"], "profile-test");
+    assert_eq!(json["primitive_count"], 2);
+    assert_eq!(json["draw_count"], 2);
+    assert_eq!(json["resource_cache_hits"], 2);
+    assert_eq!(json["resource_cache_misses"], 3);
+    assert_eq!(json["resource_evictions"], 1);
+    assert_eq!(json["jank_count"], 1);
+}
+
+#[test]
+fn renderer_resource_batch_diagnostics_detect_per_primitive_buffer_uploads() {
+    let mut scene = SceneBuilder::new();
+    scene.push_quad();
+    scene.push_quad();
+    scene.push_quad();
+
+    let batch = RendererBatchDiagnostics::for_metal_scene(scene.scene());
+
+    assert_eq!(batch.primitive_count, 3);
+    assert_eq!(batch.draw_count, 3);
+    assert_eq!(batch.batch_count, 1);
+    assert_eq!(batch.buffer_allocations, 6);
+}
+
+struct SceneBuilder {
+    scene: rui::renderer::Scene,
+}
+
+impl SceneBuilder {
+    fn new() -> Self {
+        Self {
+            scene: rui::renderer::Scene::new(),
+        }
+    }
+
+    fn scene(&self) -> &rui::renderer::Scene {
+        &self.scene
+    }
+
+    fn push_quad(&mut self) {
+        self.scene.insert(Primitive::Quad {
+            bounds: Bounds::from_xywh(0.0, 0.0, 10.0, 10.0),
+            background: Color::rgb(0.1, 0.2, 0.3).to_rgba(),
+            border_color: Color::TRANSPARENT.to_rgba(),
+            border_widths: Edges::ZERO,
+            corner_radii: Corners::ZERO,
+        });
+    }
 }

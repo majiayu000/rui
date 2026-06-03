@@ -1,8 +1,8 @@
 //! Renderer-owned resource lifecycle management.
 
+use crate::ImageSource;
 use crate::core::geometry::Size;
 use crate::renderer::primitives::PrimitiveKind;
-use crate::ImageSource;
 use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::error::Error;
@@ -138,7 +138,39 @@ pub struct RendererResourceStats {
     pub live_entries: usize,
     pub live_bytes: usize,
     pub disposed_entries: usize,
+    pub evicted_entries: usize,
+    pub cache_hits: usize,
+    pub cache_misses: usize,
     pub pressure_events: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RendererResourceLimits {
+    pub texture_max_entries: usize,
+    pub texture_max_bytes: usize,
+    pub image_max_entries: usize,
+    pub image_max_bytes: usize,
+    pub glyph_max_entries: usize,
+    pub glyph_max_bytes: usize,
+}
+
+impl RendererResourceLimits {
+    pub const fn unbounded() -> Self {
+        Self {
+            texture_max_entries: usize::MAX,
+            texture_max_bytes: usize::MAX,
+            image_max_entries: usize::MAX,
+            image_max_bytes: usize::MAX,
+            glyph_max_entries: usize::MAX,
+            glyph_max_bytes: usize::MAX,
+        }
+    }
+}
+
+impl Default for RendererResourceLimits {
+    fn default() -> Self {
+        Self::unbounded()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -242,6 +274,21 @@ impl RendererDiagnostics {
             .map(|stats| stats.pressure_events)
             .sum()
     }
+
+    pub fn total_evicted_entries(&self) -> usize {
+        self.resources
+            .iter()
+            .map(|stats| stats.evicted_entries)
+            .sum()
+    }
+
+    pub fn total_cache_hits(&self) -> usize {
+        self.resources.iter().map(|stats| stats.cache_hits).sum()
+    }
+
+    pub fn total_cache_misses(&self) -> usize {
+        self.resources.iter().map(|stats| stats.cache_misses).sum()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -272,6 +319,9 @@ where
     live_bytes: usize,
     pressure_events: usize,
     disposed_entries: usize,
+    evicted_entries: usize,
+    cache_hits: usize,
+    cache_misses: usize,
     entries: HashMap<K, RendererResourceRecord>,
 }
 
@@ -289,6 +339,9 @@ where
             live_bytes: 0,
             pressure_events: 0,
             disposed_entries: 0,
+            evicted_entries: 0,
+            cache_hits: 0,
+            cache_misses: 0,
             entries: HashMap::new(),
         }
     }
@@ -317,6 +370,7 @@ where
 
         self.tick += 1;
         if let Some(record) = self.entries.get_mut(&key) {
+            self.cache_hits += 1;
             record.last_used = self.tick;
             record.active = true;
             return Ok(RendererResourceAllocation {
@@ -326,6 +380,7 @@ where
             });
         }
 
+        self.cache_misses += 1;
         let evicted = self.make_room_for(byte_size)?;
         let handle = RendererResourceHandle {
             id: RendererResourceId(self.next_id),
@@ -370,6 +425,9 @@ where
             live_entries: self.entries.len(),
             live_bytes: self.live_bytes,
             disposed_entries: self.disposed_entries,
+            evicted_entries: self.evicted_entries,
+            cache_hits: self.cache_hits,
+            cache_misses: self.cache_misses,
             pressure_events: self.pressure_events,
         }
     }
@@ -398,6 +456,7 @@ where
             };
             self.live_bytes = self.live_bytes.saturating_sub(record.byte_size);
             self.disposed_entries += 1;
+            self.evicted_entries += 1;
             evicted.push(key);
         }
         Ok(evicted)

@@ -12,11 +12,14 @@ use crate::platform::window::{
     PlatformImeEvent, PlatformInputEvent, PlatformMouseEventKind, PlatformRendererTarget,
     PlatformWindow, PlatformWindowError, PlatformWindowEvent,
 };
-use crate::renderer::RendererError;
-use crate::renderer::Scene;
 use crate::renderer::metal::MetalRenderer;
+use crate::renderer::{
+    RendererBatchDiagnostics, RendererError, RendererFramePhaseDurations,
+    RendererTelemetryRecorder, Scene,
+};
 use objc2::MainThreadMarker;
 use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
+use std::time::Instant;
 use taffy::prelude::*;
 
 /// Run the application with default window options
@@ -101,9 +104,11 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
         let mut focused_element: Option<crate::core::ElementId> = None;
         let mut last_pointer_hit_target: Option<crate::core::ElementId> = None;
         let mut pointer_capture_target: Option<crate::core::ElementId> = None;
+        let mut profile_recorder = RendererTelemetryRecorder::enabled_from_env();
 
         // Render loop (event-driven)
         loop {
+            let mut phases = RendererFramePhaseDurations::default();
             viewport_size = match window.content_size() {
                 Ok(size) => size,
                 Err(err) => panic!("failed to read platform window size: {}", err),
@@ -119,6 +124,11 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
             let platform_events = match window.poll_events_for_app(&app, wait_for_event) {
                 Ok(events) => events,
                 Err(err) => panic!("failed to poll platform window events: {}", err),
+            };
+            let event_observed_at = if platform_events.is_empty() {
+                None
+            } else {
+                Some(Instant::now())
             };
 
             for event in platform_events {
@@ -173,6 +183,7 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
             }
 
             // Rebuild layout tree each frame we render to avoid unbounded growth
+            let layout_started_at = Instant::now();
             taffy.clear();
 
             // Layout phase
@@ -198,7 +209,9 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
                 layout.size.width,
                 layout.size.height,
             );
+            phases.layout_ns = layout_started_at.elapsed().as_nanos();
 
+            let dispatch_started_at = Instant::now();
             if viewport_size != last_viewport_size {
                 root.handle_window_event(&Event::WindowResize {
                     width: viewport_size.width,
@@ -271,18 +284,44 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
             if context.consume_runtime_view_notification() {
                 schedule_platform_redraw(&window, &mut context);
             }
+            phases.dispatch_ns = dispatch_started_at.elapsed().as_nanos();
 
             // Paint phase
+            let paint_started_at = Instant::now();
             scene.clear();
             let mut paint_cx = PaintContext::new(&mut scene, root_bounds, &taffy);
             root.paint(&mut paint_cx);
             scene.finish();
+            phases.paint_ns = paint_started_at.elapsed().as_nanos();
 
             // Get next drawable from the platform window renderer attachment
-            if let Some(metal_drawable) = window.next_drawable()
+            let drawable_wait_started_at = Instant::now();
+            let metal_drawable = window.next_drawable();
+            phases.drawable_wait_ns = drawable_wait_started_at.elapsed().as_nanos();
+
+            let render_started_at = Instant::now();
+            phases.event_to_render_latency_ns = event_observed_at.map(|observed_at| {
+                render_started_at
+                    .saturating_duration_since(observed_at)
+                    .as_nanos()
+            });
+            if let Some(metal_drawable) = metal_drawable
                 && let Err(err) = renderer.render(&scene, metal_drawable, viewport_size)
             {
                 panic!("renderer failed: {}", err);
+            }
+            phases.render_ns = render_started_at.elapsed().as_nanos();
+
+            if let Some(recorder) = profile_recorder.as_mut() {
+                let diagnostics = renderer.diagnostics();
+                let telemetry = recorder.capture_telemetry(
+                    "metal",
+                    viewport_size,
+                    phases,
+                    &diagnostics,
+                    RendererBatchDiagnostics::for_metal_scene(&scene),
+                );
+                eprintln!("{}", telemetry.to_json_line());
             }
 
             if !context.needs_rebuild && context.pending_updates.is_empty() {
