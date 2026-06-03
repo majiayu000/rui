@@ -418,6 +418,29 @@ fn action_keymap_runtime_forwards_unbound_modified_arrows_to_inputs() {
 }
 
 #[test]
+fn action_keymap_runtime_does_not_forward_modified_deletes_as_plain_deletes() {
+    let input_id = ElementId::new();
+    let latest = Rc::new(RefCell::new(String::from("abc")));
+    let latest_ref = Rc::clone(&latest);
+    let mut session = mount_or_panic(move |_cx| {
+        let latest_ref = Rc::clone(&latest_ref);
+        input()
+            .id(input_id)
+            .accessibility_label("Search")
+            .value("abc")
+            .on_change(move |value| *latest_ref.borrow_mut() = value.to_string())
+    });
+    session.request_focus(Some(input_id));
+
+    assert!(!session.dispatch_key_event(&KeyEvent::new(KeyCode::Backspace, Modifiers::alt())));
+    assert!(!session.dispatch_key_event(&KeyEvent::new(KeyCode::Delete, Modifiers::meta())));
+    assert_eq!(latest.borrow().as_str(), "abc");
+
+    assert!(session.dispatch_key_event(&KeyEvent::new(KeyCode::Backspace, Modifiers::none())));
+    assert_eq!(latest.borrow().as_str(), "ab");
+}
+
+#[test]
 fn action_keymap_select_all_reaches_inputs_inside_wrappers() {
     fn assert_select_all_reaches<E, B>(build_root: B)
     where

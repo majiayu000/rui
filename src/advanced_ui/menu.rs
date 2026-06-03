@@ -385,7 +385,12 @@ impl Element for Menu {
                 self.indexed_state.update_hover(index, cx, self.state);
                 false
             }
-            PointerEventKind::Down => self.indexed_state.press(index, cx, self.state) || inside,
+            PointerEventKind::Down => {
+                if inside && self.state.can_activate() {
+                    cx.request_focus(Some(self.id));
+                }
+                self.indexed_state.press(index, cx, self.state) || inside
+            }
             PointerEventKind::Up => {
                 let release = self.indexed_state.release(index, cx, self.state);
                 if release.activated {
@@ -515,10 +520,31 @@ mod tests {
 
         assert_eq!(menu.selected_value(), Some("open"));
         assert_eq!(&*selected.borrow(), &["open".to_string()]);
-        assert_eq!(
-            cx.take_accessibility_announcements()[0].message(),
-            "Open selected"
+        let announcements = cx.take_accessibility_announcements();
+        assert!(
+            announcements
+                .iter()
+                .any(|announcement| announcement.message() == "Open selected")
         );
+    }
+
+    #[test]
+    fn advanced_ui_menu_pointer_down_focuses_menu_for_keyboard_navigation() {
+        let id = ElementId::new();
+        let mut menu = Menu::new("File", [("new", "New"), ("open", "Open")]).id(id);
+        let taffy = TaffyTree::<ElementId>::new();
+        let mut focused = None;
+        let mut cx = event_context(&taffy, &mut focused);
+
+        assert!(menu.handle_pointer_event(&mut cx, &pointer(PointerEventKind::Down, 12.0, 12.0)));
+        assert_eq!(cx.focused_id(), Some(id));
+        assert!(menu.handle_key_event(
+            &mut cx,
+            &KeyEvent::new(KeyCode::ArrowDown, Modifiers::none()),
+        ));
+        assert!(menu.handle_key_event(&mut cx, &KeyEvent::new(KeyCode::Enter, Modifiers::none())));
+
+        assert_eq!(menu.selected_value(), Some("new"));
     }
 
     #[test]
