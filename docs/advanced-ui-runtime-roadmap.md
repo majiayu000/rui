@@ -6,6 +6,15 @@ repository. The plan is incremental: each workstream should land with
 observable contracts, tests, and examples before higher-level readiness claims
 are made.
 
+Related runtime planning docs:
+
+- [WarpUI runtime gap analysis](warpui-runtime-gap-analysis.md) compares the
+  current RUI baseline with public WarpUI runtime anchors and maps the remaining
+  gaps to owning issues.
+- [WarpUI-aligned runtime implementation spec](warpui-runtime-implementation-spec.md)
+  defines the implementation rules, workstream order, and validation policy for
+  issue #87 and its child issues.
+
 ## Goals
 
 - Preserve the lightweight RUI architecture: `View` builds elements, elements
@@ -119,6 +128,24 @@ Use these gates before making stronger claims:
    - Primitive snapshots must reject unstable image sources.
    - Example smoke tests must be finite and CI-safe.
    - Dogfood apps must use application-owned data, not placeholder fixtures.
+
+## Runtime Alignment Workstreams
+
+Issue #87 tracks the umbrella runtime-readiness gap. The focused follow-up
+issues keep the implementation scoped:
+
+- #88 runtime ownership and state contracts.
+- #89 macOS lifecycle, redraw, and multi-window contracts.
+- #90 structured responsive dimensions.
+- #91 renderer telemetry, resource limits, and batching diagnostics.
+- #92 runtime focus, keymap, and action routing.
+- #93 full IME lifecycle and TextArea contracts.
+- #94 app-owned theme and token system.
+- #95 native macOS dogfood and docs/API drift checks.
+
+Existing child trackers remain the owners for accessibility, advanced
+components, data surfaces, TextField, tabs, menus, dialogs, popovers, and
+ScrollView semantics: #40, #44, #79, #80, #81, #82, and #83.
 
 ## Workstream Rules
 
