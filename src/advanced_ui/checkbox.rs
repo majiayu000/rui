@@ -1,8 +1,5 @@
-use crate::advanced_ui::state::{InteractionState, require_non_empty, validation_border_color};
-use crate::advanced_ui::tokens::{
-    CONTROL_GAP, CONTROL_RADIUS, ControlSize, ControlState, ControlVariant, control_border_color,
-    control_colors, text_color,
-};
+use crate::advanced_ui::state::{InteractionState, require_non_empty};
+use crate::advanced_ui::tokens::{ControlSize, ControlState, ControlVariant, Theme};
 use crate::core::ElementId;
 use crate::core::accessibility::{
     AccessibilityAction, AccessibilityContext, AccessibilityError, AccessibilityNode,
@@ -22,6 +19,7 @@ pub struct Checkbox {
     label: String,
     checked: bool,
     size: ControlSize,
+    theme: Theme,
     state: InteractionState,
     style: Style,
     on_change: Option<Box<dyn Fn(bool)>>,
@@ -37,6 +35,7 @@ impl Checkbox {
             label,
             checked: false,
             size: ControlSize::default(),
+            theme: Theme::default(),
             state: InteractionState::default(),
             style: Style::new(),
             on_change: None,
@@ -73,6 +72,11 @@ impl Checkbox {
         self
     }
 
+    pub fn theme(mut self, theme: Theme) -> Self {
+        self.theme = theme;
+        self
+    }
+
     pub fn on_change(mut self, handler: impl Fn(bool) + 'static) -> Self {
         self.on_change = Some(Box::new(handler));
         self
@@ -93,9 +97,9 @@ impl Checkbox {
     }
 
     fn preferred_width(&self) -> f32 {
-        self.size.indicator_extent()
-            + CONTROL_GAP
-            + self.label.chars().count() as f32 * self.size.text_size() * 0.55
+        self.theme.indicator_extent(self.size)
+            + self.theme.control_gap()
+            + self.label.chars().count() as f32 * self.theme.text_size(self.size) * 0.55
     }
 }
 
@@ -111,7 +115,7 @@ impl Element for Checkbox {
     fn layout(&mut self, cx: &mut LayoutContext) -> NodeId {
         let mut style = style_to_taffy(&self.style);
         style.size.width = Dimension::Length(self.preferred_width());
-        style.size.height = Dimension::Length(self.size.control_height());
+        style.size.height = Dimension::Length(self.theme.control_height(self.size));
 
         match cx.taffy.new_leaf(style) {
             Ok(node) => node,
@@ -123,33 +127,34 @@ impl Element for Checkbox {
         let bounds = cx.bounds();
         cx.register_hit_region(self.id, bounds);
 
-        let indicator = self.size.indicator_extent();
+        let control_state = self.state();
+        let indicator = self.theme.indicator_extent(self.size);
         let indicator_y = bounds.y() + (bounds.height() - indicator) / 2.0;
         let box_bounds = Bounds::from_xywh(bounds.x(), indicator_y, indicator, indicator);
-        let colors = control_colors(ControlVariant::Primary, self.state());
+        let colors = self
+            .theme
+            .control_colors(ControlVariant::Primary, control_state);
 
         let box_background = if self.checked {
             colors.background
-        } else if self.state.hovered() {
-            crate::advanced_ui::tokens::disabled_surface_color()
         } else {
-            crate::advanced_ui::tokens::surface_color()
+            self.theme.surface_color_for_state(control_state)
+        };
+        let default_border = if self.checked {
+            colors.background
+        } else {
+            self.theme.colors.border
         };
 
         cx.paint(Primitive::Quad {
             bounds: box_bounds,
             background: box_background.to_rgba(),
-            border_color: validation_border_color(
-                self.state.invalid(),
-                if self.checked {
-                    colors.background
-                } else {
-                    control_border_color()
-                },
-            )
-            .to_rgba(),
+            border_color: self
+                .theme
+                .state_border_color(control_state, default_border)
+                .to_rgba(),
             border_widths: Edges::all(1.0),
-            corner_radii: Corners::all(CONTROL_RADIUS / 2.0),
+            corner_radii: Corners::all(self.theme.indicator_radius()),
         });
 
         if self.checked {
@@ -157,28 +162,35 @@ impl Element for Checkbox {
                 bounds: box_bounds,
                 content: "x".to_string(),
                 color: colors.foreground.to_rgba(),
-                font_size: self.size.text_size(),
-                font_weight: 700,
+                font_size: self.theme.text_size(self.size),
+                font_weight: self.theme.typography.selected_weight,
                 font_family: None,
                 line_height: 1.0,
                 align: crate::elements::text::TextAlign::Center,
             });
         }
 
+        let gap = self.theme.control_gap();
         let label_bounds = Bounds::from_xywh(
-            bounds.x() + indicator + CONTROL_GAP,
+            bounds.x() + indicator + gap,
             bounds.y(),
-            (bounds.width() - indicator - CONTROL_GAP).max(0.0),
+            (bounds.width() - indicator - gap).max(0.0),
             bounds.height(),
         );
+        let mut label_color = self.theme.colors.text;
+        if control_state.disabled {
+            label_color = label_color.with_alpha(self.theme.state.disabled_opacity);
+        } else if control_state.read_only {
+            label_color = label_color.with_alpha(self.theme.state.read_only_opacity);
+        }
         cx.paint(Primitive::Text {
             bounds: label_bounds,
             content: self.label.clone(),
-            color: text_color().to_rgba(),
-            font_size: self.size.text_size(),
-            font_weight: 500,
+            color: label_color.to_rgba(),
+            font_size: self.theme.text_size(self.size),
+            font_weight: self.theme.typography.label_weight,
             font_family: None,
-            line_height: 1.2,
+            line_height: self.theme.typography.line_height,
             align: crate::elements::text::TextAlign::Left,
         });
     }

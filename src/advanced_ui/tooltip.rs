@@ -1,5 +1,5 @@
 use crate::advanced_ui::state::{InteractionState, require_non_empty};
-use crate::advanced_ui::tokens::{CONTROL_RADIUS, text_color};
+use crate::advanced_ui::tokens::{ControlSize, Theme};
 use crate::core::ElementId;
 use crate::core::geometry::{Bounds, Edges};
 use crate::core::style::{Corners, Style};
@@ -13,6 +13,7 @@ pub struct Tooltip {
     id: ElementId,
     child: AnyElement,
     content: String,
+    theme: Theme,
     state: InteractionState,
 }
 
@@ -25,6 +26,7 @@ impl Tooltip {
             id: ElementId::new(),
             child: child.into(),
             content,
+            theme: Theme::default(),
             state: InteractionState::default(),
         }
     }
@@ -45,6 +47,11 @@ impl Tooltip {
 
     pub fn read_only(mut self, read_only: bool) -> Self {
         self.state.set_read_only(read_only);
+        self
+    }
+
+    pub fn theme(mut self, theme: Theme) -> Self {
+        self.theme = theme;
         self
     }
 
@@ -72,25 +79,32 @@ impl Element for Tooltip {
         self.child.paint(cx);
 
         if self.state.hovered() {
-            let width = self.content.chars().count() as f32 * 7.0 + 16.0;
-            let tooltip_bounds =
-                Bounds::from_xywh(bounds.x(), (bounds.y() - 30.0).max(0.0), width, 24.0);
+            let font_size = self.theme.text_size(ControlSize::Small);
+            let padding = self.theme.control_gap();
+            let width = self.content.chars().count() as f32 * font_size * 0.58 + padding * 2.0;
+            let height = (font_size * self.theme.typography.line_height + padding).max(20.0);
+            let tooltip_bounds = Bounds::from_xywh(
+                bounds.x(),
+                (bounds.y() - height - padding).max(0.0),
+                width,
+                height,
+            );
 
             cx.paint(Primitive::Quad {
                 bounds: tooltip_bounds,
-                background: text_color().to_rgba(),
+                background: self.theme.colors.tooltip_background.to_rgba(),
                 border_color: crate::core::color::Color::TRANSPARENT.to_rgba(),
                 border_widths: Edges::ZERO,
-                corner_radii: Corners::all(CONTROL_RADIUS),
+                corner_radii: Corners::all(self.theme.control_radius()),
             });
             cx.paint(Primitive::Text {
                 bounds: tooltip_bounds,
                 content: self.content.clone(),
-                color: crate::core::color::Color::WHITE.to_rgba(),
-                font_size: 12.0,
-                font_weight: 500,
+                color: self.theme.colors.tooltip_text.to_rgba(),
+                font_size,
+                font_weight: self.theme.typography.label_weight,
                 font_family: None,
-                line_height: 1.0,
+                line_height: self.theme.typography.line_height,
                 align: crate::elements::text::TextAlign::Center,
             });
         }

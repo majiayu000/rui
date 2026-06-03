@@ -1,4 +1,7 @@
-use rui::advanced_ui::{CrossAxisAlignment, MainAxisAlignment, column, container, row, text};
+use rui::advanced_ui::{
+    Button, CrossAxisAlignment, MainAxisAlignment, Theme, ThemeDensity, ThemeMode, column,
+    container, row, text,
+};
 use rui::core::style::{Dimension, Shadow, Style};
 use rui::elements::element::{Element, LayoutContext, PaintContext, style_to_taffy};
 use rui::renderer::{Primitive, Scene};
@@ -206,4 +209,33 @@ fn advanced_text_wraps_existing_text_painting() {
     });
 
     assert_eq!(text_primitive, Some(("Status", 16.0, 600)));
+}
+
+#[test]
+fn advanced_theme_presets_cover_light_dark_and_high_contrast() {
+    let light = Theme::light();
+    let dark = Theme::dark();
+    let high_contrast = Theme::high_contrast();
+
+    assert_eq!(light.mode, ThemeMode::Light);
+    assert_eq!(dark.mode, ThemeMode::Dark);
+    assert_eq!(high_contrast.mode, ThemeMode::HighContrast);
+    assert_ne!(light.colors.surface, dark.colors.surface);
+    assert_ne!(
+        light.colors.primary.rest.background,
+        high_contrast.colors.primary.rest.background
+    );
+}
+
+#[test]
+fn advanced_control_theme_density_changes_layout_tokens() {
+    let theme = Theme::light().with_density(ThemeDensity { scale: 1.5 });
+    let primitives = painted_primitives(Button::new("Dense").theme(theme), Size::new(240.0, 80.0));
+
+    let button_bounds = primitives.iter().find_map(|primitive| match primitive {
+        Primitive::Quad { bounds, .. } => Some(*bounds),
+        _ => None,
+    });
+
+    assert_eq!(button_bounds.map(|bounds| bounds.height()), Some(54.0));
 }
