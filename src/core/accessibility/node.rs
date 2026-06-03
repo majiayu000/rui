@@ -6,6 +6,12 @@ use super::error::AccessibilityError;
 pub enum AccessibilityRole {
     Button,
     Checkbox,
+    DataList,
+    DataListItem,
+    DataTableCell,
+    DataTableRow,
+    DataTree,
+    DataTreeItem,
     Dialog,
     Menu,
     MenuItem,

@@ -222,7 +222,7 @@ fn controls_panel_with_events(
         .background(Color::hex(0xf8fafc))
         .child(
             ui::column()
-                .spacing(18.0)
+                .spacing(8.0)
                 .child(controls_header(data))
                 .child(metric_row(data))
                 .child(action_row(data, refresh_count, events.as_ref()))
@@ -444,30 +444,78 @@ fn overview_panel(data: &LocalDogfoodData) -> ui::Container {
     ui::container()
         .w(620.0)
         .h(132.0)
-        .padding(16.0)
+        .padding(12.0)
         .background(Color::WHITE)
         .radius(6.0)
         .child(
             ui::column()
-                .spacing(10.0)
+                .spacing(8.0)
                 .child(
                     ui::text("Primary screen")
-                        .size(18.0)
+                        .size(16.0)
                         .bold()
                         .color(Color::hex(0x111827)),
                 )
                 .child(
                     ui::text(format!(
-                        "Rendering {} advanced UI source files with {} integration tests in this checkout.",
+                        "Rendering {} advanced UI files with {} integration tests from this checkout.",
                         data.advanced_ui_files, data.integration_tests
                     ))
-                    .size(14.0)
+                    .size(12.0)
                     .color(Color::hex(0x374151)),
                 )
+                .child(data_primitives_row(data)),
+        )
+}
+
+fn data_primitives_row(data: &LocalDogfoodData) -> impl Element {
+    let git_status = data
+        .git_changes
+        .first()
+        .map(String::as_str)
+        .unwrap_or("working tree clean");
+
+    ui::row()
+        .spacing(8.0)
+        .child(
+            ui::data_list(vec![
+                ui::DataListItem::new("advanced", "Advanced UI")
+                    .detail(format!("{} files", data.advanced_ui_files)),
+                ui::DataListItem::new("tests", "Integration tests")
+                    .detail(format!("{} files", data.integration_tests)),
+            ])
+            .accessibility_label("Repository counts")
+            .selected("advanced")
+            .w(186.0)
+            .row_height(24.0)
+            .read_only(true),
+        )
+        .child(
+            ui::data_tree([ui::DataTreeItem::new("workspace", "workspace")
+                .child(ui::DataTreeItem::new("advanced_ui", "src/advanced_ui"))])
+            .accessibility_label("Repository tree")
+            .selected("advanced_ui")
+            .w(190.0)
+            .row_height(24.0)
+            .read_only(true),
+        )
+        .child(
+            ui::column()
+                .spacing(0.0)
                 .child(
-                    ui::text("The app reads repository files and git state at startup.")
-                        .size(14.0)
-                        .color(Color::hex(0x374151)),
+                    ui::DataTableRow::header(["Signal", "Value"])
+                        .w(200.0)
+                        .h(24.0)
+                        .read_only(true),
+                )
+                .child(
+                    ui::data_table_row(vec![
+                        ui::DataTableCell::new("git").w(58.0),
+                        ui::DataTableCell::new(git_status),
+                    ])
+                    .w(200.0)
+                    .h(24.0)
+                    .read_only(true),
                 ),
         )
 }

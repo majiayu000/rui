@@ -2,6 +2,7 @@
 
 mod button;
 mod checkbox;
+mod data;
 mod menu;
 mod popover;
 mod progress_bar;
@@ -31,6 +32,10 @@ use taffy::prelude::NodeId;
 
 pub use button::{Button, button};
 pub use checkbox::{Checkbox, checkbox};
+pub use data::{
+    DataList, DataListItem, DataTableCell, DataTableRow, DataTree, DataTreeItem, data_list,
+    data_table_row, data_tree,
+};
 pub use menu::{Menu, MenuItem, menu};
 pub use popover::{Dialog, Popover, dialog, popover};
 pub use progress_bar::{ProgressBar, progress_bar};
