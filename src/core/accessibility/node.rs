@@ -6,6 +6,10 @@ use super::error::AccessibilityError;
 pub enum AccessibilityRole {
     Button,
     Checkbox,
+    Dialog,
+    Menu,
+    MenuItem,
+    Popover,
     ProgressIndicator,
     SegmentedControl,
     SegmentedOption,

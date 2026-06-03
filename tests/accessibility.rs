@@ -1,5 +1,6 @@
 use rui::advanced_ui::{
-    Button, Checkbox, ProgressBar, Scrollable, SegmentedControl, TextField, container, text,
+    Button, Checkbox, Dialog, Menu, Popover, ProgressBar, Scrollable, SegmentedControl, TextField,
+    button, container, text,
 };
 use rui::core::ElementId;
 use rui::core::accessibility::{
@@ -336,6 +337,55 @@ fn accessibility_progress_bar_exposes_value_and_validation_state() {
     assert_eq!(node.a11y_label(), Some("Load progress"));
     assert_eq!(node.a11y_value(), Some("42%"));
     assert!(node.a11y_invalid());
+}
+
+#[test]
+fn accessibility_menu_popover_and_dialog_expose_semantics() {
+    let menu_id = ElementId::new();
+    let menu = Menu::new("File", [("new", "New"), ("open", "Open")])
+        .id(menu_id)
+        .selected("open");
+    let menu_node = first_node(accessibility_result(
+        menu.accessibility_nodes(&AccessibilityContext::default()),
+    ));
+    assert_eq!(menu_node.a11y_role(), AccessibilityRole::Menu);
+    assert_eq!(menu_node.a11y_label(), Some("File"));
+    assert_eq!(menu_node.a11y_value(), Some("open"));
+    assert_eq!(menu_node.a11y_children().len(), 2);
+    assert_eq!(
+        menu_node.a11y_children()[1].a11y_role(),
+        AccessibilityRole::MenuItem
+    );
+    assert_eq!(menu_node.a11y_children()[1].a11y_selected(), Some(true));
+    assert_eq!(
+        menu_node.a11y_children()[1].a11y_actions(),
+        [AccessibilityAction::Activate]
+    );
+
+    let popover_id = ElementId::new();
+    let popover = Popover::new("Inspector", button("Open"), text("Details"))
+        .id(popover_id)
+        .open(true);
+    let popover_node = first_node(accessibility_result(
+        popover.accessibility_nodes(&AccessibilityContext::new(Some(popover_id))),
+    ));
+    assert_eq!(popover_node.a11y_role(), AccessibilityRole::Popover);
+    assert_eq!(popover_node.a11y_label(), Some("Inspector"));
+    assert!(popover_node.a11y_focused());
+    assert_eq!(popover_node.a11y_children().len(), 2);
+
+    let dialog_id = ElementId::new();
+    let dialog = Dialog::new(
+        "Confirm delete",
+        container().w(120.0).h(80.0).child(text("Delete?")),
+    )
+    .id(dialog_id);
+    let dialog_node = first_node(accessibility_result(
+        dialog.accessibility_nodes(&AccessibilityContext::default()),
+    ));
+    assert_eq!(dialog_node.a11y_role(), AccessibilityRole::Dialog);
+    assert_eq!(dialog_node.a11y_label(), Some("Confirm delete"));
+    assert_eq!(dialog_node.a11y_children().len(), 1);
 }
 
 #[test]
