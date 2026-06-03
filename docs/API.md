@@ -6,10 +6,38 @@ Complete API documentation for the RUI framework.
 
 - [Core Types](#core-types)
 - [Elements](#elements)
+- [Advanced UI Themes](#advanced-ui-themes)
 - [Hooks](#hooks)
 - [Styling](#styling)
 - [Colors](#colors)
 - [Animation](#animation)
+
+---
+
+## Advanced UI Themes
+
+Advanced controls accept an app-owned `rui::advanced_ui::Theme` through
+`.theme(theme)`. Store the theme in app or view state and rebuild controls when
+it changes; the controls resolve their color, radius, spacing, typography,
+density, and shared state tokens during layout and paint.
+
+```rust
+use rui::advanced_ui::{Theme, ThemeDensity, button};
+
+let mut theme = Theme::dark().with_density(ThemeDensity { scale: 1.1 });
+theme.radius.control = 8.0;
+
+button("Save").theme(theme);
+```
+
+`Theme::light()`, `Theme::dark()`, and `Theme::high_contrast()` provide the
+standard presets. Apps can customize the public token structs directly.
+
+Raw elements such as `div()`, `text()`, and `input()` remain explicit primitive
+builders: they use the colors, spacing, and style values passed to their own
+builder methods. They do not read advanced UI theme tokens automatically. Use
+advanced controls when shared disabled/read-only/invalid/focus/hover/pressed,
+loading, and error state styling should come from the theme contract.
 
 ---
 

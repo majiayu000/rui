@@ -1,21 +1,20 @@
-use crate::advanced_ui::state::{require_non_empty, InteractionState};
-use crate::advanced_ui::tokens::{
-    control_border_color, disabled_surface_color, surface_color, CONTROL_GAP, CONTROL_RADIUS,
-};
+use crate::advanced_ui::state::{InteractionState, require_non_empty};
+use crate::advanced_ui::tokens::Theme;
+use crate::core::ElementId;
 use crate::core::accessibility::{
     AccessibilityContext, AccessibilityError, AccessibilityNode, AccessibilityRole,
 };
 use crate::core::style::Style;
-use crate::core::ElementId;
 use crate::elements::element::{
     AnyElement, Element, EventContext, LayoutContext, PaintContext, PointerEvent,
 };
-use crate::elements::{div, Div};
+use crate::elements::{Div, div};
 use taffy::prelude::NodeId;
 
 pub struct Toolbar {
     id: ElementId,
     label: String,
+    theme: Theme,
     state: InteractionState,
     inner: Div,
 }
@@ -26,11 +25,13 @@ impl Toolbar {
         require_non_empty(&label, "toolbar accessibility label must not be empty");
 
         let id = ElementId::new();
+        let theme = Theme::default();
         Self {
             id,
             label,
+            theme,
             state: InteractionState::default(),
-            inner: base_toolbar_div(id, false),
+            inner: base_toolbar_div(id, InteractionState::default(), theme),
         }
     }
 
@@ -42,16 +43,19 @@ impl Toolbar {
 
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.state.set_disabled(disabled);
-        self.inner = self.inner.bg(if disabled {
-            disabled_surface_color()
-        } else {
-            surface_color()
-        });
+        self.inner = apply_toolbar_theme(self.inner, self.state, self.theme);
         self
     }
 
     pub fn read_only(mut self, read_only: bool) -> Self {
         self.state.set_read_only(read_only);
+        self.inner = apply_toolbar_theme(self.inner, self.state, self.theme);
+        self
+    }
+
+    pub fn theme(mut self, theme: Theme) -> Self {
+        self.theme = theme;
+        self.inner = apply_toolbar_theme(self.inner, self.state, self.theme);
         self
     }
 
@@ -141,20 +145,21 @@ impl Element for Toolbar {
     }
 }
 
-fn base_toolbar_div(id: ElementId, disabled: bool) -> Div {
-    div()
-        .id(id)
-        .flex_row()
-        .items_center()
-        .gap(CONTROL_GAP)
-        .p(6.0)
-        .bg(if disabled {
-            disabled_surface_color()
-        } else {
-            surface_color()
-        })
-        .border(1.0, control_border_color())
-        .rounded(CONTROL_RADIUS)
+fn base_toolbar_div(id: ElementId, state: InteractionState, theme: Theme) -> Div {
+    apply_toolbar_theme(div().id(id).flex_row().items_center(), state, theme)
+}
+
+fn apply_toolbar_theme(inner: Div, state: InteractionState, theme: Theme) -> Div {
+    let token_state = state.into();
+    inner
+        .gap(theme.control_gap())
+        .p(theme.toolbar_padding())
+        .bg(theme.surface_color_for_state(token_state))
+        .border(
+            1.0,
+            theme.state_border_color(token_state, theme.colors.border),
+        )
+        .rounded(theme.control_radius())
 }
 
 pub fn toolbar(label: impl Into<String>) -> Toolbar {

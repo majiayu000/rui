@@ -1,7 +1,5 @@
-use crate::advanced_ui::state::{
-    InteractionState, require_finite, require_finite_non_negative, validation_border_color,
-};
-use crate::advanced_ui::tokens::{CONTROL_RADIUS, ControlSize, control_border_color};
+use crate::advanced_ui::state::{InteractionState, require_finite, require_finite_non_negative};
+use crate::advanced_ui::tokens::{ControlSize, Theme};
 use crate::core::ElementId;
 use crate::core::accessibility::{
     AccessibilityContext, AccessibilityError, AccessibilityNode, AccessibilityRole,
@@ -22,8 +20,9 @@ pub struct ProgressBar {
     width: StyleDimension,
     show_label: bool,
     accessibility_label: Option<String>,
-    color: Color,
-    background: Color,
+    color: Option<Color>,
+    background: Option<Color>,
+    theme: Theme,
     state: InteractionState,
     style: Style,
 }
@@ -32,8 +31,9 @@ impl ProgressBar {
     pub fn new(value: f32) -> Self {
         validate_progress_value(value);
 
+        let theme = Theme::default();
         let mut style = Style::new();
-        style.border.radius = Corners::all(CONTROL_RADIUS);
+        style.border.radius = Corners::all(theme.control_radius());
 
         Self {
             id: ElementId::new(),
@@ -42,8 +42,9 @@ impl ProgressBar {
             width: StyleDimension::px(220.0),
             show_label: true,
             accessibility_label: None,
-            color: Color::hex(0x2563eb),
-            background: Color::hex(0xe5e7eb),
+            color: None,
+            background: None,
+            theme,
             state: InteractionState::default(),
             style,
         }
@@ -104,12 +105,18 @@ impl ProgressBar {
     }
 
     pub fn color(mut self, color: impl Into<Color>) -> Self {
-        self.color = color.into();
+        self.color = Some(color.into());
         self
     }
 
     pub fn background(mut self, color: impl Into<Color>) -> Self {
-        self.background = color.into();
+        self.background = Some(color.into());
+        self
+    }
+
+    pub fn theme(mut self, theme: Theme) -> Self {
+        self.theme = theme;
+        self.style.border.radius = Corners::all(self.theme.control_radius());
         self
     }
 
@@ -143,7 +150,7 @@ impl Element for ProgressBar {
     fn layout(&mut self, cx: &mut LayoutContext) -> NodeId {
         let mut style = style_to_taffy(&self.style);
         style.size.width = style_dimension_or(Some(self.width), None, Dimension::Auto);
-        style.size.height = Dimension::Length(self.size.control_height() / 2.0);
+        style.size.height = Dimension::Length(self.theme.control_height(self.size) / 2.0);
 
         match cx.taffy.new_leaf(style) {
             Ok(node) => node,
@@ -157,11 +164,16 @@ impl Element for ProgressBar {
     fn paint(&mut self, cx: &mut PaintContext) {
         let bounds = cx.bounds();
         let radius = self.style.border.radius;
+        let state = self.state.into();
+        let track = self.background.unwrap_or(self.theme.colors.progress_track);
+        let fill = self.color.unwrap_or(self.theme.colors.progress_fill);
 
         cx.paint(Primitive::Quad {
             bounds,
-            background: self.background.to_rgba(),
-            border_color: validation_border_color(self.state.invalid(), control_border_color())
+            background: track.to_rgba(),
+            border_color: self
+                .theme
+                .state_border_color(state, self.theme.colors.border)
                 .to_rgba(),
             border_widths: Edges::all(1.0),
             corner_radii: radius,
@@ -171,7 +183,7 @@ impl Element for ProgressBar {
             let filled_width = bounds.width() * self.value;
             cx.paint(Primitive::Quad {
                 bounds: Bounds::from_xywh(bounds.x(), bounds.y(), filled_width, bounds.height()),
-                background: self.color.to_rgba(),
+                background: fill.to_rgba(),
                 border_color: Color::TRANSPARENT.to_rgba(),
                 border_widths: Edges::ZERO,
                 corner_radii: radius,
@@ -182,9 +194,9 @@ impl Element for ProgressBar {
             cx.paint(Primitive::Text {
                 bounds,
                 content: format!("{}%", (self.value * 100.0).round() as u32),
-                color: Color::WHITE.to_rgba(),
+                color: self.theme.colors.text_on_accent.to_rgba(),
                 font_size: (bounds.height() * 0.62).max(10.0),
-                font_weight: 600,
+                font_weight: self.theme.typography.control_weight,
                 font_family: None,
                 line_height: 1.0,
                 align: crate::elements::text::TextAlign::Center,

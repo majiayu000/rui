@@ -1,11 +1,12 @@
+use rui::advanced_ui::{button, Theme};
 use rui::core::color::Rgba;
 use rui::core::geometry::{Bounds, Edges, Size};
 use rui::core::style::Corners;
 use rui::elements::{div, image, text};
 use rui::renderer::Primitive;
 use rui::testing::{
-    PrimitiveSnapshot, PrimitiveSnapshotError, assert_primitive_snapshot_text, mount,
-    primitive_snapshot,
+    assert_primitive_snapshot_text, mount, primitive_snapshot, PrimitiveSnapshot,
+    PrimitiveSnapshotError,
 };
 use rui::{ImageFit, ImageSource};
 
@@ -95,11 +96,9 @@ fn primitive_snapshot_serializes_data_images_stably() {
         Err(err) => panic!("data image snapshot should serialize: {err}"),
     };
 
-    assert!(
-        snapshot
-            .as_str()
-            .contains("source=data(width=1,height=1,len=4")
-    );
+    assert!(snapshot
+        .as_str()
+        .contains("source=data(width=1,height=1,len=4"));
     assert!(snapshot.as_str().contains("fnv64=0x"));
     assert!(snapshot.as_str().contains("opacity=0.500"));
 }
@@ -144,4 +143,29 @@ fn primitive_snapshot_rejects_file_image_element_output() {
         }
         other => panic!("expected unsupported image source, got {other}"),
     }
+}
+
+#[test]
+fn primitive_snapshot_captures_advanced_ui_theme_tokens() {
+    let mut theme = Theme::high_contrast();
+    theme.colors.primary.rest.background = rui::Color::hex(0x00ff00);
+    theme.radius.control = 2.0;
+    theme.typography.text_scale = 1.25;
+
+    let session = match mount(Size::new(160.0, 60.0), move |_cx| button("Go").theme(theme)) {
+        Ok(session) => session,
+        Err(err) => panic!("headless mount should render themed advanced button: {err}"),
+    };
+    let snapshot = match session.primitive_snapshot() {
+        Ok(snapshot) => snapshot,
+        Err(err) => panic!("themed advanced button snapshot should serialize: {err}"),
+    };
+
+    assert!(snapshot
+        .as_str()
+        .contains("background=rgba(0.000, 1.000, 0.000, 1.000)"));
+    assert!(snapshot
+        .as_str()
+        .contains("radii=(2.000, 2.000, 2.000, 2.000)"));
+    assert!(snapshot.as_str().contains("font_size=17.500"));
 }

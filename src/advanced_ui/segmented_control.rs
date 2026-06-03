@@ -1,9 +1,5 @@
-use crate::advanced_ui::state::{
-    IndexedInteractionState, InteractionState, require_non_empty, validation_border_color,
-};
-use crate::advanced_ui::tokens::{
-    CONTROL_RADIUS, ControlSize, ControlVariant, control_border_color, control_colors,
-};
+use crate::advanced_ui::state::{IndexedInteractionState, InteractionState, require_non_empty};
+use crate::advanced_ui::tokens::{ControlSize, ControlVariant, Theme};
 use crate::core::ElementId;
 use crate::core::accessibility::{
     AccessibilityAction, AccessibilityContext, AccessibilityError, AccessibilityNode,
@@ -58,6 +54,7 @@ pub struct SegmentedControl {
     selected: String,
     accessibility_label: Option<String>,
     size: ControlSize,
+    theme: Theme,
     state: InteractionState,
     indexed_state: IndexedInteractionState,
     style: Style,
@@ -75,8 +72,9 @@ impl SegmentedControl {
         validate_options(&options, &selected);
         let option_ids = options.iter().map(|_| ElementId::new()).collect();
 
+        let theme = Theme::default();
         let mut style = Style::new();
-        style.border.radius = Corners::all(CONTROL_RADIUS);
+        style.border.radius = Corners::all(theme.control_radius());
 
         Self {
             id: ElementId::new(),
@@ -85,6 +83,7 @@ impl SegmentedControl {
             selected,
             accessibility_label: None,
             size: ControlSize::default(),
+            theme,
             state: InteractionState::default(),
             indexed_state: IndexedInteractionState::default(),
             style,
@@ -106,6 +105,12 @@ impl SegmentedControl {
 
     pub fn size(mut self, size: ControlSize) -> Self {
         self.size = size;
+        self
+    }
+
+    pub fn theme(mut self, theme: Theme) -> Self {
+        self.theme = theme;
+        self.style.border.radius = Corners::all(self.theme.control_radius());
         self
     }
 
@@ -165,8 +170,8 @@ impl SegmentedControl {
         self.options
             .iter()
             .map(|option| {
-                option.label.chars().count() as f32 * self.size.text_size() * 0.56
-                    + self.size.horizontal_padding() * 2.0
+                option.label.chars().count() as f32 * self.theme.text_size(self.size) * 0.56
+                    + self.theme.horizontal_padding(self.size) * 2.0
             })
             .fold(72.0, f32::max)
     }
@@ -193,7 +198,7 @@ impl Element for SegmentedControl {
     fn layout(&mut self, cx: &mut LayoutContext) -> NodeId {
         let mut style = style_to_taffy(&self.style);
         style.size.width = Dimension::Length(self.option_width() * self.options.len() as f32);
-        style.size.height = Dimension::Length(self.size.control_height());
+        style.size.height = Dimension::Length(self.theme.control_height(self.size));
 
         match cx.taffy.new_leaf(style) {
             Ok(node) => node,
@@ -207,11 +212,17 @@ impl Element for SegmentedControl {
     fn paint(&mut self, cx: &mut PaintContext) {
         let bounds = cx.bounds();
         cx.register_hit_region(self.id, bounds);
+        let container_state = self.state.into();
 
         cx.paint(Primitive::Quad {
             bounds,
-            background: crate::advanced_ui::tokens::surface_color().to_rgba(),
-            border_color: validation_border_color(self.state.invalid(), control_border_color())
+            background: self
+                .theme
+                .surface_color_for_state(container_state)
+                .to_rgba(),
+            border_color: self
+                .theme
+                .state_border_color(container_state, self.theme.colors.border)
                 .to_rgba(),
             border_widths: Edges::all(1.0),
             corner_radii: self.style.border.radius,
@@ -231,7 +242,10 @@ impl Element for SegmentedControl {
             segment_state.set_selected(selected);
             segment_state.set_hovered(hovered);
             segment_state.set_pressed(self.indexed_state.pressed_index() == Some(index));
-            let colors = control_colors(ControlVariant::Primary, segment_state.into());
+            let segment_token_state = segment_state.into();
+            let colors = self
+                .theme
+                .control_colors(ControlVariant::Primary, segment_token_state);
 
             if selected || hovered {
                 cx.paint(Primitive::Quad {
@@ -239,28 +253,41 @@ impl Element for SegmentedControl {
                     background: if selected {
                         colors.background
                     } else {
-                        crate::advanced_ui::tokens::disabled_surface_color()
+                        self.theme.surface_color_for_state(segment_token_state)
                     }
                     .to_rgba(),
                     border_color: Color::TRANSPARENT.to_rgba(),
                     border_widths: Edges::ZERO,
-                    corner_radii: segment_corners(index, self.options.len()),
+                    corner_radii: segment_corners(
+                        index,
+                        self.options.len(),
+                        self.theme.control_radius(),
+                    ),
                 });
             }
 
+            let mut label_color = if selected {
+                colors.foreground
+            } else {
+                self.theme.colors.text
+            };
+            if segment_token_state.disabled {
+                label_color = label_color.with_alpha(self.theme.state.disabled_opacity);
+            } else if segment_token_state.read_only {
+                label_color = label_color.with_alpha(self.theme.state.read_only_opacity);
+            }
             cx.paint(Primitive::Text {
                 bounds: segment_bounds,
                 content: option.label.clone(),
-                color: if selected {
-                    colors.foreground
+                color: label_color.to_rgba(),
+                font_size: self.theme.text_size(self.size),
+                font_weight: if selected {
+                    self.theme.typography.selected_weight
                 } else {
-                    crate::advanced_ui::tokens::text_color()
-                }
-                .to_rgba(),
-                font_size: self.size.text_size(),
-                font_weight: if selected { 700 } else { 500 },
+                    self.theme.typography.label_weight
+                },
                 font_family: None,
-                line_height: 1.2,
+                line_height: self.theme.typography.line_height,
                 align: crate::elements::text::TextAlign::Center,
             });
         }
@@ -352,11 +379,11 @@ fn validate_selected(options: &[SegmentedOption], selected: &str) {
     }
 }
 
-fn segment_corners(index: usize, len: usize) -> Corners {
+fn segment_corners(index: usize, len: usize, radius: f32) -> Corners {
     match (index == 0, index + 1 == len) {
-        (true, true) => Corners::all(CONTROL_RADIUS),
-        (true, false) => Corners::left(CONTROL_RADIUS),
-        (false, true) => Corners::right(CONTROL_RADIUS),
+        (true, true) => Corners::all(radius),
+        (true, false) => Corners::left(radius),
+        (false, true) => Corners::right(radius),
         (false, false) => Corners::ZERO,
     }
 }

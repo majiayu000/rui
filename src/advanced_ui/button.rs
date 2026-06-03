@@ -1,7 +1,5 @@
-use crate::advanced_ui::state::{InteractionState, require_non_empty, validation_border_color};
-use crate::advanced_ui::tokens::{
-    CONTROL_RADIUS, ControlSize, ControlState, ControlVariant, control_colors,
-};
+use crate::advanced_ui::state::{InteractionState, require_non_empty};
+use crate::advanced_ui::tokens::{ControlSize, ControlState, ControlVariant, Theme};
 use crate::core::ElementId;
 use crate::core::accessibility::{
     AccessibilityAction, AccessibilityContext, AccessibilityError, AccessibilityNode,
@@ -22,6 +20,7 @@ pub struct Button {
     label: String,
     variant: ControlVariant,
     size: ControlSize,
+    theme: Theme,
     state: InteractionState,
     style: Style,
     on_click: Option<Box<dyn Fn()>>,
@@ -32,14 +31,16 @@ impl Button {
         let label = label.into();
         require_non_empty(&label, "advanced button label must not be empty");
 
+        let theme = Theme::default();
         let mut style = Style::new();
-        style.border.radius = Corners::all(CONTROL_RADIUS);
+        style.border.radius = Corners::all(theme.control_radius());
 
         Self {
             id: ElementId::new(),
             label,
             variant: ControlVariant::default(),
             size: ControlSize::default(),
+            theme,
             state: InteractionState::default(),
             style,
             on_click: None,
@@ -85,6 +86,12 @@ impl Button {
         self
     }
 
+    pub fn theme(mut self, theme: Theme) -> Self {
+        self.theme = theme;
+        self.style.border.radius = Corners::all(self.theme.control_radius());
+        self
+    }
+
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.state.set_disabled(disabled);
         self
@@ -122,8 +129,8 @@ impl Button {
     }
 
     fn preferred_width(&self) -> f32 {
-        let text_width = self.label.chars().count() as f32 * self.size.text_size() * 0.56;
-        text_width + self.size.horizontal_padding() * 2.0
+        let text_width = self.label.chars().count() as f32 * self.theme.text_size(self.size) * 0.56;
+        text_width + self.theme.horizontal_padding(self.size) * 2.0
     }
 }
 
@@ -139,7 +146,7 @@ impl Element for Button {
     fn layout(&mut self, cx: &mut LayoutContext) -> NodeId {
         let mut style = style_to_taffy(&self.style);
         style.size.width = Dimension::Length(self.preferred_width());
-        style.size.height = Dimension::Length(self.size.control_height());
+        style.size.height = Dimension::Length(self.theme.control_height(self.size));
 
         match cx.taffy.new_leaf(style) {
             Ok(node) => node,
@@ -151,7 +158,7 @@ impl Element for Button {
         let bounds = cx.bounds();
         cx.register_hit_region(self.id, bounds);
 
-        let colors = control_colors(self.variant, self.state.into());
+        let colors = self.theme.control_colors(self.variant, self.state.into());
         let border_widths = if matches!(self.variant, ControlVariant::Outline) {
             Edges::all(1.0)
         } else {
@@ -161,7 +168,7 @@ impl Element for Button {
         cx.paint(Primitive::Quad {
             bounds,
             background: colors.background.to_rgba(),
-            border_color: validation_border_color(self.state.invalid(), colors.border).to_rgba(),
+            border_color: colors.border.to_rgba(),
             border_widths,
             corner_radii: self.style.border.radius,
         });
@@ -170,10 +177,10 @@ impl Element for Button {
             bounds,
             content: self.label.clone(),
             color: colors.foreground.to_rgba(),
-            font_size: self.size.text_size(),
-            font_weight: 600,
+            font_size: self.theme.text_size(self.size),
+            font_weight: self.theme.typography.control_weight,
             font_family: None,
-            line_height: 1.2,
+            line_height: self.theme.typography.line_height,
             align: crate::elements::text::TextAlign::Center,
         });
     }

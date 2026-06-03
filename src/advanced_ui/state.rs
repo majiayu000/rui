@@ -102,6 +102,11 @@ impl InteractionState {
             pressed: self.pressed,
             selected: self.selected,
             disabled: self.disabled,
+            read_only: self.read_only,
+            invalid: self.invalid,
+            focused: self.focused,
+            loading: false,
+            error: false,
         }
     }
 
