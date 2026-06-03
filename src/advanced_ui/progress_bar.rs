@@ -192,7 +192,8 @@ impl Element for ProgressBar {
 
         if self.show_label {
             if self.theme.mode == ThemeMode::HighContrast {
-                let label_width = (bounds.width() * 0.38).clamp(36.0, bounds.width());
+                let available_width = bounds.width().max(0.0);
+                let label_width = (available_width * 0.38).max(36.0).min(available_width);
                 let label_height = bounds.height().max(18.0);
                 cx.paint(Primitive::Quad {
                     bounds: Bounds::from_xywh(
@@ -299,5 +300,36 @@ mod tests {
         bar.paint(&mut paint_cx);
 
         assert_eq!(scene.primitives().len(), 3);
+    }
+
+    #[test]
+    fn advanced_ui_progress_bar_high_contrast_label_allows_narrow_widths() {
+        let mut bar = ProgressBar::new(0.5).theme(Theme::high_contrast());
+        let mut taffy = TaffyTree::<ElementId>::new();
+        let mut layout_cx = LayoutContext::new(&mut taffy, Size::new(20.0, 24.0));
+        let node = bar.layout(&mut layout_cx);
+        if let Err(err) = taffy.compute_layout(
+            node,
+            taffy::Size {
+                width: taffy::prelude::AvailableSpace::Definite(20.0),
+                height: taffy::prelude::AvailableSpace::Definite(24.0),
+            },
+        ) {
+            panic!("layout should compute: {}", err);
+        }
+
+        let mut scene = Scene::new();
+        let mut paint_cx =
+            PaintContext::new(&mut scene, Bounds::from_xywh(0.0, 0.0, 20.0, 18.0), &taffy);
+        bar.paint(&mut paint_cx);
+
+        let label_backdrop = scene
+            .primitives()
+            .iter()
+            .find_map(|primitive| match primitive {
+                Primitive::Quad { bounds, .. } if bounds.width() == 20.0 => Some(*bounds),
+                _ => None,
+            });
+        assert!(label_backdrop.is_some());
     }
 }
