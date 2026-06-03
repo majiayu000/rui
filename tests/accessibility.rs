@@ -1,6 +1,6 @@
 use rui::advanced_ui::{
-    Button, Checkbox, Dialog, Menu, Popover, ProgressBar, Scrollable, SegmentedControl, TextField,
-    button, container, text,
+    Button, Checkbox, Dialog, Menu, Popover, ProgressBar, Scrollable, SegmentedControl, Tab,
+    TabPanel, Tabs, TextField, button, container, text,
 };
 use rui::core::ElementId;
 use rui::core::accessibility::{
@@ -152,6 +152,54 @@ fn accessibility_segmented_control_exposes_selected_option_tree() {
         node.a11y_children()[1].a11y_actions(),
         [AccessibilityAction::Activate]
     );
+}
+
+#[test]
+fn accessibility_tabs_expose_tab_list_tabs_and_selected_panel() {
+    let tabs_id = ElementId::new();
+    let disabled_tab = Tab::new("audit", "Audit").disabled(true);
+    let tabs = Tabs::new(
+        [
+            Tab::new("overview", "Overview"),
+            Tab::new("logs", "Logs"),
+            disabled_tab,
+        ],
+        "logs",
+    )
+    .id(tabs_id)
+    .accessibility_label("Project sections")
+    .panel(TabPanel::new("overview", text("Summary")))
+    .panel(TabPanel::new("logs", text("Build logs")))
+    .panel(TabPanel::new("audit", text("Audit log")));
+    let tree = AccessibilityTree::new(accessibility_result(
+        tabs.accessibility_nodes(&AccessibilityContext::default()),
+    ));
+
+    let tab_list = tree
+        .roots()
+        .iter()
+        .find(|node| node.a11y_role() == AccessibilityRole::TabList)
+        .expect("tab list should be an accessibility root");
+    assert_eq!(tab_list.a11y_label(), Some("Project sections"));
+    assert_eq!(tab_list.a11y_value(), Some("logs"));
+    assert_eq!(tab_list.a11y_children().len(), 3);
+    assert_eq!(
+        tab_list.a11y_children()[0].a11y_role(),
+        AccessibilityRole::Tab
+    );
+    assert_eq!(tab_list.a11y_children()[1].a11y_selected(), Some(true));
+    assert_eq!(tab_list.a11y_children()[2].a11y_enabled(), false);
+    assert!(tab_list.a11y_children()[2].a11y_actions().is_empty());
+
+    let panel = tree
+        .roots()
+        .iter()
+        .find(|node| node.a11y_role() == AccessibilityRole::TabPanel)
+        .expect("selected tab panel should be an accessibility root");
+    assert_eq!(panel.a11y_label(), Some("Logs"));
+    assert_eq!(panel.a11y_value(), Some("logs"));
+    assert_eq!(panel.a11y_children().len(), 1);
+    assert_eq!(panel.a11y_children()[0].a11y_label(), Some("Build logs"));
 }
 
 #[test]
@@ -402,6 +450,18 @@ fn accessibility_missing_required_labels_are_errors() {
         error,
         AccessibilityError::MissingLabel {
             role: AccessibilityRole::SegmentedControl
+        }
+    );
+
+    let tabs = Tabs::new([("overview", "Overview")], "overview");
+    let error = match tabs.accessibility_nodes(&AccessibilityContext::default()) {
+        Ok(_) => panic!("tabs without accessibility label should fail"),
+        Err(err) => err,
+    };
+    assert_eq!(
+        error,
+        AccessibilityError::MissingLabel {
+            role: AccessibilityRole::TabList
         }
     );
 
