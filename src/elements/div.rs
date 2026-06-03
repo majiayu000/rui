@@ -1,15 +1,15 @@
 //! Div element - the primary container element
 
+use crate::core::ElementId;
 use crate::core::color::Color;
 use crate::core::geometry::{Bounds, Edges, Size};
 use crate::core::style::{
-    AlignItems, Background, BorderStyle, Corners, Display, FlexDirection, JustifyContent,
-    Overflow, Position, Shadow, Style,
+    AlignItems, Background, BorderStyle, Corners, Dimension as StyleDimension, Display,
+    FlexDirection, JustifyContent, Overflow, Position, Shadow, Style,
 };
-use crate::core::ElementId;
 use crate::elements::element::{
-    style_to_taffy, AnyElement, Element, EventContext, LayoutContext, PaintContext, PointerEvent,
-    PointerEventKind,
+    AnyElement, Element, EventContext, LayoutContext, PaintContext, PointerEvent, PointerEventKind,
+    style_to_taffy,
 };
 use crate::renderer::Primitive;
 use smallvec::SmallVec;
@@ -50,50 +50,100 @@ impl Div {
     // Size
     pub fn size(mut self, size: impl Into<Size>) -> Self {
         let s = size.into();
-        self.style.width = Some(s.width);
-        self.style.height = Some(s.height);
+        self.style.set_width_dimension(s.width);
+        self.style.set_height_dimension(s.height);
         self
     }
 
     pub fn w(mut self, width: f32) -> Self {
-        self.style.width = Some(width);
+        self.style.set_width_dimension(width);
+        self
+    }
+
+    pub fn width(mut self, width: impl Into<StyleDimension>) -> Self {
+        self.style.set_width_dimension(width);
         self
     }
 
     pub fn h(mut self, height: f32) -> Self {
-        self.style.height = Some(height);
+        self.style.set_height_dimension(height);
         self
     }
 
+    pub fn height(mut self, height: impl Into<StyleDimension>) -> Self {
+        self.style.set_height_dimension(height);
+        self
+    }
+
+    pub fn w_percent(self, percent: f32) -> Self {
+        self.width(StyleDimension::percent(percent))
+    }
+
+    pub fn h_percent(self, percent: f32) -> Self {
+        self.height(StyleDimension::percent(percent))
+    }
+
+    pub fn w_auto(self) -> Self {
+        self.width(StyleDimension::auto())
+    }
+
+    pub fn h_auto(self) -> Self {
+        self.height(StyleDimension::auto())
+    }
+
     pub fn w_full(mut self) -> Self {
-        self.style.width = Some(f32::INFINITY); // Will be constrained by parent
+        self.style.set_width_dimension(StyleDimension::fill());
         self.style.flex_grow = 1.0;
         self
     }
 
     pub fn h_full(mut self) -> Self {
-        self.style.height = Some(f32::INFINITY);
+        self.style.set_height_dimension(StyleDimension::fill());
         self.style.flex_grow = 1.0;
         self
     }
 
     pub fn min_w(mut self, width: f32) -> Self {
-        self.style.min_width = Some(width);
+        self.style.set_min_width_dimension(width);
+        self
+    }
+
+    pub fn min_w_percent(mut self, percent: f32) -> Self {
+        self.style
+            .set_min_width_dimension(StyleDimension::percent(percent));
         self
     }
 
     pub fn min_h(mut self, height: f32) -> Self {
-        self.style.min_height = Some(height);
+        self.style.set_min_height_dimension(height);
+        self
+    }
+
+    pub fn min_h_percent(mut self, percent: f32) -> Self {
+        self.style
+            .set_min_height_dimension(StyleDimension::percent(percent));
         self
     }
 
     pub fn max_w(mut self, width: f32) -> Self {
-        self.style.max_width = Some(width);
+        self.style.set_max_width_dimension(width);
+        self
+    }
+
+    pub fn max_w_percent(mut self, percent: f32) -> Self {
+        self.style
+            .set_max_width_dimension(StyleDimension::percent(percent));
         self
     }
 
     pub fn max_h(mut self, height: f32) -> Self {
-        self.style.max_height = Some(height);
+        self.style.set_max_height_dimension(height);
+        self
+    }
+
+    pub fn max_h_percent(mut self, percent: f32) -> Self {
+        self.style
+            .set_max_height_dimension(StyleDimension::percent(percent));
         self
     }
 
@@ -237,7 +287,12 @@ impl Div {
         self
     }
 
-    pub fn bg_gradient(mut self, start: impl Into<Color>, end: impl Into<Color>, angle: f32) -> Self {
+    pub fn bg_gradient(
+        mut self,
+        start: impl Into<Color>,
+        end: impl Into<Color>,
+        angle: f32,
+    ) -> Self {
         self.style.background = Background::linear_gradient(start, end, angle);
         self
     }
@@ -297,7 +352,12 @@ impl Div {
     }
 
     pub fn shadow_lg(mut self) -> Self {
-        self.style.shadow = Some(Shadow::new(0.0, 10.0, 15.0, Color::rgba(0.0, 0.0, 0.0, 0.1)));
+        self.style.shadow = Some(Shadow::new(
+            0.0,
+            10.0,
+            15.0,
+            Color::rgba(0.0, 0.0, 0.0, 0.1),
+        ));
         self
     }
 
@@ -449,7 +509,11 @@ impl Element for Div {
 
         // Paint children
         // Note: In a full implementation, we'd get child bounds from the layout tree
-        for (child, node) in self.children.iter_mut().zip(self.child_nodes.iter().copied()) {
+        for (child, node) in self
+            .children
+            .iter_mut()
+            .zip(self.child_nodes.iter().copied())
+        {
             let child_bounds = cx.child_bounds(node).unwrap_or(bounds);
             let mut child_cx = cx.with_bounds(child_bounds);
             child.paint(&mut child_cx);

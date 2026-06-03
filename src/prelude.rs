@@ -3,7 +3,7 @@
 pub use crate::core::{
     color::{Color, Hsla, Rgba},
     geometry::{Bounds, Edges, Point, Rect, Size},
-    style::{Background, BorderStyle, Corners, Style},
+    style::{Background, BorderStyle, Corners, Dimension, DimensionConstraints, Style},
     event::{MouseEvent, KeyEvent, KeyCode, Modifiers, Cursor},
     animation::{Animation, Animatable, Easing, Transform, Transition},
     action::{

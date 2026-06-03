@@ -213,8 +213,10 @@ fn controls_panel_with_events(
     events: Option<DogfoodEvents>,
 ) -> ui::Container {
     ui::container()
-        .w(760.0)
-        .h(520.0)
+        .w_full()
+        .h_full()
+        .min_w(320.0)
+        .min_h(240.0)
         .padding(28.0)
         .background(Color::hex(0xf8fafc))
         .child(
@@ -226,7 +228,7 @@ fn controls_panel_with_events(
                 .child(setting_row(claim_gate_acknowledged, events.as_ref()))
                 .child(
                     ui::progress_bar(verification_progress(data, claim_gate_acknowledged))
-                        .width(420.0)
+                        .width_fill()
                         .size(ui::ControlSize::Large),
                 )
                 .child(panel_selector(selected_panel, events.as_ref()))
@@ -562,8 +564,10 @@ fn check_row(label: &str, passed: bool) -> ui::Container {
 
 fn error_panel(message: String, events: DogfoodEvents) -> ui::Container {
     ui::container()
-        .w(760.0)
-        .h(520.0)
+        .w_full()
+        .h_full()
+        .min_w(320.0)
+        .min_h(240.0)
         .padding(28.0)
         .background(Color::hex(0xfffbeb))
         .child(

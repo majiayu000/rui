@@ -17,7 +17,7 @@ use crate::core::accessibility::{
 use crate::core::color::Color;
 use crate::core::event::Cursor;
 use crate::core::geometry::{Edges, Point, Size};
-use crate::core::style::{Shadow, Style};
+use crate::core::style::{Dimension, Shadow, Style};
 use crate::elements::element::{
     AnyElement, Element, EventContext, LayoutContext, PaintContext, PointerEvent,
 };
@@ -138,8 +138,48 @@ impl Container {
         self
     }
 
+    pub fn width(mut self, width: impl Into<Dimension>) -> Self {
+        self.inner = self.inner.width(width);
+        self
+    }
+
+    pub fn w_percent(mut self, percent: f32) -> Self {
+        self.inner = self.inner.w_percent(percent);
+        self
+    }
+
+    pub fn w_full(mut self) -> Self {
+        self.inner = self.inner.w_full();
+        self
+    }
+
+    pub fn w_auto(mut self) -> Self {
+        self.inner = self.inner.w_auto();
+        self
+    }
+
     pub fn h(mut self, height: f32) -> Self {
         self.inner = self.inner.h(height);
+        self
+    }
+
+    pub fn height(mut self, height: impl Into<Dimension>) -> Self {
+        self.inner = self.inner.height(height);
+        self
+    }
+
+    pub fn h_percent(mut self, percent: f32) -> Self {
+        self.inner = self.inner.h_percent(percent);
+        self
+    }
+
+    pub fn h_full(mut self) -> Self {
+        self.inner = self.inner.h_full();
+        self
+    }
+
+    pub fn h_auto(mut self) -> Self {
+        self.inner = self.inner.h_auto();
         self
     }
 
@@ -148,8 +188,18 @@ impl Container {
         self
     }
 
+    pub fn min_w_percent(mut self, percent: f32) -> Self {
+        self.inner = self.inner.min_w_percent(percent);
+        self
+    }
+
     pub fn min_h(mut self, height: f32) -> Self {
         self.inner = self.inner.min_h(height);
+        self
+    }
+
+    pub fn min_h_percent(mut self, percent: f32) -> Self {
+        self.inner = self.inner.min_h_percent(percent);
         self
     }
 
@@ -160,6 +210,16 @@ impl Container {
 
     pub fn max_h(mut self, height: f32) -> Self {
         self.inner = self.inner.max_h(height);
+        self
+    }
+
+    pub fn max_w_percent(mut self, percent: f32) -> Self {
+        self.inner = self.inner.max_w_percent(percent);
+        self
+    }
+
+    pub fn max_h_percent(mut self, percent: f32) -> Self {
+        self.inner = self.inner.max_h_percent(percent);
         self
     }
 
@@ -269,8 +329,48 @@ impl Flex {
         self
     }
 
+    pub fn width(mut self, width: impl Into<Dimension>) -> Self {
+        self.inner = self.inner.width(width);
+        self
+    }
+
+    pub fn w_percent(mut self, percent: f32) -> Self {
+        self.inner = self.inner.w_percent(percent);
+        self
+    }
+
+    pub fn w_full(mut self) -> Self {
+        self.inner = self.inner.w_full();
+        self
+    }
+
+    pub fn w_auto(mut self) -> Self {
+        self.inner = self.inner.w_auto();
+        self
+    }
+
     pub fn h(mut self, height: f32) -> Self {
         self.inner = self.inner.h(height);
+        self
+    }
+
+    pub fn height(mut self, height: impl Into<Dimension>) -> Self {
+        self.inner = self.inner.height(height);
+        self
+    }
+
+    pub fn h_percent(mut self, percent: f32) -> Self {
+        self.inner = self.inner.h_percent(percent);
+        self
+    }
+
+    pub fn h_full(mut self) -> Self {
+        self.inner = self.inner.h_full();
+        self
+    }
+
+    pub fn h_auto(mut self) -> Self {
+        self.inner = self.inner.h_auto();
         self
     }
 

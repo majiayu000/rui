@@ -2,14 +2,16 @@ use crate::advanced_ui::state::{
     InteractionState, require_finite, require_finite_non_negative, validation_border_color,
 };
 use crate::advanced_ui::tokens::{CONTROL_RADIUS, ControlSize, control_border_color};
+use crate::core::ElementId;
 use crate::core::accessibility::{
     AccessibilityContext, AccessibilityError, AccessibilityNode, AccessibilityRole,
 };
-use crate::core::ElementId;
 use crate::core::color::Color;
 use crate::core::geometry::{Bounds, Edges};
-use crate::core::style::{Corners, Style};
-use crate::elements::element::{Element, LayoutContext, PaintContext, style_to_taffy};
+use crate::core::style::{Corners, Dimension as StyleDimension, Style};
+use crate::elements::element::{
+    Element, LayoutContext, PaintContext, style_dimension_or, style_to_taffy,
+};
 use crate::renderer::Primitive;
 use taffy::prelude::*;
 
@@ -17,7 +19,7 @@ pub struct ProgressBar {
     id: ElementId,
     value: f32,
     size: ControlSize,
-    width: f32,
+    width: StyleDimension,
     show_label: bool,
     accessibility_label: Option<String>,
     color: Color,
@@ -37,7 +39,7 @@ impl ProgressBar {
             id: ElementId::new(),
             value: value.clamp(0.0, 1.0),
             size: ControlSize::default(),
-            width: 220.0,
+            width: StyleDimension::px(220.0),
             show_label: true,
             accessibility_label: None,
             color: Color::hex(0x2563eb),
@@ -68,7 +70,21 @@ impl ProgressBar {
             width,
             "progress bar width must be a finite non-negative value",
         );
-        self.width = width;
+        self.width = StyleDimension::px(width);
+        self
+    }
+
+    pub fn width_percent(mut self, percent: f32) -> Self {
+        require_finite_non_negative(
+            percent,
+            "progress bar width percent must be a finite non-negative value",
+        );
+        self.width = StyleDimension::percent(percent);
+        self
+    }
+
+    pub fn width_fill(mut self) -> Self {
+        self.width = StyleDimension::fill();
         self
     }
 
@@ -126,7 +142,7 @@ impl Element for ProgressBar {
 
     fn layout(&mut self, cx: &mut LayoutContext) -> NodeId {
         let mut style = style_to_taffy(&self.style);
-        style.size.width = Dimension::Length(self.width);
+        style.size.width = style_dimension_or(Some(self.width), None, Dimension::Auto);
         style.size.height = Dimension::Length(self.size.control_height() / 2.0);
 
         match cx.taffy.new_leaf(style) {
@@ -182,9 +198,13 @@ impl Element for ProgressBar {
     ) -> Result<Option<AccessibilityNode>, AccessibilityError> {
         let label = self.accessibility_label.as_deref().unwrap_or("Progress");
         Ok(Some(
-            AccessibilityNode::label_required(self.id, AccessibilityRole::ProgressIndicator, label)?
-                .with_value(format!("{}%", (self.value * 100.0).round() as u32))
-                .with_invalid(self.state.invalid()),
+            AccessibilityNode::label_required(
+                self.id,
+                AccessibilityRole::ProgressIndicator,
+                label,
+            )?
+            .with_value(format!("{}%", (self.value * 100.0).round() as u32))
+            .with_invalid(self.state.invalid()),
         ))
     }
 }
