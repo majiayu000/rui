@@ -23,6 +23,7 @@ use crate::core::color::Color;
 use crate::core::event::Cursor;
 use crate::core::geometry::{Edges, Point, Size};
 use crate::core::style::{Dimension, Shadow, Style};
+use crate::core::text_editing::TextInputEvent;
 use crate::elements::element::{
     AnyElement, Element, EventContext, LayoutContext, PaintContext, PointerEvent,
 };
@@ -104,6 +105,14 @@ macro_rules! impl_div_wrapper_element {
                 action: &crate::core::action::ActionId,
             ) -> crate::core::action::ActionOutcome {
                 self.inner.dispatch_action(cx, action)
+            }
+
+            fn handle_text_input_event(
+                &mut self,
+                cx: &mut EventContext,
+                event: &TextInputEvent,
+            ) -> bool {
+                self.inner.handle_text_input_event(cx, event)
             }
 
             fn handle_window_event(&mut self, event: &crate::core::event::Event) -> bool {
@@ -701,6 +710,10 @@ impl Element for Hoverable {
         event: &crate::core::event::KeyEvent,
     ) -> bool {
         self.inner.handle_key_event(cx, event)
+    }
+
+    fn handle_text_input_event(&mut self, cx: &mut EventContext, event: &TextInputEvent) -> bool {
+        self.inner.handle_text_input_event(cx, event)
     }
 
     fn handle_window_event(&mut self, event: &crate::core::event::Event) -> bool {

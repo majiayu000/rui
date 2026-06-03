@@ -56,6 +56,16 @@ fn text_editing_composition_update_commit_and_cancel_are_stateful() {
 }
 
 #[test]
+fn text_editing_commit_without_active_composition_inserts_text() {
+    let mut buffer = TextEditBuffer::with_text("hello ");
+    must(buffer.apply_text_input_event(TextInputEvent::CommitComposition("你好".to_string())));
+
+    assert_eq!(buffer.text(), "hello 你好");
+    assert!(buffer.composition().is_none());
+    assert_eq!(buffer.cursor(), "hello 你好".len());
+}
+
+#[test]
 fn text_editing_grapheme_delete_keeps_unicode_clusters_intact() {
     let mut buffer = TextEditBuffer::with_text("a e\u{301} 🧑‍💻");
     must(buffer.delete_backward());

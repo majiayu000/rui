@@ -2,8 +2,9 @@
 
 use crate::core::action::route_key_event;
 use crate::core::app::{AppContext, RedrawSource};
-use crate::core::event::{Event, KeyCode, KeyEvent, Modifiers, ScrollEvent};
+use crate::core::event::{Event, KeyEvent, ScrollEvent};
 use crate::core::geometry::Bounds;
+use crate::core::text_editing::TextInputEvent;
 use crate::core::window::WindowOptions;
 use crate::elements::element::{
     Element, EventContext, LayoutContext, PaintContext, PointerEvent, PointerEventKind,
@@ -119,6 +120,7 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
             let mut pointer_events = Vec::new();
             let mut scroll_events = Vec::new();
             let mut key_events = Vec::new();
+            let mut text_input_events = Vec::new();
             let mut focus_changed = None;
             let mut close_requested = false;
             let wait_for_event =
@@ -160,6 +162,7 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
                         &mut pointer_events,
                         &mut scroll_events,
                         &mut key_events,
+                        &mut text_input_events,
                     ),
                 }
             }
@@ -291,6 +294,12 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
                 }
             }
 
+            for event in &text_input_events {
+                if root.handle_text_input_event(&mut event_cx, event) {
+                    schedule_platform_redraw(&window, &mut context, RedrawSource::PlatformInput);
+                }
+            }
+
             if context.consume_runtime_view_notification() {
                 schedule_platform_redraw(&window, &mut context, RedrawSource::ViewNotification);
             }
@@ -380,12 +389,16 @@ fn append_input_event(
     pointer_events: &mut Vec<PointerEvent>,
     scroll_events: &mut Vec<ScrollEvent>,
     key_events: &mut Vec<(bool, KeyEvent)>,
+    text_input_events: &mut Vec<TextInputEvent>,
 ) {
     match input {
         PlatformInputEvent::KeyDown(event) => key_events.push((true, event)),
         PlatformInputEvent::KeyUp(event) => key_events.push((false, event)),
         PlatformInputEvent::Ime(PlatformImeEvent::Commit(text)) => {
-            append_committed_text_events(&text, key_events);
+            text_input_events.push(TextInputEvent::CommitComposition(text));
+        }
+        PlatformInputEvent::Ime(event) => {
+            text_input_events.push(event.into_text_input_event());
         }
         PlatformInputEvent::Mouse(event) => {
             let kind = match event.kind {
@@ -400,15 +413,6 @@ fn append_input_event(
             });
         }
         PlatformInputEvent::Scroll(event) => scroll_events.push(event),
-    }
-}
-
-fn append_committed_text_events(text: &str, key_events: &mut Vec<(bool, KeyEvent)>) {
-    for ch in text.chars().filter(|ch| !ch.is_control()) {
-        key_events.push((
-            true,
-            KeyEvent::new(KeyCode::Unknown(0), Modifiers::none()).with_char(ch),
-        ));
     }
 }
 
@@ -427,23 +431,26 @@ mod tests {
     }
 
     #[test]
-    fn ime_commit_events_are_forwarded_as_text_key_events() {
+    fn ime_commit_events_are_forwarded_as_text_input_events() {
         let mut pointer_events = Vec::new();
         let mut scroll_events = Vec::new();
         let mut key_events = Vec::new();
+        let mut text_input_events = Vec::new();
 
         append_input_event(
             PlatformInputEvent::Ime(PlatformImeEvent::Commit("你好".to_string())),
             &mut pointer_events,
             &mut scroll_events,
             &mut key_events,
+            &mut text_input_events,
         );
 
         assert!(pointer_events.is_empty());
         assert!(scroll_events.is_empty());
-        assert_eq!(key_events.len(), 2);
-        assert!(key_events.iter().all(|(is_down, _)| *is_down));
-        assert_eq!(key_events[0].1.char, Some('你'));
-        assert_eq!(key_events[1].1.char, Some('好'));
+        assert!(key_events.is_empty());
+        assert_eq!(
+            text_input_events,
+            [TextInputEvent::CommitComposition("你好".to_string())]
+        );
     }
 }

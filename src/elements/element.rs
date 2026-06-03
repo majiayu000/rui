@@ -9,6 +9,7 @@ use crate::core::action::{ActionId, ActionOutcome};
 use crate::core::event::{Cursor, KeyEvent, MouseButton, ScrollEvent};
 use crate::core::geometry::{Bounds, Point, Size};
 use crate::core::style::{Dimension as StyleDimension, Style};
+use crate::core::text_editing::TextInputEvent;
 use crate::renderer::text::TextMeasureCache;
 use crate::renderer::{Primitive, Scene};
 use std::cell::{Cell, RefCell};
@@ -305,6 +306,11 @@ pub trait Element: 'static {
         self.handle_action(cx, action)
     }
 
+    /// Handle text input and IME composition events.
+    fn handle_text_input_event(&mut self, _cx: &mut EventContext, _event: &TextInputEvent) -> bool {
+        false
+    }
+
     /// Handle window events
     fn handle_window_event(&mut self, _event: &crate::core::event::Event) -> bool {
         false
@@ -394,6 +400,14 @@ impl AnyElement {
 
     pub fn dispatch_action(&mut self, cx: &mut EventContext, action: &ActionId) -> ActionOutcome {
         self.inner.dispatch_action(cx, action)
+    }
+
+    pub fn handle_text_input_event(
+        &mut self,
+        cx: &mut EventContext,
+        event: &TextInputEvent,
+    ) -> bool {
+        self.inner.handle_text_input_event(cx, event)
     }
 
     pub fn handle_window_event(&mut self, event: &crate::core::event::Event) -> bool {

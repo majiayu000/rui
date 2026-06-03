@@ -3,6 +3,7 @@ use crate::advanced_ui::tokens::{ControlSize, Theme};
 use crate::core::ElementId;
 use crate::core::geometry::{Bounds, Edges};
 use crate::core::style::{Corners, Style};
+use crate::core::text_editing::TextInputEvent;
 use crate::elements::element::{
     AnyElement, Element, EventContext, LayoutContext, PaintContext, PointerEvent, PointerEventKind,
 };
@@ -151,6 +152,10 @@ impl Element for Tooltip {
         action: &crate::core::action::ActionId,
     ) -> crate::core::action::ActionOutcome {
         self.child.dispatch_action(cx, action)
+    }
+
+    fn handle_text_input_event(&mut self, cx: &mut EventContext, event: &TextInputEvent) -> bool {
+        self.child.handle_text_input_event(cx, event)
     }
 
     fn handle_window_event(&mut self, event: &crate::core::event::Event) -> bool {

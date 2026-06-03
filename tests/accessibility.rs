@@ -13,10 +13,10 @@ use rui::core::event::{KeyCode, KeyEvent, Modifiers, MouseButton, ScrollEvent};
 use rui::core::geometry::{Bounds, Point, Size};
 use rui::core::text_editing::TextInputEvent;
 use rui::elements::Element;
-use rui::elements::Input;
 use rui::elements::element::{
     EventContext, LayoutContext, PaintContext, PointerEvent, PointerEventKind,
 };
+use rui::elements::{Input, TextArea};
 use rui::renderer::Scene;
 use taffy::TaffyTree;
 
@@ -369,6 +369,52 @@ fn accessibility_text_field_applies_advanced_contracts_to_input_semantics() {
     assert!(node.a11y_read_only());
     assert!(node.a11y_invalid());
     assert!(node.a11y_actions().is_empty());
+}
+
+#[test]
+fn accessibility_input_exposes_disabled_readonly_and_invalid_state() {
+    let id = ElementId::new();
+    let input = Input::new()
+        .id(id)
+        .accessibility_label("Email")
+        .value("not-an-email")
+        .disabled(true)
+        .read_only(true)
+        .invalid(true);
+
+    let node = first_node(accessibility_result(
+        input.accessibility_nodes(&AccessibilityContext::default()),
+    ));
+    assert!(!node.a11y_enabled());
+    assert!(node.a11y_read_only());
+    assert!(node.a11y_invalid());
+}
+
+#[test]
+fn accessibility_text_area_exposes_multiline_text_editing_semantics() {
+    let id = ElementId::new();
+    let mut area = TextArea::new()
+        .id(id)
+        .accessibility_label("Message")
+        .value("alpha\nbeta")
+        .read_only(true)
+        .invalid(true);
+    area.apply_key_event(&KeyEvent::new(KeyCode::ArrowLeft, Modifiers::shift()))
+        .expect("shift-left should create a selection");
+
+    let node = first_node(accessibility_result(
+        area.accessibility_nodes(&AccessibilityContext::new(Some(id))),
+    ));
+    assert_eq!(node.a11y_role(), AccessibilityRole::TextInput);
+    assert_eq!(node.a11y_label(), Some("Message"));
+    assert_eq!(node.a11y_value(), Some("alpha\nbeta"));
+    assert!(node.a11y_read_only());
+    assert!(node.a11y_invalid());
+    assert!(node.a11y_focused());
+    assert_eq!(
+        node.a11y_text_selection(),
+        Some(AccessibilityTextRange::new(9, 10))
+    );
 }
 
 #[test]

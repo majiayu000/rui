@@ -359,6 +359,30 @@ pub enum InputType {
 
 ---
 
+### TextArea
+
+Multiline text editing field.
+
+```rust
+text_area()
+    .placeholder("Write a message...")
+    .on_change(|value| println!("Value: {}", value))
+```
+
+#### Methods
+
+| Method | Description |
+|--------|-------------|
+| `text_area()` | Create multiline text area |
+| `.value(String)` | Set value |
+| `.placeholder(text)` | Placeholder text |
+| `.on_change(handler)` | Change handler |
+| `.disabled(bool)` | Disable editing and focus |
+| `.read_only(bool)` | Preserve value while allowing navigation |
+| `.invalid(bool)` | Mark validation state |
+
+---
+
 ### Stateful Control Contracts
 
 Stateful controls separate persistent values from transient interaction state:

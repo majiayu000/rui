@@ -7,7 +7,7 @@ mod state_and_edges;
 
 mod support {
     pub(super) use super::super::*;
-    pub(super) use crate::core::event::{KeyCode, KeyEvent, Modifiers};
+    pub(super) use crate::core::event::{Cursor, KeyCode, KeyEvent, Modifiers};
     pub(super) use crate::core::geometry::Size;
     pub(super) use crate::core::text_editing::{
         MemoryClipboard, TextEditError, TextInputEvent, TextRange,

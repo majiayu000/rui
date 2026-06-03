@@ -2,6 +2,7 @@
 
 use crate::core::event::{KeyEvent, MouseButton, ScrollEvent};
 use crate::core::geometry::{Point, Size};
+use crate::core::text_editing::TextInputEvent;
 use crate::core::window::WindowOptions;
 use crate::renderer::RendererError;
 use std::error::Error;
@@ -168,7 +169,23 @@ pub enum PlatformInputEvent {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PlatformImeEvent {
+    InsertText(String),
+    BeginComposition(String),
+    UpdateComposition(String),
     Commit(String),
+    CancelComposition,
+}
+
+impl PlatformImeEvent {
+    pub fn into_text_input_event(self) -> TextInputEvent {
+        match self {
+            Self::InsertText(text) => TextInputEvent::InsertText(text),
+            Self::BeginComposition(text) => TextInputEvent::BeginComposition(text),
+            Self::UpdateComposition(text) => TextInputEvent::UpdateComposition(text),
+            Self::Commit(text) => TextInputEvent::CommitComposition(text),
+            Self::CancelComposition => TextInputEvent::CancelComposition,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
