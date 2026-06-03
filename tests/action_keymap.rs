@@ -1,10 +1,16 @@
+use rui::ElementId;
+use rui::advanced_ui::TabList;
 use rui::core::action::{
     ActionError, ActionHandler, ActionId, ActionOutcome, ActionRouter, KeyChord, Keymap,
     StandardAction,
 };
 use rui::core::event::{KeyCode, KeyEvent, Modifiers};
+use rui::core::geometry::Bounds;
+use rui::elements::Element;
+use rui::elements::element::EventContext;
 use std::cell::RefCell;
 use std::rc::Rc;
+use taffy::TaffyTree;
 
 fn action_result<T>(result: Result<T, ActionError>) -> T {
     match result {
@@ -173,6 +179,31 @@ fn keymap_maps_standard_actions_from_key_events() {
 
     let unbound = KeyChord::new(KeyCode::F12, Modifiers::none());
     assert!(keymap.action_for_chord(unbound).is_none());
+}
+
+#[test]
+fn action_keymap_tab_list_preserves_global_tab_focus_binding() {
+    let keymap = action_result(Keymap::with_standard_bindings());
+    let tab_event = KeyEvent::new(KeyCode::Tab, Modifiers::none());
+    assert_eq!(
+        keymap.action_for_event(&tab_event),
+        Some(&ActionId::from(StandardAction::FocusNext))
+    );
+
+    let id = ElementId::new();
+    let mut list = TabList::new([("overview", "Overview"), ("logs", "Logs")], "overview")
+        .id(id)
+        .accessibility_label("Project sections");
+    let taffy = TaffyTree::<ElementId>::new();
+    let mut focused = Some(id);
+    let mut cx = EventContext::new(
+        Bounds::from_xywh(0.0, 0.0, 160.0, 36.0),
+        &taffy,
+        &mut focused,
+    );
+
+    assert!(!list.handle_key_event(&mut cx, &tab_event));
+    assert_eq!(list.selected_value(), "overview");
 }
 
 #[test]
