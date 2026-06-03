@@ -1,12 +1,12 @@
-use crate::advanced_ui::state::{InteractionState, require_non_empty};
-use crate::core::ElementId;
+use crate::advanced_ui::state::{require_non_empty, InteractionState};
 use crate::core::accessibility::{
     AccessibilityAction, AccessibilityContext, AccessibilityError, AccessibilityNode,
-    AccessibilityRole,
+    AccessibilityRole, AccessibilityScrollPosition,
 };
 use crate::core::color::Color;
 use crate::core::geometry::Size;
 use crate::core::style::Style;
+use crate::core::ElementId;
 use crate::elements::element::{
     AnyElement, Element, EventContext, LayoutContext, PaintContext, PointerEvent,
 };
@@ -175,6 +175,14 @@ impl Element for Scrollable {
             }
             node = node.with_actions(actions);
         }
+        if let Some(metrics) = self.inner.scroll_metrics() {
+            node = node.with_scroll_position(AccessibilityScrollPosition::new(
+                metrics.offset_x,
+                metrics.offset_y,
+                metrics.max_x,
+                metrics.max_y,
+            ));
+        }
         if let Some(label) = &self.accessibility_label {
             node = node.with_label(label.clone());
         }
@@ -258,6 +266,14 @@ mod tests {
             &taffy,
         );
         scrollable.paint(&mut paint_cx);
+    }
+
+    fn accessibility_node(scrollable: &Scrollable) -> AccessibilityNode {
+        match scrollable.accessibility(&AccessibilityContext::default()) {
+            Ok(Some(node)) => node,
+            Ok(None) => panic!("scrollable should expose an accessibility node"),
+            Err(err) => panic!("accessibility failed: {}", err),
+        }
     }
 
     #[test]
@@ -372,6 +388,59 @@ mod tests {
             Err(err) => panic!("accessibility failed: {}", err),
         };
         assert!(empty_node.a11y_actions().is_empty());
+    }
+
+    #[test]
+    fn advanced_ui_scrollable_accessibility_scroll_position_tracks_scroll_state() {
+        let mut scrollable = Scrollable::new(container().w(100.0).h(300.0)).h(100.0);
+        assert_eq!(accessibility_node(&scrollable).a11y_scroll_position(), None);
+
+        paint_for_accessibility_state(&mut scrollable, Size::new(100.0, 100.0));
+        let before_scroll = accessibility_node(&scrollable);
+        assert_eq!(
+            before_scroll.a11y_scroll_position(),
+            Some(AccessibilityScrollPosition::new(0.0, 0.0, 0.0, 200.0))
+        );
+        assert_eq!(
+            before_scroll.a11y_actions(),
+            [AccessibilityAction::ScrollForward]
+        );
+
+        let taffy = TaffyTree::<ElementId>::new();
+        let mut focused = None;
+        let mut event_cx = EventContext::new(
+            Bounds::from_xywh(0.0, 0.0, 100.0, 100.0),
+            &taffy,
+            &mut focused,
+        );
+        assert!(scrollable.handle_scroll_event(
+            &mut event_cx,
+            &ScrollEvent {
+                position: Point::new(4.0, 4.0),
+                delta_x: 0.0,
+                delta_y: 24.0,
+                modifiers: Modifiers::default(),
+            },
+        ));
+
+        let after_scroll = accessibility_node(&scrollable);
+        assert_eq!(
+            after_scroll.a11y_scroll_position(),
+            Some(AccessibilityScrollPosition::new(0.0, 24.0, 0.0, 200.0))
+        );
+        assert_eq!(
+            after_scroll.a11y_actions(),
+            [
+                AccessibilityAction::ScrollForward,
+                AccessibilityAction::ScrollBackward
+            ]
+        );
+
+        paint_for_accessibility_state(&mut scrollable, Size::new(100.0, 100.0));
+        assert_eq!(
+            accessibility_node(&scrollable).a11y_scroll_position(),
+            Some(AccessibilityScrollPosition::new(0.0, 24.0, 0.0, 200.0))
+        );
     }
 
     #[test]

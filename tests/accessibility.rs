@@ -1,16 +1,21 @@
-use rui::advanced_ui::{Button, Checkbox, ProgressBar, Scrollable, SegmentedControl, text};
-use rui::core::ElementId;
+use rui::advanced_ui::{
+    container, text, Button, Checkbox, ProgressBar, Scrollable, SegmentedControl,
+};
 use rui::core::accessibility::{
     AccessibilityAction, AccessibilityAnnouncementKind, AccessibilityBridge, AccessibilityContext,
-    AccessibilityError, AccessibilityNode, AccessibilityRole, AccessibilityTextRange,
-    AccessibilityTree, UnsupportedAccessibilityBridge,
+    AccessibilityError, AccessibilityNode, AccessibilityRole, AccessibilityScrollPosition,
+    AccessibilityTextRange, AccessibilityTree, UnsupportedAccessibilityBridge,
 };
-use rui::core::event::{KeyCode, KeyEvent, Modifiers, MouseButton};
-use rui::core::geometry::{Bounds, Point};
+use rui::core::event::{KeyCode, KeyEvent, Modifiers, MouseButton, ScrollEvent};
+use rui::core::geometry::{Bounds, Point, Size};
 use rui::core::text_editing::TextInputEvent;
+use rui::core::ElementId;
+use rui::elements::element::{
+    EventContext, LayoutContext, PaintContext, PointerEvent, PointerEventKind,
+};
 use rui::elements::Element;
-use rui::elements::element::{EventContext, PointerEvent, PointerEventKind};
 use rui::elements::Input;
+use rui::renderer::Scene;
 use taffy::TaffyTree;
 
 fn accessibility_result<T>(result: Result<T, AccessibilityError>) -> T {
@@ -25,6 +30,30 @@ fn first_node(nodes: Vec<AccessibilityNode>) -> AccessibilityNode {
         Some(node) => node,
         None => panic!("expected one accessibility node"),
     }
+}
+
+fn layout_and_paint_scrollable(scrollable: &mut Scrollable, size: Size) -> TaffyTree<ElementId> {
+    let mut taffy = TaffyTree::<ElementId>::new();
+    let mut layout_cx = LayoutContext::new(&mut taffy, size);
+    let node = scrollable.layout(&mut layout_cx);
+    if let Err(err) = taffy.compute_layout(
+        node,
+        taffy::Size {
+            width: taffy::prelude::AvailableSpace::Definite(size.width),
+            height: taffy::prelude::AvailableSpace::Definite(size.height),
+        },
+    ) {
+        panic!("layout should compute: {err}");
+    }
+
+    let mut scene = Scene::new();
+    let mut paint_cx = PaintContext::new(
+        &mut scene,
+        Bounds::from_xywh(0.0, 0.0, size.width, size.height),
+        &taffy,
+    );
+    scrollable.paint(&mut paint_cx);
+    taffy
 }
 
 fn accessibility_pointer(kind: PointerEventKind) -> PointerEvent {
@@ -154,6 +183,75 @@ fn accessibility_text_and_scrollable_expose_semantic_tree() {
 }
 
 #[test]
+fn accessibility_scrollable_tree_exposes_actual_scroll_position() {
+    let scroll_id = ElementId::new();
+    let mut scrollable = Scrollable::new(container().w(100.0).h(300.0))
+        .id(scroll_id)
+        .h(100.0)
+        .accessibility_label("Activity feed");
+
+    let taffy = layout_and_paint_scrollable(&mut scrollable, Size::new(100.0, 100.0));
+    let tree = AccessibilityTree::new(accessibility_result(
+        scrollable.accessibility_nodes(&AccessibilityContext::default()),
+    ));
+    let scroll_node = match tree.find(scroll_id) {
+        Some(node) => node,
+        None => panic!("scroll area should be in accessibility tree"),
+    };
+    assert_eq!(
+        scroll_node.a11y_scroll_position(),
+        Some(AccessibilityScrollPosition::new(0.0, 0.0, 0.0, 200.0))
+    );
+    assert_eq!(
+        scroll_node.a11y_actions(),
+        [AccessibilityAction::ScrollForward]
+    );
+
+    {
+        let mut focused = None;
+        let mut event_cx = EventContext::new(
+            Bounds::from_xywh(0.0, 0.0, 100.0, 100.0),
+            &taffy,
+            &mut focused,
+        );
+        assert!(scrollable.handle_scroll_event(
+            &mut event_cx,
+            &ScrollEvent {
+                position: Point::new(4.0, 4.0),
+                delta_x: 0.0,
+                delta_y: 24.0,
+                modifiers: Modifiers::default(),
+            },
+        ));
+    }
+
+    let tree = AccessibilityTree::new(accessibility_result(
+        scrollable.accessibility_nodes(&AccessibilityContext::default()),
+    ));
+    let scroll_node = match tree.find(scroll_id) {
+        Some(node) => node,
+        None => panic!("scroll area should be in accessibility tree"),
+    };
+    assert_eq!(
+        scroll_node.a11y_scroll_position(),
+        Some(AccessibilityScrollPosition::new(0.0, 24.0, 0.0, 200.0))
+    );
+
+    layout_and_paint_scrollable(&mut scrollable, Size::new(100.0, 100.0));
+    let tree = AccessibilityTree::new(accessibility_result(
+        scrollable.accessibility_nodes(&AccessibilityContext::default()),
+    ));
+    let scroll_node = match tree.find(scroll_id) {
+        Some(node) => node,
+        None => panic!("scroll area should be in accessibility tree"),
+    };
+    assert_eq!(
+        scroll_node.a11y_scroll_position(),
+        Some(AccessibilityScrollPosition::new(0.0, 24.0, 0.0, 200.0))
+    );
+}
+
+#[test]
 fn accessibility_input_exposes_text_editing_semantics() {
     let id = ElementId::new();
     let mut input = Input::new()
@@ -182,10 +280,7 @@ fn accessibility_input_exposes_text_editing_semantics() {
 #[test]
 fn accessibility_input_exposes_composition_range() {
     let id = ElementId::new();
-    let mut input = Input::new()
-        .id(id)
-        .placeholder("Message")
-        .value("Hi ");
+    let mut input = Input::new().id(id).placeholder("Message").value("Hi ");
     input
         .apply_text_input_event(TextInputEvent::BeginComposition("你".to_string()))
         .expect("composition should begin");
