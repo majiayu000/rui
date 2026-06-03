@@ -5,8 +5,9 @@ use crate::core::accessibility::{
     AccessibilityAction, AccessibilityContext, AccessibilityError, AccessibilityNode,
     AccessibilityRole, AccessibilityTextRange,
 };
+use crate::core::action::{ActionId, ActionOutcome, StandardAction};
 use crate::core::color::{Color, Rgba};
-use crate::core::event::{Cursor, KeyCode, KeyEvent};
+use crate::core::event::{Cursor, KeyCode, KeyEvent, Modifiers};
 use crate::core::geometry::{Bounds, Edges, Point};
 use crate::core::style::{Corners, Style};
 use crate::core::text_editing::{
@@ -683,6 +684,64 @@ impl Element for Input {
             Err(err) => {
                 log::error!("input key event failed: {err}");
                 false
+            }
+        }
+    }
+
+    fn handle_action(&mut self, cx: &mut EventContext, action: &ActionId) -> ActionOutcome {
+        if !cx.is_focused(self.id) && !self.state.focused {
+            return ActionOutcome::Ignored;
+        }
+
+        let ActionId::Standard(action) = action else {
+            return ActionOutcome::Ignored;
+        };
+
+        if *action == StandardAction::SelectAll {
+            let result = self
+                .sync_editor_from_public_state_if_needed()
+                .and_then(|_| {
+                    let end = self.editor.text().len();
+                    self.editor.set_selection(TextSelection::new(0, end))
+                });
+            return match result {
+                Ok(()) => {
+                    self.sync_state_from_editor();
+                    cx.request_redraw();
+                    ActionOutcome::handled("input")
+                }
+                Err(err) => {
+                    log::error!("input select all action failed: {err}");
+                    ActionOutcome::Ignored
+                }
+            };
+        }
+
+        let event = match action {
+            StandardAction::MoveLeft => KeyEvent::new(KeyCode::ArrowLeft, Modifiers::none()),
+            StandardAction::MoveRight => KeyEvent::new(KeyCode::ArrowRight, Modifiers::none()),
+            StandardAction::MoveUp => KeyEvent::new(KeyCode::ArrowUp, Modifiers::none()),
+            StandardAction::MoveDown => KeyEvent::new(KeyCode::ArrowDown, Modifiers::none()),
+            StandardAction::MoveWordLeft => KeyEvent::new(KeyCode::ArrowLeft, Modifiers::alt()),
+            StandardAction::MoveWordRight => KeyEvent::new(KeyCode::ArrowRight, Modifiers::alt()),
+            StandardAction::SelectLeft => KeyEvent::new(KeyCode::ArrowLeft, Modifiers::shift()),
+            StandardAction::SelectRight => KeyEvent::new(KeyCode::ArrowRight, Modifiers::shift()),
+            StandardAction::DeleteBackward => KeyEvent::new(KeyCode::Backspace, Modifiers::none()),
+            StandardAction::DeleteForward => KeyEvent::new(KeyCode::Delete, Modifiers::none()),
+            StandardAction::Activate | StandardAction::Submit | StandardAction::InsertNewline => {
+                KeyEvent::new(KeyCode::Enter, Modifiers::none())
+            }
+            _ => return ActionOutcome::Ignored,
+        };
+
+        match self.apply_key_event(&event) {
+            Ok(_) => {
+                cx.request_redraw();
+                ActionOutcome::handled("input")
+            }
+            Err(err) => {
+                log::error!("input action failed: {err}");
+                ActionOutcome::Ignored
             }
         }
     }

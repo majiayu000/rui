@@ -5,6 +5,7 @@ use crate::core::accessibility::{
     AccessibilityAction, AccessibilityContext, AccessibilityError, AccessibilityNode,
     AccessibilityRole,
 };
+use crate::core::action::{ActionId, ActionOutcome, StandardAction};
 use crate::core::event::Cursor;
 use crate::core::geometry::Edges;
 use crate::core::style::{Corners, Style};
@@ -221,6 +222,24 @@ impl Element for Button {
                     false
                 }
             }
+        }
+    }
+
+    fn handle_action(&mut self, cx: &mut EventContext, action: &ActionId) -> ActionOutcome {
+        if !cx.is_focused(Some(self.id)) || !self.state.can_activate() {
+            return ActionOutcome::Ignored;
+        }
+
+        match action {
+            ActionId::Standard(StandardAction::Activate) => {
+                if let Some(handler) = &self.on_click {
+                    handler();
+                }
+                cx.announce_accessibility_action(self.id, format!("{} activated", self.label));
+                cx.request_redraw();
+                ActionOutcome::handled("advanced_ui.button")
+            }
+            _ => ActionOutcome::Ignored,
         }
     }
 }

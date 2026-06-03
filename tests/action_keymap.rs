@@ -1,14 +1,15 @@
-use rui::ElementId;
-use rui::advanced_ui::TabList;
+use rui::advanced_ui::{TabList, button, checkbox};
 use rui::core::action::{
     ActionError, ActionHandler, ActionId, ActionOutcome, ActionRouter, KeyChord, Keymap,
     StandardAction,
 };
 use rui::core::event::{KeyCode, KeyEvent, Modifiers};
 use rui::core::geometry::Bounds;
-use rui::elements::Element;
+use rui::core::{AppContext, ElementId, Size};
 use rui::elements::element::EventContext;
-use std::cell::RefCell;
+use rui::elements::{Element, input};
+use rui::testing::{HeadlessSession, mount};
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use taffy::TaffyTree;
 
@@ -16,6 +17,17 @@ fn action_result<T>(result: Result<T, ActionError>) -> T {
     match result {
         Ok(value) => value,
         Err(err) => panic!("action operation failed: {err}"),
+    }
+}
+
+fn mount_or_panic<F, E>(build_root: F) -> HeadlessSession<F, E>
+where
+    F: FnMut(&mut AppContext) -> E,
+    E: Element,
+{
+    match mount(Size::new(180.0, 80.0), build_root) {
+        Ok(session) => session,
+        Err(err) => panic!("headless action session should mount: {err}"),
     }
 }
 
@@ -277,4 +289,103 @@ fn action_router_reports_ignored_when_no_handler_accepts_action() {
 
     assert_eq!(outcome, ActionOutcome::Ignored);
     assert_eq!(calls.borrow().as_slice(), ["focused", "app"]);
+}
+
+#[test]
+fn action_keymap_runtime_routes_focused_component_before_app_fallback() {
+    let button_id = ElementId::from(9201);
+    let clicked = Rc::new(Cell::new(0));
+    let clicked_ref = Rc::clone(&clicked);
+    let mut session = mount_or_panic(move |_cx| {
+        let clicked_ref = Rc::clone(&clicked_ref);
+        button("Run").id(button_id).on_click(move || {
+            clicked_ref.set(clicked_ref.get() + 1);
+        })
+    });
+    let app_calls = Rc::new(RefCell::new(Vec::new()));
+    session
+        .app_context_mut()
+        .add_action_handler(RecordingHandler::new(
+            "app",
+            vec![ActionId::from(StandardAction::Activate)],
+            Rc::clone(&app_calls),
+        ));
+
+    session.request_focus(Some(button_id));
+    assert_eq!(session.focused_element(), Some(button_id));
+    assert!(session.dispatch_key_event(&KeyEvent::new(KeyCode::Enter, Modifiers::none())));
+
+    assert_eq!(clicked.get(), 1);
+    assert!(app_calls.borrow().is_empty());
+}
+
+#[test]
+fn action_keymap_runtime_ignored_activation_falls_through_to_app() {
+    let action = ActionId::from(StandardAction::Activate);
+    let app_calls = Rc::new(RefCell::new(Vec::new()));
+    let disabled_button_id = ElementId::from(9202);
+    let clicked = Rc::new(Cell::new(false));
+    let clicked_ref = Rc::clone(&clicked);
+    let mut disabled = mount_or_panic(move |_cx| {
+        let clicked_ref = Rc::clone(&clicked_ref);
+        button("Disabled")
+            .id(disabled_button_id)
+            .disabled(true)
+            .on_click(move || {
+                clicked_ref.set(true);
+            })
+    });
+    disabled
+        .app_context_mut()
+        .add_action_handler(RecordingHandler::new(
+            "app",
+            vec![action.clone()],
+            Rc::clone(&app_calls),
+        ));
+
+    disabled.request_focus(Some(disabled_button_id));
+    assert!(disabled.dispatch_key_event(&KeyEvent::new(KeyCode::Enter, Modifiers::none())));
+    assert!(!clicked.get());
+
+    let read_only_checkbox_id = ElementId::from(9203);
+    let changed = Rc::new(Cell::new(false));
+    let changed_ref = Rc::clone(&changed);
+    let mut read_only = mount_or_panic(move |_cx| {
+        let changed_ref = Rc::clone(&changed_ref);
+        checkbox("Read only")
+            .id(read_only_checkbox_id)
+            .read_only(true)
+            .on_change(move |_| changed_ref.set(true))
+    });
+    read_only
+        .app_context_mut()
+        .add_action_handler(RecordingHandler::new(
+            "app",
+            vec![action],
+            Rc::clone(&app_calls),
+        ));
+
+    read_only.request_focus(Some(read_only_checkbox_id));
+    assert!(read_only.dispatch_key_event(&KeyEvent::new(KeyCode::Enter, Modifiers::none())));
+    assert!(!changed.get());
+    assert_eq!(app_calls.borrow().as_slice(), ["app", "app"]);
+}
+
+#[test]
+fn action_keymap_runtime_preserves_raw_text_editing_details() {
+    let input_id = ElementId::from(9204);
+    let latest = Rc::new(RefCell::new(String::new()));
+    let latest_ref = Rc::clone(&latest);
+    let mut session = mount_or_panic(move |_cx| {
+        let latest_ref = Rc::clone(&latest_ref);
+        input()
+            .id(input_id)
+            .on_change(move |value| *latest_ref.borrow_mut() = value.to_string())
+    });
+
+    session.request_focus(Some(input_id));
+    let event = KeyEvent::new(KeyCode::Unknown(0), Modifiers::none()).with_char('r');
+    assert!(session.dispatch_key_event(&event));
+
+    assert_eq!(latest.borrow().as_str(), "r");
 }
