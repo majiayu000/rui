@@ -303,9 +303,19 @@ impl DataTableRow {
         } else {
             ((bounds.width() - explicit_total).max(0.0)) / flexible_count as f32
         };
-        self.cells
+        let widths = self
+            .cells
             .iter()
             .map(|cell| cell.width.unwrap_or(flexible_width))
+            .collect::<Vec<_>>();
+        let mut remaining = bounds.width().max(0.0);
+        widths
+            .into_iter()
+            .map(|width| {
+                let clamped = width.max(0.0).min(remaining);
+                remaining -= clamped;
+                clamped
+            })
             .collect()
     }
 }
@@ -448,6 +458,9 @@ fn paint_cell(
     header: bool,
     disabled: bool,
 ) {
+    if bounds.is_empty() {
+        return;
+    }
     cx.register_hit_region(cell.id, bounds);
     if let Some(background) = cell.background {
         cx.paint(Primitive::Quad {

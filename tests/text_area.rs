@@ -1,10 +1,13 @@
-use rui::core::accessibility::{AccessibilityContext, AccessibilityTree};
+use rui::core::accessibility::{AccessibilityAction, AccessibilityContext, AccessibilityTree};
+use rui::core::action::{ActionId, StandardAction};
 use rui::core::event::{KeyCode, KeyEvent, Modifiers};
-use rui::core::geometry::Bounds;
+use rui::core::geometry::{Bounds, Size};
 use rui::core::text_editing::{MemoryClipboard, TextEditError, TextInputEvent, TextRange};
-use rui::elements::element::EventContext;
+use rui::elements::element::{EventContext, LayoutContext, PaintContext};
 use rui::elements::{Element, TextArea, div};
+use rui::renderer::{Primitive, Scene};
 use taffy::TaffyTree;
+use taffy::prelude::AvailableSpace;
 
 fn must<T>(result: Result<T, TextEditError>) -> T {
     match result {
@@ -94,4 +97,83 @@ fn text_area_text_input_events_dispatch_through_div_to_focused_child() {
     );
     let node = tree.find(id).expect("text area node should exist");
     assert_eq!(node.a11y_value(), Some("你好"));
+}
+
+#[test]
+fn text_area_select_all_action_and_accessibility_follow_editability() {
+    let id = rui::core::ElementId::new();
+    let mut area = TextArea::new()
+        .id(id)
+        .accessibility_label("Message")
+        .value("hello");
+    let taffy = TaffyTree::new();
+    let mut focused = Some(id);
+    let mut cx = EventContext::new(
+        Bounds::from_xywh(0.0, 0.0, 240.0, 120.0),
+        &taffy,
+        &mut focused,
+    );
+
+    assert!(
+        area.handle_action(&mut cx, &ActionId::from(StandardAction::SelectAll))
+            .is_handled()
+    );
+    assert_eq!(area.selection_range(), Some(range(0, 5)));
+
+    let editable = area
+        .accessibility(&AccessibilityContext::new(Some(id)))
+        .expect("editable accessibility should build")
+        .expect("editable area should expose a node");
+    assert!(
+        editable
+            .a11y_actions()
+            .contains(&AccessibilityAction::SetValue)
+    );
+
+    let read_only = TextArea::new()
+        .id(id)
+        .accessibility_label("Message")
+        .read_only(true)
+        .accessibility(&AccessibilityContext::new(Some(id)))
+        .expect("read-only accessibility should build")
+        .expect("read-only area should expose a node");
+    assert!(
+        !read_only
+            .a11y_actions()
+            .contains(&AccessibilityAction::SetValue)
+    );
+}
+
+#[test]
+fn text_area_paint_clips_multiline_content_to_bounds() {
+    let mut area = TextArea::new()
+        .accessibility_label("Message")
+        .value("one\ntwo\nthree\nfour")
+        .h(40.0)
+        .w(160.0);
+    let mut taffy = TaffyTree::new();
+    let mut layout_cx = LayoutContext::new(&mut taffy, Size::new(160.0, 40.0));
+    let node = area.layout(&mut layout_cx);
+    taffy
+        .compute_layout(
+            node,
+            taffy::Size {
+                width: AvailableSpace::Definite(160.0),
+                height: AvailableSpace::Definite(40.0),
+            },
+        )
+        .expect("text area layout should compute");
+
+    let mut scene = Scene::new();
+    let mut paint_cx =
+        PaintContext::new(&mut scene, Bounds::from_xywh(0.0, 0.0, 160.0, 40.0), &taffy);
+    area.paint(&mut paint_cx);
+
+    assert!(matches!(scene.primitives()[1], Primitive::PushClip { .. }));
+    assert!(
+        scene
+            .primitives()
+            .iter()
+            .any(|primitive| matches!(primitive, Primitive::PopClip))
+    );
 }

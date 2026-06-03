@@ -1,10 +1,10 @@
 //! Progress bar element for displaying progress
 
+use crate::core::ElementId;
 use crate::core::color::Color;
 use crate::core::geometry::Bounds;
 use crate::core::style::Style;
-use crate::core::ElementId;
-use crate::elements::element::{style_to_taffy, Element, LayoutContext, PaintContext};
+use crate::elements::element::{Element, LayoutContext, PaintContext, style_to_taffy};
 use crate::renderer::Primitive;
 use taffy::prelude::*;
 

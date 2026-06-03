@@ -124,8 +124,7 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
 
             let mut pointer_events = Vec::new();
             let mut scroll_events = Vec::new();
-            let mut key_events = Vec::new();
-            let mut text_input_events = Vec::new();
+            let mut ordered_input_events = Vec::new();
             let mut focus_changed = None;
             let mut close_requested = false;
             let wait_for_event =
@@ -171,8 +170,7 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
                         input,
                         &mut pointer_events,
                         &mut scroll_events,
-                        &mut key_events,
-                        &mut text_input_events,
+                        &mut ordered_input_events,
                     ),
                 }
             }
@@ -296,21 +294,28 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
                 root.handle_scroll_event(&mut event_cx, event);
             }
 
-            for (is_down, event) in &key_events {
-                if should_forward_key_event_to_tree(*is_down) {
-                    if route_key_event(&mut root, &mut context, &mut event_cx, event) {
-                        schedule_platform_redraw(
-                            &window,
-                            &mut context,
-                            RedrawSource::PlatformInput,
-                        );
+            for event in &ordered_input_events {
+                match event {
+                    OrderedInputEvent::Key { is_down, event } => {
+                        if should_forward_key_event_to_tree(*is_down)
+                            && route_key_event(&mut root, &mut context, &mut event_cx, event)
+                        {
+                            schedule_platform_redraw(
+                                &window,
+                                &mut context,
+                                RedrawSource::PlatformInput,
+                            );
+                        }
                     }
-                }
-            }
-
-            for event in &text_input_events {
-                if root.handle_text_input_event(&mut event_cx, event) {
-                    schedule_platform_redraw(&window, &mut context, RedrawSource::PlatformInput);
+                    OrderedInputEvent::Text(event) => {
+                        if root.handle_text_input_event(&mut event_cx, event) {
+                            schedule_platform_redraw(
+                                &window,
+                                &mut context,
+                                RedrawSource::PlatformInput,
+                            );
+                        }
+                    }
                 }
             }
 
@@ -372,9 +377,10 @@ fn mark_platform_event_redraw(event: &PlatformWindowEvent, context: &mut AppCont
         PlatformWindowEvent::Created
         | PlatformWindowEvent::Minimized(false)
         | PlatformWindowEvent::ReopenRequested => RedrawSource::PlatformLifecycle,
-        PlatformWindowEvent::CloseRequested
-        | PlatformWindowEvent::Minimized(true)
-        | PlatformWindowEvent::QuitRequested => return,
+        PlatformWindowEvent::CloseRequested | PlatformWindowEvent::QuitRequested => {
+            RedrawSource::PlatformLifecycle
+        }
+        PlatformWindowEvent::Minimized(true) => return,
         PlatformWindowEvent::Resized(_) => RedrawSource::PlatformResize,
         PlatformWindowEvent::ScaleFactorChanged(_) => RedrawSource::PlatformScaleFactor,
         PlatformWindowEvent::FocusChanged(_) | PlatformWindowEvent::ApplicationActivated(_) => {
@@ -402,17 +408,24 @@ fn append_input_event(
     input: PlatformInputEvent,
     pointer_events: &mut Vec<PointerEvent>,
     scroll_events: &mut Vec<ScrollEvent>,
-    key_events: &mut Vec<(bool, KeyEvent)>,
-    text_input_events: &mut Vec<TextInputEvent>,
+    ordered_input_events: &mut Vec<OrderedInputEvent>,
 ) {
     match input {
-        PlatformInputEvent::KeyDown(event) => key_events.push((true, event)),
-        PlatformInputEvent::KeyUp(event) => key_events.push((false, event)),
+        PlatformInputEvent::KeyDown(event) => ordered_input_events.push(OrderedInputEvent::Key {
+            is_down: true,
+            event,
+        }),
+        PlatformInputEvent::KeyUp(event) => ordered_input_events.push(OrderedInputEvent::Key {
+            is_down: false,
+            event,
+        }),
         PlatformInputEvent::Ime(PlatformImeEvent::Commit(text)) => {
-            text_input_events.push(TextInputEvent::CommitComposition(text));
+            ordered_input_events.push(OrderedInputEvent::Text(TextInputEvent::CommitComposition(
+                text,
+            )));
         }
         PlatformInputEvent::Ime(event) => {
-            text_input_events.push(event.into_text_input_event());
+            ordered_input_events.push(OrderedInputEvent::Text(event.into_text_input_event()));
         }
         PlatformInputEvent::Mouse(event) => {
             let kind = match event.kind {
@@ -428,6 +441,12 @@ fn append_input_event(
         }
         PlatformInputEvent::Scroll(event) => scroll_events.push(event),
     }
+}
+
+#[derive(Debug, Clone)]
+enum OrderedInputEvent {
+    Key { is_down: bool, event: KeyEvent },
+    Text(TextInputEvent),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -607,23 +626,53 @@ mod tests {
     fn ime_commit_events_are_forwarded_as_text_input_events() {
         let mut pointer_events = Vec::new();
         let mut scroll_events = Vec::new();
-        let mut key_events = Vec::new();
-        let mut text_input_events = Vec::new();
+        let mut ordered_input_events = Vec::new();
 
         append_input_event(
             PlatformInputEvent::Ime(PlatformImeEvent::Commit("你好".to_string())),
             &mut pointer_events,
             &mut scroll_events,
-            &mut key_events,
-            &mut text_input_events,
+            &mut ordered_input_events,
         );
 
         assert!(pointer_events.is_empty());
         assert!(scroll_events.is_empty());
-        assert!(key_events.is_empty());
-        assert_eq!(
-            text_input_events,
-            [TextInputEvent::CommitComposition("你好".to_string())]
+        match ordered_input_events.as_slice() {
+            [OrderedInputEvent::Text(TextInputEvent::CommitComposition(text))] => {
+                assert_eq!(text, "你好");
+            }
+            other => panic!("expected one committed text input event, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn key_and_text_input_events_preserve_platform_order() {
+        let mut pointer_events = Vec::new();
+        let mut scroll_events = Vec::new();
+        let mut ordered_input_events = Vec::new();
+
+        append_input_event(
+            PlatformInputEvent::Ime(PlatformImeEvent::Commit("done".to_string())),
+            &mut pointer_events,
+            &mut scroll_events,
+            &mut ordered_input_events,
         );
+        append_input_event(
+            PlatformInputEvent::KeyDown(KeyEvent::new(KeyCode::Enter, Modifiers::none())),
+            &mut pointer_events,
+            &mut scroll_events,
+            &mut ordered_input_events,
+        );
+
+        assert!(matches!(
+            ordered_input_events.as_slice(),
+            [
+                OrderedInputEvent::Text(TextInputEvent::CommitComposition(text)),
+                OrderedInputEvent::Key {
+                    is_down: true,
+                    event
+                }
+            ] if text == "done" && event.key == KeyCode::Enter
+        ));
     }
 }

@@ -5,6 +5,7 @@ use crate::core::accessibility::{
     AccessibilityAction, AccessibilityContext, AccessibilityError, AccessibilityNode,
     AccessibilityRole, AccessibilityTextRange,
 };
+use crate::core::action::{ActionId, ActionOutcome, StandardAction};
 use crate::core::color::{Color, Rgba};
 use crate::core::event::{Cursor, KeyCode, KeyEvent};
 use crate::core::geometry::{Bounds, Edges, Point};
@@ -514,6 +515,7 @@ impl Element for TextArea {
             corner_radii: self.style.border.radius,
         });
 
+        cx.scene.push_layer(bounds);
         self.paint_selection_and_marked_text(cx, bounds);
 
         let origin = self.text_origin(bounds);
@@ -545,6 +547,7 @@ impl Element for TextArea {
         }
 
         self.paint_cursor(cx, bounds);
+        cx.scene.pop_layer();
     }
 
     fn handle_pointer_event(&mut self, cx: &mut EventContext, event: &PointerEvent) -> bool {
@@ -630,6 +633,41 @@ impl Element for TextArea {
         }
     }
 
+    fn handle_action(&mut self, cx: &mut EventContext, action: &ActionId) -> ActionOutcome {
+        if !cx.is_focused(self.id) && !self.state.focused {
+            return ActionOutcome::Ignored;
+        }
+        if self.state.disabled {
+            return ActionOutcome::Ignored;
+        }
+
+        let ActionId::Standard(action) = action else {
+            return ActionOutcome::Ignored;
+        };
+
+        if *action != StandardAction::SelectAll {
+            return ActionOutcome::Ignored;
+        }
+
+        let result = self
+            .sync_editor_from_public_state_if_needed()
+            .and_then(|_| {
+                let end = self.editor.text().len();
+                self.editor.set_selection(TextSelection::new(0, end))
+            });
+        match result {
+            Ok(()) => {
+                self.sync_state_from_editor();
+                cx.request_redraw();
+                ActionOutcome::handled("text_area")
+            }
+            Err(err) => {
+                log::error!("text area select all action failed: {err}");
+                ActionOutcome::Ignored
+            }
+        }
+    }
+
     fn accessibility(
         &self,
         cx: &AccessibilityContext,
@@ -650,8 +688,10 @@ impl Element for TextArea {
             .with_read_only(self.state.read_only)
             .with_invalid(self.state.invalid)
             .with_text_caret(self.normalize_cursor_position())
-            .with_focused(cx.a11y_has_focus(id))
-            .with_action(AccessibilityAction::SetValue);
+            .with_focused(cx.a11y_has_focus(id));
+        if !self.state.disabled && !self.state.read_only {
+            node = node.with_action(AccessibilityAction::SetValue);
+        }
         if let (Some(start), Some(end)) = (self.state.selection_start, self.state.selection_end) {
             node = node.with_text_selection(AccessibilityTextRange::new(start, end));
         }

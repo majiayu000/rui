@@ -1,11 +1,11 @@
 //! Text element for rendering text
 
+use crate::core::ElementId;
 use crate::core::color::Color;
 use crate::core::style::Style;
-use crate::core::ElementId;
-use crate::elements::element::{style_to_taffy, Element, LayoutContext, PaintContext};
-use crate::renderer::text::{TextMeasureCache, TextMetrics, TextRequest};
+use crate::elements::element::{Element, LayoutContext, PaintContext, style_to_taffy};
 use crate::renderer::Primitive;
+use crate::renderer::text::{TextMeasureCache, TextMetrics, TextRequest};
 use taffy::prelude::*;
 
 /// Text alignment

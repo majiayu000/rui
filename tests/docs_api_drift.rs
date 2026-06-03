@@ -44,7 +44,7 @@ fn docs_api_covers_public_builders_and_validation_commands() {
     }
 
     for command in [
-        "cargo test docs_api_drift",
+        "cargo test --test docs_api_drift",
         "cargo test example_smoke",
         "cargo test dogfood",
         "scripts/native_dogfood_macos.sh",

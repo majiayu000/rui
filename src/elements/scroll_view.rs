@@ -1,12 +1,14 @@
 //! ScrollView element for scrollable content
 
+use crate::core::ElementId;
+use crate::core::action::{ActionId, ActionOutcome};
 use crate::core::color::Color;
 use crate::core::geometry::{Bounds, Edges, Size};
 use crate::core::style::{Corners, Overflow, Style};
-use crate::core::ElementId;
+use crate::core::text_editing::TextInputEvent;
 use crate::elements::element::{
-    style_to_taffy, AnyElement, Element, EventContext, LayoutContext, PaintContext, PointerEvent,
-    PointerEventKind,
+    AnyElement, Element, EventContext, LayoutContext, PaintContext, PointerEvent, PointerEventKind,
+    style_to_taffy,
 };
 use crate::renderer::Primitive;
 use smallvec::SmallVec;
@@ -554,6 +556,94 @@ impl Element for ScrollView {
         false
     }
 
+    fn dispatch_action(&mut self, cx: &mut EventContext, action: &ActionId) -> ActionOutcome {
+        let bounds = cx.bounds();
+        if let Some(focused) = cx.focused_id() {
+            for (child, node) in self
+                .children
+                .iter_mut()
+                .zip(self.child_nodes.iter().copied())
+                .rev()
+            {
+                if !child.contains_id(focused) {
+                    continue;
+                }
+                let child_bounds = scrolled_child_bounds(
+                    cx,
+                    node,
+                    bounds,
+                    self.state.offset_x,
+                    self.state.offset_y,
+                );
+                let mut child_cx = cx.with_bounds(child_bounds);
+                let outcome = child.dispatch_action(&mut child_cx, action);
+                if outcome.is_handled() {
+                    return outcome;
+                }
+            }
+        }
+
+        for (child, node) in self
+            .children
+            .iter_mut()
+            .zip(self.child_nodes.iter().copied())
+            .rev()
+        {
+            let child_bounds =
+                scrolled_child_bounds(cx, node, bounds, self.state.offset_x, self.state.offset_y);
+            let mut child_cx = cx.with_bounds(child_bounds);
+            let outcome = child.dispatch_action(&mut child_cx, action);
+            if outcome.is_handled() {
+                return outcome;
+            }
+        }
+
+        ActionOutcome::Ignored
+    }
+
+    fn handle_text_input_event(&mut self, cx: &mut EventContext, event: &TextInputEvent) -> bool {
+        let bounds = cx.bounds();
+        if let Some(focused) = cx.focused_id() {
+            for (child, node) in self
+                .children
+                .iter_mut()
+                .zip(self.child_nodes.iter().copied())
+                .rev()
+            {
+                if !child.contains_id(focused) {
+                    continue;
+                }
+                let child_bounds = scrolled_child_bounds(
+                    cx,
+                    node,
+                    bounds,
+                    self.state.offset_x,
+                    self.state.offset_y,
+                );
+                let mut child_cx = cx.with_bounds(child_bounds);
+                if child.handle_text_input_event(&mut child_cx, event) {
+                    return true;
+                }
+            }
+        }
+
+        for (child, node) in self
+            .children
+            .iter_mut()
+            .zip(self.child_nodes.iter().copied())
+            .rev()
+        {
+            let child_bounds =
+                scrolled_child_bounds(cx, node, bounds, self.state.offset_x, self.state.offset_y);
+            let mut child_cx = cx.with_bounds(child_bounds);
+            if child.handle_text_input_event(&mut child_cx, event) {
+                return true;
+            }
+        }
+
+        false
+    }
+
     fn handle_window_event(&mut self, event: &crate::core::event::Event) -> bool {
         for child in self.children.iter_mut().rev() {
             if child.handle_window_event(event) {
@@ -562,6 +652,22 @@ impl Element for ScrollView {
         }
         false
     }
+}
+
+fn scrolled_child_bounds(
+    cx: &EventContext,
+    node: NodeId,
+    fallback: Bounds,
+    offset_x: f32,
+    offset_y: f32,
+) -> Bounds {
+    let child_bounds = cx.child_bounds(node).unwrap_or(fallback);
+    Bounds::from_xywh(
+        child_bounds.x() - offset_x,
+        child_bounds.y() - offset_y,
+        child_bounds.width(),
+        child_bounds.height(),
+    )
 }
 
 /// Create a new ScrollView

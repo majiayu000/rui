@@ -164,7 +164,7 @@ ScrollView semantics: #40, #44, #79, #80, #81, #82, and #83.
 | Snapshot stability | `cargo test primitive_snapshot`. |
 | Example safety | `cargo test example_smoke`. |
 | Dogfood coverage | CI-safe: `cargo test dogfood`; local-only native macOS smoke: `scripts/native_dogfood_macos.sh`. |
-| Docs/API drift | `cargo test docs_api_drift`. |
+| Docs/API drift | `cargo test --test docs_api_drift`. |
 | Build health | `cargo check`, `cargo test`. |
 | Runtime performance | `cargo test benchmark_config`, `cargo bench --bench runtime_baselines`. |
 | Platform contract | `cargo test platform_window`. |

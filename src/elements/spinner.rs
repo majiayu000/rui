@@ -1,9 +1,9 @@
 //! Spinner element for displaying loading animations
 
+use crate::core::ElementId;
 use crate::core::color::Color;
 use crate::core::style::Style;
-use crate::core::ElementId;
-use crate::elements::element::{style_to_taffy, Element, LayoutContext, PaintContext};
+use crate::elements::element::{Element, LayoutContext, PaintContext, style_to_taffy};
 use crate::renderer::Primitive;
 use taffy::prelude::*;
 
@@ -185,8 +185,15 @@ impl Spinner {
     /// Estimate the width needed for rendering
     fn estimate_width(&self) -> f32 {
         let frame_width = self.font_size; // Approximate width of spinner char
-        let label_width = self.label.as_ref().map_or(0.0, |l| l.len() as f32 * self.font_size * 0.5);
-        let spacing = if self.label.is_some() { self.font_size * 0.5 } else { 0.0 };
+        let label_width = self
+            .label
+            .as_ref()
+            .map_or(0.0, |l| l.len() as f32 * self.font_size * 0.5);
+        let spacing = if self.label.is_some() {
+            self.font_size * 0.5
+        } else {
+            0.0
+        };
         frame_width + spacing + label_width
     }
 
@@ -412,9 +419,7 @@ mod tests {
 
     #[test]
     fn test_spinner_current_frame_char() {
-        let s = Spinner::new()
-            .spinner_type(SpinnerType::Line)
-            .frame(2);
+        let s = Spinner::new().spinner_type(SpinnerType::Line).frame(2);
 
         assert_eq!(s.current_frame_char(), "|");
     }
@@ -446,9 +451,7 @@ mod tests {
 
     #[test]
     fn test_spinner_clear_label() {
-        let s = Spinner::new()
-            .label("Test")
-            .clear_label();
+        let s = Spinner::new().label("Test").clear_label();
         assert_eq!(s.get_label(), None);
     }
 
@@ -466,9 +469,7 @@ mod tests {
 
     #[test]
     fn test_spinner_render_text_no_label() {
-        let s = Spinner::new()
-            .spinner_type(SpinnerType::Line)
-            .frame(0);
+        let s = Spinner::new().spinner_type(SpinnerType::Line).frame(0);
         assert_eq!(s.render_text(), "-");
     }
 
@@ -550,7 +551,11 @@ mod tests {
         for spinner_type in types {
             let s = Spinner::new().spinner_type(spinner_type);
             let text = s.render_text();
-            assert!(!text.is_empty(), "Spinner type {:?} should render non-empty text", spinner_type);
+            assert!(
+                !text.is_empty(),
+                "Spinner type {:?} should render non-empty text",
+                spinner_type
+            );
         }
     }
 

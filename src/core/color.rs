@@ -362,12 +362,15 @@ mod tests {
             // Note: Only hex values > 0xFFFFFF are treated as RGBA format
             // Values <= 0xFFFFFF are treated as RGB (alpha = 1.0)
             let cases = [
-                (0xFF0000FF, Rgba::new(1.0, 0.0, 0.0, 1.0)),   // Red with full alpha
-                (0xFFFF00FF, Rgba::new(1.0, 1.0, 0.0, 1.0)),   // Yellow with full alpha
+                (0xFF0000FF, Rgba::new(1.0, 0.0, 0.0, 1.0)), // Red with full alpha
+                (0xFFFF00FF, Rgba::new(1.0, 1.0, 0.0, 1.0)), // Yellow with full alpha
                 (0xFF000080, Rgba::new(1.0, 0.0, 0.0, 128.0 / 255.0)), // Red with half alpha
-                (0xFFFFFFFF, Rgba::new(1.0, 1.0, 1.0, 1.0)),   // White with full alpha
+                (0xFFFFFFFF, Rgba::new(1.0, 1.0, 1.0, 1.0)), // White with full alpha
                 (0x01000000, Rgba::new(1.0 / 255.0, 0.0, 0.0, 0.0)), // Minimal red, no alpha
-                (0x80808080, Rgba::new(128.0 / 255.0, 128.0 / 255.0, 128.0 / 255.0, 128.0 / 255.0)), // Gray with half alpha
+                (
+                    0x80808080,
+                    Rgba::new(128.0 / 255.0, 128.0 / 255.0, 128.0 / 255.0, 128.0 / 255.0),
+                ), // Gray with half alpha
             ];
 
             for (hex, expected) in cases {

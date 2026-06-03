@@ -1,10 +1,10 @@
 //! Table element for rendering tabular data
 
+use crate::core::ElementId;
 use crate::core::color::{Color, Rgba};
 use crate::core::geometry::{Bounds, Edges};
 use crate::core::style::{Background, Corners, Style};
-use crate::core::ElementId;
-use crate::elements::element::{style_to_taffy, Element, LayoutContext, PaintContext};
+use crate::elements::element::{Element, LayoutContext, PaintContext, style_to_taffy};
 use crate::elements::text::{FontWeight, TextAlign};
 use crate::renderer::Primitive;
 use smallvec::SmallVec;
@@ -463,8 +463,16 @@ impl Element for Table {
 
         let mut style = style_to_taffy(&self.style);
         style.size = taffy::Size {
-            width: self.style.width.map(|w| Dimension::Length(w)).unwrap_or(Dimension::Length(total_width)),
-            height: self.style.height.map(|h| Dimension::Length(h)).unwrap_or(Dimension::Length(total_height)),
+            width: self
+                .style
+                .width
+                .map(|w| Dimension::Length(w))
+                .unwrap_or(Dimension::Length(total_width)),
+            height: self
+                .style
+                .height
+                .map(|h| Dimension::Length(h))
+                .unwrap_or(Dimension::Length(total_height)),
         };
 
         let node = cx
@@ -664,10 +672,7 @@ mod tests {
 
     #[test]
     fn test_table_row_with_cells() {
-        let row = row()
-            .cell(cell("A"))
-            .cell(cell("B"))
-            .cell(cell("C"));
+        let row = row().cell(cell("A")).cell(cell("B")).cell(cell("C"));
 
         assert_eq!(row.cell_count(), 3);
         assert_eq!(row.get_cells()[0].content(), "A");
@@ -728,17 +733,14 @@ mod tests {
 
     #[test]
     fn test_table_column_widths() {
-        let t = table()
-            .column_widths(vec![100.0, 200.0, 150.0]);
+        let t = table().column_widths(vec![100.0, 200.0, 150.0]);
 
         assert_eq!(t.column_widths, Some(vec![100.0, 200.0, 150.0]));
     }
 
     #[test]
     fn test_table_border_settings() {
-        let t = table()
-            .border_color(Color::hex(0x000000))
-            .border_width(2.0);
+        let t = table().border_color(Color::hex(0x000000)).border_width(2.0);
 
         assert_eq!(t.border_width, 2.0);
     }
@@ -803,8 +805,7 @@ mod tests {
 
     #[test]
     fn test_table_calculate_column_widths_auto() {
-        let t = table()
-            .row(row().cells(["Short", "A much longer text value"]));
+        let t = table().row(row().cells(["Short", "A much longer text value"]));
 
         let widths = t.calculate_column_widths();
         assert_eq!(widths.len(), 2);
@@ -840,9 +841,7 @@ mod tests {
 
     #[test]
     fn test_table_get_rows() {
-        let t = table()
-            .row(row().cells(["A"]))
-            .row(row().cells(["B"]));
+        let t = table().row(row().cells(["A"])).row(row().cells(["B"]));
 
         let rows = t.get_rows();
         assert_eq!(rows.len(), 2);
@@ -931,8 +930,7 @@ mod tests {
     #[test]
     fn test_table_calculate_widths_minimum() {
         // Test that columns have a minimum width even for very short content
-        let t = table()
-            .row(row().cells(["A"])); // Single character
+        let t = table().row(row().cells(["A"])); // Single character
 
         let widths = t.calculate_column_widths();
         assert!(widths[0] >= 40.0); // Minimum width enforced

@@ -17,6 +17,7 @@ pub use button::{Button, ButtonSize, ButtonVariant, button};
 pub use div::{Div, div};
 pub use element::{AnyElement, Element, EventResult, IntoElement, Render};
 pub use image::{Image, ImageFit, ImageSource, image};
+pub(crate) use input::InputPaintTokens;
 pub use input::{Input, InputType, input};
 pub use list::{List, ListItem, ListStyle, list, ordered_list, unordered_list};
 pub use progress::{Progress, progress};

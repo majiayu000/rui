@@ -1,6 +1,6 @@
 use rui::advanced_ui::{
-    Button, CrossAxisAlignment, MainAxisAlignment, Theme, ThemeDensity, ThemeMode, column,
-    container, row, text,
+    Button, ControlState, ControlVariant, CrossAxisAlignment, MainAxisAlignment, Theme,
+    ThemeDensity, ThemeMode, column, container, row, text,
 };
 use rui::core::style::{Dimension, Shadow, Style};
 use rui::elements::element::{Element, LayoutContext, PaintContext, style_to_taffy};
@@ -225,6 +225,47 @@ fn advanced_theme_presets_cover_light_dark_and_high_contrast() {
         light.colors.primary.rest.background,
         high_contrast.colors.primary.rest.background
     );
+}
+
+#[test]
+fn advanced_high_contrast_tokens_preserve_state_contrast() {
+    let theme = Theme::high_contrast();
+    let outline_hover = theme.control_colors(
+        ControlVariant::Outline,
+        ControlState {
+            hovered: true,
+            ..ControlState::default()
+        },
+    );
+    assert_eq!(outline_hover.background, Color::hex(0x333333));
+    assert_eq!(outline_hover.foreground, Color::WHITE);
+
+    let pressed_surface = theme.surface_color_for_state(ControlState {
+        hovered: true,
+        pressed: true,
+        ..ControlState::default()
+    });
+    assert_eq!(pressed_surface, theme.state.pressed_surface);
+
+    let read_only_ghost = theme.control_colors(
+        ControlVariant::Ghost,
+        ControlState {
+            read_only: true,
+            ..ControlState::default()
+        },
+    );
+    assert_eq!(read_only_ghost.background.to_rgba().a, 0.0);
+
+    let loading_ghost = theme.control_colors(
+        ControlVariant::Ghost,
+        ControlState {
+            loading: true,
+            ..ControlState::default()
+        },
+    );
+    assert_eq!(loading_ghost.background, Color::hex(0x1a1a1a));
+    assert_eq!(theme.colors.danger.rest.foreground, Color::WHITE);
+    assert_eq!(theme.colors.success.rest.foreground, Color::BLACK);
 }
 
 #[test]

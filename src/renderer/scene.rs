@@ -1,7 +1,7 @@
 //! Scene graph - collects primitives for rendering
 
-use crate::core::geometry::{Bounds, Point};
 use crate::core::ElementId;
+use crate::core::geometry::{Bounds, Point};
 use crate::renderer::primitives::Primitive;
 use smallvec::SmallVec;
 

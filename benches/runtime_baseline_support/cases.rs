@@ -9,7 +9,7 @@ use rui::elements::element::{
 };
 use rui::renderer::text::{TextMeasureCache, TextRasterCache, TextRequest};
 use rui::renderer::{Primitive, RecordingRenderer, Renderer, Scene};
-use rui::{div, Bounds, Color, ElementId, Point, Size};
+use rui::{Bounds, Color, ElementId, Point, Size, div};
 use std::cell::Cell;
 use std::hint::black_box;
 use std::rc::Rc;

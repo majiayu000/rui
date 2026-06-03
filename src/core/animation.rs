@@ -31,7 +31,10 @@ pub enum Easing {
     EaseInBounce,
     EaseOutBounce,
     EaseInOutBounce,
-    Spring { stiffness: f32, damping: f32 },
+    Spring {
+        stiffness: f32,
+        damping: f32,
+    },
     Custom(fn(f32) -> f32),
 }
 
@@ -79,10 +82,18 @@ impl Easing {
                 }
             }
             Easing::EaseInExpo => {
-                if t == 0.0 { 0.0 } else { 2.0_f32.powf(10.0 * t - 10.0) }
+                if t == 0.0 {
+                    0.0
+                } else {
+                    2.0_f32.powf(10.0 * t - 10.0)
+                }
             }
             Easing::EaseOutExpo => {
-                if t == 1.0 { 1.0 } else { 1.0 - 2.0_f32.powf(-10.0 * t) }
+                if t == 1.0 {
+                    1.0
+                } else {
+                    1.0 - 2.0_f32.powf(-10.0 * t)
+                }
             }
             Easing::EaseInOutExpo => {
                 if t == 0.0 {
@@ -144,7 +155,8 @@ impl Easing {
                     if t < 0.5 {
                         -(2.0_f32.powf(20.0 * t - 10.0) * ((20.0 * t - 11.125) * c5).sin()) / 2.0
                     } else {
-                        (2.0_f32.powf(-20.0 * t + 10.0) * ((20.0 * t - 11.125) * c5).sin()) / 2.0 + 1.0
+                        (2.0_f32.powf(-20.0 * t + 10.0) * ((20.0 * t - 11.125) * c5).sin()) / 2.0
+                            + 1.0
                     }
                 }
             }
@@ -179,7 +191,9 @@ impl Easing {
                 if zeta < 1.0 {
                     // Underdamped
                     let omega_d = omega * (1.0 - zeta * zeta).sqrt();
-                    1.0 - (-zeta * omega * t).exp() * ((zeta * omega * t / omega_d).cos() + zeta * (zeta * omega * t / omega_d).sin())
+                    1.0 - (-zeta * omega * t).exp()
+                        * ((zeta * omega * t / omega_d).cos()
+                            + zeta * (zeta * omega * t / omega_d).sin())
                 } else {
                     // Critically damped or overdamped
                     1.0 - (1.0 + omega * t) * (-omega * t).exp()
@@ -379,7 +393,9 @@ impl Animatable for crate::core::color::Color {
     fn interpolate(from: &Self, to: &Self, t: f32) -> Self {
         let from_rgba = from.to_rgba();
         let to_rgba = to.to_rgba();
-        crate::core::color::Color::Rgba(crate::core::color::Rgba::interpolate(&from_rgba, &to_rgba, t))
+        crate::core::color::Color::Rgba(crate::core::color::Rgba::interpolate(
+            &from_rgba, &to_rgba, t,
+        ))
     }
 }
 
@@ -503,7 +519,11 @@ impl Transform {
 
         // Scale * Rotation * Translation
         [
-            [self.scale_x * cos_r, -self.scale_y * sin_r, self.translate_x],
+            [
+                self.scale_x * cos_r,
+                -self.scale_y * sin_r,
+                self.translate_x,
+            ],
             [self.scale_x * sin_r, self.scale_y * cos_r, self.translate_y],
             [0.0, 0.0, 1.0],
         ]
@@ -762,7 +782,10 @@ mod tests {
 
         let out_at_end = Easing::EaseOutBack.apply(0.9);
         // EaseOutBack overshoots 1.0
-        assert!(out_at_end > 1.0, "EaseOutBack should overshoot 1.0 near end");
+        assert!(
+            out_at_end > 1.0,
+            "EaseOutBack should overshoot 1.0 near end"
+        );
     }
 
     #[test]
@@ -792,7 +815,12 @@ mod tests {
         let test_points = vec![0.1, 0.3, 0.5, 0.7, 0.9];
         for t in test_points {
             let result = Easing::EaseOutBounce.apply(t);
-            assert!(result >= 0.0 && result <= 1.1, "EaseOutBounce({}) = {} should be in [0, 1.1]", t, result);
+            assert!(
+                result >= 0.0 && result <= 1.1,
+                "EaseOutBounce({}) = {} should be in [0, 1.1]",
+                t,
+                result
+            );
         }
     }
 
@@ -813,7 +841,10 @@ mod tests {
             damping: 20.0,
         };
         let result = spring_critical.apply(0.5);
-        assert!(result.is_finite(), "Critically damped spring should produce finite values");
+        assert!(
+            result.is_finite(),
+            "Critically damped spring should produce finite values"
+        );
     }
 
     #[test]
@@ -845,11 +876,7 @@ mod tests {
     #[test]
     fn test_easing_clamping() {
         // Values outside [0, 1] should be clamped
-        let test_cases = vec![
-            Easing::Linear,
-            Easing::EaseIn,
-            Easing::EaseOut,
-        ];
+        let test_cases = vec![Easing::Linear, Easing::EaseIn, Easing::EaseOut];
 
         for easing in test_cases {
             let below = easing.apply(-0.5);
@@ -1053,14 +1080,14 @@ mod tests {
 
     #[test]
     fn test_animation_on_complete_callback() {
-        use std::sync::atomic::{AtomicBool, Ordering};
         use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
 
         let called = Arc::new(AtomicBool::new(false));
         let called_clone = called.clone();
 
-        let mut anim = Animation::new(0.0_f32, 100.0_f32, Duration::from_millis(10))
-            .on_complete(move || {
+        let mut anim =
+            Animation::new(0.0_f32, 100.0_f32, Duration::from_millis(10)).on_complete(move || {
                 called_clone.store(true, Ordering::SeqCst);
             });
 
@@ -1068,13 +1095,16 @@ mod tests {
         thread::sleep(Duration::from_millis(50));
         anim.update();
 
-        assert!(called.load(Ordering::SeqCst), "on_complete should be called");
+        assert!(
+            called.load(Ordering::SeqCst),
+            "on_complete should be called"
+        );
     }
 
     #[test]
     fn test_animation_with_easing() {
-        let mut anim = Animation::new(0.0_f32, 100.0_f32, Duration::from_millis(100))
-            .easing(Easing::EaseIn);
+        let mut anim =
+            Animation::new(0.0_f32, 100.0_f32, Duration::from_millis(100)).easing(Easing::EaseIn);
 
         // Avoid sleep-based timing here; slower CI runners can overshoot the midpoint
         // enough to make the assertion flaky even when easing is correct.
@@ -1348,10 +1378,10 @@ mod tests {
         let matrix = t.to_matrix();
 
         // cos(90deg) = 0, sin(90deg) = 1
-        assert!(approx_eq(matrix[0][0], 0.0, 0.001));  // cos
+        assert!(approx_eq(matrix[0][0], 0.0, 0.001)); // cos
         assert!(approx_eq(matrix[0][1], -1.0, 0.001)); // -sin
-        assert!(approx_eq(matrix[1][0], 1.0, 0.001));  // sin
-        assert!(approx_eq(matrix[1][1], 0.0, 0.001));  // cos
+        assert!(approx_eq(matrix[1][0], 1.0, 0.001)); // sin
+        assert!(approx_eq(matrix[1][1], 0.0, 0.001)); // cos
     }
 
     // ==================== Transition Tests ====================
@@ -1376,9 +1406,10 @@ mod tests {
 
     #[test]
     fn test_transition_builder() {
-        let transition = Transition::new(TransitionProperty::Background, Duration::from_millis(200))
-            .easing(Easing::EaseOut)
-            .delay(Duration::from_millis(100));
+        let transition =
+            Transition::new(TransitionProperty::Background, Duration::from_millis(200))
+                .easing(Easing::EaseOut)
+                .delay(Duration::from_millis(100));
 
         assert_eq!(transition.property, TransitionProperty::Background);
         assert_eq!(transition.easing, Easing::EaseOut);
@@ -1505,8 +1536,8 @@ mod tests {
 
     #[test]
     fn test_full_animation_lifecycle() {
-        use std::sync::atomic::{AtomicU32, Ordering};
         use std::sync::Arc;
+        use std::sync::atomic::{AtomicU32, Ordering};
 
         let counter = Arc::new(AtomicU32::new(0));
         let counter_clone = counter.clone();
@@ -1579,7 +1610,10 @@ mod tests {
             Easing::EaseInBounce,
             Easing::EaseOutBounce,
             Easing::EaseInOutBounce,
-            Easing::Spring { stiffness: 100.0, damping: 10.0 },
+            Easing::Spring {
+                stiffness: 100.0,
+                damping: 10.0,
+            },
             Easing::Custom(|t| t),
         ];
 

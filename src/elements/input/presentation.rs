@@ -1,5 +1,5 @@
 use super::{
-    INPUT_CARET_TOP_PADDING, INPUT_CARET_WIDTH, INPUT_GRAPHEME_WIDTH, INPUT_HORIZONTAL_PADDING,
+    INPUT_CARET_WIDTH, INPUT_GRAPHEME_WIDTH, INPUT_HORIZONTAL_PADDING,
     INPUT_MARKED_UNDERLINE_HEIGHT, Input, InputType, PASSWORD_MASK,
 };
 use crate::core::color::{Color, Rgba};
@@ -22,6 +22,15 @@ impl Input {
     }
 
     pub(super) fn colors(&self) -> (Color, Color, Color) {
+        if let Some(tokens) = self.paint_tokens {
+            let text = if self.state.value.is_empty() {
+                tokens.placeholder
+            } else {
+                tokens.text
+            };
+            return (tokens.background, text, tokens.border);
+        }
+
         let bg = if self.state.disabled {
             Color::hex(0xf3f4f6)
         } else {
@@ -64,18 +73,19 @@ impl Input {
         }
     }
 
-    fn text_layout(&self) -> TextEditLayout {
+    fn text_layout_for_bounds(&self, bounds: Bounds) -> TextEditLayout {
         TextEditLayout::new(
             self.input_layout_text(),
             INPUT_GRAPHEME_WIDTH,
-            self.cursor_height(),
+            self.cursor_height(bounds),
         )
     }
 
     fn text_origin(&self, bounds: Bounds) -> Point {
+        let cursor_height = self.cursor_height(bounds);
         Point::new(
             bounds.x() + INPUT_HORIZONTAL_PADDING,
-            bounds.y() + INPUT_CARET_TOP_PADDING,
+            bounds.y() + (bounds.height() - cursor_height).max(0.0) / 2.0,
         )
     }
 
@@ -83,8 +93,20 @@ impl Input {
         bounds.width() - (INPUT_HORIZONTAL_PADDING * 2.0)
     }
 
-    fn cursor_height(&self) -> f32 {
-        20.0
+    pub(super) fn font_size(&self, bounds: Bounds) -> f32 {
+        let requested = self
+            .paint_tokens
+            .map(|tokens| tokens.font_size)
+            .unwrap_or(14.0);
+        requested.min((bounds.height() - 4.0).max(1.0))
+    }
+
+    fn cursor_height(&self, bounds: Bounds) -> f32 {
+        let requested = self
+            .paint_tokens
+            .map(|tokens| tokens.font_size * 1.4)
+            .unwrap_or(20.0);
+        requested.min((bounds.height() - 4.0).max(1.0))
     }
 
     pub(super) fn paint_selection_and_marked_text(&self, cx: &mut PaintContext, bounds: Bounds) {
@@ -92,11 +114,18 @@ impl Input {
             return;
         }
 
-        let layout = self.text_layout();
+        let layout = self.text_layout_for_bounds(bounds);
         let style = TextEditPaintStyle::new(
             INPUT_CARET_WIDTH,
-            Color::hex(0x6366f1).to_rgba(),
-            Color::hex(0x6366f1).with_alpha(0.22).to_rgba(),
+            self.paint_tokens
+                .map(|tokens| tokens.focus_ring)
+                .unwrap_or_else(|| Color::hex(0x6366f1))
+                .to_rgba(),
+            self.paint_tokens
+                .map(|tokens| tokens.focus_ring)
+                .unwrap_or_else(|| Color::hex(0x6366f1))
+                .with_alpha(0.22)
+                .to_rgba(),
         );
         let paint_origin = self.text_origin(bounds);
 
@@ -154,11 +183,18 @@ impl Input {
             return;
         };
 
-        let layout = self.text_layout();
+        let layout = self.text_layout_for_bounds(bounds);
         let style = TextEditPaintStyle::new(
             INPUT_CARET_WIDTH,
-            Color::hex(0x6366f1).to_rgba(),
-            Color::hex(0x6366f1).with_alpha(0.22).to_rgba(),
+            self.paint_tokens
+                .map(|tokens| tokens.focus_ring)
+                .unwrap_or_else(|| Color::hex(0x6366f1))
+                .to_rgba(),
+            self.paint_tokens
+                .map(|tokens| tokens.focus_ring)
+                .unwrap_or_else(|| Color::hex(0x6366f1))
+                .with_alpha(0.22)
+                .to_rgba(),
         );
         match layout.caret_primitive(cursor, self.text_origin(bounds), style) {
             Ok(primitive) => cx.paint(primitive),

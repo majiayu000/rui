@@ -3,7 +3,7 @@
 //! RUI uses an Entity-Component-System inspired architecture where all state
 //! is owned by the framework and accessed via EntityIds.
 
-use slotmap::{new_key_type, SlotMap};
+use slotmap::{SlotMap, new_key_type};
 use std::any::Any;
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -35,9 +35,9 @@ impl EntityStore {
 
     /// Get a reference to an entity
     pub fn get<T: 'static>(&self, id: EntityId) -> Option<std::cell::Ref<'_, T>> {
-        self.entities
-            .get(id)
-            .and_then(|entity| std::cell::Ref::filter_map(entity.borrow(), |e| e.downcast_ref::<T>()).ok())
+        self.entities.get(id).and_then(|entity| {
+            std::cell::Ref::filter_map(entity.borrow(), |e| e.downcast_ref::<T>()).ok()
+        })
     }
 
     /// Get a mutable reference to an entity
@@ -453,7 +453,9 @@ mod tests {
         #[test]
         fn remove_multiple_entities() {
             let mut store = EntityStore::new();
-            let ids: Vec<_> = (0..10).map(|i| store.insert(Counter { value: i })).collect();
+            let ids: Vec<_> = (0..10)
+                .map(|i| store.insert(Counter { value: i }))
+                .collect();
 
             // Remove all even-indexed entities
             for (i, &id) in ids.iter().enumerate() {
@@ -671,7 +673,9 @@ mod tests {
             let mut store = EntityStore::new();
             let mut set: HashSet<Entity<Counter>> = HashSet::new();
 
-            let ids: Vec<_> = (0..10).map(|i| store.insert(Counter { value: i })).collect();
+            let ids: Vec<_> = (0..10)
+                .map(|i| store.insert(Counter { value: i }))
+                .collect();
 
             for &id in &ids {
                 let entity = Entity::new(id);

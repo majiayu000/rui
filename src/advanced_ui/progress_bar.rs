@@ -1,5 +1,5 @@
 use crate::advanced_ui::state::{InteractionState, require_finite, require_finite_non_negative};
-use crate::advanced_ui::tokens::{ControlSize, Theme};
+use crate::advanced_ui::tokens::{ControlSize, Theme, ThemeMode};
 use crate::core::ElementId;
 use crate::core::accessibility::{
     AccessibilityContext, AccessibilityError, AccessibilityNode, AccessibilityRole,
@@ -191,10 +191,26 @@ impl Element for ProgressBar {
         }
 
         if self.show_label {
+            if self.theme.mode == ThemeMode::HighContrast {
+                let label_width = (bounds.width() * 0.38).clamp(36.0, bounds.width());
+                let label_height = bounds.height().max(18.0);
+                cx.paint(Primitive::Quad {
+                    bounds: Bounds::from_xywh(
+                        bounds.x() + (bounds.width() - label_width) / 2.0,
+                        bounds.y() + (bounds.height() - label_height) / 2.0,
+                        label_width,
+                        label_height,
+                    ),
+                    background: self.theme.colors.surface.to_rgba(),
+                    border_color: self.theme.colors.border.to_rgba(),
+                    border_widths: Edges::all(1.0),
+                    corner_radii: radius,
+                });
+            }
             cx.paint(Primitive::Text {
                 bounds,
                 content: format!("{}%", (self.value * 100.0).round() as u32),
-                color: self.theme.colors.text_on_accent.to_rgba(),
+                color: self.theme.colors.text.to_rgba(),
                 font_size: (bounds.height() * 0.62).max(10.0),
                 font_weight: self.theme.typography.control_weight,
                 font_family: None,

@@ -1,12 +1,12 @@
-use rui::advanced_ui::{button, Theme};
+use rui::advanced_ui::{Theme, button};
 use rui::core::color::Rgba;
 use rui::core::geometry::{Bounds, Edges, Size};
 use rui::core::style::Corners;
 use rui::elements::{div, image, text};
 use rui::renderer::Primitive;
 use rui::testing::{
-    assert_primitive_snapshot_text, mount, primitive_snapshot, PrimitiveSnapshot,
-    PrimitiveSnapshotError,
+    PrimitiveSnapshot, PrimitiveSnapshotError, assert_primitive_snapshot_text, mount,
+    primitive_snapshot,
 };
 use rui::{ImageFit, ImageSource};
 
@@ -96,9 +96,11 @@ fn primitive_snapshot_serializes_data_images_stably() {
         Err(err) => panic!("data image snapshot should serialize: {err}"),
     };
 
-    assert!(snapshot
-        .as_str()
-        .contains("source=data(width=1,height=1,len=4"));
+    assert!(
+        snapshot
+            .as_str()
+            .contains("source=data(width=1,height=1,len=4")
+    );
     assert!(snapshot.as_str().contains("fnv64=0x"));
     assert!(snapshot.as_str().contains("opacity=0.500"));
 }
@@ -161,11 +163,15 @@ fn primitive_snapshot_captures_advanced_ui_theme_tokens() {
         Err(err) => panic!("themed advanced button snapshot should serialize: {err}"),
     };
 
-    assert!(snapshot
-        .as_str()
-        .contains("background=rgba(0.000, 1.000, 0.000, 1.000)"));
-    assert!(snapshot
-        .as_str()
-        .contains("radii=(2.000, 2.000, 2.000, 2.000)"));
+    assert!(
+        snapshot
+            .as_str()
+            .contains("background=rgba(0.000, 1.000, 0.000, 1.000)")
+    );
+    assert!(
+        snapshot
+            .as_str()
+            .contains("radii=(2.000, 2.000, 2.000, 2.000)")
+    );
     assert!(snapshot.as_str().contains("font_size=17.500"));
 }

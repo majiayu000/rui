@@ -11,9 +11,7 @@ pub use use_mouse::{
     MouseCallback, MouseCallbackId, TerminalMouseButton, TerminalMouseEvent,
     TerminalMouseEventKind, UseMouse,
 };
-pub use use_paste::{
-    BracketedPasteMode, PasteDetector, PasteEvent, PasteHandler, UsePaste,
-};
+pub use use_paste::{BracketedPasteMode, PasteDetector, PasteEvent, PasteHandler, UsePaste};
 pub use use_window_focus::{
     FocusCallback, FocusDetector, FocusReporting, UseWindowFocus, WindowFocusEvent,
 };

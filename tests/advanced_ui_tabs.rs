@@ -1,13 +1,15 @@
 use rui::ElementId;
-use rui::advanced_ui::{Tab, TabList, TabPanel, Tabs, Theme, ThemeDensity, text};
+use rui::advanced_ui::{
+    Tab, TabList, TabPanel, Tabs, Theme, ThemeDensity, container, scrollable, text,
+};
 use rui::core::accessibility::AccessibilityRole;
-use rui::core::event::{KeyCode, KeyEvent, Modifiers, MouseButton};
+use rui::core::event::{KeyCode, KeyEvent, Modifiers, MouseButton, ScrollEvent};
 use rui::core::geometry::{Bounds, Point, Size};
 use rui::elements::Element;
 use rui::elements::element::{EventContext, PointerEvent, PointerEventKind};
 use rui::renderer::Primitive;
 use rui::testing::mount;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use taffy::TaffyTree;
 
@@ -125,6 +127,82 @@ fn advanced_ui_tab_list_keyboard_skips_disabled_tabs() {
         &KeyEvent::new(KeyCode::ArrowRight, Modifiers::none())
     ));
     assert_eq!(list.selected_value(), "overview");
+}
+
+#[test]
+#[should_panic(expected = "tab values must be unique")]
+fn advanced_ui_tab_list_rejects_duplicate_values() {
+    drop(TabList::new(
+        [Tab::new("same", "First"), Tab::new("same", "Second")],
+        "same",
+    ));
+}
+
+#[test]
+fn advanced_ui_tab_list_ignores_modified_navigation_keys() {
+    let id = ElementId::new();
+    let mut list = TabList::new([("overview", "Overview"), ("logs", "Logs")], "overview").id(id);
+    let taffy = TaffyTree::<ElementId>::new();
+    let mut focused = Some(id);
+    let mut cx = event_context(&taffy, &mut focused);
+
+    assert!(!list.handle_key_event(
+        &mut cx,
+        &KeyEvent::new(KeyCode::ArrowRight, Modifiers::shift())
+    ));
+    assert_eq!(list.selected_value(), "overview");
+}
+
+#[test]
+fn advanced_ui_tab_list_moves_focus_when_keyboard_selects_tab() {
+    let first_id = ElementId::new();
+    let second_id = ElementId::new();
+    let mut list = TabList::new(
+        [
+            Tab::new("overview", "Overview").id(first_id),
+            Tab::new("logs", "Logs").id(second_id),
+        ],
+        "overview",
+    );
+    let taffy = TaffyTree::<ElementId>::new();
+    let mut focused = Some(first_id);
+    let mut cx = event_context(&taffy, &mut focused);
+
+    assert!(list.handle_key_event(
+        &mut cx,
+        &KeyEvent::new(KeyCode::ArrowRight, Modifiers::none())
+    ));
+    assert_eq!(list.selected_value(), "logs");
+    assert_eq!(cx.focused_id(), Some(second_id));
+}
+
+#[test]
+fn advanced_ui_tabs_forward_scroll_to_selected_panel() {
+    let did_scroll = Rc::new(Cell::new(false));
+    let did_scroll_ref = Rc::clone(&did_scroll);
+    let mut session = mount(Size::new(220.0, 140.0), |_cx| {
+        Tabs::new([("overview", "Overview"), ("logs", "Logs")], "overview")
+            .accessibility_label("Project sections")
+            .panel(TabPanel::new(
+                "overview",
+                scrollable(container().w(120.0).h(240.0))
+                    .h(48.0)
+                    .on_scroll({
+                        let did_scroll_ref = Rc::clone(&did_scroll_ref);
+                        move |_, _| did_scroll_ref.set(true)
+                    }),
+            ))
+            .panel(TabPanel::new("logs", text("Logs")))
+    })
+    .expect("tabs should mount");
+
+    assert!(session.dispatch_scroll_event(&ScrollEvent {
+        position: Point::new(20.0, 64.0),
+        delta_x: 0.0,
+        delta_y: 24.0,
+        modifiers: Modifiers::none(),
+    }));
+    assert!(did_scroll.get());
 }
 
 #[test]

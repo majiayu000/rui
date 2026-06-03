@@ -79,6 +79,13 @@ fn text_contents(primitives: &[Primitive]) -> Vec<&str> {
         .collect()
 }
 
+fn primitive_bounds(primitive: &Primitive) -> Option<Bounds> {
+    match primitive {
+        Primitive::Quad { bounds, .. } | Primitive::Text { bounds, .. } => Some(*bounds),
+        _ => None,
+    }
+}
+
 #[test]
 fn advanced_ui_data_theme_density_changes_layout_tokens() {
     let theme = Theme::light().with_density(ThemeDensity { scale: 1.5 });
@@ -155,6 +162,15 @@ fn advanced_ui_data_list_selects_enabled_item_only() {
 }
 
 #[test]
+#[should_panic(expected = "data list item values must be unique")]
+fn advanced_ui_data_list_rejects_duplicate_values() {
+    drop(DataList::new([
+        DataListItem::new("same", "First"),
+        DataListItem::new("same", "Second"),
+    ]));
+}
+
+#[test]
 fn advanced_ui_data_tree_uses_expanded_visible_rows() {
     let tree = data_tree([
         DataTreeItem::new("src", "src")
@@ -211,6 +227,15 @@ fn advanced_ui_data_tree_rejects_collapsed_hidden_selection() {
 }
 
 #[test]
+#[should_panic(expected = "data tree item values must be unique")]
+fn advanced_ui_data_tree_rejects_duplicate_values() {
+    drop(DataTree::new([
+        DataTreeItem::new("src", "src").child(DataTreeItem::new("same", "Child")),
+        DataTreeItem::new("same", "Duplicate root"),
+    ]));
+}
+
+#[test]
 fn advanced_ui_data_table_row_lays_out_cells_and_selects() {
     let selected = Rc::new(Cell::new(false));
     let selected_ref = Rc::clone(&selected);
@@ -246,6 +271,26 @@ fn advanced_ui_data_table_row_lays_out_cells_and_selects() {
     assert!(row.handle_pointer_event(&mut cx, &data_pointer(PointerEventKind::Up, 4.0, 4.0)));
     assert!(row.interaction_state().selected());
     assert!(selected.get());
+}
+
+#[test]
+fn advanced_ui_data_table_row_clamps_overflowing_cell_paint() {
+    let primitives = painted_data_primitives(
+        DataTableRow::new([
+            DataTableCell::new("Oversized").w(220.0),
+            DataTableCell::new("Clamped").w(220.0),
+        ])
+        .w(200.0)
+        .h(40.0),
+        Size::new(200.0, 40.0),
+    );
+
+    for bounds in primitives.iter().filter_map(primitive_bounds) {
+        assert!(
+            bounds.max_x() <= 200.0,
+            "data table primitive should stay inside row bounds: {bounds:?}"
+        );
+    }
 }
 
 #[test]

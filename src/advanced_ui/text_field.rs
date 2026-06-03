@@ -5,12 +5,13 @@ use crate::core::accessibility::{
     AccessibilityAction, AccessibilityContext, AccessibilityError, AccessibilityNode,
     AccessibilityRole,
 };
+use crate::core::action::{ActionId, ActionOutcome};
 use crate::core::event::{Cursor, KeyEvent};
 use crate::core::geometry::Edges;
 use crate::core::style::Style;
 use crate::core::text_editing::{TextEditError, TextEditOutcome, TextInputEvent};
 use crate::elements::element::{Element, EventContext, LayoutContext, PaintContext, PointerEvent};
-use crate::elements::{Input, InputType};
+use crate::elements::{Input, InputPaintTokens, InputType};
 use crate::renderer::Primitive;
 use taffy::prelude::NodeId;
 
@@ -31,7 +32,7 @@ impl TextField {
         let id = ElementId::new();
         let size = ControlSize::default();
         let theme = Theme::default();
-        Self {
+        let mut field = Self {
             id,
             input: Input::new()
                 .id(id)
@@ -42,7 +43,9 @@ impl TextField {
             size,
             theme,
             state: InteractionState::default(),
-        }
+        };
+        field.sync_input_contract();
+        field
     }
 
     pub fn id(mut self, id: ElementId) -> Self {
@@ -99,21 +102,25 @@ impl TextField {
             .input
             .h(self.theme.control_height(self.size))
             .rounded(self.theme.control_radius());
+        self.sync_input_contract();
         self
     }
 
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.state.set_disabled(disabled);
+        self.sync_input_contract();
         self
     }
 
     pub fn read_only(mut self, read_only: bool) -> Self {
         self.state.set_read_only(read_only);
+        self.sync_input_contract();
         self
     }
 
     pub fn invalid(mut self, invalid: bool) -> Self {
         self.state.set_invalid(invalid);
+        self.sync_input_contract();
         self
     }
 
@@ -160,14 +167,48 @@ impl TextField {
     }
 
     pub fn apply_key_event(&mut self, event: &KeyEvent) -> Result<TextEditOutcome, TextEditError> {
-        if !self.can_edit() {
+        if self.state.disabled() || (self.state.read_only() && Input::key_event_would_mutate(event))
+        {
             return Ok(TextEditOutcome::default());
         }
+        self.sync_input_contract();
         self.input.apply_key_event(event)
     }
 
     fn can_edit(&self) -> bool {
         !self.state.disabled() && !self.state.read_only()
+    }
+
+    fn sync_input_contract(&mut self) {
+        self.input.set_interaction_flags(
+            self.state.disabled(),
+            self.state.read_only(),
+            self.state.invalid(),
+        );
+        let control_state = self.state.into();
+        let text = if self.state.disabled() {
+            self.theme
+                .colors
+                .text
+                .with_alpha(self.theme.state.disabled_opacity)
+        } else if self.state.read_only() {
+            self.theme
+                .colors
+                .text
+                .with_alpha(self.theme.state.read_only_opacity)
+        } else {
+            self.theme.colors.text
+        };
+        self.input.set_paint_tokens(InputPaintTokens {
+            background: self.theme.surface_color_for_state(control_state),
+            text,
+            placeholder: text.with_alpha(0.62),
+            border: self
+                .theme
+                .state_border_color(control_state, self.theme.colors.border),
+            focus_ring: self.theme.state.focus_ring,
+            font_size: self.theme.text_size(self.size),
+        });
     }
 }
 
@@ -181,10 +222,12 @@ impl Element for TextField {
     }
 
     fn layout(&mut self, cx: &mut LayoutContext) -> NodeId {
+        self.sync_input_contract();
         self.input.layout(cx)
     }
 
     fn paint(&mut self, cx: &mut PaintContext) {
+        self.sync_input_contract();
         let bounds = cx.bounds();
         cx.register_hit_region(self.id, bounds);
         self.input.paint(cx);
@@ -238,6 +281,7 @@ impl Element for TextField {
     }
 
     fn handle_pointer_event(&mut self, cx: &mut EventContext, event: &PointerEvent) -> bool {
+        self.sync_input_contract();
         if self.state.disabled() {
             if self.state.hovered() {
                 self.state.set_hovered(false);
@@ -263,10 +307,27 @@ impl Element for TextField {
     }
 
     fn handle_key_event(&mut self, cx: &mut EventContext, event: &KeyEvent) -> bool {
+        if self.state.disabled() {
+            return false;
+        }
+        self.sync_input_contract();
+        self.input.handle_key_event(cx, event)
+    }
+
+    fn handle_text_input_event(&mut self, cx: &mut EventContext, event: &TextInputEvent) -> bool {
         if !self.can_edit() {
             return false;
         }
-        self.input.handle_key_event(cx, event)
+        self.sync_input_contract();
+        self.input.handle_text_input_event(cx, event)
+    }
+
+    fn dispatch_action(&mut self, cx: &mut EventContext, action: &ActionId) -> ActionOutcome {
+        if self.state.disabled() {
+            return ActionOutcome::Ignored;
+        }
+        self.sync_input_contract();
+        self.input.dispatch_action(cx, action)
     }
 }
 

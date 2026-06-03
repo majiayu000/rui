@@ -117,12 +117,7 @@ pub struct TerminalMouseEvent {
 
 impl TerminalMouseEvent {
     /// Create a new terminal mouse event
-    pub fn new(
-        kind: TerminalMouseEventKind,
-        button: TerminalMouseButton,
-        x: u16,
-        y: u16,
-    ) -> Self {
+    pub fn new(kind: TerminalMouseEventKind, button: TerminalMouseButton, x: u16, y: u16) -> Self {
         Self {
             kind,
             button,
@@ -166,7 +161,12 @@ impl TerminalMouseEvent {
 
     /// Create a move event
     pub fn move_event(x: u16, y: u16) -> Self {
-        Self::new(TerminalMouseEventKind::Move, TerminalMouseButton::None, x, y)
+        Self::new(
+            TerminalMouseEventKind::Move,
+            TerminalMouseButton::None,
+            x,
+            y,
+        )
     }
 
     /// Create a scroll up event
@@ -315,7 +315,10 @@ impl UseMouse {
     }
 
     /// Register a callback for all mouse events
-    pub fn on_mouse(&mut self, callback: impl Fn(&TerminalMouseEvent) + 'static) -> MouseCallbackId {
+    pub fn on_mouse(
+        &mut self,
+        callback: impl Fn(&TerminalMouseEvent) + 'static,
+    ) -> MouseCallbackId {
         let id = MouseCallbackId(self.next_id);
         self.next_id += 1;
         self.callbacks.insert(id, Box::new(callback));
@@ -345,17 +348,26 @@ impl UseMouse {
     }
 
     /// Register a callback for press events
-    pub fn on_press(&mut self, callback: impl Fn(&TerminalMouseEvent) + 'static) -> MouseCallbackId {
+    pub fn on_press(
+        &mut self,
+        callback: impl Fn(&TerminalMouseEvent) + 'static,
+    ) -> MouseCallbackId {
         self.on_kind(TerminalMouseEventKind::Press, callback)
     }
 
     /// Register a callback for release events
-    pub fn on_release(&mut self, callback: impl Fn(&TerminalMouseEvent) + 'static) -> MouseCallbackId {
+    pub fn on_release(
+        &mut self,
+        callback: impl Fn(&TerminalMouseEvent) + 'static,
+    ) -> MouseCallbackId {
         self.on_kind(TerminalMouseEventKind::Release, callback)
     }
 
     /// Register a callback for click events (press then release at same position)
-    pub fn on_click(&mut self, callback: impl Fn(&TerminalMouseEvent) + 'static) -> MouseCallbackId {
+    pub fn on_click(
+        &mut self,
+        callback: impl Fn(&TerminalMouseEvent) + 'static,
+    ) -> MouseCallbackId {
         self.on_kind(TerminalMouseEventKind::Press, callback)
     }
 
@@ -370,7 +382,10 @@ impl UseMouse {
     }
 
     /// Register a callback for scroll events (both up and down)
-    pub fn on_scroll(&mut self, callback: impl Fn(&TerminalMouseEvent) + 'static) -> MouseCallbackId {
+    pub fn on_scroll(
+        &mut self,
+        callback: impl Fn(&TerminalMouseEvent) + 'static,
+    ) -> MouseCallbackId {
         // We need to register for both scroll up and scroll down
         let id = self.on_mouse(callback);
         self.kind_callbacks
@@ -385,27 +400,42 @@ impl UseMouse {
     }
 
     /// Register a callback for scroll up events
-    pub fn on_scroll_up(&mut self, callback: impl Fn(&TerminalMouseEvent) + 'static) -> MouseCallbackId {
+    pub fn on_scroll_up(
+        &mut self,
+        callback: impl Fn(&TerminalMouseEvent) + 'static,
+    ) -> MouseCallbackId {
         self.on_kind(TerminalMouseEventKind::ScrollUp, callback)
     }
 
     /// Register a callback for scroll down events
-    pub fn on_scroll_down(&mut self, callback: impl Fn(&TerminalMouseEvent) + 'static) -> MouseCallbackId {
+    pub fn on_scroll_down(
+        &mut self,
+        callback: impl Fn(&TerminalMouseEvent) + 'static,
+    ) -> MouseCallbackId {
         self.on_kind(TerminalMouseEventKind::ScrollDown, callback)
     }
 
     /// Register a callback for left button events
-    pub fn on_left_button(&mut self, callback: impl Fn(&TerminalMouseEvent) + 'static) -> MouseCallbackId {
+    pub fn on_left_button(
+        &mut self,
+        callback: impl Fn(&TerminalMouseEvent) + 'static,
+    ) -> MouseCallbackId {
         self.on_button(TerminalMouseButton::Left, callback)
     }
 
     /// Register a callback for right button events
-    pub fn on_right_button(&mut self, callback: impl Fn(&TerminalMouseEvent) + 'static) -> MouseCallbackId {
+    pub fn on_right_button(
+        &mut self,
+        callback: impl Fn(&TerminalMouseEvent) + 'static,
+    ) -> MouseCallbackId {
         self.on_button(TerminalMouseButton::Right, callback)
     }
 
     /// Register a callback for middle button events
-    pub fn on_middle_button(&mut self, callback: impl Fn(&TerminalMouseEvent) + 'static) -> MouseCallbackId {
+    pub fn on_middle_button(
+        &mut self,
+        callback: impl Fn(&TerminalMouseEvent) + 'static,
+    ) -> MouseCallbackId {
         self.on_button(TerminalMouseButton::Middle, callback)
     }
 
@@ -673,18 +703,33 @@ mod tests {
     #[test]
     fn test_terminal_mouse_event_kind_equality() {
         assert_eq!(TerminalMouseEventKind::Press, TerminalMouseEventKind::Press);
-        assert_eq!(TerminalMouseEventKind::Release, TerminalMouseEventKind::Release);
+        assert_eq!(
+            TerminalMouseEventKind::Release,
+            TerminalMouseEventKind::Release
+        );
         assert_eq!(TerminalMouseEventKind::Drag, TerminalMouseEventKind::Drag);
         assert_eq!(TerminalMouseEventKind::Move, TerminalMouseEventKind::Move);
-        assert_eq!(TerminalMouseEventKind::ScrollUp, TerminalMouseEventKind::ScrollUp);
-        assert_eq!(TerminalMouseEventKind::ScrollDown, TerminalMouseEventKind::ScrollDown);
+        assert_eq!(
+            TerminalMouseEventKind::ScrollUp,
+            TerminalMouseEventKind::ScrollUp
+        );
+        assert_eq!(
+            TerminalMouseEventKind::ScrollDown,
+            TerminalMouseEventKind::ScrollDown
+        );
     }
 
     #[test]
     fn test_terminal_mouse_event_kind_inequality() {
-        assert_ne!(TerminalMouseEventKind::Press, TerminalMouseEventKind::Release);
+        assert_ne!(
+            TerminalMouseEventKind::Press,
+            TerminalMouseEventKind::Release
+        );
         assert_ne!(TerminalMouseEventKind::Drag, TerminalMouseEventKind::Move);
-        assert_ne!(TerminalMouseEventKind::ScrollUp, TerminalMouseEventKind::ScrollDown);
+        assert_ne!(
+            TerminalMouseEventKind::ScrollUp,
+            TerminalMouseEventKind::ScrollDown
+        );
     }
 
     #[test]
@@ -693,8 +738,14 @@ mod tests {
         assert_eq!(format!("{:?}", TerminalMouseEventKind::Release), "Release");
         assert_eq!(format!("{:?}", TerminalMouseEventKind::Drag), "Drag");
         assert_eq!(format!("{:?}", TerminalMouseEventKind::Move), "Move");
-        assert_eq!(format!("{:?}", TerminalMouseEventKind::ScrollUp), "ScrollUp");
-        assert_eq!(format!("{:?}", TerminalMouseEventKind::ScrollDown), "ScrollDown");
+        assert_eq!(
+            format!("{:?}", TerminalMouseEventKind::ScrollUp),
+            "ScrollUp"
+        );
+        assert_eq!(
+            format!("{:?}", TerminalMouseEventKind::ScrollDown),
+            "ScrollDown"
+        );
     }
 
     #[test]
@@ -1450,7 +1501,11 @@ mod tests {
         hook.handle_event(&TerminalMouseEvent::press(TerminalMouseButton::Left, 0, 0));
         hook.handle_event(&TerminalMouseEvent::drag(TerminalMouseButton::Left, 5, 5));
         hook.handle_event(&TerminalMouseEvent::drag(TerminalMouseButton::Left, 10, 10));
-        hook.handle_event(&TerminalMouseEvent::release(TerminalMouseButton::Left, 10, 10));
+        hook.handle_event(&TerminalMouseEvent::release(
+            TerminalMouseButton::Left,
+            10,
+            10,
+        ));
 
         let events = events_received.borrow();
         assert_eq!(events.len(), 4);

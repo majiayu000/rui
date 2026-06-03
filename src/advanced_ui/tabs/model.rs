@@ -1,5 +1,6 @@
 use crate::advanced_ui::state::require_non_empty;
 use crate::core::ElementId;
+use std::collections::HashSet;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Tab {
@@ -60,6 +61,12 @@ impl From<(&str, &str)> for Tab {
 pub(crate) fn validate_tabs(tabs: &[Tab], selected: &str) {
     if tabs.is_empty() {
         panic!("tab list requires at least one tab");
+    }
+    let mut seen = HashSet::new();
+    for tab in tabs {
+        if !seen.insert(tab.value()) {
+            panic!("tab values must be unique");
+        }
     }
     validate_selected_tab(tabs, selected);
 }
