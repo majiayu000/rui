@@ -90,6 +90,12 @@ fn test_builder_width() {
 }
 
 #[test]
+fn test_builder_height() {
+    let inp = Input::new().h(36.0);
+    assert_eq!(inp.height, Some(36.0));
+}
+
+#[test]
 fn test_builder_rounded() {
     let inp = Input::new().rounded(10.0);
     assert_eq!(inp.style.border.radius, Corners::all(10.0));
@@ -118,6 +124,7 @@ fn test_builder_chain() {
         .placeholder("Enter text")
         .password()
         .w(300.0)
+        .h(36.0)
         .rounded(8.0)
         .border_color(Color::BLUE);
 
@@ -126,6 +133,7 @@ fn test_builder_chain() {
     assert_eq!(inp.placeholder, "Enter text");
     assert_eq!(inp.input_type, InputType::Password);
     assert_eq!(inp.width, Some(300.0));
+    assert_eq!(inp.height, Some(36.0));
     assert_eq!(inp.style.border.radius, Corners::all(8.0));
     assert_eq!(inp.style.border.color, Color::BLUE);
 }

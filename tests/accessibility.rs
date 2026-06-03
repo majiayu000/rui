@@ -1,6 +1,7 @@
 use rui::advanced_ui::{
-    container, text, Button, Checkbox, ProgressBar, Scrollable, SegmentedControl,
+    Button, Checkbox, ProgressBar, Scrollable, SegmentedControl, TextField, container, text,
 };
+use rui::core::ElementId;
 use rui::core::accessibility::{
     AccessibilityAction, AccessibilityAnnouncementKind, AccessibilityBridge, AccessibilityContext,
     AccessibilityError, AccessibilityNode, AccessibilityRole, AccessibilityScrollPosition,
@@ -9,12 +10,11 @@ use rui::core::accessibility::{
 use rui::core::event::{KeyCode, KeyEvent, Modifiers, MouseButton, ScrollEvent};
 use rui::core::geometry::{Bounds, Point, Size};
 use rui::core::text_editing::TextInputEvent;
-use rui::core::ElementId;
+use rui::elements::Element;
+use rui::elements::Input;
 use rui::elements::element::{
     EventContext, LayoutContext, PaintContext, PointerEvent, PointerEventKind,
 };
-use rui::elements::Element;
-use rui::elements::Input;
 use rui::renderer::Scene;
 use taffy::TaffyTree;
 
@@ -294,6 +294,31 @@ fn accessibility_input_exposes_composition_range() {
         node.a11y_text_composition(),
         Some(AccessibilityTextRange::new(3, 6))
     );
+}
+
+#[test]
+fn accessibility_text_field_applies_advanced_contracts_to_input_semantics() {
+    let id = ElementId::new();
+    let mut field = TextField::new("Search")
+        .id(id)
+        .value("alpha")
+        .read_only(true)
+        .invalid(true);
+    let ignored = field
+        .apply_text_input_event(TextInputEvent::InsertText("x".to_string()))
+        .expect("read-only text field should report an ignored edit");
+    assert!(!ignored.changed);
+
+    let node = first_node(accessibility_result(
+        field.accessibility_nodes(&AccessibilityContext::new(Some(id))),
+    ));
+    assert_eq!(node.a11y_role(), AccessibilityRole::TextInput);
+    assert_eq!(node.a11y_label(), Some("Search"));
+    assert_eq!(node.a11y_value(), Some("alpha"));
+    assert_eq!(node.a11y_text_caret(), Some(5));
+    assert!(node.a11y_read_only());
+    assert!(node.a11y_invalid());
+    assert!(node.a11y_actions().is_empty());
 }
 
 #[test]

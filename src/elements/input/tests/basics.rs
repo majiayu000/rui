@@ -162,6 +162,7 @@ fn test_input_new() {
     assert!(!input.state.hovered);
     assert!(input.id.is_none());
     assert!(input.width.is_none());
+    assert!(input.height.is_none());
     assert!(input.on_change.is_none());
     assert!(input.on_submit.is_none());
     assert!(input.on_focus.is_none());
