@@ -243,13 +243,15 @@ impl TextEditBuffer {
 
     pub fn commit_composition(&mut self, text: &str) -> Result<(), TextEditError> {
         self.ensure_text_allowed(text)?;
-        let composition = self
-            .composition
-            .take()
-            .ok_or(TextEditError::CompositionMissing)?;
-        self.replace_range_internal(composition.replacement_range(), text)?;
-        self.selection =
-            TextSelection::collapsed(composition.replacement_range().start() + text.len());
+        if let Some(composition) = self.composition.take() {
+            self.replace_range_internal(composition.replacement_range(), text)?;
+            self.selection =
+                TextSelection::collapsed(composition.replacement_range().start() + text.len());
+        } else {
+            let range = self.selected_range();
+            self.replace_range_internal(range, text)?;
+            self.selection = TextSelection::collapsed(range.start() + text.len());
+        }
         Ok(())
     }
 

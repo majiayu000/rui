@@ -5,6 +5,7 @@ use crate::core::accessibility::{
     AccessibilityContext, AccessibilityError, AccessibilityNode, AccessibilityRole,
 };
 use crate::core::style::Style;
+use crate::core::text_editing::TextInputEvent;
 use crate::elements::element::{
     AnyElement, Element, EventContext, LayoutContext, PaintContext, PointerEvent,
 };
@@ -141,6 +142,10 @@ impl Element for Toolbar {
             return crate::core::action::ActionOutcome::Ignored;
         }
         self.inner.dispatch_action(cx, action)
+    }
+
+    fn handle_text_input_event(&mut self, cx: &mut EventContext, event: &TextInputEvent) -> bool {
+        self.state.can_activate() && self.inner.handle_text_input_event(cx, event)
     }
 
     fn handle_window_event(&mut self, event: &crate::core::event::Event) -> bool {

@@ -1,25 +1,27 @@
 //! UI Elements - the building blocks of the UI
 
-pub mod element;
-mod div;
-pub mod text;
 mod button;
-mod input;
-mod scroll_view;
+mod div;
+pub mod element;
 mod image;
-mod table;
+mod input;
 mod list;
 mod progress;
+mod scroll_view;
 mod spinner;
+mod table;
+pub mod text;
+mod text_area;
 
-pub use element::{AnyElement, Element, EventResult, IntoElement, Render};
+pub use button::{Button, ButtonSize, ButtonVariant, button};
 pub use div::{Div, div};
-pub use text::{Text, text};
-pub use button::{Button, button, ButtonVariant, ButtonSize};
-pub use input::{Input, input, InputType};
-pub use scroll_view::{ScrollView, scroll_view, ScrollDirection};
-pub use image::{Image, image, ImageFit, ImageSource};
-pub use table::{Table, table, TableRow, row, header_row, TableCell, cell};
+pub use element::{AnyElement, Element, EventResult, IntoElement, Render};
+pub use image::{Image, ImageFit, ImageSource, image};
+pub use input::{Input, InputType, input};
 pub use list::{List, ListItem, ListStyle, list, ordered_list, unordered_list};
 pub use progress::{Progress, progress};
-pub use spinner::{Spinner, spinner, SpinnerType};
+pub use scroll_view::{ScrollDirection, ScrollView, scroll_view};
+pub use spinner::{Spinner, SpinnerType, spinner};
+pub use table::{Table, TableCell, TableRow, cell, header_row, row, table};
+pub use text::{Text, text};
+pub use text_area::{TextArea, TextAreaState, text_area};
