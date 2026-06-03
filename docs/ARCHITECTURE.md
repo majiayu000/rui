@@ -190,9 +190,16 @@ flowchart LR
     D --> E[Render]
 ```
 
-`AppContext` maintains two flags:
+`AppContext` maintains render state and source counters:
 - `needs_rebuild`: rebuild the element tree
 - `dirty`: re-layout/repaint without rebuilding
+- `RedrawSourceCounts`: cumulative counters for explicit, element,
+  view-notification, and platform lifecycle/input/resize/focus/redraw requests
+
+Explicit runtime and element redraw requests are coalesced before they post a
+platform redraw event. Native platform events still mark the app dirty and bump
+their source counters, but they do not create an extra wake event while the loop
+is already processing AppKit input.
 
 ### 4.2 Resource Pipeline
 

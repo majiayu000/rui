@@ -4,6 +4,7 @@ use crate::core::entity::{Entity, EntityId, EntityStore};
 use crate::core::view::{View, ViewContext, ViewNotifier};
 use crate::core::window::{Window, WindowId, WindowOptions};
 use crate::elements::Element;
+use crate::platform::window::{PlatformWindowError, PlatformWindowFeature};
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -17,7 +18,75 @@ pub struct AppContext {
     pub(crate) running: bool,
     pub(crate) needs_rebuild: bool,
     pub(crate) dirty: bool,
+    redraw_scheduler: RedrawScheduler,
     runtime_view_notifier: Option<(EntityId, ViewNotifier)>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RedrawSource {
+    Explicit,
+    ViewNotification,
+    Element,
+    PlatformLifecycle,
+    PlatformResize,
+    PlatformScaleFactor,
+    PlatformFocus,
+    PlatformInput,
+    PlatformRedraw,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct RedrawSourceCounts {
+    pub explicit: u64,
+    pub view_notification: u64,
+    pub element: u64,
+    pub platform_lifecycle: u64,
+    pub platform_resize: u64,
+    pub platform_scale_factor: u64,
+    pub platform_focus: u64,
+    pub platform_input: u64,
+    pub platform_redraw: u64,
+}
+
+impl RedrawSourceCounts {
+    fn increment(&mut self, source: RedrawSource) {
+        match source {
+            RedrawSource::Explicit => self.explicit += 1,
+            RedrawSource::ViewNotification => self.view_notification += 1,
+            RedrawSource::Element => self.element += 1,
+            RedrawSource::PlatformLifecycle => self.platform_lifecycle += 1,
+            RedrawSource::PlatformResize => self.platform_resize += 1,
+            RedrawSource::PlatformScaleFactor => self.platform_scale_factor += 1,
+            RedrawSource::PlatformFocus => self.platform_focus += 1,
+            RedrawSource::PlatformInput => self.platform_input += 1,
+            RedrawSource::PlatformRedraw => self.platform_redraw += 1,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+struct RedrawScheduler {
+    counts: RedrawSourceCounts,
+    platform_redraw_pending: bool,
+}
+
+impl RedrawScheduler {
+    fn mark_redraw(&mut self, source: RedrawSource) {
+        self.counts.increment(source);
+    }
+
+    fn request_platform_redraw(&mut self, source: RedrawSource) -> bool {
+        self.mark_redraw(source);
+        if self.platform_redraw_pending {
+            return false;
+        }
+        self.platform_redraw_pending = true;
+        true
+    }
+
+    fn complete_frame(&mut self) {
+        self.platform_redraw_pending = false;
+    }
 }
 
 impl AppContext {
@@ -29,6 +98,7 @@ impl AppContext {
             running: false,
             needs_rebuild: true,
             dirty: true,
+            redraw_scheduler: RedrawScheduler::default(),
             runtime_view_notifier: None,
         }
     }
@@ -53,18 +123,43 @@ impl AppContext {
     pub fn notify(&mut self, entity_id: EntityId) {
         self.pending_updates.insert(entity_id);
         self.needs_rebuild = true;
-        self.dirty = true;
+        self.mark_redraw_from(RedrawSource::ViewNotification);
     }
 
     /// Request a full rebuild of the UI tree
     pub fn request_rebuild(&mut self) {
         self.needs_rebuild = true;
-        self.dirty = true;
+        self.mark_redraw_from(RedrawSource::Explicit);
     }
 
     /// Request a redraw without rebuilding the UI tree
     pub fn request_redraw(&mut self) {
+        self.mark_redraw_from(RedrawSource::Explicit);
+    }
+
+    pub(crate) fn mark_redraw_from(&mut self, source: RedrawSource) {
         self.dirty = true;
+        self.redraw_scheduler.mark_redraw(source);
+    }
+
+    pub(crate) fn request_platform_redraw_from(&mut self, source: RedrawSource) -> bool {
+        self.dirty = true;
+        self.redraw_scheduler.request_platform_redraw(source)
+    }
+
+    pub(crate) fn complete_redraw_frame(&mut self) {
+        self.redraw_scheduler.complete_frame();
+        if !self.needs_rebuild && self.pending_updates.is_empty() {
+            self.dirty = false;
+        }
+    }
+
+    pub fn redraw_source_counts(&self) -> RedrawSourceCounts {
+        self.redraw_scheduler.counts
+    }
+
+    pub fn platform_redraw_pending(&self) -> bool {
+        self.redraw_scheduler.platform_redraw_pending
     }
 
     pub(crate) fn set_runtime_view_notifier(
@@ -90,11 +185,18 @@ impl AppContext {
     }
 
     /// Open a new window
-    pub fn open_window(&mut self, options: WindowOptions) -> WindowId {
+    pub fn open_window(&mut self, options: WindowOptions) -> Result<WindowId, PlatformWindowError> {
+        if !self.windows.is_empty() {
+            return Err(PlatformWindowError::unsupported(
+                std::env::consts::OS,
+                PlatformWindowFeature::MultiWindow,
+            ));
+        }
+
         let id = WindowId::new(WINDOW_ID_COUNTER.fetch_add(1, Ordering::Relaxed));
         let window = Window::new(id, options);
         self.windows.push(window);
-        id
+        Ok(id)
     }
 
     /// Check if the application is running
@@ -160,7 +262,7 @@ impl App {
 
         // Create the main window
         let window_options = WindowOptions::default().title("RUI Application");
-        let _window_id = self.context.open_window(window_options);
+        let _window_id = open_main_window(&mut self.context, window_options);
 
         // Start the platform-specific event loop
         #[cfg(target_os = "macos")]
@@ -192,7 +294,7 @@ impl App {
     {
         self.context.running = true;
 
-        let _window_id = self.context.open_window(options.clone());
+        let _window_id = open_main_window(&mut self.context, options.clone());
 
         #[cfg(target_os = "macos")]
         {
@@ -213,7 +315,7 @@ impl App {
     {
         self.context.running = true;
 
-        let _window_id = self.context.open_window(options.clone());
+        let _window_id = open_main_window(&mut self.context, options.clone());
         let view_marker = self.context.create(());
         let view_entity = Entity::<V>::new(view_marker.id());
         let notifier = ViewNotifier::new();
@@ -235,6 +337,13 @@ impl App {
         {
             panic!("{}", unsupported_platform_error());
         }
+    }
+}
+
+fn open_main_window(context: &mut AppContext, options: WindowOptions) -> WindowId {
+    match context.open_window(options) {
+        Ok(window_id) => window_id,
+        Err(err) => panic!("failed to open main window: {err}"),
     }
 }
 
@@ -374,5 +483,50 @@ mod tests {
 
         assert!(context.pending_updates.contains(&entity_id));
         assert!(context.needs_rebuild);
+    }
+
+    #[test]
+    fn redraw_scheduler_counts_sources_and_coalesces_platform_requests() {
+        let mut context = AppContext::new();
+        context.pending_updates.clear();
+        context.needs_rebuild = false;
+        context.dirty = false;
+
+        assert!(context.request_platform_redraw_from(RedrawSource::Element));
+        assert!(!context.request_platform_redraw_from(RedrawSource::Element));
+        assert!(!context.request_platform_redraw_from(RedrawSource::ViewNotification));
+
+        let counts = context.redraw_source_counts();
+        assert_eq!(counts.element, 2);
+        assert_eq!(counts.view_notification, 1);
+        assert!(context.dirty);
+        assert!(context.platform_redraw_pending());
+
+        context.complete_redraw_frame();
+        assert!(!context.dirty);
+        assert!(!context.platform_redraw_pending());
+        assert!(context.request_platform_redraw_from(RedrawSource::PlatformLifecycle));
+    }
+
+    #[test]
+    fn second_window_returns_explicit_unsupported_error() {
+        let mut context = AppContext::new();
+        match context.open_window(WindowOptions::default()) {
+            Ok(_) => {}
+            Err(err) => panic!("first window should open: {err}"),
+        }
+
+        let err = match context.open_window(WindowOptions::default()) {
+            Ok(_) => panic!("second window should be unsupported"),
+            Err(err) => err,
+        };
+
+        assert_eq!(
+            err,
+            PlatformWindowError::unsupported(
+                std::env::consts::OS,
+                PlatformWindowFeature::MultiWindow
+            )
+        );
     }
 }

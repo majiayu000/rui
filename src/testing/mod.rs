@@ -231,9 +231,7 @@ where
         self.root.paint(&mut paint_cx);
         self.scene.finish();
 
-        if !self.context.needs_rebuild && self.context.pending_updates.is_empty() {
-            self.context.dirty = false;
-        }
+        self.context.complete_redraw_frame();
 
         self.last_frame = Some(HeadlessFrame {
             viewport_size: self.viewport_size,

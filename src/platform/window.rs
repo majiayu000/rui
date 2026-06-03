@@ -16,6 +16,7 @@ pub enum PlatformWindowFeature {
     Focus,
     Clipboard,
     RendererAttachment,
+    MultiWindow,
 }
 
 impl PlatformWindowFeature {
@@ -28,6 +29,7 @@ impl PlatformWindowFeature {
             Self::Focus => "focus",
             Self::Clipboard => "clipboard",
             Self::RendererAttachment => "renderer attachment",
+            Self::MultiWindow => "multi-window",
         }
     }
 }
@@ -41,6 +43,7 @@ pub struct PlatformWindowFeatures {
     pub focus: bool,
     pub clipboard: bool,
     pub renderer_attachment: bool,
+    pub multi_window: bool,
 }
 
 impl PlatformWindowFeatures {
@@ -63,6 +66,7 @@ impl PlatformWindowFeatures {
             focus: false,
             clipboard: false,
             renderer_attachment: false,
+            multi_window: false,
         }
     }
 
@@ -75,6 +79,7 @@ impl PlatformWindowFeatures {
             focus: true,
             clipboard: true,
             renderer_attachment: true,
+            multi_window: true,
         }
     }
 
@@ -87,6 +92,7 @@ impl PlatformWindowFeatures {
             PlatformWindowFeature::Focus => self.focus,
             PlatformWindowFeature::Clipboard => self.clipboard,
             PlatformWindowFeature::RendererAttachment => self.renderer_attachment,
+            PlatformWindowFeature::MultiWindow => self.multi_window,
         }
     }
 
@@ -186,6 +192,10 @@ pub enum PlatformWindowEvent {
     Resized(Size),
     ScaleFactorChanged(f32),
     FocusChanged(bool),
+    ApplicationActivated(bool),
+    Minimized(bool),
+    ReopenRequested,
+    QuitRequested,
     RedrawRequested,
     Input(PlatformInputEvent),
 }
@@ -198,6 +208,9 @@ impl PlatformWindowEvent {
                 | Self::Resized(_)
                 | Self::ScaleFactorChanged(_)
                 | Self::FocusChanged(_)
+                | Self::ApplicationActivated(_)
+                | Self::Minimized(false)
+                | Self::ReopenRequested
                 | Self::RedrawRequested
                 | Self::Input(_)
         )

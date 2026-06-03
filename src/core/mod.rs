@@ -15,7 +15,7 @@ pub mod action;
 pub mod accessibility;
 pub mod text_editing;
 
-pub use app::{App, AppContext};
+pub use app::{App, AppContext, RedrawSource, RedrawSourceCounts};
 pub use color::{Color, Hsla, Rgba};
 pub use entity::EntityId;
 pub use geometry::{Bounds, Edges, Point, Rect, Size};

@@ -3,6 +3,7 @@
 use crate::core::event::{KeyCode, KeyEvent, Modifiers, MouseButton, ScrollEvent};
 use crate::core::geometry::{Point, Size};
 use crate::core::window::WindowOptions;
+use crate::platform::mac::lifecycle::{MacLifecycleDelegate, MacLifecycleEvent};
 use crate::platform::window::{
     PlatformImeEvent, PlatformInputEvent, PlatformMouseEvent, PlatformMouseEventKind,
     PlatformRendererAttachment, PlatformRendererTarget, PlatformWindow, PlatformWindowError,
@@ -31,7 +32,9 @@ pub struct MacWindow {
     last_scale_factor: f32,
     last_focused: bool,
     last_visible: bool,
+    last_miniaturized: bool,
     created_event_pending: bool,
+    lifecycle_delegate: Retained<MacLifecycleDelegate>,
 }
 
 impl MacWindow {
@@ -66,6 +69,14 @@ impl MacWindow {
 
     pub(crate) fn is_visible(&self) -> bool {
         unsafe { msg_send![&*self.window, isVisible] }
+    }
+
+    pub(crate) fn is_miniaturized(&self) -> bool {
+        self.window.isMiniaturized()
+    }
+
+    pub(crate) fn install_application_delegate(&self, app: &NSApplication) {
+        self.lifecycle_delegate.install_as_app_delegate(app);
     }
 
     pub(crate) fn next_drawable(&self) -> Option<&metal::MetalDrawableRef> {
@@ -123,6 +134,7 @@ impl MacWindow {
 
             if event.windowNumber() != window_number {
                 app.sendEvent(&event);
+                self.push_delegate_lifecycle_events(&mut events)?;
                 continue;
             }
 
@@ -136,6 +148,7 @@ impl MacWindow {
 
             append_platform_events_from_native_event(&event, self.last_content_size, &mut events);
             app.sendEvent(&event);
+            self.push_delegate_lifecycle_events(&mut events)?;
         }
 
         self.push_lifecycle_events(&mut events)?;
@@ -146,6 +159,8 @@ impl MacWindow {
         &mut self,
         events: &mut Vec<PlatformWindowEvent>,
     ) -> Result<(), PlatformWindowError> {
+        self.push_delegate_lifecycle_events(events)?;
+
         if self.created_event_pending {
             events.push(PlatformWindowEvent::Created);
             self.created_event_pending = false;
@@ -171,10 +186,56 @@ impl MacWindow {
         }
 
         let visible = self.is_visible();
-        if self.last_visible && !visible {
+        let miniaturized = self.is_miniaturized();
+        if miniaturized != self.last_miniaturized {
+            self.last_miniaturized = miniaturized;
+            events.push(PlatformWindowEvent::Minimized(miniaturized));
+        }
+
+        if self.last_visible && !visible && !miniaturized {
             events.push(PlatformWindowEvent::CloseRequested);
         }
         self.last_visible = visible;
+
+        Ok(())
+    }
+
+    fn push_delegate_lifecycle_events(
+        &mut self,
+        events: &mut Vec<PlatformWindowEvent>,
+    ) -> Result<(), PlatformWindowError> {
+        for event in self.lifecycle_delegate.drain_events() {
+            match event {
+                MacLifecycleEvent::CloseRequested => {
+                    self.last_visible = false;
+                    events.push(PlatformWindowEvent::CloseRequested);
+                }
+                MacLifecycleEvent::QuitRequested => {
+                    events.push(PlatformWindowEvent::QuitRequested);
+                }
+                MacLifecycleEvent::ReopenRequested => {
+                    events.push(PlatformWindowEvent::ReopenRequested);
+                }
+                MacLifecycleEvent::ApplicationActivated(active) => {
+                    events.push(PlatformWindowEvent::ApplicationActivated(active));
+                }
+                MacLifecycleEvent::FocusChanged(focused) => {
+                    self.last_focused = focused;
+                    events.push(PlatformWindowEvent::FocusChanged(focused));
+                }
+                MacLifecycleEvent::Resized => {
+                    let content_size = self.content_size()?;
+                    let scale_factor = self.scale_factor();
+                    self.update_metal_layer_size(content_size, scale_factor);
+                    self.last_content_size = content_size;
+                    events.push(PlatformWindowEvent::Resized(content_size));
+                }
+                MacLifecycleEvent::Miniaturized(miniaturized) => {
+                    self.last_miniaturized = miniaturized;
+                    events.push(PlatformWindowEvent::Minimized(miniaturized));
+                }
+            }
+        }
 
         Ok(())
     }
@@ -194,6 +255,7 @@ impl PlatformWindow for MacWindow {
             focus: true,
             clipboard: true,
             renderer_attachment: true,
+            multi_window: false,
         }
     }
 
@@ -602,6 +664,9 @@ pub unsafe fn create_window(
             false,
         )
     };
+    unsafe {
+        window.setReleasedWhenClosed(false);
+    }
 
     // Set title
     let title = NSString::from_str(&options.title);
@@ -639,6 +704,9 @@ pub unsafe fn create_window(
     let _: () = msg_send![&*window, setAcceptsMouseMovedEvents: true];
     let _: bool = msg_send![&*window, makeFirstResponder: &*content_view];
 
+    let lifecycle_delegate = MacLifecycleDelegate::new(mtm);
+    lifecycle_delegate.install_as_window_delegate(&window);
+
     // Center window on screen
     window.center();
 
@@ -649,7 +717,9 @@ pub unsafe fn create_window(
         last_scale_factor: scale_factor as f32,
         last_focused: false,
         last_visible: false,
+        last_miniaturized: false,
         created_event_pending: true,
+        lifecycle_delegate,
     })
 }
 
@@ -670,6 +740,7 @@ impl MacWindowBackend {
             focus: true,
             clipboard: true,
             renderer_attachment: true,
+            multi_window: false,
         }
     }
 }
