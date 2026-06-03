@@ -1,9 +1,10 @@
 //! macOS application runner
 
+use crate::core::ElementId;
 use crate::core::action::route_key_event;
 use crate::core::app::{AppContext, RedrawSource};
-use crate::core::event::{Event, KeyEvent, ScrollEvent};
-use crate::core::geometry::Bounds;
+use crate::core::event::{Event, KeyCode, KeyEvent, Modifiers, MouseButton, ScrollEvent};
+use crate::core::geometry::{Bounds, Point};
 use crate::core::text_editing::TextInputEvent;
 use crate::core::window::WindowOptions;
 use crate::elements::element::{
@@ -11,8 +12,8 @@ use crate::elements::element::{
 };
 use crate::platform::mac::window::create_window;
 use crate::platform::window::{
-    PlatformImeEvent, PlatformInputEvent, PlatformMouseEventKind, PlatformRendererTarget,
-    PlatformWindow, PlatformWindowError, PlatformWindowEvent,
+    PlatformImeEvent, PlatformInputEvent, PlatformMouseEvent, PlatformMouseEventKind,
+    PlatformRendererTarget, PlatformWindow, PlatformWindowError, PlatformWindowEvent,
 };
 use crate::renderer::metal::MetalRenderer;
 use crate::renderer::{
@@ -23,6 +24,8 @@ use objc2::MainThreadMarker;
 use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
 use std::time::Instant;
 use taffy::prelude::*;
+
+const NATIVE_DOGFOOD_INPUT_ID: ElementId = ElementId(29_001);
 
 /// Run the application with default window options
 pub fn run_app<F, E>(context: AppContext, build_root: F)
@@ -108,6 +111,8 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
         let mut last_pointer_hit_target: Option<crate::core::ElementId> = None;
         let mut pointer_capture_target: Option<crate::core::ElementId> = None;
         let mut profile_recorder = RendererTelemetryRecorder::enabled_from_env();
+        let mut native_dogfood_automation =
+            NativeDogfoodAutomation::load_from_environment(options.size);
 
         // Render loop (event-driven)
         loop {
@@ -125,10 +130,15 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
             let mut close_requested = false;
             let wait_for_event =
                 !context.dirty && !context.needs_rebuild && context.pending_updates.is_empty();
-            let platform_events = match window.poll_events_for_app(&app, wait_for_event) {
+            let mut platform_events = match window.poll_events_for_app(&app, wait_for_event) {
                 Ok(events) => events,
                 Err(err) => panic!("failed to poll platform window events: {}", err),
             };
+            let mut automation_focused_element = None;
+            if let Some(automation) = &mut native_dogfood_automation {
+                automation_focused_element =
+                    automation.append_events(&window, &mut platform_events);
+            }
             let event_observed_at = if platform_events.is_empty() {
                 None
             } else {
@@ -242,6 +252,10 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
                 root.handle_window_event(&Event::WindowClose);
                 context.quit();
                 schedule_platform_redraw(&window, &mut context, RedrawSource::PlatformLifecycle);
+            }
+
+            if let Some(focused) = automation_focused_element {
+                focused_element = Some(focused);
             }
 
             let mut event_cx = EventContext::new(root_bounds, &taffy, &mut focused_element);
@@ -413,6 +427,165 @@ fn append_input_event(
             });
         }
         PlatformInputEvent::Scroll(event) => scroll_events.push(event),
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NativeDogfoodAutomationPhase {
+    Warmup,
+    Interact,
+    Minimize,
+    Reopen,
+    Submit,
+    Done,
+}
+
+struct NativeDogfoodAutomation {
+    phase: NativeDogfoodAutomationPhase,
+    text: String,
+    click_point: Point,
+}
+
+impl NativeDogfoodAutomation {
+    fn load_from_environment(viewport_size: crate::core::Size) -> Option<Self> {
+        if std::env::var_os("RUI_NATIVE_DOGFOOD_AUTOMATION").is_none() {
+            return None;
+        }
+
+        let text = std::env::var("RUI_NATIVE_DOGFOOD_TEXT")
+            .unwrap_or_else(|_| String::from("rui-native-dogfood"));
+        Some(Self {
+            phase: NativeDogfoodAutomationPhase::Warmup,
+            text,
+            click_point: Point::new(90.0, (viewport_size.height * 0.48).round()),
+        })
+    }
+
+    fn append_events(
+        &mut self,
+        window: &crate::platform::mac::window::MacWindow,
+        events: &mut Vec<PlatformWindowEvent>,
+    ) -> Option<ElementId> {
+        let focused_element = match self.phase {
+            NativeDogfoodAutomationPhase::Warmup => {
+                self.phase = NativeDogfoodAutomationPhase::Interact;
+                request_automation_redraw(window);
+                None
+            }
+            NativeDogfoodAutomationPhase::Interact => {
+                append_pointer_click(events, self.click_point);
+                append_text_keys(events, &self.text);
+                self.phase = NativeDogfoodAutomationPhase::Minimize;
+                request_automation_redraw(window);
+                Some(NATIVE_DOGFOOD_INPUT_ID)
+            }
+            NativeDogfoodAutomationPhase::Minimize => {
+                window.set_minimized(true);
+                self.phase = NativeDogfoodAutomationPhase::Reopen;
+                request_automation_redraw(window);
+                None
+            }
+            NativeDogfoodAutomationPhase::Reopen => {
+                window.set_minimized(false);
+                self.phase = NativeDogfoodAutomationPhase::Submit;
+                request_automation_redraw(window);
+                None
+            }
+            NativeDogfoodAutomationPhase::Submit => {
+                append_pointer_click(events, self.click_point);
+                append_key_pair(
+                    events,
+                    KeyEvent::new(KeyCode::Enter, Modifiers::none()).with_char('\n'),
+                );
+                self.phase = NativeDogfoodAutomationPhase::Done;
+                request_automation_redraw(window);
+                Some(NATIVE_DOGFOOD_INPUT_ID)
+            }
+            NativeDogfoodAutomationPhase::Done => None,
+        };
+        focused_element
+    }
+}
+
+fn append_pointer_click(events: &mut Vec<PlatformWindowEvent>, position: Point) {
+    events.push(PlatformWindowEvent::Input(PlatformInputEvent::Mouse(
+        PlatformMouseEvent {
+            kind: PlatformMouseEventKind::Down,
+            position,
+            button: Some(MouseButton::Left),
+        },
+    )));
+    events.push(PlatformWindowEvent::Input(PlatformInputEvent::Mouse(
+        PlatformMouseEvent {
+            kind: PlatformMouseEventKind::Up,
+            position,
+            button: Some(MouseButton::Left),
+        },
+    )));
+}
+
+fn append_text_keys(events: &mut Vec<PlatformWindowEvent>, text: &str) {
+    for ch in text.chars() {
+        let key = key_code_for_dogfood_char(ch);
+        append_key_pair(events, KeyEvent::new(key, Modifiers::none()).with_char(ch));
+    }
+}
+
+fn append_key_pair(events: &mut Vec<PlatformWindowEvent>, event: KeyEvent) {
+    events.push(PlatformWindowEvent::Input(PlatformInputEvent::KeyDown(
+        event.clone(),
+    )));
+    events.push(PlatformWindowEvent::Input(PlatformInputEvent::KeyUp(event)));
+}
+
+fn key_code_for_dogfood_char(ch: char) -> KeyCode {
+    match ch {
+        'a' | 'A' => KeyCode::A,
+        'b' | 'B' => KeyCode::B,
+        'c' | 'C' => KeyCode::C,
+        'd' | 'D' => KeyCode::D,
+        'e' | 'E' => KeyCode::E,
+        'f' | 'F' => KeyCode::F,
+        'g' | 'G' => KeyCode::G,
+        'h' | 'H' => KeyCode::H,
+        'i' | 'I' => KeyCode::I,
+        'j' | 'J' => KeyCode::J,
+        'k' | 'K' => KeyCode::K,
+        'l' | 'L' => KeyCode::L,
+        'm' | 'M' => KeyCode::M,
+        'n' | 'N' => KeyCode::N,
+        'o' | 'O' => KeyCode::O,
+        'p' | 'P' => KeyCode::P,
+        'q' | 'Q' => KeyCode::Q,
+        'r' | 'R' => KeyCode::R,
+        's' | 'S' => KeyCode::S,
+        't' | 'T' => KeyCode::T,
+        'u' | 'U' => KeyCode::U,
+        'v' | 'V' => KeyCode::V,
+        'w' | 'W' => KeyCode::W,
+        'x' | 'X' => KeyCode::X,
+        'y' | 'Y' => KeyCode::Y,
+        'z' | 'Z' => KeyCode::Z,
+        '0' => KeyCode::Key0,
+        '1' => KeyCode::Key1,
+        '2' => KeyCode::Key2,
+        '3' => KeyCode::Key3,
+        '4' => KeyCode::Key4,
+        '5' => KeyCode::Key5,
+        '6' => KeyCode::Key6,
+        '7' => KeyCode::Key7,
+        '8' => KeyCode::Key8,
+        '9' => KeyCode::Key9,
+        '-' => KeyCode::Minus,
+        '_' => KeyCode::Minus,
+        ' ' => KeyCode::Space,
+        other => KeyCode::Unknown(other as u32),
+    }
+}
+
+fn request_automation_redraw<W: PlatformWindow>(window: &W) {
+    if let Err(err) = window.request_redraw() {
+        panic!("native dogfood automation failed to request redraw: {err}");
     }
 }
 

@@ -75,6 +75,22 @@ impl MacWindow {
         self.window.isMiniaturized()
     }
 
+    pub(crate) fn set_minimized(&self, minimized: bool) {
+        unsafe {
+            if minimized {
+                let _: () = msg_send![
+                    &*self.window,
+                    miniaturize: std::ptr::null::<objc2::runtime::AnyObject>()
+                ];
+            } else {
+                let _: () = msg_send![
+                    &*self.window,
+                    deminiaturize: std::ptr::null::<objc2::runtime::AnyObject>()
+                ];
+            }
+        }
+    }
+
     pub(crate) fn install_application_delegate(&self, app: &NSApplication) {
         self.lifecycle_delegate.install_as_app_delegate(app);
     }
