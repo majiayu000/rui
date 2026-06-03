@@ -5,6 +5,7 @@ use crate::core::accessibility::{
     AccessibilityAnnouncement, AccessibilityAnnouncementKind, AccessibilityContext,
     AccessibilityError, AccessibilityNode,
 };
+use crate::core::action::{ActionId, ActionOutcome};
 use crate::core::event::{Cursor, KeyEvent, MouseButton, ScrollEvent};
 use crate::core::geometry::{Bounds, Point, Size};
 use crate::core::style::{Dimension as StyleDimension, Style};
@@ -295,6 +296,15 @@ pub trait Element: 'static {
         false
     }
 
+    /// Handle typed actions produced by keymaps or platform semantics.
+    fn handle_action(&mut self, _cx: &mut EventContext, _action: &ActionId) -> ActionOutcome {
+        ActionOutcome::Ignored
+    }
+
+    fn dispatch_action(&mut self, cx: &mut EventContext, action: &ActionId) -> ActionOutcome {
+        self.handle_action(cx, action)
+    }
+
     /// Handle window events
     fn handle_window_event(&mut self, _event: &crate::core::event::Event) -> bool {
         false
@@ -382,6 +392,10 @@ impl AnyElement {
         self.inner.handle_key_event(cx, event)
     }
 
+    pub fn dispatch_action(&mut self, cx: &mut EventContext, action: &ActionId) -> ActionOutcome {
+        self.inner.dispatch_action(cx, action)
+    }
+
     pub fn handle_window_event(&mut self, event: &crate::core::event::Event) -> bool {
         self.inner.handle_window_event(event)
     }
@@ -400,6 +414,39 @@ impl AnyElement {
     ) -> Result<Vec<AccessibilityNode>, AccessibilityError> {
         self.inner.accessibility_nodes(cx)
     }
+}
+
+pub(crate) fn dispatch_action_to_children(
+    children: &mut [AnyElement],
+    cx: &mut EventContext,
+    action: &ActionId,
+) -> ActionOutcome {
+    let focused_index = cx.focused_id().and_then(|focused| {
+        children
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(index, child)| child.contains_id(focused).then_some(index))
+    });
+
+    if let Some(index) = focused_index {
+        let outcome = children[index].dispatch_action(cx, action);
+        if outcome.is_handled() {
+            return outcome;
+        }
+    }
+
+    for (index, child) in children.iter_mut().enumerate().rev() {
+        if Some(index) == focused_index {
+            continue;
+        }
+        let outcome = child.dispatch_action(cx, action);
+        if outcome.is_handled() {
+            return outcome;
+        }
+    }
+
+    ActionOutcome::Ignored
 }
 
 impl<E: Element> From<E> for AnyElement {

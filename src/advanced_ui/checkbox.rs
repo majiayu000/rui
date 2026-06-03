@@ -5,6 +5,7 @@ use crate::core::accessibility::{
     AccessibilityAction, AccessibilityContext, AccessibilityError, AccessibilityNode,
     AccessibilityRole,
 };
+use crate::core::action::{ActionId, ActionOutcome, StandardAction};
 use crate::core::geometry::{Bounds, Edges};
 use crate::core::style::{Corners, Style};
 use crate::elements::element::{
@@ -241,6 +242,30 @@ impl Element for Checkbox {
                     false
                 }
             }
+        }
+    }
+
+    fn handle_action(&mut self, cx: &mut EventContext, action: &ActionId) -> ActionOutcome {
+        if !cx.is_focused(Some(self.id)) || !self.state.can_activate() {
+            return ActionOutcome::Ignored;
+        }
+
+        match action {
+            ActionId::Standard(StandardAction::Activate) => {
+                self.checked = !self.checked;
+                if let Some(handler) = &self.on_change {
+                    handler(self.checked);
+                }
+                let message = if self.checked {
+                    format!("{} checked", self.label)
+                } else {
+                    format!("{} unchecked", self.label)
+                };
+                cx.announce_accessibility_action(self.id, message);
+                cx.request_redraw();
+                ActionOutcome::handled("advanced_ui.checkbox")
+            }
+            _ => ActionOutcome::Ignored,
         }
     }
 }

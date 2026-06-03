@@ -1,5 +1,6 @@
 //! macOS application runner
 
+use crate::core::action::route_key_event;
 use crate::core::app::{AppContext, RedrawSource};
 use crate::core::event::{Event, KeyCode, KeyEvent, Modifiers, ScrollEvent};
 use crate::core::geometry::Bounds;
@@ -280,7 +281,13 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
 
             for (is_down, event) in &key_events {
                 if should_forward_key_event_to_tree(*is_down) {
-                    root.handle_key_event(&mut event_cx, event);
+                    if route_key_event(&mut root, &mut context, &mut event_cx, event) {
+                        schedule_platform_redraw(
+                            &window,
+                            &mut context,
+                            RedrawSource::PlatformInput,
+                        );
+                    }
                 }
             }
 

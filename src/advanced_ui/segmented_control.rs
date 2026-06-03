@@ -5,6 +5,7 @@ use crate::core::accessibility::{
     AccessibilityAction, AccessibilityContext, AccessibilityError, AccessibilityNode,
     AccessibilityRole,
 };
+use crate::core::action::{ActionId, ActionOutcome, StandardAction};
 use crate::core::geometry::{Bounds, Edges};
 use crate::core::style::{Corners, Style};
 use crate::elements::element::{
@@ -184,6 +185,31 @@ impl SegmentedControl {
         let index = ((position.x - bounds.x()) / width).floor() as usize;
         (index < self.options.len()).then_some(index)
     }
+
+    fn selected_index(&self) -> Option<usize> {
+        self.options
+            .iter()
+            .position(|option| option.value == self.selected)
+    }
+
+    fn select_index(&mut self, index: usize, cx: &EventContext) -> ActionOutcome {
+        let Some(option) = self.options.get(index) else {
+            return ActionOutcome::Ignored;
+        };
+        let value = option.value.clone();
+        let label = option.label.clone();
+        if value == self.selected {
+            return ActionOutcome::handled("advanced_ui.segmented_control");
+        }
+
+        self.selected = value;
+        if let Some(handler) = &self.on_change {
+            handler(&self.selected);
+        }
+        cx.announce_accessibility_action(self.id, format!("{label} selected"));
+        cx.request_redraw();
+        ActionOutcome::handled("advanced_ui.segmented_control")
+    }
 }
 
 impl Element for SegmentedControl {
@@ -362,6 +388,29 @@ impl Element for SegmentedControl {
                 }
                 false
             }
+        }
+    }
+
+    fn handle_action(&mut self, cx: &mut EventContext, action: &ActionId) -> ActionOutcome {
+        if !cx.is_focused(Some(self.id)) || !self.state.can_activate() {
+            return ActionOutcome::Ignored;
+        }
+
+        let Some(selected) = self.selected_index() else {
+            return ActionOutcome::Ignored;
+        };
+
+        match action {
+            ActionId::Standard(StandardAction::MoveLeft | StandardAction::MoveUp) => {
+                let index = selected.saturating_sub(1);
+                self.select_index(index, cx)
+            }
+            ActionId::Standard(StandardAction::MoveRight | StandardAction::MoveDown) => {
+                let index = (selected + 1).min(self.options.len() - 1);
+                self.select_index(index, cx)
+            }
+            ActionId::Standard(StandardAction::Activate) => self.select_index(selected, cx),
+            _ => ActionOutcome::Ignored,
         }
     }
 }

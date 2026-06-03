@@ -3,6 +3,7 @@ mod snapshot;
 
 use crate::core::ElementId;
 use crate::core::accessibility::{AccessibilityContext, AccessibilityError, AccessibilityTree};
+use crate::core::action::route_key_event;
 use crate::core::app::{AppContext, RuntimeView};
 use crate::core::entity::Entity;
 use crate::core::event::{Event, KeyEvent, MouseButton, ScrollEvent};
@@ -330,11 +331,16 @@ where
     pub fn dispatch_key_event(&mut self, event: &KeyEvent) -> bool {
         let mut event_cx =
             EventContext::new(self.root_bounds, &self.taffy, &mut self.focused_element);
-        let handled = self.root.handle_key_event(&mut event_cx, event);
-        if event_cx.redraw_requested() {
+        let handled = route_key_event(&mut self.root, &mut self.context, &mut event_cx, event);
+        if handled || event_cx.redraw_requested() {
             self.context.request_redraw();
         }
         handled
+    }
+
+    pub fn request_focus(&mut self, id: Option<ElementId>) {
+        self.focused_element = id;
+        self.context.request_redraw();
     }
 
     pub fn dispatch_window_event(&mut self, event: &Event) -> bool {

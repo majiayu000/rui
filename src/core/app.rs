@@ -1,5 +1,6 @@
 //! Application context and lifecycle
 
+use crate::core::action::{ActionHandler, ActionId, ActionOutcome, Keymap};
 use crate::core::entity::{Entity, EntityId, EntityStore};
 use crate::core::view::{View, ViewContext, ViewNotifier};
 use crate::core::window::{Window, WindowId, WindowOptions};
@@ -19,6 +20,8 @@ pub struct AppContext {
     pub(crate) needs_rebuild: bool,
     pub(crate) dirty: bool,
     redraw_scheduler: RedrawScheduler,
+    keymap: Keymap,
+    app_action_handlers: Vec<Box<dyn ActionHandler>>,
     runtime_view_notifier: Option<(EntityId, ViewNotifier)>,
 }
 
@@ -91,6 +94,11 @@ impl RedrawScheduler {
 
 impl AppContext {
     pub fn new() -> Self {
+        let keymap = match Keymap::with_standard_bindings() {
+            Ok(keymap) => keymap,
+            Err(err) => panic!("failed to initialize standard keymap: {err}"),
+        };
+
         Self {
             entities: EntityStore::new(),
             windows: Vec::new(),
@@ -99,6 +107,8 @@ impl AppContext {
             needs_rebuild: true,
             dirty: true,
             redraw_scheduler: RedrawScheduler::default(),
+            keymap,
+            app_action_handlers: Vec::new(),
             runtime_view_notifier: None,
         }
     }
@@ -160,6 +170,33 @@ impl AppContext {
 
     pub fn platform_redraw_pending(&self) -> bool {
         self.redraw_scheduler.platform_redraw_pending
+    }
+
+    pub fn keymap(&self) -> &Keymap {
+        &self.keymap
+    }
+
+    pub fn keymap_mut(&mut self) -> &mut Keymap {
+        &mut self.keymap
+    }
+
+    pub fn add_action_handler(&mut self, handler: impl ActionHandler + 'static) {
+        self.app_action_handlers.push(Box::new(handler));
+    }
+
+    pub(crate) fn dispatch_app_action(&mut self, action: &ActionId) -> ActionOutcome {
+        for handler in &mut self.app_action_handlers {
+            if action.requires_enabled() && !handler.action_handler_enabled() {
+                continue;
+            }
+
+            let outcome = handler.run_action(action);
+            if outcome.is_handled() {
+                return outcome;
+            }
+        }
+
+        ActionOutcome::Ignored
     }
 
     pub(crate) fn set_runtime_view_notifier(

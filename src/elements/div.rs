@@ -9,7 +9,7 @@ use crate::core::style::{
 };
 use crate::elements::element::{
     AnyElement, Element, EventContext, LayoutContext, PaintContext, PointerEvent, PointerEventKind,
-    style_to_taffy,
+    dispatch_action_to_children, style_to_taffy,
 };
 use crate::renderer::Primitive;
 use smallvec::SmallVec;
@@ -615,6 +615,14 @@ impl Element for Div {
         }
 
         false
+    }
+
+    fn dispatch_action(
+        &mut self,
+        cx: &mut EventContext,
+        action: &crate::core::action::ActionId,
+    ) -> crate::core::action::ActionOutcome {
+        dispatch_action_to_children(&mut self.children, cx, action)
     }
 
     fn handle_window_event(&mut self, event: &crate::core::event::Event) -> bool {

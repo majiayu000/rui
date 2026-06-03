@@ -132,6 +132,17 @@ impl Element for Toolbar {
         self.state.can_activate() && self.inner.handle_key_event(cx, event)
     }
 
+    fn dispatch_action(
+        &mut self,
+        cx: &mut EventContext,
+        action: &crate::core::action::ActionId,
+    ) -> crate::core::action::ActionOutcome {
+        if !self.state.can_activate() {
+            return crate::core::action::ActionOutcome::Ignored;
+        }
+        self.inner.dispatch_action(cx, action)
+    }
+
     fn handle_window_event(&mut self, event: &crate::core::event::Event) -> bool {
         self.state.can_activate() && self.inner.handle_window_event(event)
     }
