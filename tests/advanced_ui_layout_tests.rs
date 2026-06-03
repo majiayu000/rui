@@ -1,9 +1,9 @@
 use rui::advanced_ui::{CrossAxisAlignment, MainAxisAlignment, column, container, row, text};
-use rui::core::style::Shadow;
-use rui::elements::element::{Element, LayoutContext, PaintContext};
+use rui::core::style::{Dimension, Shadow, Style};
+use rui::elements::element::{Element, LayoutContext, PaintContext, style_to_taffy};
 use rui::renderer::{Primitive, Scene};
 use rui::{Bounds, Color, ElementId, Size};
-use taffy::prelude::{AvailableSpace, TaffyTree};
+use taffy::prelude::{AvailableSpace, Dimension as TaffyDimension, TaffyTree};
 
 fn painted_primitives(mut root: impl Element, viewport: Size) -> Vec<Primitive> {
     let mut taffy = TaffyTree::<ElementId>::new();
@@ -117,6 +117,77 @@ fn advanced_container_exposes_semantic_style_controls() {
     assert_eq!(style.border.color, Color::BLACK);
     assert_eq!(style.border.radius, rui::Corners::all(6.0));
     assert!(style.shadow.is_some());
+}
+
+#[test]
+fn structured_dimensions_convert_to_taffy_without_float_sentinels() {
+    let mut style = Style::new();
+    style.set_width_dimension(Dimension::percent(50.0));
+    style.set_height_dimension(Dimension::fill());
+    style.set_min_width_dimension(Dimension::px(120.0));
+    style.set_max_height_dimension(Dimension::auto());
+
+    let taffy_style = style_to_taffy(&style);
+
+    assert_eq!(taffy_style.size.width, TaffyDimension::Percent(0.5));
+    assert_eq!(taffy_style.size.height, TaffyDimension::Percent(1.0));
+    assert_eq!(taffy_style.min_size.width, TaffyDimension::Length(120.0));
+    assert_eq!(taffy_style.max_size.height, TaffyDimension::Auto);
+}
+
+#[test]
+fn responsive_dimensions_resize_without_horizontal_clipping() {
+    for viewport in [
+        Size::new(320.0, 240.0),
+        Size::new(760.0, 520.0),
+        Size::new(1200.0, 800.0),
+    ] {
+        let root = column()
+            .w_full()
+            .h_full()
+            .padding(16.0)
+            .spacing(8.0)
+            .child(
+                container()
+                    .w_percent(50.0)
+                    .h(28.0)
+                    .background(Color::hex(0xff0000)),
+            )
+            .child(
+                container()
+                    .w_full()
+                    .h(28.0)
+                    .background(Color::hex(0x0000ff)),
+            )
+            .child(
+                row()
+                    .w_full()
+                    .h(32.0)
+                    .spacing(8.0)
+                    .child(
+                        container()
+                            .w_percent(35.0)
+                            .h(24.0)
+                            .background(Color::hex(0x00ff00)),
+                    )
+                    .child(
+                        container()
+                            .w_percent(35.0)
+                            .h(24.0)
+                            .background(Color::hex(0xff00ff)),
+                    ),
+            );
+
+        let bounds = quad_bounds(&painted_primitives(root, viewport));
+        assert!(!bounds.is_empty());
+        for bounds in bounds {
+            assert!(bounds.x() >= 0.0, "bounds clipped left: {bounds:?}");
+            assert!(
+                bounds.x() + bounds.width() <= viewport.width + 0.1,
+                "bounds clipped right in {viewport:?}: {bounds:?}"
+            );
+        }
+    }
 }
 
 #[test]

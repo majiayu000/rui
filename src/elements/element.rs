@@ -1,13 +1,13 @@
 //! Core Element trait and related types
 
+use crate::core::ElementId;
 use crate::core::accessibility::{
     AccessibilityAnnouncement, AccessibilityAnnouncementKind, AccessibilityContext,
     AccessibilityError, AccessibilityNode,
 };
 use crate::core::event::{Cursor, KeyEvent, MouseButton, ScrollEvent};
 use crate::core::geometry::{Bounds, Point, Size};
-use crate::core::style::Style;
-use crate::core::ElementId;
+use crate::core::style::{Dimension as StyleDimension, Style};
 use crate::renderer::text::TextMeasureCache;
 use crate::renderer::{Primitive, Scene};
 use std::cell::{Cell, RefCell};
@@ -44,7 +44,11 @@ pub struct PaintContext<'a> {
 
 impl<'a> PaintContext<'a> {
     pub fn new(scene: &'a mut Scene, bounds: Bounds, taffy: &'a TaffyTree<ElementId>) -> Self {
-        Self { scene, bounds, taffy }
+        Self {
+            scene,
+            bounds,
+            taffy,
+        }
     }
 
     /// Add a primitive to the scene
@@ -104,11 +108,7 @@ pub enum EventResult {
 
 impl EventResult {
     pub fn from_handled(handled: bool) -> Self {
-        if handled {
-            Self::Stop
-        } else {
-            Self::Propagate
-        }
+        if handled { Self::Stop } else { Self::Propagate }
     }
 
     pub fn is_stopped(self) -> bool {
@@ -435,6 +435,34 @@ pub trait Render {
     fn render(&mut self) -> impl Element;
 }
 
+fn dimension_to_taffy(dimension: StyleDimension) -> Dimension {
+    match dimension {
+        StyleDimension::Px(value) => Dimension::Length(value),
+        StyleDimension::Percent(value) => Dimension::Percent(value / 100.0),
+        StyleDimension::Auto => Dimension::Auto,
+        StyleDimension::Fill => Dimension::Percent(1.0),
+    }
+}
+
+fn dimension_or_px(
+    dimension: Option<StyleDimension>,
+    pixels: Option<f32>,
+    fallback: Dimension,
+) -> Dimension {
+    dimension
+        .map(dimension_to_taffy)
+        .or_else(|| pixels.map(Dimension::Length))
+        .unwrap_or(fallback)
+}
+
+pub(crate) fn style_dimension_or(
+    dimension: Option<StyleDimension>,
+    pixels: Option<f32>,
+    fallback: Dimension,
+) -> Dimension {
+    dimension_or_px(dimension, pixels, fallback)
+}
+
 /// Convert Taffy style to our style
 pub fn style_to_taffy(style: &Style) -> taffy::Style {
     taffy::Style {
@@ -475,16 +503,24 @@ pub fn style_to_taffy(style: &Style) -> taffy::Style {
             height: LengthPercentage::Length(style.gap),
         },
         size: taffy::Size {
-            width: style.width.map(|w| Dimension::Length(w)).unwrap_or(Dimension::Auto),
-            height: style.height.map(|h| Dimension::Length(h)).unwrap_or(Dimension::Auto),
+            width: dimension_or_px(style.dimensions.width, style.width, Dimension::Auto),
+            height: dimension_or_px(style.dimensions.height, style.height, Dimension::Auto),
         },
         min_size: taffy::Size {
-            width: style.min_width.map(|w| Dimension::Length(w)).unwrap_or(Dimension::Auto),
-            height: style.min_height.map(|h| Dimension::Length(h)).unwrap_or(Dimension::Auto),
+            width: dimension_or_px(style.dimensions.min_width, style.min_width, Dimension::Auto),
+            height: dimension_or_px(
+                style.dimensions.min_height,
+                style.min_height,
+                Dimension::Auto,
+            ),
         },
         max_size: taffy::Size {
-            width: style.max_width.map(|w| Dimension::Length(w)).unwrap_or(Dimension::Auto),
-            height: style.max_height.map(|h| Dimension::Length(h)).unwrap_or(Dimension::Auto),
+            width: dimension_or_px(style.dimensions.max_width, style.max_width, Dimension::Auto),
+            height: dimension_or_px(
+                style.dimensions.max_height,
+                style.max_height,
+                Dimension::Auto,
+            ),
         },
         margin: taffy::Rect {
             top: LengthPercentageAuto::Length(style.margin.top),

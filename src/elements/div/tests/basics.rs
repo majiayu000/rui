@@ -113,15 +113,27 @@ fn test_div_h() {
 #[test]
 fn test_div_w_full() {
     let d = Div::new().w_full();
-    assert_eq!(d.style.width, Some(f32::INFINITY));
+    assert_eq!(d.style.width, None);
+    assert_eq!(d.style.dimensions.width, Some(Dimension::Fill));
     assert_eq!(d.style.flex_grow, 1.0);
 }
 
 #[test]
 fn test_div_h_full() {
     let d = Div::new().h_full();
-    assert_eq!(d.style.height, Some(f32::INFINITY));
+    assert_eq!(d.style.height, None);
+    assert_eq!(d.style.dimensions.height, Some(Dimension::Fill));
     assert_eq!(d.style.flex_grow, 1.0);
+}
+
+#[test]
+fn test_div_percent_and_auto_dimensions() {
+    let d = Div::new().w_percent(50.0).h_auto();
+
+    assert_eq!(d.style.width, None);
+    assert_eq!(d.style.height, None);
+    assert_eq!(d.style.dimensions.width, Some(Dimension::Percent(50.0)));
+    assert_eq!(d.style.dimensions.height, Some(Dimension::Auto));
 }
 
 #[test]

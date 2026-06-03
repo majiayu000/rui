@@ -19,7 +19,7 @@ pub use app::{App, AppContext};
 pub use color::{Color, Hsla, Rgba};
 pub use entity::EntityId;
 pub use geometry::{Bounds, Edges, Point, Rect, Size};
-pub use style::{Background, BorderStyle, Corners, Style};
+pub use style::{Background, BorderStyle, Corners, Dimension, DimensionConstraints, Style};
 pub use view::{View, ViewContext, ViewNotifier};
 pub use window::{Window, WindowOptions};
 
