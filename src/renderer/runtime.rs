@@ -4,7 +4,7 @@ use crate::core::geometry::Size;
 use crate::renderer::resources::{
     RendererDiagnostics, RendererResourceError, RendererUnsupportedPrimitive,
 };
-use crate::renderer::{Primitive, PrimitiveKind, Scene};
+use crate::renderer::{Primitive, PrimitiveKind, RendererBatchDiagnostics, Scene};
 use std::error::Error;
 use std::fmt;
 
@@ -154,6 +154,7 @@ impl RendererPrimitiveSupport {
 pub struct RecordedScene {
     pub viewport_size: Size,
     pub primitives: Vec<Primitive>,
+    pub batch: RendererBatchDiagnostics,
 }
 
 /// Renderer implementation for tests that does not allocate platform resources.
@@ -195,6 +196,7 @@ impl Renderer for RecordingRenderer {
         self.frames.push(RecordedScene {
             viewport_size,
             primitives: scene.primitives().to_vec(),
+            batch: RendererBatchDiagnostics::from_scene(scene),
         });
         Ok(())
     }
@@ -316,6 +318,7 @@ mod tests {
         assert_eq!(renderer.frames().len(), 1);
         assert_eq!(renderer.frames()[0].viewport_size, viewport_size);
         assert_eq!(renderer.frames()[0].primitives.len(), 1);
+        assert_eq!(renderer.frames()[0].batch.draw_count, 1);
     }
 
     #[test]

@@ -9,7 +9,7 @@ use crate::renderer::text::{TextRasterCache, TextRequest};
 use crate::renderer::{
     Renderer, RendererDeviceDiagnostics, RendererDiagnostics, RendererError, RendererImageCache,
     RendererPrimitiveSupport, RendererResourceCache, RendererResourceError, RendererResourceKind,
-    Scene,
+    RendererResourceLimits, Scene,
 };
 use crate::{ImageFit, ImageSource};
 use metal::*;
@@ -40,6 +40,10 @@ pub struct MetalRenderer {
 
 impl MetalRenderer {
     pub fn new() -> Result<Self, RendererError> {
+        Self::with_resource_limits(RendererResourceLimits::default())
+    }
+
+    pub fn with_resource_limits(limits: RendererResourceLimits) -> Result<Self, RendererError> {
         let device = Device::system_default()
             .ok_or_else(|| RendererError::backend_unavailable("Metal device is unavailable"))?;
         let command_queue = device.new_command_queue();
@@ -194,9 +198,19 @@ impl MetalRenderer {
             path_pipeline,
             sampler,
             textures: HashMap::new(),
-            texture_resources: RendererResourceCache::unbounded(RendererResourceKind::Texture),
-            image_cache: RendererImageCache::new(),
-            text_cache: TextRasterCache::new(),
+            texture_resources: RendererResourceCache::new(
+                RendererResourceKind::Texture,
+                limits.texture_max_entries,
+                limits.texture_max_bytes,
+            ),
+            image_cache: RendererImageCache::with_limits(
+                limits.image_max_entries,
+                limits.image_max_bytes,
+            ),
+            text_cache: TextRasterCache::with_limits(
+                limits.glyph_max_entries,
+                limits.glyph_max_bytes,
+            ),
         })
     }
 
