@@ -418,7 +418,7 @@ fn action_keymap_runtime_forwards_unbound_modified_arrows_to_inputs() {
 }
 
 #[test]
-fn action_keymap_runtime_does_not_forward_modified_deletes_as_plain_deletes() {
+fn action_keymap_runtime_preserves_shifted_deletes_for_text_editing() {
     let input_id = ElementId::new();
     let latest = Rc::new(RefCell::new(String::from("abc")));
     let latest_ref = Rc::clone(&latest);
@@ -436,8 +436,15 @@ fn action_keymap_runtime_does_not_forward_modified_deletes_as_plain_deletes() {
     assert!(!session.dispatch_key_event(&KeyEvent::new(KeyCode::Delete, Modifiers::meta())));
     assert_eq!(latest.borrow().as_str(), "abc");
 
-    assert!(session.dispatch_key_event(&KeyEvent::new(KeyCode::Backspace, Modifiers::none())));
+    assert!(session.dispatch_key_event(&KeyEvent::new(KeyCode::Backspace, Modifiers::shift())));
     assert_eq!(latest.borrow().as_str(), "ab");
+
+    assert!(session.dispatch_key_event(&KeyEvent::new(KeyCode::Backspace, Modifiers::none())));
+    assert_eq!(latest.borrow().as_str(), "a");
+
+    assert!(session.dispatch_key_event(&KeyEvent::new(KeyCode::A, Modifiers::meta())));
+    assert!(session.dispatch_key_event(&KeyEvent::new(KeyCode::Delete, Modifiers::shift())));
+    assert_eq!(latest.borrow().as_str(), "");
 }
 
 #[test]
