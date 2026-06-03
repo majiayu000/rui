@@ -331,6 +331,40 @@ pub enum InputType {
 
 ---
 
+### Stateful Control Contracts
+
+Stateful controls separate persistent values from transient interaction state:
+
+- Controlled values are supplied on every render, for example `Checkbox::checked`, `SegmentedControl::selected`, and `Input::value`. Event handlers should update caller-owned state or an `AppContext` entity, then notify the view so the next rebuild supplies the new value.
+- Uncontrolled values are local to the current element instance. They can handle immediate interaction, but they are not a persistence boundary across rebuilds.
+- Disabled controls refuse activation, do not call mutation callbacks, expose disabled accessibility state, and clear hover/pressed transients.
+- Read-only controls still expose their value, but refuse internal value mutation and mutation callbacks.
+- Hover, pressed, focus, validation, and accessibility announcement state are component-local transients. Persist application data outside the element tree when it must survive rebuilds.
+
+```rust
+struct SyncView {
+    checked: Rc<Cell<bool>>,
+}
+
+impl View for SyncView {
+    type Element = Checkbox;
+
+    fn render(&mut self, cx: &mut ViewContext<Self>) -> Self::Element {
+        let notifier = cx.notifier();
+        let checked_for_handler = Rc::clone(&self.checked);
+
+        Checkbox::new("Sync")
+            .checked(self.checked.get())
+            .on_change(move |value| {
+                checked_for_handler.set(value);
+                notifier.notify();
+            })
+    }
+}
+```
+
+---
+
 ### Image
 
 Image display element.

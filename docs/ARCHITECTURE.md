@@ -194,6 +194,24 @@ flowchart LR
 - `needs_rebuild`: rebuild the element tree
 - `dirty`: re-layout/repaint without rebuilding
 
+### 4.1.1 Runtime Ownership and State Contracts
+
+RUI separates long-lived application state from the short-lived element tree:
+
+- `AppContext` owns framework state: the `EntityStore`, windows, pending view updates, and dirty/rebuild flags.
+- `App::run_view` and `testing::mount_view` own a long-lived `View` inside `RuntimeView`; each rebuild calls `View::render` with a fresh `ViewContext`.
+- Caller-owned state may live outside RUI, such as `Rc<Cell<T>>`, `Rc<RefCell<T>>`, or application data protected by the caller. Event callbacks can mutate that state, then call `ViewNotifier::notify` to request a rebuild.
+- Component-local state belongs to the current element instance, for example hover, pressed, focused, selected, and text-editing transients. It may be replaced on rebuild, so persistent values should be supplied by caller state or an `AppContext` entity.
+
+Typed handles are context-bound:
+
+- `Entity<T>` is a typed handle, not the state itself. Clone or copy the handle freely, but read or mutate the value only through `AppContext::get` or `AppContext::get_mut` while an `AppContext` or `ViewContext` is active.
+- Borrowed `Ref` and `RefMut` values from the entity store must not escape the current render or callback scope.
+- A `ViewContext` grants access to the current view entity and to `AppContext` only for the duration of `render`.
+- `ViewNotifier` is the safe object to move into callbacks. It does not expose state; it only schedules the owning view to rebuild on the next runtime pass.
+
+RUI does not currently expose a separate `Model` trait. Model-like state should be represented as caller-owned state or as typed `Entity<T>` values in `AppContext` until a dedicated model API exists.
+
 ### 4.2 Resource Pipeline
 
 The renderer owns explicit resource caches for text, images, and GPU textures:
