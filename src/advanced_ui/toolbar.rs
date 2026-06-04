@@ -322,22 +322,25 @@ mod tests {
 
     #[test]
     fn advanced_ui_toolbar_inactive_state_disables_accessible_children() {
+        let child_id = ElementId::from(932);
         for toolbar in [
             Toolbar::new("Formatting")
                 .disabled(true)
-                .child(button("Bold").on_click(|| {})),
+                .child(button("Bold").id(child_id).on_click(|| {})),
             Toolbar::new("Formatting")
                 .read_only(true)
-                .child(button("Bold").on_click(|| {})),
+                .child(button("Bold").id(child_id).on_click(|| {})),
         ] {
-            let nodes = match toolbar.accessibility_nodes(&AccessibilityContext::default()) {
-                Ok(nodes) => nodes,
-                Err(err) => panic!("toolbar accessibility should build: {err}"),
-            };
+            let nodes =
+                match toolbar.accessibility_nodes(&AccessibilityContext::new(Some(child_id))) {
+                    Ok(nodes) => nodes,
+                    Err(err) => panic!("toolbar accessibility should build: {err}"),
+                };
 
             let toolbar_node = &nodes[0];
             let child = &toolbar_node.a11y_children()[0];
             assert!(!child.a11y_enabled());
+            assert!(!child.a11y_focused());
             assert!(child.a11y_actions().is_empty());
         }
     }

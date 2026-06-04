@@ -194,10 +194,10 @@ impl TextShapePlan {
 pub(crate) struct ClusterDraft {
     pub(crate) byte_start: usize,
     pub(crate) byte_end: usize,
-    text: String,
-    script: TextScript,
-    direction: TextDirection,
-    font_index: usize,
+    pub(crate) text: String,
+    pub(crate) script: TextScript,
+    pub(crate) direction: TextDirection,
+    pub(crate) font_index: usize,
     pub(crate) x_offset: f32,
     pub(crate) advance_width: f32,
 }
