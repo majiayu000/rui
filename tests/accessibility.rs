@@ -328,6 +328,43 @@ fn accessibility_input_exposes_text_editing_semantics() {
 }
 
 #[test]
+fn accessibility_input_placeholder_exposes_default_id_node() {
+    let input = Input::new().placeholder("Search...");
+
+    let node = first_node(accessibility_result(
+        input.accessibility_nodes(&AccessibilityContext::default()),
+    ));
+    assert_eq!(node.a11y_role(), AccessibilityRole::TextInput);
+    assert_eq!(node.a11y_label(), Some("Search..."));
+}
+
+#[test]
+fn accessibility_password_input_uses_display_offsets() {
+    let id = ElementId::new();
+    let mut input = Input::new()
+        .id(id)
+        .accessibility_label("Password")
+        .value("éa")
+        .password();
+    input
+        .apply_key_event(&KeyEvent::new(KeyCode::ArrowLeft, Modifiers::shift()))
+        .expect("shift-left should select the final grapheme");
+
+    let node = first_node(accessibility_result(
+        input.accessibility_nodes(&AccessibilityContext::new(Some(id))),
+    ));
+    assert_eq!(node.a11y_value(), Some("\u{2022}\u{2022}"));
+    assert_eq!(node.a11y_text_caret(), Some("\u{2022}".len()));
+    assert_eq!(
+        node.a11y_text_selection(),
+        Some(AccessibilityTextRange::new(
+            "\u{2022}".len(),
+            "\u{2022}\u{2022}".len()
+        ))
+    );
+}
+
+#[test]
 fn accessibility_input_exposes_composition_range() {
     let id = ElementId::new();
     let mut input = Input::new().id(id).placeholder("Message").value("Hi ");

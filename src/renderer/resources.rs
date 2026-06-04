@@ -94,7 +94,7 @@ impl RendererResourceError {
 
     pub fn resource_id(&self) -> Option<u32> {
         match self {
-            Self::MissingResource { id, .. } => Some(*id),
+            Self::MissingResource { id, .. } if *id != 0 => Some(*id),
             _ => None,
         }
     }

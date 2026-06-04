@@ -1,5 +1,6 @@
 use crate::core::geometry::{Bounds, Size};
 use crate::renderer::text::{TextMetrics, TextRequest};
+use crate::renderer::text_cluster_position::apply_exact_cluster_positions;
 use rusttype::{Font, GlyphId, Scale, point};
 use rustybuzz::{BufferClusterLevel, Direction as HbDirection, Face, UnicodeBuffer};
 use std::sync::Arc;
@@ -190,15 +191,15 @@ impl TextShapePlan {
 }
 
 #[derive(Debug, Clone)]
-struct ClusterDraft {
-    byte_start: usize,
-    byte_end: usize,
+pub(crate) struct ClusterDraft {
+    pub(crate) byte_start: usize,
+    pub(crate) byte_end: usize,
     text: String,
     script: TextScript,
     direction: TextDirection,
     font_index: usize,
-    x_offset: f32,
-    advance_width: f32,
+    pub(crate) x_offset: f32,
+    pub(crate) advance_width: f32,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -479,7 +480,7 @@ fn shape_run(
     let run_text = &request.content[clusters[0].byte_start..clusters.last().unwrap().byte_end];
     let glyphs = shape_run_glyphs(font, request, clusters, start_x, ink_bounds);
     let advance_width = glyphs.iter().map(|glyph| glyph.advance_width).sum::<f32>();
-    distribute_cluster_advances(font, request, clusters, start_x, advance_width);
+    distribute_cluster_advances(font, request, clusters, start_x, &glyphs, advance_width);
 
     let grapheme_count = clusters
         .iter()
@@ -578,8 +579,13 @@ fn distribute_cluster_advances(
     request: TextRequest<'_>,
     clusters: &mut [ClusterDraft],
     start_x: f32,
+    glyphs: &[ShapedGlyph],
     shaped_advance: f32,
 ) {
+    if apply_exact_cluster_positions(clusters, glyphs) {
+        return;
+    }
+
     let scale = Scale::uniform(request.font_size);
     let simple_advances = clusters
         .iter()

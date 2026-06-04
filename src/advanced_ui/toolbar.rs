@@ -113,6 +113,28 @@ impl Element for Toolbar {
         ))
     }
 
+    fn accessibility_nodes(
+        &self,
+        cx: &AccessibilityContext,
+    ) -> Result<Vec<AccessibilityNode>, AccessibilityError> {
+        let mut child_nodes = Vec::new();
+        for child in self.children() {
+            child_nodes.extend(child.accessibility_nodes(cx)?);
+        }
+
+        if !self.state.can_activate() {
+            child_nodes = child_nodes
+                .into_iter()
+                .map(|child| child.with_inherited_inactive(self.state.read_only()))
+                .collect();
+        }
+
+        match self.accessibility(cx)? {
+            Some(node) => Ok(vec![node.with_children(child_nodes)]),
+            None => Ok(child_nodes),
+        }
+    }
+
     fn handle_pointer_event(&mut self, cx: &mut EventContext, event: &PointerEvent) -> bool {
         self.state.can_activate() && self.inner.handle_pointer_event(cx, event)
     }
@@ -296,6 +318,28 @@ mod tests {
             nodes[0].a11y_children()[0].a11y_role(),
             AccessibilityRole::Button
         );
+    }
+
+    #[test]
+    fn advanced_ui_toolbar_inactive_state_disables_accessible_children() {
+        for toolbar in [
+            Toolbar::new("Formatting")
+                .disabled(true)
+                .child(button("Bold").on_click(|| {})),
+            Toolbar::new("Formatting")
+                .read_only(true)
+                .child(button("Bold").on_click(|| {})),
+        ] {
+            let nodes = match toolbar.accessibility_nodes(&AccessibilityContext::default()) {
+                Ok(nodes) => nodes,
+                Err(err) => panic!("toolbar accessibility should build: {err}"),
+            };
+
+            let toolbar_node = &nodes[0];
+            let child = &toolbar_node.a11y_children()[0];
+            assert!(!child.a11y_enabled());
+            assert!(child.a11y_actions().is_empty());
+        }
     }
 
     #[test]

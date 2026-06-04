@@ -94,7 +94,7 @@ impl Input {
         style.border.width = Edges::all(1.0);
 
         Self {
-            id: None,
+            id: Some(ElementId::new()),
             placeholder: String::new(),
             accessibility_label: None,
             input_type: InputType::default(),
@@ -732,18 +732,30 @@ impl Element for Input {
             .with_enabled(!self.state.disabled)
             .with_read_only(self.state.read_only)
             .with_invalid(self.state.invalid)
-            .with_text_caret(self.normalize_cursor_position())
             .with_focused(cx.a11y_has_focus(id));
+        if let Some(caret) = self.display_offset_for_value_offset(self.normalize_cursor_position())
+        {
+            node = node.with_text_caret(caret);
+        }
         if !self.state.disabled && !self.state.read_only {
             node = node.with_action(AccessibilityAction::SetValue);
         }
 
         if let (Some(start), Some(end)) = (self.state.selection_start, self.state.selection_end) {
-            node = node.with_text_selection(AccessibilityTextRange::new(start, end));
+            let range =
+                TextRange::new(start, end).map_err(|_| AccessibilityError::BridgeFailure {
+                    message: "input accessibility selection is not a valid text range".to_string(),
+                })?;
+            if let Some(range) = self.display_range_for_value_range(range) {
+                node = node
+                    .with_text_selection(AccessibilityTextRange::new(range.start(), range.end()));
+            }
         }
         if let Some(range) = self.state.composition_range {
-            node =
-                node.with_text_composition(AccessibilityTextRange::new(range.start(), range.end()));
+            if let Some(range) = self.display_range_for_value_range(range) {
+                node = node
+                    .with_text_composition(AccessibilityTextRange::new(range.start(), range.end()));
+            }
         }
 
         Ok(Some(node))

@@ -322,6 +322,18 @@ impl AccessibilityNode {
         self.children.extend(children);
         self
     }
+
+    pub fn with_inherited_inactive(mut self, read_only: bool) -> Self {
+        self.enabled = false;
+        self.read_only = self.read_only || read_only;
+        self.actions.clear();
+        self.children = self
+            .children
+            .into_iter()
+            .map(|child| child.with_inherited_inactive(read_only))
+            .collect();
+        self
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]

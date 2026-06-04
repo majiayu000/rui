@@ -231,9 +231,9 @@ fn input_paints_selection_marked_text_and_layout_caret() {
 // ==================== Element Trait Tests ====================
 
 #[test]
-fn test_element_id_none_by_default() {
+fn test_element_id_generated_by_default() {
     let inp = Input::new();
-    assert!(Element::id(&inp).is_none());
+    assert!(Element::id(&inp).is_some());
 }
 
 #[test]

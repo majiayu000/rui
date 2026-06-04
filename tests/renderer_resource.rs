@@ -150,6 +150,9 @@ fn renderer_resource_errors_expose_structured_context() {
     assert_eq!(missing.resource_id(), Some(42));
     assert!(!missing.is_pressure());
 
+    let synthetic_missing = RendererResourceError::missing(RendererResourceKind::Texture, 0);
+    assert_eq!(synthetic_missing.resource_id(), None);
+
     let mut cache = RendererResourceCache::new(RendererResourceKind::Glyph, 0, 8);
     let pressure = match cache.resolve(GlyphResourceKey::new("A", 12.0, 400, None, 1.0), 4) {
         Ok(_) => panic!("zero-entry cache should report resource pressure"),
