@@ -326,6 +326,7 @@ impl AccessibilityNode {
     pub fn with_inherited_inactive(mut self, read_only: bool) -> Self {
         self.enabled = false;
         self.read_only = self.read_only || read_only;
+        self.focused = false;
         self.actions.clear();
         self.children = self
             .children
