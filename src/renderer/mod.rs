@@ -6,6 +6,7 @@ mod runtime;
 mod scene;
 mod telemetry;
 pub mod text;
+mod text_cluster_position;
 mod text_shaping;
 
 #[cfg(target_os = "macos")]

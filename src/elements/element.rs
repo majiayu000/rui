@@ -422,7 +422,7 @@ impl AnyElement {
         self.inner.contains_id(id)
     }
 
-    fn accessibility_nodes(
+    pub(crate) fn accessibility_nodes(
         &self,
         cx: &AccessibilityContext,
     ) -> Result<Vec<AccessibilityNode>, AccessibilityError> {

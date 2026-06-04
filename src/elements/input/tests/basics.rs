@@ -160,7 +160,7 @@ fn test_input_new() {
     assert_eq!(input.state.value, "");
     assert!(!input.state.focused);
     assert!(!input.state.hovered);
-    assert!(input.id.is_none());
+    assert!(input.id.is_some());
     assert!(input.width.is_none());
     assert!(input.height.is_none());
     assert!(input.on_change.is_none());

@@ -465,6 +465,26 @@ mod tests {
     }
 
     #[test]
+    fn shaping_cluster_offsets_follow_positioned_glyphs() {
+        let mut cache = TextMeasureCache::new();
+        let plan = shape(&mut cache, request("AV"));
+
+        if plan.glyphs().len() != plan.clusters().len() {
+            return;
+        }
+
+        for cluster in plan.clusters() {
+            let glyph = plan
+                .glyphs()
+                .iter()
+                .find(|glyph| glyph.byte_start == cluster.byte_start)
+                .expect("cluster should map to a positioned glyph");
+            assert_close(cluster.x_offset, glyph.x_offset);
+            assert_close(cluster.advance_width, glyph.advance_width);
+        }
+    }
+
+    #[test]
     fn shaping_reports_ligature_substitution_when_the_font_applies_one() {
         let mut cache = TextMeasureCache::new();
         let plan = shape(&mut cache, request("office"));
