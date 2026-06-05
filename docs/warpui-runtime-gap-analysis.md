@@ -6,6 +6,9 @@ of truth for RUI. RUI should keep its own architecture and add explicit runtime
 contracts where the current implementation is still too demo-oriented or
 component-local.
 
+Use `docs/runtime-architecture-foundation.md` as the canonical RUI architecture
+source-of-truth. This gap analysis remains a planning and comparison document.
+
 ## Public Comparison Anchors
 
 Warp publishes the `warpui_core` and `warpui` crates in `warpdotdev/warp`. The

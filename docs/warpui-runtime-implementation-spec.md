@@ -5,6 +5,10 @@ coordination document for child issues rather than a request to copy WarpUI. RUI
 should stay native to this repository and use public WarpUI signals only as a
 runtime maturity benchmark.
 
+The canonical RUI runtime architecture source-of-truth is
+`docs/runtime-architecture-foundation.md`; this document only coordinates
+implementation workstreams.
+
 ## Design Principles
 
 - Keep ownership explicit: the runtime should state whether data belongs to the
