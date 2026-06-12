@@ -1,10 +1,16 @@
 # RUI Architecture
 
-This document describes the architecture of RUI, a GPU-accelerated UI framework for Rust.
+This document describes the current architecture of RUI, a GPU-accelerated UI
+framework for Rust. The canonical runtime direction, source-of-truth map, and
+future `Presenter` / `FramePipeline` boundaries live in
+[`runtime-architecture-foundation.md`](runtime-architecture-foundation.md).
 
 ## Overview
 
-RUI is designed with a layered architecture that separates concerns and enables high-performance GPU rendering.
+RUI is designed as a native Rust UI runtime: `AppContext` owns framework state,
+`View` values build transient element trees, elements produce layout and scene
+output, renderers consume backend-neutral scenes, and platform adapters own
+native windows and renderer attachments.
 
 ```mermaid
 graph TB

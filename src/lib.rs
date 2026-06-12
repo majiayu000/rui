@@ -5,11 +5,15 @@
 //!
 //! # Architecture
 //!
-//! RUI follows a three-layer architecture:
+//! RUI follows a native runtime architecture:
 //!
-//! 1. **Core Layer** - Basic types (geometry, colors, styles)
-//! 2. **Element Layer** - UI primitives (Div, Text, Image)
-//! 3. **Renderer Layer** - GPU rendering (Metal/Vulkan)
+//! 1. **App Runtime** - AppContext, views, entities, redraw scheduling
+//! 2. **Element Tree** - Layout, events, accessibility, and scene output
+//! 3. **Renderer Adapter** - Backend-neutral scenes to GPU or recording targets
+//! 4. **Platform Adapter** - Native windows, events, clipboard, DPI, targets
+//!
+//! See `docs/runtime-architecture-foundation.md` for the runtime boundary
+//! design.
 //!
 //! # Example
 //!

@@ -166,7 +166,11 @@ fn feature_card(title: &str, description: &str, color: u32) -> Div {
 
 ## Architecture
 
-RUI follows a three-layer architecture:
+RUI follows a native runtime architecture: `AppContext` owns framework state,
+`View` values build transient element trees, elements produce layout and scene
+output, renderers consume backend-neutral scenes, and platform adapters own
+native windows and renderer attachments. The canonical runtime foundation is in
+[`docs/runtime-architecture-foundation.md`](docs/runtime-architecture-foundation.md).
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -189,6 +193,9 @@ RUI follows a three-layer architecture:
 │  ┌─────────────────────────────────────────────────────┐    │
 │  │              Metal GPU Renderer (macOS)              │    │
 │  └─────────────────────────────────────────────────────┘    │
+├─────────────────────────────────────────────────────────────┤
+│                      Platform Layer                          │
+│  Native window, events, clipboard, DPI, renderer target       │
 └─────────────────────────────────────────────────────────────┘
 ```
 
