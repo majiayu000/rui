@@ -163,6 +163,30 @@ fn renderer_errors_flow_through_platform_window_error() {
 }
 
 #[test]
+fn platform_boundary_docs_define_backend_readiness_gates() {
+    let docs = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("docs/platform-window-boundary.md"),
+    )
+    .expect("platform boundary docs should be readable");
+
+    for required in [
+        "## Backend Readiness Matrix",
+        "macOS/AppKit + Metal",
+        "Headless",
+        "Windows",
+        "Linux",
+        "Web/WASM",
+        "## Backend Adoption Gates",
+        "UnsupportedPlatformWindow",
+    ] {
+        assert!(
+            docs.contains(required),
+            "platform boundary docs should include {required}"
+        );
+    }
+}
+
+#[test]
 fn renderer_sources_do_not_depend_on_native_window_apis() {
     let mut files = Vec::new();
     collect_rs_files(
@@ -196,7 +220,7 @@ fn renderer_sources_do_not_depend_on_native_window_apis() {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "metal"))]
 #[test]
 fn platform_macos_backend_reports_implemented_window_features() {
     let backend = rui::platform::mac::MacWindowBackend::new();

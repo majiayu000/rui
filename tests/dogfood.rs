@@ -268,6 +268,37 @@ fn native_dogfood_profile_body_is_valid_json_contract() {
     assert_eq!(parsed["driver"], "scripts/native_dogfood_macos.sh");
 }
 
+#[test]
+fn runtime_roadmap_separates_product_pressure_readiness_gates() {
+    let roadmap = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("docs/advanced-ui-runtime-roadmap.md"),
+    )
+    .expect("runtime roadmap should be readable");
+
+    for required in [
+        "## Product Pressure Readiness Gates",
+        "Finite example smoke",
+        "Repository dogfood",
+        "Native macOS dogfood",
+        "Benchmark policy",
+        "Benchmark report",
+        "Docs/API drift",
+        "`cargo test example_smoke`",
+        "`cargo test dogfood`",
+        "`cargo test benchmark_config`",
+        "`cargo test --test docs_api_drift`",
+        "`scripts/native_dogfood_macos.sh`",
+        "`cargo bench --bench runtime_baselines`",
+        "performance enforcement remains advisory while `enforcement_enabled` is false",
+    ] {
+        assert!(
+            roadmap.contains(required),
+            "runtime roadmap should document product-pressure gate `{required}`"
+        );
+    }
+}
+
 fn fixture_data() -> LocalDogfoodData {
     LocalDogfoodData {
         package_name: String::from("rui"),

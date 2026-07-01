@@ -174,6 +174,26 @@ ScrollView semantics: #40, #44, #79, #80, #81, #82, and #83.
 | Platform contract | `cargo test platform_window`. |
 | Accessibility | `cargo test accessibility`. |
 
+## Product Pressure Readiness Gates
+
+Finite checks prove that a known path works. Product-pressure gates prove that
+the runtime remains honest under repository-owned data, longer interaction
+flows, explicit telemetry policy, and docs/API drift checks.
+
+| Gate | Command | Scope | Release interpretation |
+| --- | --- | --- | --- |
+| Finite example smoke | `cargo test example_smoke` | Headless one-frame examples and missing-capture diagnostics. | Blocking for example regressions, not sufficient for production readiness. |
+| Repository dogfood | `cargo test dogfood` | Local repository data, input/filter workflow, panel switching, refresh, accessibility labels, and native dogfood script/profile contract. | Blocking for dogfood contract regressions. |
+| Native macOS dogfood | `scripts/native_dogfood_macos.sh` | Local-only GUI automation: type text, submit, minimize, reopen, profile output, and finite exit. | Manual/local gate before stronger native runtime claims; not CI-safe. |
+| Benchmark policy | `cargo test benchmark_config` | Baseline schema, required runtime categories, threshold policy, and noise classification. | Blocking for policy/schema drift; performance enforcement remains advisory while `enforcement_enabled` is false. |
+| Benchmark report | `cargo bench --bench runtime_baselines` | Layout, text, scene build, pointer dispatch, and recording throughput measurements. | Advisory until stable CI hardware and calibration history justify enforcement. |
+| Docs/API drift | `cargo test --test docs_api_drift` | Public API docs and validation command references. | Blocking for docs/API mismatch. |
+
+Do not use a single native dogfood pass, a single benchmark run, or finite smoke
+output as a production-grade runtime claim. Stronger claims require the relevant
+gate above to pass in the current branch and the claim text to name any pending
+validation.
+
 ## Readiness Language
 
 Use precise language for the current state:

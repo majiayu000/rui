@@ -46,3 +46,35 @@ dropping the final paint.
 
 Non-macOS platforms intentionally use explicit unsupported errors until a real
 backend is implemented and covered by the shared platform contract tests.
+
+## Backend Readiness Matrix
+
+| Backend | Current status | Required before supported |
+| --- | --- | --- |
+| macOS/AppKit + Metal | Active default runtime backend | Keep lifecycle, input, DPI, resize, focus, clipboard, renderer attachment, redraw, and unsupported multi-window tests green. |
+| Headless | Active deterministic test backend | Keep layout, input dispatch, accessibility extraction, snapshots, frame recording, and explicit missing-capture errors green. |
+| Windows | Unsupported | Add a native lifecycle loop, input mapping, DPI/resize/focus events, clipboard integration, renderer attachment, unsupported error coverage, and shared platform tests. |
+| Linux | Unsupported | Add a native lifecycle loop, input mapping, DPI/resize/focus events, clipboard integration, renderer attachment, unsupported error coverage, and shared platform tests. |
+| Web/WASM | Unsupported | Add browser lifecycle integration, pointer/key/text input mapping, resize/focus events, clipboard policy, renderer target attachment, unsupported error coverage, and shared platform tests. |
+
+Unsupported backends must stay explicit. `UnsupportedPlatformWindow` is valid
+for diagnostics and tests, but it is not a product backend and must not be used
+to claim support for a platform.
+
+## Backend Adoption Gates
+
+New backend implementation issues should not be closed until the backend has:
+
+1. A real platform event source for lifecycle, input, DPI, resize, focus, and
+   close handling.
+2. Clipboard read/write behavior or explicit unsupported errors for clipboard
+   operations.
+3. A renderer attachment that targets the active renderer without importing
+   native window APIs into renderer modules.
+4. Deterministic tests for `PlatformWindowFeatures`, unsupported errors,
+   redraw classification, and renderer attachment diagnostics.
+5. Headless or shared runtime tests proving that backend differences do not
+   change layout, event dispatch, accessibility extraction, or redraw
+   completion semantics.
+6. Documentation that separates active support, unsupported diagnostics, and
+   planned adoption work.

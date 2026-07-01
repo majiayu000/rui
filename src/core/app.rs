@@ -290,25 +290,30 @@ impl App {
     }
 
     /// Run the application with a root view builder
+    #[cfg_attr(
+        not(all(target_os = "macos", feature = "metal")),
+        allow(unused_variables)
+    )]
     pub fn run<F, E>(mut self, build_root: F)
     where
         F: FnMut(&mut AppContext) -> E + 'static,
         E: Element + 'static,
     {
-        self.context.running = true;
-
-        // Create the main window
-        let window_options = WindowOptions::default().title("RUI Application");
-        let _window_id = open_main_window(&mut self.context, window_options);
-
-        // Start the platform-specific event loop
-        #[cfg(target_os = "macos")]
+        #[cfg(all(target_os = "macos", feature = "metal"))]
         {
+            self.context.running = true;
+
+            // Create the main window
+            let window_options = WindowOptions::default().title("RUI Application");
+            let _window_id = open_main_window(&mut self.context, window_options);
+
+            // Start the platform-specific event loop
             crate::platform::mac::run_app(self.context, build_root);
         }
 
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(all(target_os = "macos", feature = "metal")))]
         {
+            self.context.running = true;
             panic!("{}", unsupported_platform_error());
         }
     }
@@ -324,45 +329,54 @@ impl App {
     }
 
     /// Run with custom window options
+    #[cfg_attr(
+        not(all(target_os = "macos", feature = "metal")),
+        allow(unused_variables)
+    )]
     pub fn run_with_options<F, E>(mut self, options: WindowOptions, build_root: F)
     where
         F: FnMut(&mut AppContext) -> E + 'static,
         E: Element + 'static,
     {
-        self.context.running = true;
-
-        let _window_id = open_main_window(&mut self.context, options.clone());
-
-        #[cfg(target_os = "macos")]
+        #[cfg(all(target_os = "macos", feature = "metal"))]
         {
+            self.context.running = true;
+
+            let _window_id = open_main_window(&mut self.context, options.clone());
+
             crate::platform::mac::run_app_with_options(self.context, build_root, options);
         }
 
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(all(target_os = "macos", feature = "metal")))]
         {
+            self.context.running = true;
             panic!("{}", unsupported_platform_error());
         }
     }
 
     /// Run a long-lived stateful view with custom window options.
+    #[cfg_attr(
+        not(all(target_os = "macos", feature = "metal")),
+        allow(unused_variables)
+    )]
     pub fn run_view_with_options<V>(mut self, options: WindowOptions, view: V)
     where
         V: View,
         V::Element: Element + 'static,
     {
-        self.context.running = true;
-
-        let _window_id = open_main_window(&mut self.context, options.clone());
-        let view_marker = self.context.create(());
-        let view_entity = Entity::<V>::new(view_marker.id());
-        let notifier = ViewNotifier::new();
-        self.context
-            .set_runtime_view_notifier(view_entity.id(), notifier.clone());
-
-        let mut runtime_view = RuntimeView::new(view_entity, notifier, view);
-
-        #[cfg(target_os = "macos")]
+        #[cfg(all(target_os = "macos", feature = "metal"))]
         {
+            self.context.running = true;
+
+            let _window_id = open_main_window(&mut self.context, options.clone());
+            let view_marker = self.context.create(());
+            let view_entity = Entity::<V>::new(view_marker.id());
+            let notifier = ViewNotifier::new();
+            self.context
+                .set_runtime_view_notifier(view_entity.id(), notifier.clone());
+
+            let mut runtime_view = RuntimeView::new(view_entity, notifier, view);
+
             crate::platform::mac::run_app_with_options(
                 self.context,
                 move |context| runtime_view.render(context),
@@ -370,13 +384,15 @@ impl App {
             );
         }
 
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(all(target_os = "macos", feature = "metal")))]
         {
+            self.context.running = true;
             panic!("{}", unsupported_platform_error());
         }
     }
 }
 
+#[cfg(all(target_os = "macos", feature = "metal"))]
 fn open_main_window(context: &mut AppContext, options: WindowOptions) -> WindowId {
     match context.open_window(options) {
         Ok(window_id) => window_id,
@@ -384,7 +400,7 @@ fn open_main_window(context: &mut AppContext, options: WindowOptions) -> WindowI
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(all(target_os = "macos", feature = "metal")))]
 fn unsupported_platform_error() -> crate::platform::window::PlatformWindowError {
     crate::platform::window::PlatformWindowError::unsupported(
         std::env::consts::OS,

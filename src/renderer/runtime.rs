@@ -385,7 +385,7 @@ mod tests {
         assert!(renderer.frames().is_empty());
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(all(target_os = "macos", feature = "metal"))]
     #[test]
     fn metal_renderer_implements_renderer_trait() {
         fn assert_renderer<R: Renderer<Target = metal::MetalDrawableRef>>() {}
