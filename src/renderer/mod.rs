@@ -9,7 +9,7 @@ pub mod text;
 mod text_cluster_position;
 mod text_shaping;
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "metal"))]
 pub mod metal;
 
 pub use primitives::{PathVertex, Primitive, PrimitiveKind};

@@ -2,7 +2,7 @@
 
 pub mod window;
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "metal"))]
 pub mod mac;
 
 pub use window::{

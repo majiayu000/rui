@@ -4,12 +4,12 @@ use crate::core::ElementId;
 use crate::core::action::route_key_event;
 use crate::core::app::{AppContext, RedrawSource};
 use crate::core::event::{Event, KeyCode, KeyEvent, Modifiers, MouseButton, ScrollEvent};
-use crate::core::geometry::{Bounds, Point};
+use crate::core::frame_pipeline::FramePipeline;
+use crate::core::geometry::Point;
+use crate::core::presenter::Presenter;
 use crate::core::text_editing::TextInputEvent;
 use crate::core::window::WindowOptions;
-use crate::elements::element::{
-    Element, EventContext, LayoutContext, PaintContext, PointerEvent, PointerEventKind,
-};
+use crate::elements::element::{Element, EventContext, PointerEvent, PointerEventKind};
 use crate::platform::mac::window::create_window;
 use crate::platform::window::{
     PlatformImeEvent, PlatformInputEvent, PlatformMouseEvent, PlatformMouseEventKind,
@@ -17,13 +17,11 @@ use crate::platform::window::{
 };
 use crate::renderer::metal::MetalRenderer;
 use crate::renderer::{
-    RendererBatchDiagnostics, RendererError, RendererFramePhaseDurations,
-    RendererTelemetryRecorder, Scene,
+    RendererBatchDiagnostics, RendererError, RendererFramePhaseDurations, RendererTelemetryRecorder,
 };
 use objc2::MainThreadMarker;
 use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
 use std::time::Instant;
-use taffy::prelude::*;
 
 const NATIVE_DOGFOOD_INPUT_ID: ElementId = ElementId(29_001);
 
@@ -98,18 +96,11 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
         // Activate the application
         app.activate();
 
-        // Create layout engine
-        let mut taffy: TaffyTree<crate::core::ElementId> = TaffyTree::new();
-
-        // Create scene
-        let mut scene = Scene::new();
+        let mut presenter = Presenter::new(options.size);
 
         // Main run loop
-        let mut viewport_size = options.size;
+        let mut viewport_size = presenter.viewport_size();
         let mut last_viewport_size = viewport_size;
-        let mut focused_element: Option<crate::core::ElementId> = None;
-        let mut last_pointer_hit_target: Option<crate::core::ElementId> = None;
-        let mut pointer_capture_target: Option<crate::core::ElementId> = None;
         let mut profile_recorder = RendererTelemetryRecorder::enabled_from_env();
         let mut native_dogfood_automation =
             NativeDogfoodAutomation::load_from_environment(options.size);
@@ -121,6 +112,7 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
                 Ok(size) => size,
                 Err(err) => panic!("failed to read platform window size: {}", err),
             };
+            presenter.set_viewport_size(viewport_size);
 
             let mut pointer_events = Vec::new();
             let mut scroll_events = Vec::new();
@@ -179,7 +171,7 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
                 schedule_platform_redraw(&window, &mut context, RedrawSource::PlatformResize);
             }
 
-            context.consume_runtime_view_notification();
+            FramePipeline::prepare_frame(&mut context);
 
             if !context.dirty && !context.needs_rebuild && context.pending_updates.is_empty() {
                 if !context.is_running() {
@@ -188,42 +180,17 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
                 continue;
             }
 
-            if context.needs_rebuild || !context.pending_updates.is_empty() {
-                context.pending_updates.clear();
-                context.needs_rebuild = false;
-                root = build_root(&mut context);
-                if !context.pending_updates.is_empty() {
-                    context.needs_rebuild = true;
-                }
-            }
+            FramePipeline::rebuild_if_needed(&mut context, &mut root, &mut build_root);
 
-            // Rebuild layout tree each frame we render to avoid unbounded growth
             let layout_started_at = Instant::now();
-            taffy.clear();
-
-            // Layout phase
-            let mut layout_cx = LayoutContext::new(&mut taffy, viewport_size);
-            let root_node = root.layout(&mut layout_cx);
-
-            // Compute layout
-            taffy
-                .compute_layout(
-                    root_node,
-                    taffy::Size {
-                        width: AvailableSpace::Definite(viewport_size.width),
-                        height: AvailableSpace::Definite(viewport_size.height),
-                    },
-                )
-                .expect("Layout failed");
-
-            // Get computed bounds
-            let layout = taffy.layout(root_node).expect("No layout");
-            let root_bounds = Bounds::from_xywh(
-                layout.location.x,
-                layout.location.y,
-                layout.size.width,
-                layout.size.height,
-            );
+            let root_bounds = {
+                let (taffy, _) = presenter.frame_surfaces_mut();
+                match FramePipeline::layout_root(&mut root, taffy, viewport_size) {
+                    Ok(bounds) => bounds,
+                    Err(err) => panic!("Layout failed: {err}"),
+                }
+            };
+            presenter.set_root_bounds(root_bounds);
             phases.layout_ns = layout_started_at.elapsed().as_nanos();
 
             let dispatch_started_at = Instant::now();
@@ -239,7 +206,7 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
                 let evt = if is_focused {
                     Event::Focus(crate::core::event::FocusEvent { focused: true })
                 } else {
-                    focused_element = None;
+                    presenter.set_focused_element(None);
                     Event::Blur(crate::core::event::FocusEvent { focused: false })
                 };
                 root.handle_window_event(&evt);
@@ -253,53 +220,58 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
             }
 
             if let Some(focused) = automation_focused_element {
-                focused_element = Some(focused);
+                presenter.set_focused_element(Some(focused));
             }
 
-            let mut event_cx = EventContext::new(root_bounds, &taffy, &mut focused_element);
-
             for event in &pointer_events {
-                let hit_target = scene.hit_test(event.position);
-                let dispatch_target = pointer_capture_target.or(hit_target);
-                let previous_target = if matches!(event.kind, PointerEventKind::Move) {
-                    last_pointer_hit_target
-                } else {
-                    None
+                let hit_target = presenter.hit_test(event.position);
+                let dispatch_target = presenter.pointer_dispatch_target(hit_target);
+                let previous_target = presenter.previous_pointer_target(event.kind);
+                let (stopped, redraw_requested) = {
+                    let (root_bounds, taffy, focused_element) = presenter.event_context_parts_mut();
+                    let mut event_cx = EventContext::new(root_bounds, taffy, focused_element);
+                    event_cx.set_hit_target(dispatch_target);
+                    event_cx.set_previous_hit_target(previous_target);
+
+                    let result = root.dispatch_pointer_event(&mut event_cx, event);
+                    (result.is_stopped(), event_cx.redraw_requested())
                 };
 
-                event_cx.set_hit_target(dispatch_target);
-                event_cx.set_previous_hit_target(previous_target);
+                presenter.update_pointer_tracking(event.kind, stopped, dispatch_target, hit_target);
 
-                let result = root.dispatch_pointer_event(&mut event_cx, event);
-
-                match event.kind {
-                    PointerEventKind::Down if result.is_stopped() => {
-                        pointer_capture_target = dispatch_target;
-                    }
-                    PointerEventKind::Up => {
-                        pointer_capture_target = None;
-                    }
-                    PointerEventKind::Move => {
-                        last_pointer_hit_target = hit_target;
-                    }
-                    PointerEventKind::Down => {}
+                if redraw_requested {
+                    schedule_platform_redraw(&window, &mut context, RedrawSource::Element);
                 }
             }
 
-            if event_cx.redraw_requested() {
-                schedule_platform_redraw(&window, &mut context, RedrawSource::Element);
-            }
-
             for event in &scroll_events {
-                root.handle_scroll_event(&mut event_cx, event);
+                let redraw_requested = {
+                    let (root_bounds, taffy, focused_element) = presenter.event_context_parts_mut();
+                    let mut event_cx = EventContext::new(root_bounds, taffy, focused_element);
+                    root.handle_scroll_event(&mut event_cx, event);
+                    event_cx.redraw_requested()
+                };
+                if redraw_requested {
+                    schedule_platform_redraw(&window, &mut context, RedrawSource::Element);
+                }
             }
 
             for event in &ordered_input_events {
                 match event {
                     OrderedInputEvent::Key { is_down, event } => {
-                        if should_forward_key_event_to_tree(*is_down)
-                            && route_key_event(&mut root, &mut context, &mut event_cx, event)
-                        {
+                        let (handled, redraw_requested) =
+                            if should_forward_key_event_to_tree(*is_down) {
+                                let (root_bounds, taffy, focused_element) =
+                                    presenter.event_context_parts_mut();
+                                let mut event_cx =
+                                    EventContext::new(root_bounds, taffy, focused_element);
+                                let handled =
+                                    route_key_event(&mut root, &mut context, &mut event_cx, event);
+                                (handled, event_cx.redraw_requested())
+                            } else {
+                                (false, false)
+                            };
+                        if handled || redraw_requested {
                             schedule_platform_redraw(
                                 &window,
                                 &mut context,
@@ -308,7 +280,15 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
                         }
                     }
                     OrderedInputEvent::Text(event) => {
-                        if root.handle_text_input_event(&mut event_cx, event) {
+                        let (handled, redraw_requested) = {
+                            let (root_bounds, taffy, focused_element) =
+                                presenter.event_context_parts_mut();
+                            let mut event_cx =
+                                EventContext::new(root_bounds, taffy, focused_element);
+                            let handled = root.handle_text_input_event(&mut event_cx, event);
+                            (handled, event_cx.redraw_requested())
+                        };
+                        if handled || redraw_requested {
                             schedule_platform_redraw(
                                 &window,
                                 &mut context,
@@ -326,10 +306,10 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
 
             // Paint phase
             let paint_started_at = Instant::now();
-            scene.clear();
-            let mut paint_cx = PaintContext::new(&mut scene, root_bounds, &taffy);
-            root.paint(&mut paint_cx);
-            scene.finish();
+            {
+                let (taffy, scene) = presenter.paint_surfaces_mut();
+                FramePipeline::paint_root(&mut root, taffy, scene, root_bounds);
+            }
             phases.paint_ns = paint_started_at.elapsed().as_nanos();
 
             // Get next drawable from the platform window renderer attachment
@@ -344,7 +324,7 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
                     .as_nanos()
             });
             if let Some(metal_drawable) = metal_drawable
-                && let Err(err) = renderer.render(&scene, metal_drawable, viewport_size)
+                && let Err(err) = renderer.render(presenter.scene(), metal_drawable, viewport_size)
             {
                 panic!("renderer failed: {}", err);
             }
@@ -357,12 +337,13 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
                     viewport_size,
                     phases,
                     &diagnostics,
-                    RendererBatchDiagnostics::for_metal_scene(&scene),
+                    RendererBatchDiagnostics::for_metal_scene(presenter.scene()),
                 );
                 eprintln!("{}", telemetry.to_json_line());
             }
 
-            context.complete_redraw_frame();
+            FramePipeline::finish_frame(&mut context);
+            presenter.complete_frame();
 
             // Check if we should quit
             if !context.is_running() {

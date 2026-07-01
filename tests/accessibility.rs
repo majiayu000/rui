@@ -5,9 +5,10 @@ use rui::advanced_ui::{
 };
 use rui::core::ElementId;
 use rui::core::accessibility::{
-    AccessibilityAction, AccessibilityAnnouncementKind, AccessibilityBridge, AccessibilityContext,
-    AccessibilityError, AccessibilityNode, AccessibilityRole, AccessibilityScrollPosition,
-    AccessibilityTextRange, AccessibilityTree, UnsupportedAccessibilityBridge,
+    AccessibilityAction, AccessibilityAnnouncement, AccessibilityAnnouncementKind,
+    AccessibilityBridge, AccessibilityContext, AccessibilityError, AccessibilityNode,
+    AccessibilityRole, AccessibilityScrollPosition, AccessibilityTextRange, AccessibilityTree,
+    UnsupportedAccessibilityBridge,
 };
 use rui::core::event::{KeyCode, KeyEvent, Modifiers, MouseButton, ScrollEvent};
 use rui::core::geometry::{Bounds, Point, Size};
@@ -675,13 +676,78 @@ fn accessibility_unsupported_bridge_returns_explicit_error() {
     );
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "metal"))]
 #[test]
 fn accessibility_macos_bridge_reports_missing_native_host() {
     let mut bridge = rui::platform::mac::MacAccessibilityBridge::new();
     let tree = AccessibilityTree::default();
     let error = match bridge.publish_tree(&tree) {
         Ok(_) => panic!("macOS bridge without native host should fail"),
+        Err(err) => err,
+    };
+    assert!(matches!(error, AccessibilityError::BridgeFailure { .. }));
+}
+
+#[cfg(all(target_os = "macos", feature = "metal"))]
+#[test]
+fn accessibility_macos_bridge_maps_semantic_tree_to_native_snapshot() {
+    let root_id = ElementId::new();
+    let child_id = ElementId::new();
+    let child = AccessibilityNode::label_required(child_id, AccessibilityRole::Text, "Status")
+        .expect("child label should be valid")
+        .with_value("Ready");
+    let root = AccessibilityNode::label_required(root_id, AccessibilityRole::Checkbox, "Sync")
+        .expect("root label should be valid")
+        .with_value("checked")
+        .with_enabled(false)
+        .with_read_only(true)
+        .with_invalid(true)
+        .with_focused(true)
+        .with_selected(true)
+        .with_checked(true)
+        .with_actions([AccessibilityAction::Activate, AccessibilityAction::SetValue])
+        .with_child(child);
+
+    let bridge = rui::platform::mac::MacAccessibilityBridge::new();
+    let snapshot = bridge.snapshot_tree(&AccessibilityTree::new(vec![root]));
+    let node = match snapshot.nodes().first() {
+        Some(node) => node,
+        None => panic!("snapshot should include root node"),
+    };
+
+    assert_eq!(node.id(), root_id);
+    assert_eq!(node.native_role(), "AXCheckBox");
+    assert_eq!(node.label(), Some("Sync"));
+    assert_eq!(node.value(), Some("checked"));
+    assert!(!node.enabled());
+    assert!(node.read_only());
+    assert!(node.invalid());
+    assert!(node.focused());
+    assert_eq!(node.selected(), Some(true));
+    assert_eq!(node.checked(), Some(true));
+    assert_eq!(node.native_actions(), ["AXPress", "AXSetValue"]);
+    assert_eq!(node.children().len(), 1);
+    assert_eq!(node.children()[0].id(), child_id);
+    assert_eq!(node.children()[0].native_role(), "AXStaticText");
+    assert_eq!(node.children()[0].label(), Some("Status"));
+    assert_eq!(node.children()[0].value(), Some("Ready"));
+}
+
+#[cfg(all(target_os = "macos", feature = "metal"))]
+#[test]
+fn accessibility_macos_bridge_maps_announcements_and_fails_without_host() {
+    let id = ElementId::new();
+    let announcement =
+        AccessibilityAnnouncement::new(id, AccessibilityAnnouncementKind::FocusChanged, "Focused");
+    let mut bridge = rui::platform::mac::MacAccessibilityBridge::new();
+    let snapshot = bridge.snapshot_announcement(&announcement);
+
+    assert_eq!(snapshot.node_id(), id);
+    assert_eq!(snapshot.native_notification(), "AXFocusedUIElementChanged");
+    assert_eq!(snapshot.message(), "Focused");
+
+    let error = match bridge.announce(&announcement) {
+        Ok(_) => panic!("macOS bridge without native host should fail announcements"),
         Err(err) => err,
     };
     assert!(matches!(error, AccessibilityError::BridgeFailure { .. }));

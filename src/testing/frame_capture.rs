@@ -38,12 +38,12 @@ pub fn capture_frame_with_backend(
     backend.capture_frame(scene, viewport_size)
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "metal"))]
 pub struct MetalFrameCaptureBackend {
     renderer: crate::renderer::metal::MetalRenderer,
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "metal"))]
 impl MetalFrameCaptureBackend {
     pub fn new() -> Result<Self, RendererError> {
         Ok(Self {
@@ -52,7 +52,7 @@ impl MetalFrameCaptureBackend {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "metal"))]
 impl FrameCaptureBackend for MetalFrameCaptureBackend {
     fn capture_frame(
         &mut self,
