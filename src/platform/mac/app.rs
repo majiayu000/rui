@@ -113,6 +113,7 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
                 Err(err) => panic!("failed to read platform window size: {}", err),
             };
             presenter.set_viewport_size(viewport_size);
+            context.set_viewport_size(viewport_size);
 
             let mut pointer_events = Vec::new();
             let mut scroll_events = Vec::new();
