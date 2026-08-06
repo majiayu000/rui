@@ -5,7 +5,7 @@ use crate::core::action::route_key_event;
 use crate::core::app::{AppContext, RedrawSource};
 use crate::core::event::{Event, KeyCode, KeyEvent, Modifiers, MouseButton, ScrollEvent};
 use crate::core::frame_pipeline::FramePipeline;
-use crate::core::geometry::Point;
+use crate::core::geometry::{Point, Size};
 use crate::core::presenter::Presenter;
 use crate::core::text_editing::TextInputEvent;
 use crate::core::window::WindowOptions;
@@ -100,6 +100,7 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
 
         // Main run loop
         let mut viewport_size = presenter.viewport_size();
+        context.set_viewport_size(viewport_size);
         let mut last_viewport_size = viewport_size;
         let mut profile_recorder = RendererTelemetryRecorder::enabled_from_env();
         let mut native_dogfood_automation =
@@ -112,9 +113,6 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
                 Ok(size) => size,
                 Err(err) => panic!("failed to read platform window size: {}", err),
             };
-            presenter.set_viewport_size(viewport_size);
-            context.set_viewport_size(viewport_size);
-
             let mut pointer_events = Vec::new();
             let mut scroll_events = Vec::new();
             let mut ordered_input_events = Vec::new();
@@ -168,7 +166,13 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
                 }
             }
 
-            if viewport_size != last_viewport_size {
+            let viewport_changed = synchronize_viewport_after_platform_events(
+                &mut presenter,
+                &mut context,
+                viewport_size,
+                last_viewport_size,
+            );
+            if viewport_changed {
                 schedule_platform_redraw(&window, &mut context, RedrawSource::PlatformResize);
             }
 
@@ -195,7 +199,7 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
             phases.layout_ns = layout_started_at.elapsed().as_nanos();
 
             let dispatch_started_at = Instant::now();
-            if viewport_size != last_viewport_size {
+            if viewport_changed {
                 root.handle_window_event(&Event::WindowResize {
                     width: viewport_size.width,
                     height: viewport_size.height,
@@ -352,6 +356,22 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
             }
         }
     }
+}
+
+fn synchronize_viewport_after_platform_events(
+    presenter: &mut Presenter,
+    context: &mut AppContext,
+    viewport_size: Size,
+    last_viewport_size: Size,
+) -> bool {
+    if viewport_size == last_viewport_size {
+        return false;
+    }
+
+    presenter.set_viewport_size(viewport_size);
+    context.set_viewport_size(viewport_size);
+    context.request_rebuild();
+    true
 }
 
 fn mark_platform_event_redraw(event: &PlatformWindowEvent, context: &mut AppContext) {
@@ -597,6 +617,35 @@ fn should_forward_key_event_to_tree(is_down: bool) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_viewport_resize_sync_requests_one_rebuild() {
+        let initial_size = Size::new(320.0, 240.0);
+        let resized = Size::new(640.0, 480.0);
+        let mut presenter = Presenter::new(initial_size);
+        let mut context = AppContext::new();
+        context.set_viewport_size(initial_size);
+        context.needs_rebuild = false;
+
+        assert!(synchronize_viewport_after_platform_events(
+            &mut presenter,
+            &mut context,
+            resized,
+            initial_size,
+        ));
+        assert_eq!(presenter.viewport_size(), resized);
+        assert_eq!(context.viewport_size(), resized);
+        assert!(context.needs_rebuild);
+
+        context.needs_rebuild = false;
+        assert!(!synchronize_viewport_after_platform_events(
+            &mut presenter,
+            &mut context,
+            resized,
+            resized,
+        ));
+        assert!(!context.needs_rebuild);
+    }
 
     #[test]
     fn only_key_down_events_are_forwarded_to_elements() {

@@ -193,11 +193,13 @@ where
     pub fn resize(&mut self, viewport_size: Size) -> bool {
         self.presenter.set_viewport_size(viewport_size);
         self.context.set_viewport_size(viewport_size);
+        self.context.request_rebuild();
+        FramePipeline::prepare_frame(&mut self.context);
+        FramePipeline::rebuild_if_needed(&mut self.context, &mut self.root, &mut self.build_root);
         let handled = self.root.handle_window_event(&Event::WindowResize {
             width: viewport_size.width,
             height: viewport_size.height,
         });
-        self.context.request_rebuild();
         handled
     }
 

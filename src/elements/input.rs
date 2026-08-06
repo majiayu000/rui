@@ -685,6 +685,11 @@ impl Element for Input {
             return ActionOutcome::Ignored;
         };
 
+        if *action == StandardAction::Cancel {
+            self.emit_cancel();
+            return ActionOutcome::handled("input");
+        }
+
         if *action == StandardAction::SelectAll {
             let result = self
                 .sync_editor_from_public_state_if_needed()

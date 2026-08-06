@@ -1,9 +1,13 @@
 use rui::advanced_ui::{Button, Checkbox, Flex, column};
 use rui::core::accessibility::AccessibilityRole;
+use rui::core::event::Event;
 use rui::core::{AppContext, ElementId, Point, Size, View, ViewContext};
+use rui::elements::Element;
+use rui::elements::element::{LayoutContext, PaintContext};
 use rui::testing::{HeadlessError, mount, mount_view};
 use std::cell::Cell;
 use std::rc::Rc;
+use taffy::prelude::NodeId;
 
 struct HeadlessCounterView {
     count: Rc<Cell<i32>>,
@@ -19,6 +23,38 @@ struct StateContractView {
     disabled_id: ElementId,
     read_only_id: ElementId,
     refresh_id: ElementId,
+}
+
+struct ResizeAwareElement {
+    button: Button,
+    resized: bool,
+    resize_deliveries: Rc<Cell<u32>>,
+    painted_resized_state: Rc<Cell<bool>>,
+}
+
+impl Element for ResizeAwareElement {
+    fn style(&self) -> &rui::core::style::Style {
+        self.button.style()
+    }
+
+    fn layout(&mut self, cx: &mut LayoutContext) -> NodeId {
+        self.button.layout(cx)
+    }
+
+    fn paint(&mut self, cx: &mut PaintContext) {
+        self.painted_resized_state.set(self.resized);
+        self.button.paint(cx);
+    }
+
+    fn handle_window_event(&mut self, event: &Event) -> bool {
+        if matches!(event, Event::WindowResize { .. }) {
+            self.resized = true;
+            self.resize_deliveries.set(self.resize_deliveries.get() + 1);
+            true
+        } else {
+            false
+        }
+    }
 }
 
 impl View for HeadlessCounterView {
@@ -257,6 +293,38 @@ fn headless_resize_rebuilds_with_latest_viewport_size() {
     }
 
     assert_eq!(render_width.get(), 240);
+}
+
+#[test]
+fn headless_resize_delivers_once_to_rebuilt_root_before_frame() {
+    let build_count = Rc::new(Cell::new(0));
+    let resize_deliveries = Rc::new(Cell::new(0));
+    let painted_resized_state = Rc::new(Cell::new(false));
+    let build_count_ref = Rc::clone(&build_count);
+    let resize_deliveries_ref = Rc::clone(&resize_deliveries);
+    let painted_resized_state_ref = Rc::clone(&painted_resized_state);
+    let mut session = mount_or_panic(Size::new(160.0, 80.0), move |_cx| {
+        build_count_ref.set(build_count_ref.get() + 1);
+        ResizeAwareElement {
+            button: Button::new("Resize aware"),
+            resized: false,
+            resize_deliveries: Rc::clone(&resize_deliveries_ref),
+            painted_resized_state: Rc::clone(&painted_resized_state_ref),
+        }
+    });
+
+    assert_eq!(build_count.get(), 1);
+    assert!(session.resize(Size::new(240.0, 120.0)));
+    assert_eq!(build_count.get(), 2);
+    assert_eq!(resize_deliveries.get(), 1);
+
+    if let Err(err) = session.frame() {
+        panic!("headless frame should preserve current-root resize state: {err}");
+    }
+
+    assert_eq!(build_count.get(), 2);
+    assert_eq!(resize_deliveries.get(), 1);
+    assert!(painted_resized_state.get());
 }
 
 #[test]

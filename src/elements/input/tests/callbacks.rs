@@ -1,4 +1,6 @@
 use super::support::*;
+use crate::core::action::route_key_event;
+use crate::core::app::AppContext;
 
 // ==================== on_change Callback Tests ====================
 
@@ -120,6 +122,45 @@ fn test_on_cancel_callback_called_by_escape_key() {
     assert!(!outcome.submitted);
     assert_eq!(inp.state.value, "draft");
     assert!(*called.borrow());
+}
+
+#[test]
+fn test_on_cancel_routed_escape_is_handled_once() {
+    let call_count = Rc::new(RefCell::new(0));
+    let count_clone = call_count.clone();
+
+    let mut inp = Input::new().value("draft").on_cancel(move || {
+        *count_clone.borrow_mut() += 1;
+    });
+    let input_id = inp.id;
+    let taffy = TaffyTree::new();
+    let mut focused = input_id;
+    let mut cx = focused_context(&taffy, &mut focused);
+    let mut app = AppContext::new();
+
+    let handled = route_key_event(&mut inp, &mut app, &mut cx, &key_event(KeyCode::Escape));
+
+    assert!(handled);
+    assert_eq!(*call_count.borrow(), 1);
+    assert_eq!(inp.state.value, "draft");
+}
+
+#[test]
+fn test_on_cancel_ignores_unfocused_input() {
+    let called = Rc::new(RefCell::new(false));
+    let called_clone = called.clone();
+
+    let mut inp = Input::new().on_cancel(move || {
+        *called_clone.borrow_mut() = true;
+    });
+    let taffy = TaffyTree::new();
+    let mut focused = None;
+    let mut cx = focused_context(&taffy, &mut focused);
+
+    let outcome = inp.handle_action(&mut cx, &ActionId::Standard(StandardAction::Cancel));
+
+    assert_eq!(outcome, ActionOutcome::Ignored);
+    assert!(!*called.borrow());
 }
 
 // ==================== on_focus Callback Tests ====================
