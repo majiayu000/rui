@@ -157,11 +157,12 @@ fn bench_text_multi_frame_layout() -> Result<f64, BenchError> {
     let viewport = Size::new(720.0, 480.0);
     let mut measurer = TextMeasureCache::new();
     let mut root = text_tree();
+    let mut taffy = TaffyTree::<ElementId>::new();
     let start = Instant::now();
     let mut checksum = 0.0f32;
 
     for _ in 0..FRAME_ITERATIONS {
-        let mut taffy = TaffyTree::<ElementId>::new();
+        taffy.clear();
         let root_node = {
             let mut cx = LayoutContext::with_text_measurer(&mut taffy, viewport, &mut measurer);
             root.layout(&mut cx)

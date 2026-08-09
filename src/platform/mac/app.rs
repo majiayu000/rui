@@ -3,7 +3,9 @@
 use crate::core::ElementId;
 use crate::core::app::{AppContext, RedrawSource};
 use crate::core::event::{KeyCode, KeyEvent, Modifiers, MouseButton, ScrollEvent};
-use crate::core::frame_pipeline::{FramePipeline, IdlePolicy};
+use crate::core::frame_pipeline::{
+    FramePipeline, FramePipelineError, FramePresentation, IdlePolicy,
+};
 use crate::core::geometry::{Point, Size};
 use crate::core::presenter::Presenter;
 use crate::core::text_editing::TextInputEvent;
@@ -96,7 +98,7 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
         // Activate the application
         app.activate();
 
-        let mut presenter = Presenter::new(options.size, root);
+        let mut presenter = Presenter::with_root(options.size, root);
 
         // Main run loop. AppContext is the single owner of viewport size; the
         // window options only provide its initial value.
@@ -200,6 +202,7 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
                 |presenter, context| {
                     resize_applied =
                         dispatch_native_events(presenter, context, &window, &frame_events);
+                    Ok(())
                 },
                 |presenter, _context| {
                     let drawable_wait_started_at = Instant::now();
@@ -212,15 +215,17 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
                             .saturating_duration_since(observed_at)
                             .as_nanos()
                     });
-                    if let Some(metal_drawable) = metal_drawable
-                        && let Err(err) =
-                            renderer.render(presenter.scene(), metal_drawable, viewport_size)
-                    {
-                        panic!("renderer failed: {}", err);
-                    }
+                    let presentation = match metal_drawable {
+                        Some(metal_drawable) => {
+                            renderer
+                                .render(presenter.scene(), metal_drawable, viewport_size)
+                                .map_err(|err| FramePipelineError::present(err.to_string()))?;
+                            FramePresentation::Presented(Some(renderer.diagnostics()))
+                        }
+                        None => FramePresentation::Deferred,
+                    };
                     phases.render_ns = render_started_at.elapsed().as_nanos();
-
-                    presenter.record_renderer_diagnostics(renderer.diagnostics());
+                    Ok(presentation)
                 },
             ) {
                 Ok(Some(outcome)) => outcome,
@@ -239,8 +244,9 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
             phases.layout_ns = outcome.durations.layout_ns;
             phases.dispatch_ns = outcome.durations.dispatch_ns;
             phases.paint_ns = outcome.durations.paint_ns;
+            let frame_committed = outcome.presented;
 
-            if let Some(recorder) = profile_recorder.as_mut() {
+            if frame_committed && let Some(recorder) = profile_recorder.as_mut() {
                 let diagnostics = match presenter.renderer_diagnostics() {
                     Some(diagnostics) => diagnostics,
                     None => panic!("renderer diagnostics were not recorded for this frame"),
@@ -255,6 +261,9 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
                 eprintln!("{}", telemetry.to_json_line());
             }
 
+            if mark_deferred_frame_for_retry(&mut context, frame_committed) {
+                request_automation_redraw(&window);
+            }
             // Check if we should quit
             if !context.is_running() {
                 break;
@@ -514,6 +523,10 @@ fn request_automation_redraw<W: PlatformWindow>(window: &W) {
     }
 }
 
+fn mark_deferred_frame_for_retry(context: &mut AppContext, presented: bool) -> bool {
+    !presented && context.request_platform_redraw_from(RedrawSource::PlatformRedraw)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -690,7 +703,7 @@ mod tests {
         let resized = Size::new(640.0, 480.0);
         let mut context = AppContext::new();
         context.set_viewport_size(initial_size);
-        let mut presenter = Presenter::new(initial_size, crate::elements::div());
+        let mut presenter = Presenter::with_root(initial_size, crate::elements::div());
 
         synchronize_viewport_after_platform_events(&mut context, resized, initial_size);
         let viewport_size = context.viewport_size();
@@ -698,7 +711,7 @@ mod tests {
             panic!("layout failed: {err}");
         }
         presenter.paint();
-        presenter.complete_frame(viewport_size);
+        presenter.complete_presented_frame(None);
 
         // The presenter keeps no viewport of its own, so the recorded frame can
         // only report what AppContext owns.
@@ -706,6 +719,15 @@ mod tests {
             Some(frame) => assert_eq!(frame.viewport_size, resized),
             None => panic!("expected a recorded frame"),
         }
+    }
+
+    #[test]
+    fn deferred_frame_requeues_the_platform_redraw() {
+        let mut context = AppContext::new();
+
+        assert!(mark_deferred_frame_for_retry(&mut context, false));
+        assert!(context.platform_redraw_pending());
+        assert!(!mark_deferred_frame_for_retry(&mut context, true));
     }
 
     #[test]

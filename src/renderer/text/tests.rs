@@ -328,6 +328,7 @@ fn rasterization_filters_control_characters_like_measurement() {
 fn empty_raster_requests_do_not_require_fonts() {
     let mut cache = TextRasterCache {
         measurer: TextMeasureCache::without_font(),
+        font_generation: 0,
         resources: RendererResourceCache::unbounded(RendererResourceKind::Glyph),
         entries: HashMap::new(),
     };
@@ -347,6 +348,7 @@ fn empty_raster_requests_do_not_require_fonts() {
 fn raster_cache_hits_do_not_require_reshaping() {
     let mut cache = TextRasterCache {
         measurer: TextMeasureCache::without_font(),
+        font_generation: 0,
         resources: RendererResourceCache::unbounded(RendererResourceKind::Glyph),
         entries: HashMap::new(),
     };
@@ -443,8 +445,10 @@ fn measure_caches_share_one_parsed_font_set() {
     let second = TextMeasureCache::new();
 
     if !first.has_fonts() {
-        // Without any installed candidate font the set stays retryable and is
-        // deliberately not shared; `system_fonts` covers that policy.
+        assert!(
+            !second.has_fonts(),
+            "font availability must not silently differ between adjacent cache constructions"
+        );
         return;
     }
     assert!(first.shares_fonts_with(&second));
@@ -454,6 +458,10 @@ fn measure_caches_share_one_parsed_font_set() {
 fn repeated_measurement_reuses_the_cached_metrics_entry() {
     let mut cache = TextMeasureCache::new();
     if !cache.has_fonts() {
+        assert_eq!(
+            cache.measure_single_line(request("cached once")),
+            Err(TextError::MissingFont)
+        );
         return;
     }
 
@@ -467,19 +475,122 @@ fn repeated_measurement_reuses_the_cached_metrics_entry() {
 }
 
 #[test]
-fn retained_metrics_stay_bounded_for_ever_changing_text() {
-    let mut cache = TextMeasureCache::new();
-    if !cache.has_fonts() {
-        return;
+fn a_long_lived_empty_cache_retries_font_loading() {
+    let mut cache = TextMeasureCache::retryable_without_font();
+    let result = cache.measure_single_line(request("retry font loading"));
+
+    if cache.has_fonts() {
+        assert!(result.is_ok());
+        assert!(!cache.fonts_retryable);
+    } else {
+        assert_eq!(result, Err(TextError::MissingFont));
+        assert!(cache.fonts_retryable);
     }
+}
+
+#[test]
+fn non_not_found_font_io_is_exposed_as_text_error() {
+    let mut cache = TextMeasureCache::with_font_error_for_test(
+        "/denied/font.ttf",
+        std::io::ErrorKind::PermissionDenied,
+        "permission denied by test",
+    );
+
+    let error = cache
+        .measure_single_line(request("fail closed"))
+        .expect_err("font I/O failure must fail closed");
+    let TextError::Resource(RendererResourceError::InvalidResource { kind, message }) = error
+    else {
+        panic!("font I/O failure must use the existing resource error surface");
+    };
+    assert_eq!(kind, RendererResourceKind::Glyph);
+    assert!(message.contains("/denied/font.ttf"));
+    assert!(message.contains("PermissionDenied"));
+    assert!(message.contains("permission denied by test"));
+}
+
+#[test]
+fn raster_cache_hit_is_invalidated_through_resolve_when_font_generation_changes() {
+    let mut cache = TextRasterCache {
+        measurer: TextMeasureCache::without_font(),
+        font_generation: 0,
+        resources: RendererResourceCache::unbounded(RendererResourceKind::Glyph),
+        entries: HashMap::new(),
+    };
+    let key = GlyphResourceKey::new("generation", 20.0, 400, None, 1.2);
+    let entry = Arc::new(TextRasterEntry {
+        id: 7,
+        metrics: TextMetrics::empty(),
+        pixels: vec![255, 255, 255, 255],
+    });
+    cache.entries.insert(key.clone(), entry);
+    cache
+        .resources
+        .resolve(key, 4)
+        .expect("test raster resource should be retained");
+    cache.measurer.font_generation = 1;
+
+    assert!(matches!(
+        cache.resolve(request("generation")),
+        Err(TextError::MissingFont)
+    ));
+    assert!(cache.entries.is_empty());
+    assert_eq!(cache.resource_stats().live_entries, 0);
+    assert_eq!(cache.resource_stats().live_bytes, 0);
+}
+
+#[test]
+fn retained_metrics_stay_bounded_for_ever_changing_text() {
+    let mut cache = TextMeasureCache::without_font();
 
     for index in 0..(MAX_RETAINED_METRICS + 64) {
-        let content = format!("frame {index}");
-        measure(&mut cache, request(&content));
+        cache.retain_metrics(
+            TextMeasureKey {
+                content: format!("frame {index}"),
+                size_bits: 12.0f32.to_bits(),
+                line_height_bits: 1.2f32.to_bits(),
+                font_weight: 400,
+                font_family: "test".to_string(),
+            },
+            TextMetrics::empty(),
+        );
         assert!(
             cache.cached_metrics_len() <= MAX_RETAINED_METRICS,
             "retained metrics must stay bounded across frames"
         );
     }
     assert!(cache.cached_metrics_len() > 0);
+}
+
+#[test]
+fn retained_metrics_stay_within_the_byte_budget() {
+    let mut cache = TextMeasureCache::without_font();
+    let chunk = "x".repeat(MAX_RETAINED_METRIC_BYTES / 3);
+
+    for index in 0..6 {
+        cache.retain_metrics(
+            TextMeasureKey {
+                content: format!("{index}{chunk}"),
+                size_bits: 12.0f32.to_bits(),
+                line_height_bits: 1.2f32.to_bits(),
+                font_weight: 400,
+                font_family: "test".to_string(),
+            },
+            TextMetrics::empty(),
+        );
+        assert!(cache.cached_metric_bytes() <= MAX_RETAINED_METRIC_BYTES);
+    }
+
+    let entries_before_oversized_key = cache.cached_metrics_len();
+    cache.retain_metrics(
+        TextMeasureKey {
+            content: "y".repeat(MAX_RETAINED_METRIC_BYTES + 1),
+            size_bits: 12.0f32.to_bits(),
+            line_height_bits: 1.2f32.to_bits(),
+            font_weight: 400,
+            font_family: "test".to_string(),
+        },
+        TextMetrics::empty(),
+    );
+    assert_eq!(cache.cached_metrics_len(), entries_before_oversized_key);
 }

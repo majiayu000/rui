@@ -350,3 +350,22 @@ fn headless_record_frame_and_capture_errors_are_explicit() {
         other => panic!("expected renderer error, got {other}"),
     }
 }
+
+#[test]
+fn headless_record_frame_keeps_the_prepared_scene_viewport_after_resize() {
+    let initial_size = Size::new(160.0, 80.0);
+    let resized = Size::new(240.0, 120.0);
+    let mut session = mount_or_panic(initial_size, |_cx| Button::new("Capture"));
+
+    assert!(
+        !session.resize(resized),
+        "the button does not handle window-resize events"
+    );
+    let recorded = match session.record_frame() {
+        Ok(frame) => frame,
+        Err(err) => panic!("recording the prepared scene should succeed: {err}"),
+    };
+
+    assert_eq!(recorded.viewport_size, initial_size);
+    assert_eq!(recorded.primitives.len(), session.primitives().len());
+}

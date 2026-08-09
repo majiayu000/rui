@@ -33,10 +33,12 @@ pub struct PointerDispatch {
 /// focus, hit-test tracking, pointer capture and the last renderer diagnostics
 /// snapshot. Native window handles and renderer backend resources stay outside.
 ///
-/// Viewport size is deliberately *not* stored here. [`AppContext`] is its single
-/// owner, and it reaches the presenter as an argument to the frame methods.
-pub struct Presenter<E> {
+/// Authoritative viewport size is deliberately *not* stored here. [`AppContext`]
+/// is its single owner; the presenter only records which viewport produced its
+/// latest layout and painted frame.
+pub struct Presenter<E = ()> {
     root: E,
+    legacy_viewport_size: Option<Size>,
     taffy: TaffyTree<ElementId>,
     scene: Scene,
     text_measurer: TextMeasureCache,
@@ -45,23 +47,33 @@ pub struct Presenter<E> {
     last_pointer_hit_target: Option<ElementId>,
     pointer_capture_target: Option<ElementId>,
     renderer_diagnostics: Option<RendererDiagnostics>,
+    laid_out_viewport: Size,
+    prepared_frame: PresenterFrame,
     last_frame: Option<PresenterFrame>,
 }
 
 impl<E> Presenter<E> {
     /// `viewport_size` only seeds the initial root bounds; every later frame
     /// recomputes them from the size passed to [`Presenter::layout`].
-    pub fn new(viewport_size: Size, root: E) -> Self {
+    pub fn with_root(viewport_size: Size, root: E) -> Self {
+        let root_bounds = Bounds::from_xywh(0.0, 0.0, viewport_size.width, viewport_size.height);
         Self {
             root,
+            legacy_viewport_size: None,
             taffy: TaffyTree::new(),
             scene: Scene::new(),
             text_measurer: TextMeasureCache::new(),
-            root_bounds: Bounds::from_xywh(0.0, 0.0, viewport_size.width, viewport_size.height),
+            root_bounds,
             focused_element: None,
             last_pointer_hit_target: None,
             pointer_capture_target: None,
             renderer_diagnostics: None,
+            laid_out_viewport: viewport_size,
+            prepared_frame: PresenterFrame {
+                viewport_size,
+                root_bounds,
+                primitive_count: 0,
+            },
             last_frame: None,
         }
     }
@@ -78,12 +90,20 @@ impl<E> Presenter<E> {
         self.root_bounds
     }
 
+    pub fn set_root_bounds(&mut self, root_bounds: Bounds) {
+        self.root_bounds = root_bounds;
+    }
+
     pub fn focused_element(&self) -> Option<ElementId> {
         self.focused_element
     }
 
     pub fn set_focused_element(&mut self, focused_element: Option<ElementId>) {
         self.focused_element = focused_element;
+    }
+
+    pub fn focused_element_mut(&mut self) -> &mut Option<ElementId> {
+        &mut self.focused_element
     }
 
     pub fn scene(&self) -> &Scene {
@@ -100,31 +120,48 @@ impl<E> Presenter<E> {
         self.renderer_diagnostics.as_ref()
     }
 
-    pub fn record_renderer_diagnostics(&mut self, diagnostics: RendererDiagnostics) {
-        self.renderer_diagnostics = Some(diagnostics);
+    pub fn frame_surfaces_mut(&mut self) -> (&mut TaffyTree<ElementId>, &mut Scene) {
+        (&mut self.taffy, &mut self.scene)
+    }
+
+    /// Layout inputs owned by the presenter. The text measurement cache is
+    /// handed out by reference so its metrics survive across frames.
+    pub fn layout_surfaces_mut(&mut self) -> (&mut TaffyTree<ElementId>, &mut TextMeasureCache) {
+        (&mut self.taffy, &mut self.text_measurer)
+    }
+
+    pub fn paint_surfaces_mut(&mut self) -> (&TaffyTree<ElementId>, &mut Scene) {
+        (&self.taffy, &mut self.scene)
+    }
+
+    pub fn event_context_parts_mut(
+        &mut self,
+    ) -> (Bounds, &TaffyTree<ElementId>, &mut Option<ElementId>) {
+        (self.root_bounds, &self.taffy, &mut self.focused_element)
     }
 
     pub fn hit_test(&self, position: Point) -> Option<ElementId> {
         self.scene.hit_test(position)
     }
 
-    pub fn complete_frame(&mut self, viewport_size: Size) {
-        self.last_frame = Some(PresenterFrame {
-            viewport_size,
-            root_bounds: self.root_bounds,
-            primitive_count: self.scene.len(),
-        });
+    pub(crate) fn prepared_scene(&self) -> (&Scene, &PresenterFrame) {
+        (&self.scene, &self.prepared_frame)
+    }
+
+    pub fn complete_presented_frame(&mut self, diagnostics: Option<RendererDiagnostics>) {
+        self.last_frame = Some(self.prepared_frame.clone());
+        self.renderer_diagnostics = diagnostics;
     }
 
     pub fn last_frame(&self) -> Option<&PresenterFrame> {
         self.last_frame.as_ref()
     }
 
-    fn pointer_dispatch_target(&self, hit_target: Option<ElementId>) -> Option<ElementId> {
+    pub fn pointer_dispatch_target(&self, hit_target: Option<ElementId>) -> Option<ElementId> {
         self.pointer_capture_target.or(hit_target)
     }
 
-    fn previous_pointer_target(&self, kind: PointerEventKind) -> Option<ElementId> {
+    pub fn previous_pointer_target(&self, kind: PointerEventKind) -> Option<ElementId> {
         if matches!(kind, PointerEventKind::Move) {
             self.last_pointer_hit_target
         } else {
@@ -132,7 +169,7 @@ impl<E> Presenter<E> {
         }
     }
 
-    fn update_pointer_tracking(
+    pub fn update_pointer_tracking(
         &mut self,
         kind: PointerEventKind,
         stopped: bool,
@@ -154,6 +191,37 @@ impl<E> Presenter<E> {
     }
 }
 
+impl Presenter<()> {
+    /// Constructs the pre-root-ownership presenter surface for source
+    /// compatibility. Runtime code that transfers root ownership uses
+    /// [`Presenter::with_root`].
+    pub fn new(viewport_size: Size) -> Self {
+        let mut presenter = Self::with_root(viewport_size, ());
+        presenter.legacy_viewport_size = Some(viewport_size);
+        presenter
+    }
+
+    pub fn viewport_size(&self) -> Size {
+        match self.legacy_viewport_size {
+            Some(viewport_size) => viewport_size,
+            None => Size::new(self.root_bounds.width(), self.root_bounds.height()),
+        }
+    }
+
+    pub fn set_viewport_size(&mut self, viewport_size: Size) {
+        self.legacy_viewport_size = Some(viewport_size);
+    }
+
+    pub fn complete_frame(&mut self) {
+        self.prepared_frame = PresenterFrame {
+            viewport_size: self.viewport_size(),
+            root_bounds: self.root_bounds,
+            primitive_count: self.scene.len(),
+        };
+        self.complete_presented_frame(None);
+    }
+}
+
 impl<E> Presenter<E>
 where
     E: Element,
@@ -167,13 +235,14 @@ where
 
     /// Lays the presented tree out and stores the resulting root bounds.
     pub fn layout(&mut self, viewport_size: Size) -> Result<Bounds, FramePipelineError> {
-        let root_bounds = FramePipeline::layout_root(
+        let root_bounds = FramePipeline::layout_root_with_text_measurer(
             &mut self.root,
             &mut self.taffy,
             &mut self.text_measurer,
             viewport_size,
         )?;
         self.root_bounds = root_bounds;
+        self.laid_out_viewport = viewport_size;
         Ok(root_bounds)
     }
 
@@ -185,6 +254,39 @@ where
             &mut self.scene,
             self.root_bounds,
         );
+        self.prepared_frame = PresenterFrame {
+            viewport_size: self.laid_out_viewport,
+            root_bounds: self.root_bounds,
+            primitive_count: self.scene.len(),
+        };
+    }
+
+    pub fn build_frame<F>(
+        &mut self,
+        context: &mut AppContext,
+        build_root: &mut F,
+        viewport_size: Size,
+    ) -> Result<Bounds, FramePipelineError>
+    where
+        F: FnMut(&mut AppContext) -> E,
+    {
+        let root_bounds = FramePipeline::build_frame_with_text_measurer(
+            context,
+            &mut self.root,
+            build_root,
+            &mut self.taffy,
+            &mut self.scene,
+            &mut self.text_measurer,
+            viewport_size,
+        )?;
+        self.root_bounds = root_bounds;
+        self.laid_out_viewport = viewport_size;
+        self.prepared_frame = PresenterFrame {
+            viewport_size,
+            root_bounds,
+            primitive_count: self.scene.len(),
+        };
+        Ok(root_bounds)
     }
 
     /// Runs `dispatch` against the presented tree with an event context built
@@ -301,7 +403,7 @@ mod tests {
         let id = ElementId::from(7);
         let viewport_size = Size::new(100.0, 100.0);
         let (probe, observed_targets) = CaptureProbe::new(id, Size::new(50.0, 50.0));
-        let mut presenter = Presenter::new(viewport_size, probe);
+        let mut presenter = Presenter::with_root(viewport_size, probe);
         match presenter.layout(viewport_size) {
             Ok(_) => {}
             Err(err) => panic!("layout failed: {err}"),
@@ -313,7 +415,7 @@ mod tests {
     #[test]
     fn presenter_owns_the_root_it_presents() {
         let viewport_size = Size::new(64.0, 32.0);
-        let mut presenter = Presenter::new(viewport_size, div().w(64.0).h(32.0));
+        let mut presenter = Presenter::with_root(viewport_size, div().w(64.0).h(32.0));
 
         let root_bounds = match presenter.layout(viewport_size) {
             Ok(bounds) => bounds,
@@ -327,15 +429,38 @@ mod tests {
     #[test]
     fn completed_frame_records_the_viewport_it_was_given() {
         let viewport_size = Size::new(64.0, 32.0);
-        let mut presenter = Presenter::new(viewport_size, div().w(64.0).h(32.0));
+        let mut presenter = Presenter::with_root(viewport_size, div().w_full().h_full());
         match presenter.layout(viewport_size) {
             Ok(_) => {}
             Err(err) => panic!("layout failed: {err}"),
         }
+        let painted_root_bounds = presenter.root_bounds();
         presenter.paint();
 
         let resized = Size::new(128.0, 96.0);
-        presenter.complete_frame(resized);
+        match presenter.layout(resized) {
+            Ok(_) => {}
+            Err(err) => panic!("resized layout failed: {err}"),
+        }
+        assert_ne!(presenter.root_bounds(), painted_root_bounds);
+        presenter.complete_presented_frame(None);
+
+        match presenter.last_frame() {
+            Some(frame) => {
+                assert_eq!(
+                    frame.viewport_size, viewport_size,
+                    "layout alone must not relabel the scene painted for the previous viewport"
+                );
+                assert_eq!(
+                    frame.root_bounds, painted_root_bounds,
+                    "layout alone must not relabel the scene with new root bounds"
+                );
+            }
+            None => panic!("expected a recorded frame"),
+        }
+
+        presenter.paint();
+        presenter.complete_presented_frame(None);
 
         match presenter.last_frame() {
             Some(frame) => assert_eq!(frame.viewport_size, resized),
@@ -401,7 +526,7 @@ mod tests {
 
     #[test]
     fn renderer_diagnostics_start_empty() {
-        let presenter = Presenter::new(Size::new(8.0, 8.0), div());
+        let presenter = Presenter::with_root(Size::new(8.0, 8.0), div());
         assert!(presenter.renderer_diagnostics().is_none());
     }
 }

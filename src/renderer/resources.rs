@@ -356,6 +356,12 @@ where
         }
     }
 
+    pub fn clear(&mut self) {
+        self.disposed_entries += self.entries.len();
+        self.entries.clear();
+        self.live_bytes = 0;
+    }
+
     pub fn resolve(
         &mut self,
         key: K,

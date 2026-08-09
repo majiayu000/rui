@@ -4,6 +4,7 @@ use crate::core::geometry::{Bounds, Size};
 use crate::core::presenter::Presenter;
 use crate::elements::Element;
 use crate::elements::element::{LayoutContext, PaintContext};
+use crate::renderer::RendererDiagnostics;
 use crate::renderer::Scene;
 use crate::renderer::text::TextMeasureCache;
 use std::error::Error;
@@ -20,6 +21,12 @@ impl FramePipelineError {
     fn layout(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
+        }
+    }
+
+    pub(crate) fn present(message: impl Into<String>) -> Self {
+        Self {
+            message: format!("present stage failed: {}", message.into()),
         }
     }
 }
@@ -57,6 +64,18 @@ impl FramePipeline {
     }
 
     pub fn layout_root<E>(
+        root: &mut E,
+        taffy: &mut TaffyTree<ElementId>,
+        viewport_size: Size,
+    ) -> Result<Bounds, FramePipelineError>
+    where
+        E: Element,
+    {
+        let mut text_measurer = TextMeasureCache::new();
+        Self::layout_root_with_text_measurer(root, taffy, &mut text_measurer, viewport_size)
+    }
+
+    pub fn layout_root_with_text_measurer<E>(
         root: &mut E,
         taffy: &mut TaffyTree<ElementId>,
         text_measurer: &mut TextMeasureCache,
@@ -163,6 +182,13 @@ pub struct FrameStageDurations {
 pub struct FrameOutcome {
     pub root_bounds: Bounds,
     pub durations: FrameStageDurations,
+    pub presented: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FramePresentation {
+    Presented(Option<RendererDiagnostics>),
+    Deferred,
 }
 
 /// What a runner wants to happen when [`FrameStage::Prepare`] leaves nothing to
@@ -178,6 +204,52 @@ pub enum IdlePolicy {
 }
 
 impl FramePipeline {
+    pub fn build_frame<E, F>(
+        context: &mut AppContext,
+        root: &mut E,
+        build_root: &mut F,
+        taffy: &mut TaffyTree<ElementId>,
+        scene: &mut Scene,
+        viewport_size: Size,
+    ) -> Result<Bounds, FramePipelineError>
+    where
+        E: Element,
+        F: FnMut(&mut AppContext) -> E,
+    {
+        let mut text_measurer = TextMeasureCache::new();
+        Self::build_frame_with_text_measurer(
+            context,
+            root,
+            build_root,
+            taffy,
+            scene,
+            &mut text_measurer,
+            viewport_size,
+        )
+    }
+
+    pub fn build_frame_with_text_measurer<E, F>(
+        context: &mut AppContext,
+        root: &mut E,
+        build_root: &mut F,
+        taffy: &mut TaffyTree<ElementId>,
+        scene: &mut Scene,
+        text_measurer: &mut TextMeasureCache,
+        viewport_size: Size,
+    ) -> Result<Bounds, FramePipelineError>
+    where
+        E: Element,
+        F: FnMut(&mut AppContext) -> E,
+    {
+        Self::prepare_frame(context);
+        Self::rebuild_if_needed(context, root, build_root);
+        let bounds =
+            Self::layout_root_with_text_measurer(root, taffy, text_measurer, viewport_size)?;
+        Self::paint_root(root, taffy, scene, bounds);
+        Self::finish_frame(context);
+        Ok(bounds)
+    }
+
     /// Runs one frame through [`FrameStage::ORDER`].
     ///
     /// `dispatch_events` and `present_frame` are the two stages a runner has to
@@ -198,12 +270,17 @@ impl FramePipeline {
     where
         E: Element,
         F: FnMut(&mut AppContext) -> E,
-        D: FnOnce(&mut Presenter<E>, &mut AppContext),
-        P: FnOnce(&mut Presenter<E>, &mut AppContext),
+        D: FnOnce(&mut Presenter<E>, &mut AppContext) -> Result<(), FramePipelineError>,
+        P: FnOnce(
+            &mut Presenter<E>,
+            &mut AppContext,
+        ) -> Result<FramePresentation, FramePipelineError>,
     {
         let mut durations = FrameStageDurations::default();
         let mut dispatch_events = Some(dispatch_events);
         let mut present_frame = Some(present_frame);
+        let mut presentation = None;
+        let mut presented = false;
 
         for stage in FrameStage::ORDER {
             match stage {
@@ -223,7 +300,7 @@ impl FramePipeline {
                 FrameStage::DispatchEvents => {
                     let started_at = Instant::now();
                     if let Some(dispatch) = dispatch_events.take() {
-                        dispatch(presenter, context);
+                        dispatch(presenter, context)?;
                     }
                     durations.dispatch_ns = started_at.elapsed().as_nanos();
                 }
@@ -235,13 +312,24 @@ impl FramePipeline {
                 FrameStage::Present => {
                     let started_at = Instant::now();
                     if let Some(present) = present_frame.take() {
-                        present(presenter, context);
+                        presentation = Some(present(presenter, context)?);
                     }
                     durations.present_ns = started_at.elapsed().as_nanos();
                 }
                 FrameStage::Finish => {
                     Self::finish_frame(context);
-                    presenter.complete_frame(viewport_size);
+                    match presentation.take() {
+                        Some(FramePresentation::Presented(diagnostics)) => {
+                            presenter.complete_presented_frame(diagnostics);
+                            presented = true;
+                        }
+                        Some(FramePresentation::Deferred) => {}
+                        None => {
+                            return Err(FramePipelineError::layout(
+                                "present stage did not report an outcome",
+                            ));
+                        }
+                    }
                 }
             }
         }
@@ -249,6 +337,7 @@ impl FramePipeline {
         Ok(Some(FrameOutcome {
             root_bounds: presenter.root_bounds(),
             durations,
+            presented,
         }))
     }
 }
@@ -256,6 +345,7 @@ impl FramePipeline {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::Presenter;
     use crate::elements::div;
     use crate::elements::text::text;
     use std::cell::RefCell;
@@ -264,7 +354,8 @@ mod tests {
     fn run_recording_frame(
         idle_policy: IdlePolicy,
         prepare: impl FnOnce(&mut AppContext),
-    ) -> (Option<FrameOutcome>, Vec<&'static str>, AppContext) {
+        presentation: FramePresentation,
+    ) -> (Option<FrameOutcome>, Vec<&'static str>, AppContext, bool) {
         let viewport_size = Size::new(120.0, 80.0);
         let mut context = AppContext::new();
         context.set_viewport_size(viewport_size);
@@ -277,7 +368,7 @@ mod tests {
                 .bg(crate::core::Color::rgb(0.1, 0.2, 0.3))
         };
         let root = build_root(&mut context);
-        let mut presenter = Presenter::new(viewport_size, root);
+        let mut presenter = Presenter::with_root(viewport_size, root);
         let log = Rc::new(RefCell::new(Vec::new()));
 
         let dispatch_log = Rc::clone(&log);
@@ -292,11 +383,13 @@ mod tests {
                 // Layout ran already, so dispatch sees this frame's bounds.
                 assert_eq!(presenter.root_bounds().width(), 120.0);
                 dispatch_log.borrow_mut().push("dispatch");
+                Ok(())
             },
             move |presenter, _| {
                 // Paint ran already, so present sees a populated scene.
                 assert!(!presenter.scene().primitives().is_empty());
                 present_log.borrow_mut().push("present");
+                Ok(presentation)
             },
         ) {
             Ok(outcome) => outcome,
@@ -304,7 +397,8 @@ mod tests {
         };
 
         let stages = log.borrow().clone();
-        (outcome, stages, context)
+        let recorded = presenter.last_frame().is_some();
+        (outcome, stages, context, recorded)
     }
 
     #[test]
@@ -326,7 +420,11 @@ mod tests {
 
     #[test]
     fn run_frame_executes_the_runner_supplied_stages_in_order() {
-        let (outcome, stages, _) = run_recording_frame(IdlePolicy::AlwaysDraw, |_| {});
+        let (outcome, stages, _, _) = run_recording_frame(
+            IdlePolicy::AlwaysDraw,
+            |_| {},
+            FramePresentation::Presented(None),
+        );
 
         assert!(outcome.is_some(), "AlwaysDraw must produce a frame");
         assert_eq!(stages, ["dispatch", "present"]);
@@ -334,10 +432,14 @@ mod tests {
 
     #[test]
     fn always_draw_runs_a_frame_even_when_nothing_is_dirty() {
-        let (outcome, stages, context) = run_recording_frame(IdlePolicy::AlwaysDraw, |context| {
-            context.dirty = false;
-            context.needs_rebuild = false;
-        });
+        let (outcome, stages, context, _) = run_recording_frame(
+            IdlePolicy::AlwaysDraw,
+            |context| {
+                context.dirty = false;
+                context.needs_rebuild = false;
+            },
+            FramePresentation::Presented(None),
+        );
 
         assert!(outcome.is_some());
         assert_eq!(stages, ["dispatch", "present"]);
@@ -346,10 +448,14 @@ mod tests {
 
     #[test]
     fn skip_when_idle_stops_after_prepare_without_dispatching_or_presenting() {
-        let (outcome, stages, _) = run_recording_frame(IdlePolicy::SkipWhenIdle, |context| {
-            context.dirty = false;
-            context.needs_rebuild = false;
-        });
+        let (outcome, stages, _, _) = run_recording_frame(
+            IdlePolicy::SkipWhenIdle,
+            |context| {
+                context.dirty = false;
+                context.needs_rebuild = false;
+            },
+            FramePresentation::Presented(None),
+        );
 
         assert!(outcome.is_none(), "an idle frame must be skipped");
         assert!(
@@ -360,9 +466,11 @@ mod tests {
 
     #[test]
     fn skip_when_idle_still_runs_a_frame_that_has_work() {
-        let (outcome, stages, _) = run_recording_frame(IdlePolicy::SkipWhenIdle, |context| {
-            context.request_redraw();
-        });
+        let (outcome, stages, _, _) = run_recording_frame(
+            IdlePolicy::SkipWhenIdle,
+            |context| context.request_redraw(),
+            FramePresentation::Presented(None),
+        );
 
         assert!(outcome.is_some());
         assert_eq!(stages, ["dispatch", "present"]);
@@ -370,9 +478,11 @@ mod tests {
 
     #[test]
     fn a_completed_frame_clears_the_redraw_request() {
-        let (_, _, context) = run_recording_frame(IdlePolicy::AlwaysDraw, |context| {
-            context.request_redraw();
-        });
+        let (_, _, context, _) = run_recording_frame(
+            IdlePolicy::AlwaysDraw,
+            |context| context.request_redraw(),
+            FramePresentation::Presented(None),
+        );
 
         assert!(
             !context.has_frame_work(),
@@ -381,16 +491,44 @@ mod tests {
     }
 
     #[test]
+    fn deferred_presentation_does_not_record_a_presented_frame() {
+        let (outcome, _, _, recorded) =
+            run_recording_frame(IdlePolicy::AlwaysDraw, |_| {}, FramePresentation::Deferred);
+
+        match outcome {
+            Some(outcome) => assert!(!outcome.presented),
+            None => panic!("AlwaysDraw must produce a frame outcome"),
+        }
+        assert!(!recorded);
+    }
+
+    #[test]
     fn text_metrics_survive_across_frames() {
         let viewport_size = Size::new(320.0, 240.0);
         let mut taffy = TaffyTree::<ElementId>::new();
         let mut text_measurer = TextMeasureCache::new();
         if !text_measurer.has_fonts() {
+            let mut root = div().child(text("fontless layout must fail explicitly"));
+            assert!(
+                FramePipeline::layout_root_with_text_measurer(
+                    &mut root,
+                    &mut taffy,
+                    &mut text_measurer,
+                    viewport_size,
+                )
+                .is_err(),
+                "a fontless environment must not report a successful text layout"
+            );
             return;
         }
         let mut root = div().child(text("metrics survive the frame boundary"));
 
-        match FramePipeline::layout_root(&mut root, &mut taffy, &mut text_measurer, viewport_size) {
+        match FramePipeline::layout_root_with_text_measurer(
+            &mut root,
+            &mut taffy,
+            &mut text_measurer,
+            viewport_size,
+        ) {
             Ok(_) => {}
             Err(err) => panic!("first frame layout failed: {err}"),
         }
@@ -400,7 +538,13 @@ mod tests {
             "the first frame should populate the metrics cache"
         );
 
-        match FramePipeline::layout_root(&mut root, &mut taffy, &mut text_measurer, viewport_size) {
+        let hits_before_second_frame = text_measurer.metric_hits();
+        match FramePipeline::layout_root_with_text_measurer(
+            &mut root,
+            &mut taffy,
+            &mut text_measurer,
+            viewport_size,
+        ) {
             Ok(_) => {}
             Err(err) => panic!("second frame layout failed: {err}"),
         }
@@ -409,11 +553,41 @@ mod tests {
             after_first_frame,
             "the second frame should hit the entries written by the first"
         );
+        assert!(
+            text_measurer.metric_hits() > hits_before_second_frame,
+            "the second frame must hit metrics written by the first"
+        );
     }
 
     #[test]
     fn a_fresh_measurer_starts_without_cached_metrics() {
         let text_measurer = TextMeasureCache::new();
         assert_eq!(text_measurer.cached_metrics_len(), 0);
+    }
+
+    #[test]
+    fn pre_cache_pipeline_and_presenter_signatures_remain_source_compatible() {
+        let viewport_size = Size::new(64.0, 32.0);
+        let mut root = div();
+        let mut taffy = TaffyTree::<ElementId>::new();
+        assert!(FramePipeline::layout_root(&mut root, &mut taffy, viewport_size).is_ok());
+
+        let mut context = AppContext::new();
+        let mut scene = Scene::new();
+        let mut build_root = |_context: &mut AppContext| div();
+        assert!(
+            FramePipeline::build_frame(
+                &mut context,
+                &mut root,
+                &mut build_root,
+                &mut taffy,
+                &mut scene,
+                viewport_size,
+            )
+            .is_ok()
+        );
+
+        let mut presenter = Presenter::new(viewport_size);
+        let (_taffy, _scene) = presenter.frame_surfaces_mut();
     }
 }

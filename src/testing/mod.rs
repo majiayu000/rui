@@ -7,7 +7,7 @@ use crate::core::action::route_key_event;
 use crate::core::app::{AppContext, RuntimeView};
 use crate::core::entity::Entity;
 use crate::core::event::{Event, KeyEvent, MouseButton, ScrollEvent};
-use crate::core::frame_pipeline::{FramePipeline, IdlePolicy};
+use crate::core::frame_pipeline::{FramePipeline, FramePresentation, IdlePolicy};
 use crate::core::geometry::{Bounds, Point, Size};
 use crate::core::presenter::{Presenter, PresenterFrame};
 use crate::core::view::{View, ViewNotifier};
@@ -120,7 +120,7 @@ where
     let mut session = HeadlessSession {
         context,
         build_root,
-        presenter: Presenter::new(viewport_size, root),
+        presenter: Presenter::with_root(viewport_size, root),
     };
     session.frame()?;
     Ok(session)
@@ -173,8 +173,8 @@ where
             &mut self.build_root,
             viewport_size,
             IdlePolicy::AlwaysDraw,
-            |_, _| {},
-            |_, _| {},
+            |_, _| Ok(()),
+            |_, _| Ok(FramePresentation::Presented(None)),
         )
         .map_err(|err| HeadlessError::Layout {
             message: err.to_string(),
@@ -284,7 +284,8 @@ where
 
     pub fn record_frame(&self) -> Result<RecordedScene, HeadlessError> {
         let mut renderer = RecordingRenderer::new();
-        renderer.render(self.presenter.scene(), &(), self.context.viewport_size())?;
+        let (scene, prepared_frame) = self.presenter.prepared_scene();
+        renderer.render(scene, &(), prepared_frame.viewport_size)?;
         match renderer.frames().first() {
             Some(frame) => Ok(frame.clone()),
             None => Err(HeadlessError::Renderer(RendererError::render_failed(
@@ -295,10 +296,11 @@ where
 
     pub fn capture_current_frame(&self) -> Result<CapturedFrame, HeadlessError> {
         let mut backend = MissingFrameCaptureBackend;
+        let (scene, prepared_frame) = self.presenter.prepared_scene();
         Ok(capture_frame_with_backend(
             &mut backend,
-            self.presenter.scene(),
-            self.context.viewport_size(),
+            scene,
+            prepared_frame.viewport_size,
         )?)
     }
 }

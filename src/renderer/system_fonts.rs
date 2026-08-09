@@ -63,6 +63,72 @@ const FONT_CANDIDATES: [(&str, &str); 19] = [
 pub(crate) struct RetryableResourceSet<T> {
     slot: Mutex<Option<Arc<Vec<T>>>>,
     loads: AtomicUsize,
+    generation: AtomicUsize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FontLoadError {
+    pub(crate) path: String,
+    pub(crate) kind: std::io::ErrorKind,
+    pub(crate) message: String,
+}
+
+impl FontLoadError {
+    fn new(path: &str, error: std::io::Error) -> Self {
+        Self {
+            path: path.to_string(),
+            kind: error.kind(),
+            message: error.to_string(),
+        }
+    }
+
+    fn invalid_data(path: &str, message: impl Into<String>) -> Self {
+        Self {
+            path: path.to_string(),
+            kind: std::io::ErrorKind::InvalidData,
+            message: message.into(),
+        }
+    }
+}
+
+pub(crate) struct ResourceLoad<T> {
+    resources: Vec<T>,
+    cacheable: bool,
+    error: Option<FontLoadError>,
+}
+
+impl<T> ResourceLoad<T> {
+    fn complete(resources: Vec<T>) -> Self {
+        Self {
+            resources,
+            cacheable: true,
+            error: None,
+        }
+    }
+
+    #[cfg(test)]
+    fn retryable(resources: Vec<T>) -> Self {
+        Self {
+            resources,
+            cacheable: false,
+            error: None,
+        }
+    }
+
+    fn retryable_with_error(resources: Vec<T>, error: FontLoadError) -> Self {
+        Self {
+            resources,
+            cacheable: false,
+            error: Some(error),
+        }
+    }
+}
+
+pub(crate) struct ResourceSnapshot<T> {
+    pub(crate) resources: Arc<Vec<T>>,
+    pub(crate) retryable: bool,
+    pub(crate) generation: usize,
+    pub(crate) error: Option<FontLoadError>,
 }
 
 impl<T> RetryableResourceSet<T> {
@@ -70,6 +136,7 @@ impl<T> RetryableResourceSet<T> {
         Self {
             slot: Mutex::new(None),
             loads: AtomicUsize::new(0),
+            generation: AtomicUsize::new(0),
         }
     }
 
@@ -80,7 +147,10 @@ impl<T> RetryableResourceSet<T> {
         self.loads.load(Ordering::Relaxed)
     }
 
-    pub(crate) fn get_or_load(&self, load: impl FnOnce() -> Vec<T>) -> Arc<Vec<T>> {
+    pub(crate) fn get_or_load(
+        &self,
+        load: impl FnOnce() -> ResourceLoad<T>,
+    ) -> ResourceSnapshot<T> {
         // The slot is only written after `load` returns, so a loader that panics
         // cannot leave a half-built value behind: a poisoned lock still guards a
         // valid `Option`. Recovering it keeps one caller's panic from turning
@@ -90,15 +160,53 @@ impl<T> RetryableResourceSet<T> {
             Err(poisoned) => poisoned.into_inner(),
         };
         if let Some(cached) = slot.as_ref() {
-            return Arc::clone(cached);
+            return ResourceSnapshot {
+                resources: Arc::clone(cached),
+                retryable: false,
+                generation: self.generation.load(Ordering::Acquire),
+                error: None,
+            };
         }
 
         self.loads.fetch_add(1, Ordering::Relaxed);
-        let loaded = Arc::new(load());
-        if !loaded.is_empty() {
-            *slot = Some(Arc::clone(&loaded));
+        let loaded = load();
+        let resources = Arc::new(loaded.resources);
+        let retryable = resources.is_empty() || !loaded.cacheable;
+        let generation = if !retryable {
+            *slot = Some(Arc::clone(&resources));
+            self.generation.fetch_add(1, Ordering::AcqRel) + 1
+        } else {
+            self.generation.load(Ordering::Acquire)
+        };
+        ResourceSnapshot {
+            resources,
+            retryable,
+            generation,
+            error: loaded.error,
         }
-        loaded
+    }
+
+    pub(crate) fn reload(&self, load: impl FnOnce() -> ResourceLoad<T>) -> ResourceSnapshot<T> {
+        let mut slot = match self.slot.lock() {
+            Ok(slot) => slot,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        self.loads.fetch_add(1, Ordering::Relaxed);
+        let loaded = load();
+        let resources = Arc::new(loaded.resources);
+        let retryable = resources.is_empty() || !loaded.cacheable;
+        let generation = if !retryable {
+            *slot = Some(Arc::clone(&resources));
+            self.generation.fetch_add(1, Ordering::AcqRel) + 1
+        } else {
+            self.generation.load(Ordering::Acquire)
+        };
+        ResourceSnapshot {
+            resources,
+            retryable,
+            generation,
+            error: loaded.error,
+        }
     }
 }
 
@@ -109,8 +217,36 @@ static SYSTEM_TEXT_FONTS: RetryableResourceSet<TextShapingFont> = RetryableResou
 /// Returns an empty set when no candidate font could be read; callers must
 /// surface that as [`crate::renderer::text::TextError::MissingFont`] instead of
 /// measuring without fonts.
-pub(crate) fn load_system_fonts() -> Arc<Vec<TextShapingFont>> {
+pub(crate) fn load_system_fonts() -> ResourceSnapshot<TextShapingFont> {
     SYSTEM_TEXT_FONTS.get_or_load(load_system_fonts_uncached)
+}
+
+pub(crate) fn system_font_generation() -> usize {
+    SYSTEM_TEXT_FONTS.generation.load(Ordering::Acquire)
+}
+
+pub(crate) fn reload_system_fonts_for_family(
+    family: &str,
+) -> Result<Option<ResourceSnapshot<TextShapingFont>>, FontLoadError> {
+    let has_available_candidate =
+        has_available_candidate_with(family, |path| std::path::Path::new(path).try_exists())?;
+    Ok(has_available_candidate.then(|| SYSTEM_TEXT_FONTS.reload(load_system_fonts_uncached)))
+}
+
+fn has_available_candidate_with(
+    family: &str,
+    mut try_exists: impl FnMut(&str) -> std::io::Result<bool>,
+) -> Result<bool, FontLoadError> {
+    for (candidate_family, path) in FONT_CANDIDATES {
+        if candidate_family.eq_ignore_ascii_case(family) {
+            match try_exists(path) {
+                Ok(true) => return Ok(true),
+                Ok(false) => {}
+                Err(error) => return Err(FontLoadError::new(path, error)),
+            }
+        }
+    }
+    Ok(false)
 }
 
 #[cfg(test)]
@@ -118,29 +254,93 @@ pub(crate) fn system_font_load_count() -> usize {
     SYSTEM_TEXT_FONTS.load_count()
 }
 
-fn load_system_fonts_uncached() -> Vec<TextShapingFont> {
+fn load_system_fonts_uncached() -> ResourceLoad<TextShapingFont> {
     let mut fonts = Vec::new();
+    let mut first_error = None;
     for (family, path) in FONT_CANDIDATES {
-        load_font_faces(family, path, &mut fonts);
+        if let Err(error) = load_font_faces(family, path, &mut fonts)
+            && first_error.is_none()
+        {
+            first_error = Some(error);
+        }
     }
-    fonts
+    match first_error {
+        Some(error) => ResourceLoad::retryable_with_error(fonts, error),
+        None => ResourceLoad::complete(fonts),
+    }
 }
 
-fn load_font_faces(family: &str, path: &str, fonts: &mut Vec<TextShapingFont>) {
-    let Ok(bytes) = std::fs::read(path) else {
-        return;
+fn load_font_faces(
+    family: &str,
+    path: &str,
+    fonts: &mut Vec<TextShapingFont>,
+) -> Result<(), FontLoadError> {
+    load_font_faces_with(family, path, fonts, |candidate_path| {
+        std::fs::read(candidate_path)
+    })
+}
+
+fn load_font_faces_with(
+    family: &str,
+    path: &str,
+    fonts: &mut Vec<TextShapingFont>,
+    read: impl FnOnce(&str) -> std::io::Result<Vec<u8>>,
+) -> Result<(), FontLoadError> {
+    let bytes = match read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(FontLoadError::new(path, error)),
     };
     let data = Arc::new(bytes);
+    let face_count = font_face_count(path, data.as_slice())?;
 
-    for index in 0..MAX_FACES_PER_FILE {
-        let Some(font) = Font::try_from_vec_and_index(data.as_ref().clone(), index) else {
-            break;
-        };
-        if rustybuzz::Face::from_slice(data.as_slice(), index).is_none() {
-            break;
+    for index in 0..face_count {
+        let rusttype_font = Font::try_from_vec_and_index(data.as_ref().clone(), index);
+        let rustybuzz_font = rustybuzz::Face::from_slice(data.as_slice(), index);
+        match (rusttype_font, rustybuzz_font) {
+            (Some(font), Some(_)) => {
+                fonts.push(TextShapingFont::new(family, index, data.clone(), font));
+            }
+            (None, None) => {
+                return Err(FontLoadError::invalid_data(
+                    path,
+                    format!("font face {index} cannot be parsed"),
+                ));
+            }
+            _ => {
+                return Err(FontLoadError::invalid_data(
+                    path,
+                    format!("font face {index} is not supported by both text engines"),
+                ));
+            }
         }
-        fonts.push(TextShapingFont::new(family, index, data.clone(), font));
     }
+    Ok(())
+}
+
+fn font_face_count(path: &str, data: &[u8]) -> Result<u32, FontLoadError> {
+    if !data.starts_with(b"ttcf") {
+        return Ok(1);
+    }
+    let Some(count_bytes) = data.get(8..12) else {
+        return Err(FontLoadError::invalid_data(
+            path,
+            "font collection header is truncated",
+        ));
+    };
+    let count = u32::from_be_bytes([
+        count_bytes[0],
+        count_bytes[1],
+        count_bytes[2],
+        count_bytes[3],
+    ]);
+    if count == 0 || count > MAX_FACES_PER_FILE {
+        return Err(FontLoadError::invalid_data(
+            path,
+            format!("font collection declares unsupported face count {count}"),
+        ));
+    }
+    Ok(count)
 }
 
 #[cfg(test)]
@@ -151,25 +351,119 @@ mod tests {
     fn empty_load_is_not_cached_and_is_retried() {
         let set = RetryableResourceSet::<u32>::new();
 
-        let first = set.get_or_load(Vec::new);
-        assert!(first.is_empty());
+        let first = set.get_or_load(|| ResourceLoad::complete(Vec::new()));
+        assert!(first.resources.is_empty());
+        assert!(first.retryable);
         assert_eq!(set.load_count(), 1);
 
         // A second caller must get a fresh attempt rather than the empty set.
-        let second = set.get_or_load(|| vec![7]);
-        assert_eq!(second.as_slice(), [7]);
+        let second = set.get_or_load(|| ResourceLoad::complete(vec![7]));
+        assert_eq!(second.resources.as_slice(), [7]);
+        assert!(!second.retryable);
         assert_eq!(set.load_count(), 2);
+    }
+
+    #[test]
+    fn partial_load_is_not_cached_and_is_retried() {
+        let set = RetryableResourceSet::<u32>::new();
+
+        let first = set.get_or_load(|| ResourceLoad::retryable(vec![1]));
+        assert_eq!(first.resources.as_slice(), [1]);
+        assert!(first.retryable);
+
+        let second = set.get_or_load(|| ResourceLoad::complete(vec![1, 2]));
+        assert_eq!(second.resources.as_slice(), [1, 2]);
+        assert!(!second.retryable);
+        assert_eq!(set.load_count(), 2);
+    }
+
+    #[test]
+    fn retrying_caller_reuses_a_snapshot_published_by_another_caller() {
+        let set = RetryableResourceSet::<u32>::new();
+        let first = set.get_or_load(|| ResourceLoad::complete(Vec::new()));
+        assert!(first.retryable);
+
+        let published = set.get_or_load(|| ResourceLoad::complete(vec![9]));
+        let recovered = set.get_or_load(|| panic!("a published snapshot must prevent reparsing"));
+
+        assert_eq!(set.load_count(), 2);
+        assert_eq!(published.generation, recovered.generation);
+        assert!(Arc::ptr_eq(&published.resources, &recovered.resources));
+    }
+
+    #[test]
+    fn non_not_found_io_error_preserves_path_and_kind() {
+        let mut fonts = Vec::new();
+        let error = match load_font_faces_with("Test", "/denied/font.ttf", &mut fonts, |_| {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "permission denied by test",
+            ))
+        }) {
+            Ok(()) => panic!("permission denied must not be treated as a missing optional font"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error.path, "/denied/font.ttf");
+        assert_eq!(error.kind, std::io::ErrorKind::PermissionDenied);
+        assert!(error.message.contains("permission denied by test"));
+        assert!(fonts.is_empty());
+    }
+
+    #[test]
+    fn malformed_font_data_is_an_explicit_retryable_error() {
+        let mut fonts = Vec::new();
+        let error = load_font_faces_with("Broken", "/fonts/broken.ttf", &mut fonts, |_| {
+            Ok(b"not a font".to_vec())
+        })
+        .expect_err("readable malformed font data must not be cached as a successful load");
+
+        assert_eq!(error.path, "/fonts/broken.ttf");
+        assert_eq!(error.kind, std::io::ErrorKind::InvalidData);
+        assert!(error.message.contains("face 0 cannot be parsed"));
+        assert!(fonts.is_empty());
+    }
+
+    #[test]
+    fn font_collection_face_count_is_validated() {
+        let mut header = b"ttcf\0\x01\0\0".to_vec();
+        header.extend_from_slice(&2_u32.to_be_bytes());
+        assert_eq!(font_face_count("two.ttc", &header), Ok(2));
+
+        header[8..12].copy_from_slice(&0_u32.to_be_bytes());
+        let error = font_face_count("empty.ttc", &header)
+            .expect_err("a collection must declare at least one face");
+        assert_eq!(error.kind, std::io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn candidate_metadata_error_preserves_path_and_kind() {
+        let error = has_available_candidate_with("Arial", |path| {
+            if path.ends_with("Arial.ttf") {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "metadata denied by test",
+                ))
+            } else {
+                Ok(false)
+            }
+        })
+        .expect_err("metadata errors must not look like an unavailable font family");
+
+        assert!(error.path.ends_with("Arial.ttf"));
+        assert_eq!(error.kind, std::io::ErrorKind::PermissionDenied);
+        assert!(error.message.contains("metadata denied by test"));
     }
 
     #[test]
     fn successful_load_is_cached_and_shared() {
         let set = RetryableResourceSet::<u32>::new();
 
-        let first = set.get_or_load(|| vec![1, 2, 3]);
+        let first = set.get_or_load(|| ResourceLoad::complete(vec![1, 2, 3]));
         let second =
             set.get_or_load(|| panic!("loader must not run again after a successful load"));
 
-        assert!(Arc::ptr_eq(&first, &second));
+        assert!(Arc::ptr_eq(&first.resources, &second.resources));
         assert_eq!(set.load_count(), 1);
     }
 
@@ -179,16 +473,16 @@ mod tests {
         let loads_after_first = system_font_load_count();
         let second = load_system_fonts();
 
-        if first.is_empty() {
+        if first.retryable {
             // No candidate font exists on this machine. The retry policy applies:
-            // the empty set must not have been cached.
+            // empty or partial sets must not have been cached.
             assert!(
                 system_font_load_count() > loads_after_first,
-                "an empty font set must stay retryable"
+                "an empty or partial font set must stay retryable"
             );
         } else {
             assert!(
-                Arc::ptr_eq(&first, &second),
+                Arc::ptr_eq(&first.resources, &second.resources),
                 "loaded fonts should be shared, not re-parsed"
             );
             assert_eq!(
@@ -196,6 +490,7 @@ mod tests {
                 loads_after_first,
                 "a successful font load must not repeat"
             );
+            assert_eq!(first.generation, second.generation);
         }
     }
 }

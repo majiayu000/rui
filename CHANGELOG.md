@@ -12,8 +12,10 @@ All notable project changes should be recorded here.
 ### Runtime
 
 - Added `LayoutContext::with_text_measurer` for callers that hold a text
-  measurement cache across frames. `FramePipeline::layout_root` and
-  `FramePipeline::build_frame` take that cache as an argument.
+  measurement cache across frames. The cache-aware pipeline entry points are
+  `FramePipeline::layout_root_with_text_measurer` and
+  `FramePipeline::build_frame_with_text_measurer`; the original signatures
+  remain available for source compatibility.
 - `Presenter` now owns the root element it presents and the renderer diagnostics
   snapshot for its window; native and headless runners drive frames through it
   instead of holding their own copies.
