@@ -120,10 +120,6 @@ impl<E> Presenter<E> {
         self.renderer_diagnostics.as_ref()
     }
 
-    pub fn record_renderer_diagnostics(&mut self, diagnostics: RendererDiagnostics) {
-        self.renderer_diagnostics = Some(diagnostics);
-    }
-
     pub fn frame_surfaces_mut(&mut self) -> (&mut TaffyTree<ElementId>, &mut Scene) {
         (&mut self.taffy, &mut self.scene)
     }
@@ -148,8 +144,13 @@ impl<E> Presenter<E> {
         self.scene.hit_test(position)
     }
 
-    pub fn complete_presented_frame(&mut self) {
+    pub(crate) fn prepared_scene(&self) -> (&Scene, &PresenterFrame) {
+        (&self.scene, &self.prepared_frame)
+    }
+
+    pub fn complete_presented_frame(&mut self, diagnostics: Option<RendererDiagnostics>) {
         self.last_frame = Some(self.prepared_frame.clone());
+        self.renderer_diagnostics = diagnostics;
     }
 
     pub fn last_frame(&self) -> Option<&PresenterFrame> {
@@ -217,7 +218,7 @@ impl Presenter<()> {
             root_bounds: self.root_bounds,
             primitive_count: self.scene.len(),
         };
-        self.complete_presented_frame();
+        self.complete_presented_frame(None);
     }
 }
 
@@ -442,7 +443,7 @@ mod tests {
             Err(err) => panic!("resized layout failed: {err}"),
         }
         assert_ne!(presenter.root_bounds(), painted_root_bounds);
-        presenter.complete_presented_frame();
+        presenter.complete_presented_frame(None);
 
         match presenter.last_frame() {
             Some(frame) => {
@@ -459,7 +460,7 @@ mod tests {
         }
 
         presenter.paint();
-        presenter.complete_presented_frame();
+        presenter.complete_presented_frame(None);
 
         match presenter.last_frame() {
             Some(frame) => assert_eq!(frame.viewport_size, resized),

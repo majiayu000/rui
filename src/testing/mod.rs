@@ -169,7 +169,7 @@ where
             .map_err(|err| HeadlessError::Layout {
                 message: err.to_string(),
             })?;
-        self.presenter.complete_presented_frame();
+        self.presenter.complete_presented_frame(None);
 
         match self.presenter.last_frame() {
             Some(frame) => Ok(frame),
@@ -270,7 +270,8 @@ where
 
     pub fn record_frame(&self) -> Result<RecordedScene, HeadlessError> {
         let mut renderer = RecordingRenderer::new();
-        renderer.render(self.presenter.scene(), &(), self.context.viewport_size())?;
+        let (scene, prepared_frame) = self.presenter.prepared_scene();
+        renderer.render(scene, &(), prepared_frame.viewport_size)?;
         match renderer.frames().first() {
             Some(frame) => Ok(frame.clone()),
             None => Err(HeadlessError::Renderer(RendererError::render_failed(
@@ -281,10 +282,11 @@ where
 
     pub fn capture_current_frame(&self) -> Result<CapturedFrame, HeadlessError> {
         let mut backend = MissingFrameCaptureBackend;
+        let (scene, prepared_frame) = self.presenter.prepared_scene();
         Ok(capture_frame_with_backend(
             &mut backend,
-            self.presenter.scene(),
-            self.context.viewport_size(),
+            scene,
+            prepared_frame.viewport_size,
         )?)
     }
 }

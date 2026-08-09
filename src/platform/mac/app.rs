@@ -17,7 +17,8 @@ use crate::platform::window::{
 };
 use crate::renderer::metal::MetalRenderer;
 use crate::renderer::{
-    RendererBatchDiagnostics, RendererError, RendererFramePhaseDurations, RendererTelemetryRecorder,
+    RendererBatchDiagnostics, RendererDiagnostics, RendererError, RendererFramePhaseDurations,
+    RendererTelemetryRecorder,
 };
 use objc2::MainThreadMarker;
 use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
@@ -292,16 +293,23 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
                     .saturating_duration_since(observed_at)
                     .as_nanos()
             });
-            if let Some(metal_drawable) = metal_drawable
-                && let Err(err) = renderer.render(presenter.scene(), metal_drawable, viewport_size)
-            {
-                panic!("renderer failed: {}", err);
-            }
+            let rendered = match metal_drawable {
+                Some(metal_drawable) => {
+                    if let Err(err) =
+                        renderer.render(presenter.scene(), metal_drawable, viewport_size)
+                    {
+                        panic!("renderer failed: {}", err);
+                    }
+                    true
+                }
+                None => false,
+            };
             phases.render_ns = render_started_at.elapsed().as_nanos();
 
-            presenter.record_renderer_diagnostics(renderer.diagnostics());
+            let rendered_diagnostics = rendered.then(|| renderer.diagnostics());
+            let frame_committed = complete_native_render(&mut presenter, rendered_diagnostics);
 
-            if let Some(recorder) = profile_recorder.as_mut() {
+            if frame_committed && let Some(recorder) = profile_recorder.as_mut() {
                 let diagnostics = match presenter.renderer_diagnostics() {
                     Some(diagnostics) => diagnostics,
                     None => panic!("renderer diagnostics were not recorded for this frame"),
@@ -317,7 +325,6 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
             }
 
             FramePipeline::finish_frame(&mut context);
-            presenter.complete_presented_frame();
 
             // Check if we should quit
             if !context.is_running() {
@@ -582,6 +589,17 @@ fn should_forward_key_event_to_tree(is_down: bool) -> bool {
     is_down
 }
 
+fn complete_native_render<E>(
+    presenter: &mut Presenter<E>,
+    diagnostics: Option<RendererDiagnostics>,
+) -> bool {
+    let Some(diagnostics) = diagnostics else {
+        return false;
+    };
+    presenter.complete_presented_frame(Some(diagnostics));
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -625,7 +643,7 @@ mod tests {
             panic!("layout failed: {err}");
         }
         presenter.paint();
-        presenter.complete_presented_frame();
+        presenter.complete_presented_frame(None);
 
         // The presenter keeps no viewport of its own, so the recorded frame can
         // only report what AppContext owns.
@@ -633,6 +651,28 @@ mod tests {
             Some(frame) => assert_eq!(frame.viewport_size, resized),
             None => panic!("expected a recorded frame"),
         }
+    }
+
+    #[test]
+    fn missing_drawable_does_not_commit_a_presented_frame() {
+        let viewport_size = Size::new(320.0, 240.0);
+        let mut presenter = Presenter::with_root(viewport_size, crate::elements::div());
+        if let Err(err) = presenter.layout(viewport_size) {
+            panic!("layout failed: {err}");
+        }
+        presenter.paint();
+
+        assert!(!complete_native_render(&mut presenter, None));
+
+        assert!(presenter.last_frame().is_none());
+        assert!(presenter.renderer_diagnostics().is_none());
+
+        assert!(complete_native_render(
+            &mut presenter,
+            Some(RendererDiagnostics::headless("test")),
+        ));
+        assert!(presenter.last_frame().is_some());
+        assert!(presenter.renderer_diagnostics().is_some());
     }
 
     #[test]
