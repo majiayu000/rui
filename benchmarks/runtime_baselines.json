@@ -1,13 +1,13 @@
 {
   "schema_version": 2,
-  "generated_at": "2026-08-10T01:58:24+08:00",
-  "baseline_revision": "4ad8ee8",
+  "generated_at": "2026-08-10T02:27:26+08:00",
+  "baseline_revision": "9b405fc",
   "environment": {
     "os": "macos",
     "arch": "aarch64",
     "rustc": "rustc 1.97.0 (2d8144b78 2026-07-07)",
     "profile": "bench",
-    "notes": "Local macOS arm64 calibration captured after warm-up at revision 4ad8ee8; refresh on stable CI hardware before enforcement."
+    "notes": "Local macOS arm64 calibration captured after warm-up at revision 9b405fc; refresh on stable CI hardware before enforcement."
   },
   "thresholds": {
     "warning_median_percent": 15.0,
@@ -26,48 +26,48 @@
       "id": "layout.flex_tree",
       "category": "layout",
       "unit": "ns_per_frame",
-      "median": 78539.71875,
-      "p95": 82192.0625,
+      "median": 80257.171875,
+      "p95": 82686.84375,
       "samples": 9
     },
     {
       "id": "text.measure_raster",
       "category": "text",
       "unit": "ns_per_frame",
-      "median": 420435.546875,
-      "p95": 430528.0,
+      "median": 435113.28125,
+      "p95": 442339.203125,
       "samples": 9
     },
     {
       "id": "text.multi_frame_layout",
       "category": "text",
       "unit": "ns_per_frame",
-      "median": 52460.9375,
-      "p95": 52820.3125,
+      "median": 52208.328125,
+      "p95": 52673.828125,
       "samples": 9
     },
     {
       "id": "scene.build",
       "category": "scene",
       "unit": "ns_per_frame",
-      "median": 5702.46875,
-      "p95": 6129.5625,
+      "median": 5687.5,
+      "p95": 5764.984375,
       "samples": 9
     },
     {
       "id": "event.pointer_dispatch",
       "category": "event",
       "unit": "ns_per_dispatch",
-      "median": 1034.7085,
-      "p95": 1047.958,
+      "median": 1051.7085,
+      "p95": 1087.167,
       "samples": 9
     },
     {
       "id": "renderer.recording_throughput",
       "category": "renderer",
       "unit": "ns_per_frame",
-      "median": 1660.15625,
-      "p95": 1719.390625,
+      "median": 1596.34375,
+      "p95": 1634.765625,
       "samples": 9
     }
   ]
