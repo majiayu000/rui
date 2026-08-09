@@ -36,31 +36,31 @@
 
 ## T4 GH123 Native Accessibility Bridge
 
-- [ ] Map roles, labels, values, actions, focus, and announcements through the
+- [x] Map roles, labels, values, actions, focus, and announcements through the
   native macOS bridge or explicit unsupported errors.
-- [ ] Fail closed for missing required accessibility metadata.
-- [ ] Verify `cargo test accessibility`.
-- [ ] Verify `cargo test platform_window`.
+- [x] Fail closed for missing required accessibility metadata.
+- [x] Verify `cargo test accessibility`.
+- [x] Verify `cargo test platform_window`.
 
 ## T5 GH124 Shared FramePipeline
 
-- [ ] Extract or explicitly model shared native/headless frame order.
-- [ ] Cover notification preservation and dirty clearing.
-- [ ] Cover redraw source classification.
-- [ ] Cover pointer hit testing against the previous completed scene.
-- [ ] Verify `cargo test headless`.
-- [ ] Verify `cargo test platform_window`.
-- [ ] Verify `cargo test event_targeting`.
-- [ ] Verify `cargo test renderer_resource`.
-- [ ] Verify `cargo test`.
+- [x] Extract or explicitly model shared native/headless frame order.
+- [x] Cover notification preservation and dirty clearing.
+- [x] Cover redraw source classification.
+- [x] Cover pointer hit testing against the previous completed scene.
+- [x] Verify `cargo test headless`.
+- [x] Verify `cargo test platform_window`.
+- [x] Verify `cargo test event_targeting`.
+- [x] Verify `cargo test renderer_resource`.
+- [x] Verify `cargo test`.
 
 ## T6 GH120 Presenter
 
-- [ ] Move per-window presentation state into `Presenter`.
-- [ ] Keep native handles and renderer backend resources outside `Presenter`.
-- [ ] Route native and headless runners through presenter-owned state.
-- [ ] Verify resize, focus, pointer capture, rebuild, and redraw behavior.
-- [ ] Verify `cargo test headless`.
-- [ ] Verify `cargo test event_targeting`.
-- [ ] Verify `cargo test platform_window`.
-- [ ] Verify `cargo test`.
+- [x] Move per-window presentation state into `Presenter`.
+- [x] Keep native handles and renderer backend resources outside `Presenter`.
+- [x] Route native and headless runners through presenter-owned state.
+- [x] Verify resize, focus, pointer capture, rebuild, and redraw behavior.
+- [x] Verify `cargo test headless`.
+- [x] Verify `cargo test event_targeting`.
+- [x] Verify `cargo test platform_window`.
+- [x] Verify `cargo test`.
