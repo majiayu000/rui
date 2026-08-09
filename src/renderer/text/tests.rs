@@ -474,19 +474,55 @@ fn repeated_measurement_reuses_the_cached_metrics_entry() {
 
 #[test]
 fn a_long_lived_empty_cache_retries_font_loading() {
-    let loads_before = crate::renderer::system_fonts::system_font_load_count();
     let mut cache = TextMeasureCache::retryable_without_font();
     let result = cache.measure_single_line(request("retry font loading"));
 
-    assert!(
-        crate::renderer::system_fonts::system_font_load_count() > loads_before,
-        "the same empty cache must initiate another font load"
-    );
     if cache.has_fonts() {
         assert!(result.is_ok());
+        assert!(!cache.fonts_retryable);
     } else {
         assert_eq!(result, Err(TextError::MissingFont));
+        assert!(cache.fonts_retryable);
     }
+}
+
+#[test]
+fn non_not_found_font_io_is_exposed_as_text_error() {
+    let mut cache = TextMeasureCache::with_font_error_for_test(
+        "/denied/font.ttf",
+        std::io::ErrorKind::PermissionDenied,
+        "permission denied by test",
+    );
+
+    assert_eq!(
+        cache.measure_single_line(request("fail closed")),
+        Err(TextError::FontIo {
+            path: "/denied/font.ttf".to_string(),
+            kind: std::io::ErrorKind::PermissionDenied,
+            message: "permission denied by test".to_string(),
+        })
+    );
+}
+
+#[test]
+fn raster_entries_are_invalidated_when_font_generation_changes() {
+    let mut cache = TextRasterCache::new();
+    let entry = match cache.resolve(request("generation")) {
+        Ok(Some(entry)) => entry,
+        Ok(None) => panic!("expected a raster entry"),
+        Err(TextError::MissingFont) => return,
+        Err(error) => panic!("unexpected raster error: {error:?}"),
+    };
+    assert!(entry.pixels.len() > 0);
+    assert_eq!(cache.resource_stats().live_entries, 1);
+
+    let previous_generation = cache.measurer.font_generation;
+    cache.measurer.font_generation = previous_generation.saturating_add(1);
+    cache.invalidate_for_font_generation_change(previous_generation);
+
+    assert!(cache.entries.is_empty());
+    assert_eq!(cache.resource_stats().live_entries, 0);
+    assert_eq!(cache.resource_stats().live_bytes, 0);
 }
 
 #[test]

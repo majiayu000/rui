@@ -5,9 +5,11 @@ use crate::renderer::resources::{
     GlyphResourceKey, RendererResourceCache, RendererResourceError, RendererResourceKind,
     RendererResourceStats,
 };
-use crate::renderer::system_fonts::{load_system_fonts, reload_system_fonts};
+use crate::renderer::system_fonts::{
+    FontLoadError, ResourceSnapshot, load_system_fonts, reload_system_fonts_for_family,
+};
 use crate::renderer::text_shaping::{TextShapingFont, rasterize_with_plan, shape_with_fonts};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 pub use crate::renderer::text_shaping::{
@@ -19,6 +21,11 @@ pub const TEXT_BOUNDS_TOLERANCE: f32 = 1.0;
 #[derive(Debug, Clone, PartialEq)]
 pub enum TextError {
     MissingFont,
+    FontIo {
+        path: String,
+        kind: std::io::ErrorKind,
+        message: String,
+    },
     UnsupportedFontFamily(String),
     Resource(RendererResourceError),
 }
@@ -117,6 +124,9 @@ const MAX_RETAINED_METRIC_BYTES: usize = 4 * 1024 * 1024;
 pub struct TextMeasureCache {
     fonts: Arc<Vec<TextShapingFont>>,
     fonts_retryable: bool,
+    font_generation: usize,
+    font_error: Option<FontLoadError>,
+    refreshed_missing_families: HashSet<String>,
     metrics: HashMap<TextMeasureKey, TextMetrics>,
     retained_metric_bytes: usize,
     #[cfg(test)]
@@ -131,6 +141,9 @@ impl TextMeasureCache {
         Self {
             fonts: snapshot.resources,
             fonts_retryable: snapshot.retryable,
+            font_generation: snapshot.generation,
+            font_error: snapshot.error,
+            refreshed_missing_families: HashSet::new(),
             metrics: HashMap::new(),
             retained_metric_bytes: 0,
             #[cfg(test)]
@@ -145,6 +158,9 @@ impl TextMeasureCache {
         Self {
             fonts: Arc::new(Vec::new()),
             fonts_retryable: false,
+            font_generation: 0,
+            font_error: None,
+            refreshed_missing_families: HashSet::new(),
             metrics: HashMap::new(),
             retained_metric_bytes: 0,
             metric_hits: 0,
@@ -157,10 +173,36 @@ impl TextMeasureCache {
         Self {
             fonts: Arc::new(Vec::new()),
             fonts_retryable: true,
+            font_generation: 0,
+            font_error: None,
+            refreshed_missing_families: HashSet::new(),
             metrics: HashMap::new(),
             retained_metric_bytes: 0,
             metric_hits: 0,
             font_refresh_enabled: true,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_font_error_for_test(
+        path: &str,
+        kind: std::io::ErrorKind,
+        message: &str,
+    ) -> Self {
+        Self {
+            fonts: Arc::new(Vec::new()),
+            fonts_retryable: true,
+            font_generation: 0,
+            font_error: Some(FontLoadError {
+                path: path.to_string(),
+                kind,
+                message: message.to_string(),
+            }),
+            refreshed_missing_families: HashSet::new(),
+            metrics: HashMap::new(),
+            retained_metric_bytes: 0,
+            metric_hits: 0,
+            font_refresh_enabled: false,
         }
     }
 
@@ -232,30 +274,58 @@ impl TextMeasureCache {
     }
 
     fn primary_font_index(&mut self, font_family: Option<&str>) -> Result<usize, TextError> {
+        self.prepare_fonts(font_family)?;
+        self.primary_font_index_prepared(font_family)
+    }
+
+    fn prepare_fonts(&mut self, font_family: Option<&str>) -> Result<(), TextError> {
         let family = font_family
             .map(str::trim)
             .filter(|family| !family.is_empty());
 
-        if self.font_refresh_enabled()
-            && (self.fonts.is_empty()
-                || self.fonts_retryable
-                || family.is_some_and(|family| {
-                    !matches!(family, "system" | "default")
-                        && !self
-                            .fonts
-                            .iter()
-                            .any(|font| font.family.eq_ignore_ascii_case(family))
-                }))
-        {
-            let snapshot = reload_system_fonts();
-            self.fonts = snapshot.resources;
-            self.fonts_retryable = snapshot.retryable;
-            self.clear_metrics();
+        if self.font_refresh_enabled() && (self.fonts.is_empty() || self.fonts_retryable) {
+            self.apply_font_snapshot(load_system_fonts());
+        }
+
+        if let Some(error) = self.font_error.as_ref() {
+            return Err(TextError::FontIo {
+                path: error.path.clone(),
+                kind: error.kind,
+                message: error.message.clone(),
+            });
         }
 
         if self.fonts.is_empty() {
             return Err(TextError::MissingFont);
         }
+
+        if let Some(family) = family
+            && !matches!(family, "system" | "default")
+            && !self
+                .fonts
+                .iter()
+                .any(|font| font.family.eq_ignore_ascii_case(family))
+            && !self.refreshed_missing_families.contains(family)
+            && let Some(snapshot) = reload_system_fonts_for_family(family)
+        {
+            self.refreshed_missing_families.insert(family.to_string());
+            self.apply_font_snapshot(snapshot);
+            if let Some(error) = self.font_error.as_ref() {
+                return Err(TextError::FontIo {
+                    path: error.path.clone(),
+                    kind: error.kind,
+                    message: error.message.clone(),
+                });
+            }
+        }
+
+        Ok(())
+    }
+
+    fn primary_font_index_prepared(&self, font_family: Option<&str>) -> Result<usize, TextError> {
+        let family = font_family
+            .map(str::trim)
+            .filter(|family| !family.is_empty());
 
         let Some(family) = family else {
             return Ok(0);
@@ -269,6 +339,17 @@ impl TextMeasureCache {
             .iter()
             .position(|font| font.family.eq_ignore_ascii_case(family))
             .ok_or_else(|| TextError::UnsupportedFontFamily(family.to_string()))
+    }
+
+    fn apply_font_snapshot(&mut self, snapshot: ResourceSnapshot<TextShapingFont>) {
+        if snapshot.generation != self.font_generation {
+            self.clear_metrics();
+            self.refreshed_missing_families.clear();
+        }
+        self.fonts = snapshot.resources;
+        self.fonts_retryable = snapshot.retryable;
+        self.font_generation = snapshot.generation;
+        self.font_error = snapshot.error;
     }
 
     fn retain_metrics(&mut self, key: TextMeasureKey, metrics: TextMetrics) {
@@ -368,6 +449,11 @@ impl TextRasterCache {
             request.font_family,
             request.line_height,
         );
+        if self.measurer.fonts_retryable {
+            let previous_generation = self.measurer.font_generation;
+            self.measurer.prepare_fonts(request.font_family)?;
+            self.invalidate_for_font_generation_change(previous_generation);
+        }
         if let Some(entry) = self.entries.get(&key).cloned() {
             let allocation = self.resources.resolve(key.clone(), entry.pixels.len())?;
             self.drop_evicted(allocation.evicted);
@@ -397,6 +483,13 @@ impl TextRasterCache {
     fn drop_evicted(&mut self, evicted: Vec<GlyphResourceKey>) {
         for key in evicted {
             self.entries.remove(&key);
+        }
+    }
+
+    fn invalidate_for_font_generation_change(&mut self, previous_generation: usize) {
+        if self.measurer.font_generation != previous_generation {
+            self.entries.clear();
+            self.resources.clear();
         }
     }
 }
