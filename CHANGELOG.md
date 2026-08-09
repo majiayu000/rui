@@ -4,7 +4,18 @@ All notable project changes should be recorded here.
 
 ## Unreleased
 
-- No unreleased changes yet.
+### Performance
+
+- System fonts are now parsed once per process and text measurement metrics
+  survive across frames, instead of both being rebuilt every frame.
+
+### Runtime
+
+- Added `LayoutContext::with_text_measurer` for callers that hold a text
+  measurement cache across frames. The cache-aware pipeline entry points are
+  `FramePipeline::layout_root_with_text_measurer` and
+  `FramePipeline::build_frame_with_text_measurer`; the original signatures
+  remain available for source compatibility.
 
 ## 0.2.5 - 2026-05-31
 

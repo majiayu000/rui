@@ -54,6 +54,7 @@ pub struct BenchmarkMeasurement {
 }
 
 pub fn run_case(case: &BenchCase) -> Result<BenchmarkMeasurement, BenchError> {
+    let _warm_up = (case.run)()?;
     let mut samples = Vec::with_capacity(SAMPLE_COUNT);
     for _ in 0..SAMPLE_COUNT {
         let sample = (case.run)()?;

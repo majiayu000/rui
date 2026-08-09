@@ -1,6 +1,6 @@
 use super::config::{
     EVENT_BENCHMARK_ID, LAYOUT_BENCHMARK_ID, RENDERER_BENCHMARK_ID, SCENE_BENCHMARK_ID,
-    TEXT_BENCHMARK_ID,
+    TEXT_BENCHMARK_ID, TEXT_MULTI_FRAME_BENCHMARK_ID,
 };
 use super::measure::{BenchCase, BenchError};
 use rui::core::event::MouseButton;
@@ -9,7 +9,7 @@ use rui::elements::element::{
 };
 use rui::renderer::text::{TextMeasureCache, TextRasterCache, TextRequest};
 use rui::renderer::{Primitive, RecordingRenderer, Renderer, Scene};
-use rui::{Bounds, Color, ElementId, Point, Size, div};
+use rui::{Bounds, Color, ElementId, Point, Size, div, text};
 use std::cell::Cell;
 use std::hint::black_box;
 use std::rc::Rc;
@@ -45,6 +45,12 @@ pub fn runtime_cases() -> Vec<BenchCase> {
             category: "text",
             unit: "ns_per_frame",
             run: bench_text_measure_raster,
+        },
+        BenchCase {
+            id: TEXT_MULTI_FRAME_BENCHMARK_ID,
+            category: "text",
+            unit: "ns_per_frame",
+            run: bench_text_multi_frame_layout,
         },
         BenchCase {
             id: SCENE_BENCHMARK_ID,
@@ -141,6 +147,58 @@ fn bench_text_measure_raster() -> Result<f64, BenchError> {
 
     black_box(checksum);
     Ok(start.elapsed().as_nanos() as f64 / FRAME_ITERATIONS as f64)
+}
+
+/// Lays out a text-heavy tree over many frames while reusing one measurement
+/// cache, the way a window's frame loop does. Guards the cross-frame caching in
+/// `TextMeasureCache`: before it, every frame re-parsed the system fonts and
+/// discarded the previous frame's metrics.
+fn bench_text_multi_frame_layout() -> Result<f64, BenchError> {
+    let viewport = Size::new(720.0, 480.0);
+    let mut measurer = TextMeasureCache::new();
+    let mut root = text_tree();
+    let mut taffy = TaffyTree::<ElementId>::new();
+    let start = Instant::now();
+    let mut checksum = 0.0f32;
+
+    for _ in 0..FRAME_ITERATIONS {
+        taffy.clear();
+        let root_node = {
+            let mut cx = LayoutContext::with_text_measurer(&mut taffy, viewport, &mut measurer);
+            root.layout(&mut cx)
+        };
+        taffy
+            .compute_layout(
+                root_node,
+                taffy::Size {
+                    width: AvailableSpace::Definite(viewport.width),
+                    height: AvailableSpace::Definite(viewport.height),
+                },
+            )
+            .map_err(|err| BenchError::new(format!("text layout benchmark failed: {err}")))?;
+        let layout = taffy
+            .layout(root_node)
+            .map_err(|err| BenchError::new(format!("text layout lookup failed: {err}")))?;
+        checksum += layout.size.width + layout.size.height;
+    }
+
+    black_box(checksum);
+    Ok(start.elapsed().as_nanos() as f64 / FRAME_ITERATIONS as f64)
+}
+
+fn text_tree() -> rui::Div {
+    let mut root = div().w(720.0).h(480.0).flex_col().gap(4.0).p(8.0);
+    for (index, content) in TEXT_ITEMS.iter().enumerate() {
+        let font_size = 13.0 + (index % 5) as f32;
+        root = root.child(
+            div()
+                .flex_row()
+                .gap(6.0)
+                .child(text(*content).size(font_size))
+                .child(text(*content).size(font_size)),
+        );
+    }
+    root
 }
 
 fn bench_scene_build() -> Result<f64, BenchError> {

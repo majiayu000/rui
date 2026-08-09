@@ -167,13 +167,14 @@ where
 
     pub fn frame(&mut self) -> Result<&HeadlessFrame, HeadlessError> {
         let viewport_size = self.presenter.viewport_size();
-        let (taffy, scene) = self.presenter.frame_surfaces_mut();
-        let root_bounds = FramePipeline::build_frame(
+        let (taffy, scene, text_measurer) = self.presenter.frame_resources_mut();
+        let root_bounds = FramePipeline::build_frame_with_text_measurer(
             &mut self.context,
             &mut self.root,
             &mut self.build_root,
             taffy,
             scene,
+            text_measurer,
             viewport_size,
         )
         .map_err(|err| HeadlessError::Layout {
