@@ -75,7 +75,11 @@ impl Presenter {
         &self.taffy
     }
 
-    pub fn frame_surfaces_mut(
+    pub fn frame_surfaces_mut(&mut self) -> (&mut TaffyTree<ElementId>, &mut Scene) {
+        (&mut self.taffy, &mut self.scene)
+    }
+
+    pub(crate) fn frame_resources_mut(
         &mut self,
     ) -> (&mut TaffyTree<ElementId>, &mut Scene, &mut TextMeasureCache) {
         (&mut self.taffy, &mut self.scene, &mut self.text_measurer)

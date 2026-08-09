@@ -190,7 +190,12 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
             let layout_started_at = Instant::now();
             let root_bounds = {
                 let (taffy, text_measurer) = presenter.layout_surfaces_mut();
-                match FramePipeline::layout_root(&mut root, taffy, text_measurer, viewport_size) {
+                match FramePipeline::layout_root_with_text_measurer(
+                    &mut root,
+                    taffy,
+                    text_measurer,
+                    viewport_size,
+                ) {
                     Ok(bounds) => bounds,
                     Err(err) => panic!("Layout failed: {err}"),
                 }

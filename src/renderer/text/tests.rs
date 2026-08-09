@@ -443,8 +443,10 @@ fn measure_caches_share_one_parsed_font_set() {
     let second = TextMeasureCache::new();
 
     if !first.has_fonts() {
-        // Without any installed candidate font the set stays retryable and is
-        // deliberately not shared; `system_fonts` covers that policy.
+        assert!(
+            !second.has_fonts(),
+            "font availability must not silently differ between adjacent cache constructions"
+        );
         return;
     }
     assert!(first.shares_fonts_with(&second));
@@ -454,6 +456,10 @@ fn measure_caches_share_one_parsed_font_set() {
 fn repeated_measurement_reuses_the_cached_metrics_entry() {
     let mut cache = TextMeasureCache::new();
     if !cache.has_fonts() {
+        assert_eq!(
+            cache.measure_single_line(request("cached once")),
+            Err(TextError::MissingFont)
+        );
         return;
     }
 
@@ -467,19 +473,74 @@ fn repeated_measurement_reuses_the_cached_metrics_entry() {
 }
 
 #[test]
-fn retained_metrics_stay_bounded_for_ever_changing_text() {
-    let mut cache = TextMeasureCache::new();
-    if !cache.has_fonts() {
-        return;
+fn a_long_lived_empty_cache_retries_font_loading() {
+    let loads_before = crate::renderer::system_fonts::system_font_load_count();
+    let mut cache = TextMeasureCache::retryable_without_font();
+    let result = cache.measure_single_line(request("retry font loading"));
+
+    assert!(
+        crate::renderer::system_fonts::system_font_load_count() > loads_before,
+        "the same empty cache must initiate another font load"
+    );
+    if cache.has_fonts() {
+        assert!(result.is_ok());
+    } else {
+        assert_eq!(result, Err(TextError::MissingFont));
     }
+}
+
+#[test]
+fn retained_metrics_stay_bounded_for_ever_changing_text() {
+    let mut cache = TextMeasureCache::without_font();
 
     for index in 0..(MAX_RETAINED_METRICS + 64) {
-        let content = format!("frame {index}");
-        measure(&mut cache, request(&content));
+        cache.retain_metrics(
+            TextMeasureKey {
+                content: format!("frame {index}"),
+                size_bits: 12.0f32.to_bits(),
+                line_height_bits: 1.2f32.to_bits(),
+                font_weight: 400,
+                font_family: "test".to_string(),
+            },
+            TextMetrics::empty(),
+        );
         assert!(
             cache.cached_metrics_len() <= MAX_RETAINED_METRICS,
             "retained metrics must stay bounded across frames"
         );
     }
     assert!(cache.cached_metrics_len() > 0);
+}
+
+#[test]
+fn retained_metrics_stay_within_the_byte_budget() {
+    let mut cache = TextMeasureCache::without_font();
+    let chunk = "x".repeat(MAX_RETAINED_METRIC_BYTES / 3);
+
+    for index in 0..6 {
+        cache.retain_metrics(
+            TextMeasureKey {
+                content: format!("{index}{chunk}"),
+                size_bits: 12.0f32.to_bits(),
+                line_height_bits: 1.2f32.to_bits(),
+                font_weight: 400,
+                font_family: "test".to_string(),
+            },
+            TextMetrics::empty(),
+        );
+        assert!(cache.cached_metric_bytes() <= MAX_RETAINED_METRIC_BYTES);
+    }
+
+    let entries_before_oversized_key = cache.cached_metrics_len();
+    cache.retain_metrics(
+        TextMeasureKey {
+            content: "y".repeat(MAX_RETAINED_METRIC_BYTES + 1),
+            size_bits: 12.0f32.to_bits(),
+            line_height_bits: 1.2f32.to_bits(),
+            font_weight: 400,
+            font_family: "test".to_string(),
+        },
+        TextMetrics::empty(),
+    );
+    assert_eq!(cache.cached_metrics_len(), entries_before_oversized_key);
 }
