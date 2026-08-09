@@ -81,6 +81,14 @@ impl FontLoadError {
             message: error.to_string(),
         }
     }
+
+    fn invalid_data(path: &str, message: impl Into<String>) -> Self {
+        Self {
+            path: path.to_string(),
+            kind: std::io::ErrorKind::InvalidData,
+            message: message.into(),
+        }
+    }
 }
 
 pub(crate) struct ResourceLoad<T> {
@@ -284,17 +292,55 @@ fn load_font_faces_with(
         Err(error) => return Err(FontLoadError::new(path, error)),
     };
     let data = Arc::new(bytes);
+    let face_count = font_face_count(path, data.as_slice())?;
 
-    for index in 0..MAX_FACES_PER_FILE {
-        let Some(font) = Font::try_from_vec_and_index(data.as_ref().clone(), index) else {
-            break;
-        };
-        if rustybuzz::Face::from_slice(data.as_slice(), index).is_none() {
-            break;
+    for index in 0..face_count {
+        let rusttype_font = Font::try_from_vec_and_index(data.as_ref().clone(), index);
+        let rustybuzz_font = rustybuzz::Face::from_slice(data.as_slice(), index);
+        match (rusttype_font, rustybuzz_font) {
+            (Some(font), Some(_)) => {
+                fonts.push(TextShapingFont::new(family, index, data.clone(), font));
+            }
+            (None, None) => {
+                return Err(FontLoadError::invalid_data(
+                    path,
+                    format!("font face {index} cannot be parsed"),
+                ));
+            }
+            _ => {
+                return Err(FontLoadError::invalid_data(
+                    path,
+                    format!("font face {index} is not supported by both text engines"),
+                ));
+            }
         }
-        fonts.push(TextShapingFont::new(family, index, data.clone(), font));
     }
     Ok(())
+}
+
+fn font_face_count(path: &str, data: &[u8]) -> Result<u32, FontLoadError> {
+    if !data.starts_with(b"ttcf") {
+        return Ok(1);
+    }
+    let Some(count_bytes) = data.get(8..12) else {
+        return Err(FontLoadError::invalid_data(
+            path,
+            "font collection header is truncated",
+        ));
+    };
+    let count = u32::from_be_bytes([
+        count_bytes[0],
+        count_bytes[1],
+        count_bytes[2],
+        count_bytes[3],
+    ]);
+    if count == 0 || count > MAX_FACES_PER_FILE {
+        return Err(FontLoadError::invalid_data(
+            path,
+            format!("font collection declares unsupported face count {count}"),
+        ));
+    }
+    Ok(count)
 }
 
 #[cfg(test)]
@@ -362,6 +408,32 @@ mod tests {
         assert_eq!(error.kind, std::io::ErrorKind::PermissionDenied);
         assert!(error.message.contains("permission denied by test"));
         assert!(fonts.is_empty());
+    }
+
+    #[test]
+    fn malformed_font_data_is_an_explicit_retryable_error() {
+        let mut fonts = Vec::new();
+        let error = load_font_faces_with("Broken", "/fonts/broken.ttf", &mut fonts, |_| {
+            Ok(b"not a font".to_vec())
+        })
+        .expect_err("readable malformed font data must not be cached as a successful load");
+
+        assert_eq!(error.path, "/fonts/broken.ttf");
+        assert_eq!(error.kind, std::io::ErrorKind::InvalidData);
+        assert!(error.message.contains("face 0 cannot be parsed"));
+        assert!(fonts.is_empty());
+    }
+
+    #[test]
+    fn font_collection_face_count_is_validated() {
+        let mut header = b"ttcf\0\x01\0\0".to_vec();
+        header.extend_from_slice(&2_u32.to_be_bytes());
+        assert_eq!(font_face_count("two.ttc", &header), Ok(2));
+
+        header[8..12].copy_from_slice(&0_u32.to_be_bytes());
+        let error = font_face_count("empty.ttc", &header)
+            .expect_err("a collection must declare at least one face");
+        assert_eq!(error.kind, std::io::ErrorKind::InvalidData);
     }
 
     #[test]
