@@ -328,6 +328,7 @@ fn rasterization_filters_control_characters_like_measurement() {
 fn empty_raster_requests_do_not_require_fonts() {
     let mut cache = TextRasterCache {
         measurer: TextMeasureCache::without_font(),
+        font_generation: 0,
         resources: RendererResourceCache::unbounded(RendererResourceKind::Glyph),
         entries: HashMap::new(),
     };
@@ -347,6 +348,7 @@ fn empty_raster_requests_do_not_require_fonts() {
 fn raster_cache_hits_do_not_require_reshaping() {
     let mut cache = TextRasterCache {
         measurer: TextMeasureCache::without_font(),
+        font_generation: 0,
         resources: RendererResourceCache::unbounded(RendererResourceKind::Glyph),
         entries: HashMap::new(),
     };
@@ -494,32 +496,44 @@ fn non_not_found_font_io_is_exposed_as_text_error() {
         "permission denied by test",
     );
 
-    assert_eq!(
-        cache.measure_single_line(request("fail closed")),
-        Err(TextError::FontIo {
-            path: "/denied/font.ttf".to_string(),
-            kind: std::io::ErrorKind::PermissionDenied,
-            message: "permission denied by test".to_string(),
-        })
-    );
+    let error = cache
+        .measure_single_line(request("fail closed"))
+        .expect_err("font I/O failure must fail closed");
+    let TextError::Resource(RendererResourceError::InvalidResource { kind, message }) = error
+    else {
+        panic!("font I/O failure must use the existing resource error surface");
+    };
+    assert_eq!(kind, RendererResourceKind::Glyph);
+    assert!(message.contains("/denied/font.ttf"));
+    assert!(message.contains("PermissionDenied"));
+    assert!(message.contains("permission denied by test"));
 }
 
 #[test]
-fn raster_entries_are_invalidated_when_font_generation_changes() {
-    let mut cache = TextRasterCache::new();
-    let entry = match cache.resolve(request("generation")) {
-        Ok(Some(entry)) => entry,
-        Ok(None) => panic!("expected a raster entry"),
-        Err(TextError::MissingFont) => return,
-        Err(error) => panic!("unexpected raster error: {error:?}"),
+fn raster_cache_hit_is_invalidated_through_resolve_when_font_generation_changes() {
+    let mut cache = TextRasterCache {
+        measurer: TextMeasureCache::without_font(),
+        font_generation: 0,
+        resources: RendererResourceCache::unbounded(RendererResourceKind::Glyph),
+        entries: HashMap::new(),
     };
-    assert!(entry.pixels.len() > 0);
-    assert_eq!(cache.resource_stats().live_entries, 1);
+    let key = GlyphResourceKey::new("generation", 20.0, 400, None, 1.2);
+    let entry = Arc::new(TextRasterEntry {
+        id: 7,
+        metrics: TextMetrics::empty(),
+        pixels: vec![255, 255, 255, 255],
+    });
+    cache.entries.insert(key.clone(), entry);
+    cache
+        .resources
+        .resolve(key, 4)
+        .expect("test raster resource should be retained");
+    cache.measurer.font_generation = 1;
 
-    let previous_generation = cache.measurer.font_generation;
-    cache.measurer.font_generation = previous_generation.saturating_add(1);
-    cache.invalidate_for_font_generation_change(previous_generation);
-
+    assert!(matches!(
+        cache.resolve(request("generation")),
+        Err(TextError::MissingFont)
+    ));
     assert!(cache.entries.is_empty());
     assert_eq!(cache.resource_stats().live_entries, 0);
     assert_eq!(cache.resource_stats().live_bytes, 0);

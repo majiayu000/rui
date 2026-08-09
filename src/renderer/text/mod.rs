@@ -7,6 +7,7 @@ use crate::renderer::resources::{
 };
 use crate::renderer::system_fonts::{
     FontLoadError, ResourceSnapshot, load_system_fonts, reload_system_fonts_for_family,
+    system_font_generation,
 };
 use crate::renderer::text_shaping::{TextShapingFont, rasterize_with_plan, shape_with_fonts};
 use std::collections::{HashMap, HashSet};
@@ -21,11 +22,6 @@ pub const TEXT_BOUNDS_TOLERANCE: f32 = 1.0;
 #[derive(Debug, Clone, PartialEq)]
 pub enum TextError {
     MissingFont,
-    FontIo {
-        path: String,
-        kind: std::io::ErrorKind,
-        message: String,
-    },
     UnsupportedFontFamily(String),
     Resource(RendererResourceError),
 }
@@ -283,16 +279,10 @@ impl TextMeasureCache {
             .map(str::trim)
             .filter(|family| !family.is_empty());
 
-        if self.font_refresh_enabled() && (self.fonts.is_empty() || self.fonts_retryable) {
-            self.apply_font_snapshot(load_system_fonts());
-        }
+        self.sync_font_snapshot();
 
         if let Some(error) = self.font_error.as_ref() {
-            return Err(TextError::FontIo {
-                path: error.path.clone(),
-                kind: error.kind,
-                message: error.message.clone(),
-            });
+            return Err(font_io_text_error(error));
         }
 
         if self.fonts.is_empty() {
@@ -306,16 +296,22 @@ impl TextMeasureCache {
                 .iter()
                 .any(|font| font.family.eq_ignore_ascii_case(family))
             && !self.refreshed_missing_families.contains(family)
-            && let Some(snapshot) = reload_system_fonts_for_family(family)
         {
-            self.refreshed_missing_families.insert(family.to_string());
-            self.apply_font_snapshot(snapshot);
-            if let Some(error) = self.font_error.as_ref() {
-                return Err(TextError::FontIo {
-                    path: error.path.clone(),
-                    kind: error.kind,
-                    message: error.message.clone(),
-                });
+            let snapshot = reload_system_fonts_for_family(family)
+                .map_err(|error| font_io_text_error(&error))?;
+            if let Some(snapshot) = snapshot {
+                self.apply_font_snapshot(snapshot);
+                if let Some(error) = self.font_error.as_ref() {
+                    return Err(font_io_text_error(error));
+                }
+                if !self.fonts_retryable
+                    && !self
+                        .fonts
+                        .iter()
+                        .any(|font| font.family.eq_ignore_ascii_case(family))
+                {
+                    self.refreshed_missing_families.insert(family.to_string());
+                }
             }
         }
 
@@ -350,6 +346,16 @@ impl TextMeasureCache {
         self.fonts_retryable = snapshot.retryable;
         self.font_generation = snapshot.generation;
         self.font_error = snapshot.error;
+    }
+
+    fn sync_font_snapshot(&mut self) {
+        if self.font_refresh_enabled()
+            && (self.fonts.is_empty()
+                || self.fonts_retryable
+                || self.font_generation != system_font_generation())
+        {
+            self.apply_font_snapshot(load_system_fonts());
+        }
     }
 
     fn retain_metrics(&mut self, key: TextMeasureKey, metrics: TextMetrics) {
@@ -393,22 +399,29 @@ impl Default for TextMeasureCache {
 
 pub struct TextRasterCache {
     measurer: TextMeasureCache,
+    font_generation: usize,
     resources: RendererResourceCache<GlyphResourceKey>,
     entries: HashMap<GlyphResourceKey, Arc<TextRasterEntry>>,
 }
 
 impl TextRasterCache {
     pub fn new() -> Self {
+        let measurer = TextMeasureCache::new();
+        let font_generation = measurer.font_generation;
         Self {
-            measurer: TextMeasureCache::new(),
+            measurer,
+            font_generation,
             resources: RendererResourceCache::unbounded(RendererResourceKind::Glyph),
             entries: HashMap::new(),
         }
     }
 
     pub fn with_limits(max_entries: usize, max_bytes: usize) -> Self {
+        let measurer = TextMeasureCache::new();
+        let font_generation = measurer.font_generation;
         Self {
-            measurer: TextMeasureCache::new(),
+            measurer,
+            font_generation,
             resources: RendererResourceCache::new(
                 RendererResourceKind::Glyph,
                 max_entries,
@@ -449,10 +462,10 @@ impl TextRasterCache {
             request.font_family,
             request.line_height,
         );
-        if self.measurer.fonts_retryable {
-            let previous_generation = self.measurer.font_generation;
-            self.measurer.prepare_fonts(request.font_family)?;
-            self.invalidate_for_font_generation_change(previous_generation);
+        self.measurer.sync_font_snapshot();
+        self.invalidate_for_font_generation_change();
+        if let Some(error) = self.measurer.font_error.as_ref() {
+            return Err(font_io_text_error(error));
         }
         if let Some(entry) = self.entries.get(&key).cloned() {
             let allocation = self.resources.resolve(key.clone(), entry.pixels.len())?;
@@ -460,7 +473,12 @@ impl TextRasterCache {
             return Ok(Some(entry));
         }
 
-        let primary_index = self.measurer.primary_font_index(request.font_family)?;
+        let prepared = self.measurer.prepare_fonts(request.font_family);
+        self.invalidate_for_font_generation_change();
+        prepared?;
+        let primary_index = self
+            .measurer
+            .primary_font_index_prepared(request.font_family)?;
         let plan = self.measurer.shape_with_primary(request, primary_index);
         let metrics = plan.metrics();
         if metrics.ink_bounds.is_empty() {
@@ -486,12 +504,23 @@ impl TextRasterCache {
         }
     }
 
-    fn invalidate_for_font_generation_change(&mut self, previous_generation: usize) {
-        if self.measurer.font_generation != previous_generation {
+    fn invalidate_for_font_generation_change(&mut self) {
+        if self.measurer.font_generation != self.font_generation {
             self.entries.clear();
             self.resources.clear();
+            self.font_generation = self.measurer.font_generation;
         }
     }
+}
+
+fn font_io_text_error(error: &FontLoadError) -> TextError {
+    TextError::Resource(RendererResourceError::invalid(
+        RendererResourceKind::Glyph,
+        format!(
+            "failed to load font at {} ({:?}): {}",
+            error.path, error.kind, error.message
+        ),
+    ))
 }
 
 impl Default for TextRasterCache {

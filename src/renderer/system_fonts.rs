@@ -213,13 +213,32 @@ pub(crate) fn load_system_fonts() -> ResourceSnapshot<TextShapingFont> {
     SYSTEM_TEXT_FONTS.get_or_load(load_system_fonts_uncached)
 }
 
+pub(crate) fn system_font_generation() -> usize {
+    SYSTEM_TEXT_FONTS.generation.load(Ordering::Acquire)
+}
+
 pub(crate) fn reload_system_fonts_for_family(
     family: &str,
-) -> Option<ResourceSnapshot<TextShapingFont>> {
-    let has_available_candidate = FONT_CANDIDATES.iter().any(|(candidate_family, path)| {
-        candidate_family.eq_ignore_ascii_case(family) && std::path::Path::new(path).exists()
-    });
-    has_available_candidate.then(|| SYSTEM_TEXT_FONTS.reload(load_system_fonts_uncached))
+) -> Result<Option<ResourceSnapshot<TextShapingFont>>, FontLoadError> {
+    let has_available_candidate =
+        has_available_candidate_with(family, |path| std::path::Path::new(path).try_exists())?;
+    Ok(has_available_candidate.then(|| SYSTEM_TEXT_FONTS.reload(load_system_fonts_uncached)))
+}
+
+fn has_available_candidate_with(
+    family: &str,
+    mut try_exists: impl FnMut(&str) -> std::io::Result<bool>,
+) -> Result<bool, FontLoadError> {
+    for (candidate_family, path) in FONT_CANDIDATES {
+        if candidate_family.eq_ignore_ascii_case(family) {
+            match try_exists(path) {
+                Ok(true) => return Ok(true),
+                Ok(false) => {}
+                Err(error) => return Err(FontLoadError::new(path, error)),
+            }
+        }
+    }
+    Ok(false)
 }
 
 #[cfg(test)]
@@ -343,6 +362,25 @@ mod tests {
         assert_eq!(error.kind, std::io::ErrorKind::PermissionDenied);
         assert!(error.message.contains("permission denied by test"));
         assert!(fonts.is_empty());
+    }
+
+    #[test]
+    fn candidate_metadata_error_preserves_path_and_kind() {
+        let error = has_available_candidate_with("Arial", |path| {
+            if path.ends_with("Arial.ttf") {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "metadata denied by test",
+                ))
+            } else {
+                Ok(false)
+            }
+        })
+        .expect_err("metadata errors must not look like an unavailable font family");
+
+        assert!(error.path.ends_with("Arial.ttf"));
+        assert_eq!(error.kind, std::io::ErrorKind::PermissionDenied);
+        assert!(error.message.contains("metadata denied by test"));
     }
 
     #[test]
