@@ -167,6 +167,10 @@ impl AppContext {
         }
     }
 
+    pub(crate) fn preserve_frame_work(&mut self) {
+        self.dirty = true;
+    }
+
     /// Whether anything is pending that a frame would render.
     ///
     /// The single definition of "idle" for the frame pipeline; runners must not

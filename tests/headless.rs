@@ -2,8 +2,8 @@ use rui::advanced_ui::{Button, Checkbox, Flex, column};
 use rui::core::accessibility::AccessibilityRole;
 use rui::core::event::Event;
 use rui::core::{AppContext, ElementId, Point, Size, View, ViewContext};
-use rui::elements::Element;
-use rui::elements::element::{LayoutContext, PaintContext};
+use rui::elements::element::{EventContext, LayoutContext, PaintContext, PointerEvent};
+use rui::elements::{Div, Element, div};
 use rui::testing::{HeadlessError, mount, mount_view};
 use std::cell::Cell;
 use std::rc::Rc;
@@ -30,6 +30,30 @@ struct ResizeAwareElement {
     resized: bool,
     resize_deliveries: Rc<Cell<u32>>,
     painted_resized_state: Rc<Cell<bool>>,
+}
+
+struct DispatchBoundsProbe {
+    inner: Div,
+    observed_width: Rc<Cell<u32>>,
+}
+
+impl Element for DispatchBoundsProbe {
+    fn style(&self) -> &rui::core::style::Style {
+        self.inner.style()
+    }
+
+    fn layout(&mut self, cx: &mut LayoutContext) -> NodeId {
+        self.inner.layout(cx)
+    }
+
+    fn paint(&mut self, cx: &mut PaintContext) {
+        self.inner.paint(cx);
+    }
+
+    fn handle_pointer_event(&mut self, cx: &mut EventContext, _event: &PointerEvent) -> bool {
+        self.observed_width.set(cx.bounds().width() as u32);
+        true
+    }
 }
 
 impl Element for ResizeAwareElement {
@@ -293,6 +317,20 @@ fn headless_resize_rebuilds_with_latest_viewport_size() {
     }
 
     assert_eq!(render_width.get(), 240);
+}
+
+#[test]
+fn headless_input_dispatch_uses_layout_for_the_latest_viewport() {
+    let observed_width = Rc::new(Cell::new(0));
+    let observed_width_ref = Rc::clone(&observed_width);
+    let mut session = mount_or_panic(Size::new(160.0, 80.0), move |_cx| DispatchBoundsProbe {
+        inner: div().w_full().h_full(),
+        observed_width: Rc::clone(&observed_width_ref),
+    });
+
+    let _handled_resize = session.resize(Size::new(240.0, 120.0));
+    assert!(session.pointer_down(Point::new(4.0, 4.0)));
+    assert_eq!(observed_width.get(), 240);
 }
 
 #[test]

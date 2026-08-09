@@ -193,6 +193,35 @@ where
         }
     }
 
+    fn dispatch_frame<R>(
+        &mut self,
+        dispatch: impl FnOnce(&mut Presenter<E>, &mut AppContext) -> R,
+    ) -> R {
+        let viewport_size = self.context.viewport_size();
+        let mut result = None;
+        let outcome = FramePipeline::run_frame(
+            &mut self.context,
+            &mut self.presenter,
+            &mut self.build_root,
+            viewport_size,
+            IdlePolicy::AlwaysDraw,
+            |presenter, context| {
+                result = Some(dispatch(presenter, context));
+                Ok(())
+            },
+            |_, _| Ok(FramePresentation::Presented(None)),
+        );
+        match outcome {
+            Ok(Some(_)) => {}
+            Ok(None) => panic!("headless input frame was skipped despite AlwaysDraw"),
+            Err(err) => panic!("headless input frame failed: {err}"),
+        }
+        match result {
+            Some(result) => result,
+            None => panic!("headless input frame did not run its dispatch stage"),
+        }
+    }
+
     pub fn resize(&mut self, viewport_size: Size) -> bool {
         self.context.set_viewport_size(viewport_size);
         self.context.request_rebuild();
@@ -206,11 +235,13 @@ where
     }
 
     pub fn dispatch_pointer_event(&mut self, event: PointerEvent) -> bool {
-        let dispatch = self.presenter.dispatch_pointer_event(&event);
-        if dispatch.redraw_requested {
-            self.context.request_redraw();
-        }
-        dispatch.stopped
+        self.dispatch_frame(move |presenter, context| {
+            let dispatch = presenter.dispatch_pointer_event(&event);
+            if dispatch.redraw_requested {
+                context.request_redraw();
+            }
+            dispatch.stopped
+        })
     }
 
     pub fn pointer_move(&mut self, position: Point) -> bool {
@@ -238,24 +269,26 @@ where
     }
 
     pub fn dispatch_scroll_event(&mut self, event: &ScrollEvent) -> bool {
-        let (handled, redraw_requested) = self
-            .presenter
-            .with_event_context(|root, event_cx| root.handle_scroll_event(event_cx, event));
-        if redraw_requested {
-            self.context.request_redraw();
-        }
-        handled
+        self.dispatch_frame(|presenter, context| {
+            let (handled, redraw_requested) = presenter
+                .with_event_context(|root, event_cx| root.handle_scroll_event(event_cx, event));
+            if redraw_requested {
+                context.request_redraw();
+            }
+            handled
+        })
     }
 
     pub fn dispatch_key_event(&mut self, event: &KeyEvent) -> bool {
-        let context = &mut self.context;
-        let (handled, redraw_requested) = self
-            .presenter
-            .with_event_context(|root, event_cx| route_key_event(root, context, event_cx, event));
-        if handled || redraw_requested {
-            self.context.request_redraw();
-        }
-        handled
+        self.dispatch_frame(|presenter, context| {
+            let (handled, redraw_requested) = presenter.with_event_context(|root, event_cx| {
+                route_key_event(root, context, event_cx, event)
+            });
+            if handled || redraw_requested {
+                context.request_redraw();
+            }
+            handled
+        })
     }
 
     pub fn request_focus(&mut self, id: Option<ElementId>) {

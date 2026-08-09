@@ -219,7 +219,12 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
                         Some(metal_drawable) => {
                             renderer
                                 .render(presenter.scene(), metal_drawable, viewport_size)
-                                .map_err(|err| FramePipelineError::present(err.to_string()))?;
+                                .map_err(|err| {
+                                    FramePipelineError::stage(
+                                        crate::core::frame_pipeline::FrameStage::Present,
+                                        err.to_string(),
+                                    )
+                                })?;
                             FramePresentation::Presented(Some(renderer.diagnostics()))
                         }
                         None => FramePresentation::Deferred,

@@ -24,9 +24,9 @@ impl FramePipelineError {
         }
     }
 
-    pub(crate) fn present(message: impl Into<String>) -> Self {
+    pub fn stage(stage: FrameStage, message: impl Into<String>) -> Self {
         Self {
-            message: format!("present stage failed: {}", message.into()),
+            message: format!("{stage:?} stage failed: {}", message.into()),
         }
     }
 }
@@ -323,7 +323,7 @@ impl FramePipeline {
                             presenter.complete_presented_frame(diagnostics);
                             presented = true;
                         }
-                        Some(FramePresentation::Deferred) => {}
+                        Some(FramePresentation::Deferred) => context.preserve_frame_work(),
                         None => {
                             return Err(FramePipelineError::layout(
                                 "present stage did not report an outcome",
