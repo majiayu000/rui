@@ -4,6 +4,7 @@ pub const BASELINE_JSON: &str = include_str!("../../benchmarks/runtime_baselines
 
 pub const LAYOUT_BENCHMARK_ID: &str = "layout.flex_tree";
 pub const TEXT_BENCHMARK_ID: &str = "text.measure_raster";
+pub const TEXT_MULTI_FRAME_BENCHMARK_ID: &str = "text.multi_frame_layout";
 pub const SCENE_BENCHMARK_ID: &str = "scene.build";
 pub const EVENT_BENCHMARK_ID: &str = "event.pointer_dispatch";
 pub const RENDERER_BENCHMARK_ID: &str = "renderer.recording_throughput";
@@ -14,9 +15,10 @@ pub const REQUIRED_CATEGORIES: [&str; 5] = ["layout", "text", "scene", "event", 
 
 #[cfg(test)]
 #[allow(dead_code)]
-pub const BENCHMARK_IDS: [&str; 5] = [
+pub const BENCHMARK_IDS: [&str; 6] = [
     LAYOUT_BENCHMARK_ID,
     TEXT_BENCHMARK_ID,
+    TEXT_MULTI_FRAME_BENCHMARK_ID,
     SCENE_BENCHMARK_ID,
     EVENT_BENCHMARK_ID,
     RENDERER_BENCHMARK_ID,

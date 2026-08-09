@@ -4,6 +4,7 @@ mod primitives;
 mod resources;
 mod runtime;
 mod scene;
+mod system_fonts;
 mod telemetry;
 pub mod text;
 mod text_cluster_position;

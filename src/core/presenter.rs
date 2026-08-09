@@ -2,6 +2,7 @@ use crate::core::ElementId;
 use crate::core::geometry::{Bounds, Point, Size};
 use crate::elements::element::PointerEventKind;
 use crate::renderer::Scene;
+use crate::renderer::text::TextMeasureCache;
 use taffy::prelude::TaffyTree;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -15,6 +16,7 @@ pub struct Presenter {
     viewport_size: Size,
     taffy: TaffyTree<ElementId>,
     scene: Scene,
+    text_measurer: TextMeasureCache,
     root_bounds: Bounds,
     focused_element: Option<ElementId>,
     last_pointer_hit_target: Option<ElementId>,
@@ -28,6 +30,7 @@ impl Presenter {
             viewport_size,
             taffy: TaffyTree::new(),
             scene: Scene::new(),
+            text_measurer: TextMeasureCache::new(),
             root_bounds: Bounds::from_xywh(0.0, 0.0, viewport_size.width, viewport_size.height),
             focused_element: None,
             last_pointer_hit_target: None,
@@ -72,8 +75,16 @@ impl Presenter {
         &self.taffy
     }
 
-    pub fn frame_surfaces_mut(&mut self) -> (&mut TaffyTree<ElementId>, &mut Scene) {
-        (&mut self.taffy, &mut self.scene)
+    pub fn frame_surfaces_mut(
+        &mut self,
+    ) -> (&mut TaffyTree<ElementId>, &mut Scene, &mut TextMeasureCache) {
+        (&mut self.taffy, &mut self.scene, &mut self.text_measurer)
+    }
+
+    /// Layout inputs owned by the presenter. The text measurement cache is
+    /// handed out by reference so its metrics survive across frames.
+    pub fn layout_surfaces_mut(&mut self) -> (&mut TaffyTree<ElementId>, &mut TextMeasureCache) {
+        (&mut self.taffy, &mut self.text_measurer)
     }
 
     pub fn paint_surfaces_mut(&mut self) -> (&TaffyTree<ElementId>, &mut Scene) {

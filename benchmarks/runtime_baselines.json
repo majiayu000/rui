@@ -39,6 +39,14 @@
       "samples": 9
     },
     {
+      "id": "text.multi_frame_layout",
+      "category": "text",
+      "unit": "ns_per_frame",
+      "median": 47546.2,
+      "p95": 49943.4,
+      "samples": 9
+    },
+    {
       "id": "scene.build",
       "category": "scene",
       "unit": "ns_per_frame",
