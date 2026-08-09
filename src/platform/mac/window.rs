@@ -3,6 +3,7 @@
 use crate::core::event::{KeyCode, KeyEvent, Modifiers, MouseButton, ScrollEvent};
 use crate::core::geometry::{Point, Size};
 use crate::core::window::WindowOptions;
+use crate::platform::mac::MacAccessibilityBridge;
 use crate::platform::mac::lifecycle::{MacLifecycleDelegate, MacLifecycleEvent};
 use crate::platform::window::{
     PlatformImeEvent, PlatformInputEvent, PlatformMouseEvent, PlatformMouseEventKind,
@@ -22,12 +23,15 @@ use objc2_app_kit::{
 use objc2_foundation::{NSDate, NSDefaultRunLoopMode, NSPoint, NSRect, NSSize, NSString};
 use objc2_quartz_core::CAMetalLayer;
 
-pub(crate) const MAC_REDRAW_EVENT_DATA: isize = 0x5255_4952;
-const MAC_REDRAW_EVENT_SUBTYPE: i16 = 0;
+use crate::platform::mac::events::{
+    MAC_REDRAW_EVENT_DATA, MacApplicationEvent, MacWindowEvent, append_platform_events,
+    application_event, post_application_event,
+};
 
 pub struct MacWindow {
     window: Retained<NSWindow>,
     metal_layer: Retained<CAMetalLayer>,
+    accessibility_bridge: MacAccessibilityBridge,
     last_content_size: Size,
     last_scale_factor: f32,
     last_focused: bool,
@@ -38,6 +42,10 @@ pub struct MacWindow {
 }
 
 impl MacWindow {
+    pub(crate) fn accessibility_bridge_mut(&mut self) -> &mut MacAccessibilityBridge {
+        &mut self.accessibility_bridge
+    }
+
     pub(crate) fn make_key_and_order_front(&self) {
         unsafe {
             let _: () = msg_send![
@@ -128,9 +136,11 @@ impl MacWindow {
         &mut self,
         app: &NSApplication,
         wait_for_event: bool,
-    ) -> Result<Vec<PlatformWindowEvent>, PlatformWindowError> {
+    ) -> Result<Vec<MacWindowEvent>, PlatformWindowError> {
         let mut events = Vec::new();
-        self.push_lifecycle_events(&mut events)?;
+        let mut lifecycle_events = Vec::new();
+        self.push_lifecycle_events(&mut lifecycle_events)?;
+        append_platform_events(&mut events, lifecycle_events);
 
         let mask = platform_event_mask();
         let mut expiration = if wait_for_event {
@@ -150,24 +160,47 @@ impl MacWindow {
 
             if event.windowNumber() != window_number {
                 app.sendEvent(&event);
-                self.push_delegate_lifecycle_events(&mut events)?;
+                let mut lifecycle_events = Vec::new();
+                self.push_delegate_lifecycle_events(&mut lifecycle_events)?;
+                append_platform_events(&mut events, lifecycle_events);
                 continue;
             }
 
             let event_type = event.r#type();
-            if event_type == NSEventType::ApplicationDefined
-                && event.data1() == MAC_REDRAW_EVENT_DATA
-            {
-                events.push(PlatformWindowEvent::RedrawRequested);
-                continue;
+            if event_type == NSEventType::ApplicationDefined {
+                match application_event(event.data1()) {
+                    Some(MacApplicationEvent::Redraw) => {
+                        events.push(MacWindowEvent::Platform(
+                            PlatformWindowEvent::RedrawRequested,
+                        ));
+                        continue;
+                    }
+                    Some(MacApplicationEvent::Accessibility) => {
+                        if let Some(request) = self.accessibility_bridge.take_action_request() {
+                            events.push(MacWindowEvent::Accessibility(request));
+                        }
+                        continue;
+                    }
+                    None => {}
+                }
             }
 
-            append_platform_events_from_native_event(&event, self.last_content_size, &mut events);
+            let mut platform_events = Vec::new();
+            append_platform_events_from_native_event(
+                &event,
+                self.last_content_size,
+                &mut platform_events,
+            );
+            append_platform_events(&mut events, platform_events);
             app.sendEvent(&event);
-            self.push_delegate_lifecycle_events(&mut events)?;
+            let mut lifecycle_events = Vec::new();
+            self.push_delegate_lifecycle_events(&mut lifecycle_events)?;
+            append_platform_events(&mut events, lifecycle_events);
         }
 
-        self.push_lifecycle_events(&mut events)?;
+        let mut lifecycle_events = Vec::new();
+        self.push_lifecycle_events(&mut lifecycle_events)?;
+        append_platform_events(&mut events, lifecycle_events);
         Ok(events)
     }
 
@@ -350,7 +383,15 @@ impl PlatformWindow for MacWindow {
             PlatformWindowError::backend("macos", "event polling must run on the main thread")
         })?;
         let app = NSApplication::sharedApplication(mtm);
-        self.poll_events_for_app(&app, false)
+        self.poll_events_for_app(&app, false).map(|events| {
+            events
+                .into_iter()
+                .map(|event| match event {
+                    MacWindowEvent::Platform(event) => event,
+                    MacWindowEvent::Accessibility(_) => PlatformWindowEvent::RedrawRequested,
+                })
+                .collect()
+        })
     }
 
     fn renderer_attachment(&self) -> Result<PlatformRendererAttachment, PlatformWindowError> {
@@ -366,28 +407,10 @@ impl PlatformWindow for MacWindow {
             .window
             .contentView()
             .ok_or_else(|| PlatformWindowError::backend("macos", "window has no content view"))?;
-        let mtm = MainThreadMarker::new().ok_or_else(|| {
-            PlatformWindowError::backend("macos", "redraw requested off the main thread")
-        })?;
-        let app = NSApplication::sharedApplication(mtm);
         unsafe {
             let _: () = msg_send![&*content_view, setNeedsDisplay: true];
         }
-        let event =
-            NSEvent::otherEventWithType_location_modifierFlags_timestamp_windowNumber_context_subtype_data1_data2(
-                NSEventType::ApplicationDefined,
-                NSPoint::new(0.0, 0.0),
-                NSEventModifierFlags::empty(),
-                NSDate::timeIntervalSinceReferenceDate_class(),
-                self.window_number(),
-                None,
-                MAC_REDRAW_EVENT_SUBTYPE,
-                MAC_REDRAW_EVENT_DATA,
-                0,
-            )
-            .ok_or_else(|| PlatformWindowError::backend("macos", "failed to create redraw event"))?;
-        app.postEvent_atStart(&event, false);
-        Ok(())
+        post_application_event(self.window_number(), MAC_REDRAW_EVENT_DATA)
     }
 
     fn close(&mut self) -> Result<(), PlatformWindowError> {
@@ -726,9 +749,13 @@ pub unsafe fn create_window(
     // Center window on screen
     window.center();
 
+    let accessibility_bridge =
+        MacAccessibilityBridge::attached_to(content_view.clone(), window.windowNumber());
+
     Ok(MacWindow {
         window,
         metal_layer,
+        accessibility_bridge,
         last_content_size: options.size,
         last_scale_factor: scale_factor as f32,
         last_focused: false,
@@ -762,36 +789,5 @@ impl MacWindowBackend {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn clipboard_text_or_error_rejects_missing_text() {
-        assert_eq!(
-            clipboard_text_or_error(None),
-            Err(PlatformWindowError::backend(
-                "macos",
-                "general pasteboard does not contain text",
-            ))
-        );
-        assert_eq!(
-            clipboard_text_or_error(Some(String::new())),
-            Ok(String::new())
-        );
-        assert_eq!(
-            clipboard_text_or_error(Some("copied".to_string())),
-            Ok("copied".to_string())
-        );
-    }
-
-    #[test]
-    fn committed_text_only_matches_single_char_key_events() {
-        let a_key = KeyEvent::new(KeyCode::A, Modifiers::none()).with_char('a');
-        assert!(committed_text_matches_key_event("a", &a_key));
-        assert!(!committed_text_matches_key_event("ab", &a_key));
-        assert!(!committed_text_matches_key_event("", &a_key));
-
-        let ime_key = KeyEvent::new(KeyCode::Unknown(0), Modifiers::none());
-        assert!(!committed_text_matches_key_event("好", &ime_key));
-    }
-}
+#[path = "window_tests.rs"]
+mod tests;

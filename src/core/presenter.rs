@@ -1,4 +1,7 @@
 use crate::core::ElementId;
+use crate::core::accessibility::{
+    AccessibilityAnnouncement, AccessibilityContext, AccessibilityError, AccessibilityTree,
+};
 use crate::core::app::AppContext;
 use crate::core::event::Event;
 use crate::core::frame_pipeline::{FramePipeline, FramePipelineError};
@@ -8,6 +11,7 @@ use crate::elements::element::{EventContext, PointerEvent, PointerEventKind};
 use crate::renderer::RendererDiagnostics;
 use crate::renderer::Scene;
 use crate::renderer::text::TextMeasureCache;
+use std::collections::HashMap;
 use taffy::prelude::TaffyTree;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -44,6 +48,8 @@ pub struct Presenter<E = ()> {
     text_measurer: TextMeasureCache,
     root_bounds: Bounds,
     focused_element: Option<ElementId>,
+    accessibility_announcements_enabled: bool,
+    pending_accessibility_announcements: Vec<AccessibilityAnnouncement>,
     last_pointer_hit_target: Option<ElementId>,
     pointer_capture_target: Option<ElementId>,
     renderer_diagnostics: Option<RendererDiagnostics>,
@@ -65,6 +71,8 @@ impl<E> Presenter<E> {
             text_measurer: TextMeasureCache::new(),
             root_bounds,
             focused_element: None,
+            accessibility_announcements_enabled: false,
+            pending_accessibility_announcements: Vec::new(),
             last_pointer_hit_target: None,
             pointer_capture_target: None,
             renderer_diagnostics: None,
@@ -99,11 +107,33 @@ impl<E> Presenter<E> {
     }
 
     pub fn set_focused_element(&mut self, focused_element: Option<ElementId>) {
+        if self.accessibility_announcements_enabled
+            && self.focused_element != focused_element
+            && let Some(id) = focused_element
+        {
+            self.pending_accessibility_announcements
+                .push(AccessibilityAnnouncement::new(
+                    id,
+                    crate::core::accessibility::AccessibilityAnnouncementKind::FocusChanged,
+                    "focus changed",
+                ));
+        }
         self.focused_element = focused_element;
     }
 
     pub fn focused_element_mut(&mut self) -> &mut Option<ElementId> {
         &mut self.focused_element
+    }
+
+    pub fn take_accessibility_announcements(&mut self) -> Vec<AccessibilityAnnouncement> {
+        std::mem::take(&mut self.pending_accessibility_announcements)
+    }
+
+    pub fn set_accessibility_announcements_enabled(&mut self, enabled: bool) {
+        self.accessibility_announcements_enabled = enabled;
+        if !enabled {
+            self.pending_accessibility_announcements.clear();
+        }
     }
 
     pub fn scene(&self) -> &Scene {
@@ -226,6 +256,19 @@ impl<E> Presenter<E>
 where
     E: Element,
 {
+    pub fn accessibility_tree(&self) -> Result<AccessibilityTree, AccessibilityError> {
+        let context = AccessibilityContext::new(self.focused_element);
+        let mut tree = self
+            .root
+            .accessibility_nodes(&context)
+            .map(AccessibilityTree::new)?;
+        let bounds_by_id = self.scene.accessibility_regions();
+        for node in tree.roots_mut() {
+            apply_accessibility_bounds(node, self.root_bounds, bounds_by_id);
+        }
+        Ok(tree)
+    }
+
     pub fn rebuild_if_needed<F>(&mut self, context: &mut AppContext, build_root: &mut F)
     where
         F: FnMut(&mut AppContext) -> E,
@@ -299,7 +342,14 @@ where
         let mut event_cx =
             EventContext::new(self.root_bounds, &self.taffy, &mut self.focused_element);
         let value = dispatch(&mut self.root, &mut event_cx);
-        (value, event_cx.redraw_requested())
+        let redraw_requested = event_cx.redraw_requested();
+        let announcements = event_cx.take_accessibility_announcements();
+        drop(event_cx);
+        if self.accessibility_announcements_enabled {
+            self.pending_accessibility_announcements
+                .extend(announcements);
+        }
+        (value, redraw_requested)
     }
 
     pub fn dispatch_pointer_event(&mut self, event: &PointerEvent) -> PointerDispatch {
@@ -323,6 +373,21 @@ where
 
     pub fn handle_window_event(&mut self, event: &Event) -> bool {
         self.root.handle_window_event(event)
+    }
+}
+
+fn apply_accessibility_bounds(
+    node: &mut crate::core::accessibility::AccessibilityNode,
+    inherited: Bounds,
+    bounds_by_id: &HashMap<ElementId, Bounds>,
+) {
+    let bounds = node
+        .a11y_bounds()
+        .or_else(|| bounds_by_id.get(&node.a11y_id()).copied())
+        .unwrap_or(inherited);
+    node.set_a11y_bounds(bounds);
+    for child in node.a11y_children_mut() {
+        apply_accessibility_bounds(child, bounds, bounds_by_id);
     }
 }
 
@@ -528,5 +593,21 @@ mod tests {
     fn renderer_diagnostics_start_empty() {
         let presenter = Presenter::with_root(Size::new(8.0, 8.0), div());
         assert!(presenter.renderer_diagnostics().is_none());
+    }
+
+    #[test]
+    fn explicit_accessibility_bounds_are_not_overwritten_by_scene_regions() {
+        let id = ElementId::from(77);
+        let explicit = Bounds::from_xywh(1.0, 2.0, 30.0, 40.0);
+        let mut node = crate::core::accessibility::AccessibilityNode::new(
+            id,
+            crate::core::accessibility::AccessibilityRole::ScrollArea,
+        )
+        .with_bounds(explicit);
+        let bounds_by_id = HashMap::from([(id, Bounds::from_xywh(9.0, 9.0, 9.0, 9.0))]);
+
+        apply_accessibility_bounds(&mut node, Bounds::ZERO, &bounds_by_id);
+
+        assert_eq!(node.a11y_bounds(), Some(explicit));
     }
 }

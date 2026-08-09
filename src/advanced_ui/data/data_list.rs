@@ -9,6 +9,7 @@ use crate::core::accessibility::{
     AccessibilityAction, AccessibilityContext, AccessibilityError, AccessibilityNode,
     AccessibilityRole,
 };
+use crate::core::action::{ActionId, ActionOutcome, StandardAction};
 use crate::core::geometry::Point;
 use crate::core::style::Style;
 use crate::elements::element::{
@@ -267,6 +268,26 @@ impl DataList {
     fn interactive_index(&self, index: Option<usize>) -> Option<usize> {
         index.filter(|&index| self.state.can_activate() && self.items[index].can_activate())
     }
+
+    fn select_index(&mut self, index: usize, cx: &EventContext) -> ActionOutcome {
+        let Some(item) = self.items.get(index) else {
+            return ActionOutcome::Ignored;
+        };
+        if !self.state.can_activate() || !item.can_activate() {
+            return ActionOutcome::Ignored;
+        }
+        let value = item.value.clone();
+        let label = item.label.clone();
+        if self.selected_value.as_deref() != Some(value.as_str()) {
+            self.selected_value = Some(value.clone());
+            if let Some(handler) = &self.on_select {
+                handler(&value);
+            }
+        }
+        cx.announce_accessibility_action(self.id, format!("{label} selected"));
+        cx.request_redraw();
+        ActionOutcome::handled("advanced_ui.data_list")
+    }
 }
 
 impl Element for DataList {
@@ -359,7 +380,8 @@ impl Element for DataList {
             .with_selected(self.selected_value.as_deref() == Some(item.value()))
             .with_enabled(!self.state.disabled() && !item.disabled)
             .with_read_only(self.state.read_only() || item.read_only)
-            .with_invalid(self.state.invalid() || item.invalid);
+            .with_invalid(self.state.invalid() || item.invalid)
+            .with_focused(cx.a11y_has_focus(item.id));
             if self.state.can_activate() && item.can_activate() {
                 child = child.with_action(AccessibilityAction::Activate);
             }
@@ -382,21 +404,22 @@ impl Element for DataList {
                     return false;
                 }
                 let index = release.released_index.expect("selected data list index");
-                let value = self.items[index].value.clone();
-                if self.selected_value.as_deref() != Some(value.as_str()) {
-                    self.selected_value = Some(value.clone());
-                    if let Some(handler) = &self.on_select {
-                        handler(&value);
-                    }
-                }
-                cx.announce_accessibility_action(
-                    self.id,
-                    format!("{} selected", self.items[index].label),
-                );
-                cx.request_redraw();
-                true
+                self.select_index(index, cx).is_handled()
             }
         }
+    }
+
+    fn handle_action(&mut self, cx: &mut EventContext, action: &ActionId) -> ActionOutcome {
+        if !matches!(action, ActionId::Standard(StandardAction::Activate)) {
+            return ActionOutcome::Ignored;
+        }
+        let Some(index) = cx
+            .focused_id()
+            .and_then(|focused| self.items.iter().position(|item| item.id == focused))
+        else {
+            return ActionOutcome::Ignored;
+        };
+        self.select_index(index, cx)
     }
 
     fn contains_id(&self, id: ElementId) -> bool {

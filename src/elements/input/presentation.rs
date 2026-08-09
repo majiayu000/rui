@@ -7,11 +7,28 @@ use crate::core::event::Cursor;
 use crate::core::geometry::{Bounds, Edges, Point};
 use crate::core::style::Corners;
 use crate::core::text_editing::{TextEditLayout, TextEditPaintStyle, TextRange};
-use crate::elements::element::PaintContext;
+use crate::elements::element::{EventContext, PaintContext};
 use crate::renderer::Primitive;
 use unicode_segmentation::UnicodeSegmentation;
 
 impl Input {
+    pub(super) fn sync_focus_from_context(&mut self, cx: &mut EventContext<'_>) -> bool {
+        let focused = cx.is_focused(self.id);
+        if self.state.focused == focused {
+            return false;
+        }
+        self.state.focused = focused;
+        if focused {
+            if let Some(handler) = &self.on_focus {
+                handler();
+            }
+        } else if let Some(handler) = &self.on_blur {
+            handler();
+        }
+        cx.request_redraw();
+        true
+    }
+
     /// Get display text (masked for password)
     pub(super) fn display_text(&self) -> String {
         if self.input_type == InputType::Password {

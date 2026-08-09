@@ -1,6 +1,8 @@
 use super::support::*;
 use crate::core::action::route_key_event;
 use crate::core::app::AppContext;
+use crate::core::presenter::Presenter;
+use crate::elements::Div;
 
 // ==================== on_change Callback Tests ====================
 
@@ -190,6 +192,45 @@ fn test_on_focus_callback_called() {
         handler();
     }
     assert!(*called.borrow());
+}
+
+#[test]
+fn accessibility_focus_sync_blurs_the_previous_sibling_input() {
+    let first_id = ElementId::new();
+    let second_id = ElementId::new();
+    let first_focused = Rc::new(RefCell::new(0));
+    let first_blurred = Rc::new(RefCell::new(0));
+    let second_focused = Rc::new(RefCell::new(0));
+    let first_focus_count = Rc::clone(&first_focused);
+    let first_blur_count = Rc::clone(&first_blurred);
+    let second_focus_count = Rc::clone(&second_focused);
+    let root = Div::new()
+        .child(
+            Input::new()
+                .id(first_id)
+                .on_focus(move || *first_focus_count.borrow_mut() += 1)
+                .on_blur(move || *first_blur_count.borrow_mut() += 1),
+        )
+        .child(
+            Input::new()
+                .id(second_id)
+                .on_focus(move || *second_focus_count.borrow_mut() += 1),
+        );
+    let mut presenter = Presenter::with_root(Size::new(200.0, 40.0), root);
+
+    for id in [first_id, second_id] {
+        presenter.set_focused_element(Some(id));
+        presenter.with_event_context(|root, cx| {
+            root.dispatch_action(
+                cx,
+                &ActionId::custom(crate::core::action::SYNC_ACCESSIBILITY_FOCUS_ACTION),
+            )
+        });
+    }
+
+    assert_eq!(*first_focused.borrow(), 1);
+    assert_eq!(*first_blurred.borrow(), 1);
+    assert_eq!(*second_focused.borrow(), 1);
 }
 
 // ==================== on_blur Callback Tests ====================

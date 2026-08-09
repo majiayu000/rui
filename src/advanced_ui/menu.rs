@@ -5,6 +5,7 @@ use crate::core::accessibility::{
     AccessibilityAction, AccessibilityContext, AccessibilityError, AccessibilityNode,
     AccessibilityRole,
 };
+use crate::core::action::{ActionId, ActionOutcome, StandardAction};
 use crate::core::color::Color;
 use crate::core::event::{KeyCode, KeyEvent};
 use crate::core::geometry::{Bounds, Edges, Point};
@@ -300,6 +301,7 @@ impl Element for Menu {
                 bounds.width() - MENU_PADDING * 2.0,
                 self.item_height(),
             );
+            cx.register_accessibility_region(self.item_ids[index], item_bounds);
             let hovered = self.indexed_state.hovered_index() == Some(index);
             let selected = self.selected.as_deref() == Some(self.items[index].value());
             let disabled = self.state.disabled() || self.items[index].disabled;
@@ -367,7 +369,8 @@ impl Element for Menu {
                     .with_selected(selected)
                     .with_enabled(enabled)
                     .with_read_only(self.state.read_only())
-                    .with_invalid(self.state.invalid());
+                    .with_invalid(self.state.invalid())
+                    .with_focused(cx.a11y_has_focus(id));
             if enabled && !self.state.read_only() {
                 child = child.with_action(AccessibilityAction::Activate);
             }
@@ -439,6 +442,23 @@ impl Element for Menu {
                 }
             }
             _ => false,
+        }
+    }
+
+    fn handle_action(&mut self, cx: &mut EventContext, action: &ActionId) -> ActionOutcome {
+        if !matches!(action, ActionId::Standard(StandardAction::Activate)) {
+            return ActionOutcome::Ignored;
+        }
+        let Some(index) = cx
+            .focused_id()
+            .and_then(|focused| self.item_ids.iter().position(|id| *id == focused))
+        else {
+            return ActionOutcome::Ignored;
+        };
+        if self.activate_index(index, cx) {
+            ActionOutcome::handled("advanced_ui.menu")
+        } else {
+            ActionOutcome::Ignored
         }
     }
 

@@ -12,6 +12,7 @@ use rui::core::accessibility::{
 };
 use rui::core::event::{KeyCode, KeyEvent, Modifiers, MouseButton, ScrollEvent};
 use rui::core::geometry::{Bounds, Point, Size};
+use rui::core::presenter::Presenter;
 use rui::core::text_editing::TextInputEvent;
 use rui::elements::Element;
 use rui::elements::element::{
@@ -658,6 +659,27 @@ fn accessibility_focus_announcements_are_testable() {
         announcements[0].kind(),
         AccessibilityAnnouncementKind::FocusChanged
     );
+}
+
+#[test]
+fn accessibility_presenter_retains_announcements_for_the_native_bridge() {
+    let id = ElementId::new();
+    let mut presenter = Presenter::with_root(Size::new(40.0, 20.0), rui::elements::div());
+    presenter.set_accessibility_announcements_enabled(true);
+
+    let (_, redraw_requested) = presenter.with_event_context(|_, event_cx| {
+        event_cx.request_focus(Some(id));
+    });
+
+    assert!(!redraw_requested);
+    let announcements = presenter.take_accessibility_announcements();
+    assert_eq!(announcements.len(), 1);
+    assert_eq!(announcements[0].node_id(), id);
+    assert_eq!(
+        announcements[0].kind(),
+        AccessibilityAnnouncementKind::FocusChanged
+    );
+    assert!(presenter.take_accessibility_announcements().is_empty());
 }
 
 #[test]

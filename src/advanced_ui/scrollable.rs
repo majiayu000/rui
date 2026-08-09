@@ -154,6 +154,7 @@ impl Element for Scrollable {
     }
 
     fn paint(&mut self, cx: &mut PaintContext) {
+        cx.register_accessibility_region(self.id, cx.bounds());
         self.inner.paint(cx);
     }
 
@@ -227,6 +228,30 @@ impl Element for Scrollable {
         if !self.state.can_activate() {
             return crate::core::action::ActionOutcome::Ignored;
         }
+        if cx.focused_id() == Some(self.id) {
+            let forward = match action {
+                crate::core::action::ActionId::Custom(name)
+                    if name == crate::core::action::ACCESSIBILITY_SCROLL_FORWARD_ACTION =>
+                {
+                    Some(true)
+                }
+                crate::core::action::ActionId::Custom(name)
+                    if name == crate::core::action::ACCESSIBILITY_SCROLL_BACKWARD_ACTION =>
+                {
+                    Some(false)
+                }
+                _ => None,
+            };
+            if let Some(forward) = forward {
+                if self.inner.scroll_accessibility(forward) {
+                    cx.request_redraw();
+                    return crate::core::action::ActionOutcome::handled(
+                        "advanced_ui.scrollable accessibility",
+                    );
+                }
+                return crate::core::action::ActionOutcome::Ignored;
+            }
+        }
         self.inner.dispatch_action(cx, action)
     }
 
@@ -259,6 +284,7 @@ mod tests {
     use crate::advanced_ui::container;
     use crate::core::event::{Modifiers, ScrollEvent};
     use crate::core::geometry::{Bounds, Point};
+    use crate::core::presenter::Presenter;
     use crate::renderer::Scene;
     use std::cell::Cell;
     use std::rc::Rc;
@@ -459,6 +485,91 @@ mod tests {
         assert_eq!(
             accessibility_node(&scrollable).a11y_scroll_position(),
             Some(AccessibilityScrollPosition::new(0.0, 24.0, 0.0, 200.0))
+        );
+    }
+
+    #[test]
+    fn accessibility_scroll_action_uses_the_horizontal_axis() {
+        let id = ElementId::new();
+        let scrollable = Scrollable::new(crate::elements::div().w(300.0).h(40.0).flex_shrink(0.0))
+            .id(id)
+            .horizontal()
+            .w(100.0)
+            .h(40.0)
+            .accessibility_label("Columns");
+        let mut presenter = Presenter::with_root(Size::new(100.0, 40.0), scrollable);
+        presenter
+            .layout(Size::new(100.0, 40.0))
+            .expect("horizontal scrollable should lay out");
+        presenter.paint();
+        presenter.set_focused_element(Some(id));
+
+        let (outcome, redraw) = presenter.with_event_context(|root, cx| {
+            root.dispatch_action(
+                cx,
+                &crate::core::action::ActionId::custom(
+                    crate::core::action::ACCESSIBILITY_SCROLL_FORWARD_ACTION,
+                ),
+            )
+        });
+
+        assert!(outcome.is_handled());
+        assert!(redraw);
+        let tree = presenter
+            .accessibility_tree()
+            .expect("horizontal accessibility tree should build");
+        assert_eq!(
+            tree.roots()[0].a11y_scroll_position(),
+            Some(AccessibilityScrollPosition::new(40.0, 0.0, 200.0, 0.0))
+        );
+    }
+
+    #[test]
+    fn accessibility_scroll_action_routes_to_the_nested_target() {
+        let outer_id = ElementId::new();
+        let inner_id = ElementId::new();
+        let inner = Scrollable::new(container().w(100.0).h(300.0))
+            .id(inner_id)
+            .vertical()
+            .w(100.0)
+            .h(150.0)
+            .accessibility_label("Inner");
+        let outer = Scrollable::new(inner)
+            .id(outer_id)
+            .vertical()
+            .w(100.0)
+            .h(100.0)
+            .accessibility_label("Outer");
+        let mut presenter = Presenter::with_root(Size::new(100.0, 100.0), outer);
+        presenter
+            .layout(Size::new(100.0, 100.0))
+            .expect("nested scrollables should lay out");
+        presenter.paint();
+        presenter.set_focused_element(Some(inner_id));
+
+        let (outcome, redraw) = presenter.with_event_context(|root, cx| {
+            root.dispatch_action(
+                cx,
+                &crate::core::action::ActionId::custom(
+                    crate::core::action::ACCESSIBILITY_SCROLL_FORWARD_ACTION,
+                ),
+            )
+        });
+
+        assert!(outcome.is_handled());
+        assert!(redraw);
+        let tree = presenter
+            .accessibility_tree()
+            .expect("nested accessibility tree should build");
+        let outer = &tree.roots()[0];
+        let inner = &outer.a11y_children()[0];
+        assert_eq!(
+            outer.a11y_scroll_position(),
+            Some(AccessibilityScrollPosition::new(0.0, 0.0, 0.0, 50.0))
+        );
+        assert_eq!(
+            inner.a11y_scroll_position(),
+            Some(AccessibilityScrollPosition::new(0.0, 40.0, 0.0, 150.0))
         );
     }
 

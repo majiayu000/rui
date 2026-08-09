@@ -179,6 +179,23 @@ impl TextArea {
         }
     }
 
+    fn sync_focus_from_context(&mut self, cx: &mut EventContext<'_>) -> bool {
+        let focused = cx.is_focused(self.id);
+        if self.state.focused == focused {
+            return false;
+        }
+        self.state.focused = focused;
+        if focused {
+            if let Some(handler) = &self.on_focus {
+                handler();
+            }
+        } else if let Some(handler) = &self.on_blur {
+            handler();
+        }
+        cx.request_redraw();
+        true
+    }
+
     pub fn apply_text_input_event(
         &mut self,
         event: TextInputEvent,
@@ -506,6 +523,9 @@ impl Element for TextArea {
 
     fn paint(&mut self, cx: &mut PaintContext) {
         let bounds = cx.bounds();
+        if let Some(id) = self.id {
+            cx.register_accessibility_region(id, bounds);
+        }
         let (bg, text_color, border_color) = self.colors();
         cx.paint(Primitive::Quad {
             bounds,
@@ -555,17 +575,7 @@ impl Element for TextArea {
             self.state.hovered = false;
             return false;
         }
-        let should_be_focused = cx.is_focused(self.id);
-        if self.state.focused != should_be_focused {
-            self.state.focused = should_be_focused;
-            if self.state.focused {
-                if let Some(handler) = &self.on_focus {
-                    handler();
-                }
-            } else if let Some(handler) = &self.on_blur {
-                handler();
-            }
-        }
+        self.sync_focus_from_context(cx);
 
         let inside = cx.bounds().contains(event.position);
         match event.kind {
@@ -634,6 +644,11 @@ impl Element for TextArea {
     }
 
     fn handle_action(&mut self, cx: &mut EventContext, action: &ActionId) -> ActionOutcome {
+        if matches!(action, ActionId::Custom(name) if name == crate::core::action::SYNC_ACCESSIBILITY_FOCUS_ACTION)
+        {
+            self.sync_focus_from_context(cx);
+            return ActionOutcome::Ignored;
+        }
         if !cx.is_focused(self.id) && !self.state.focused {
             return ActionOutcome::Ignored;
         }
