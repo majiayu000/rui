@@ -14,6 +14,11 @@ All notable project changes should be recorded here.
 - Added `LayoutContext::with_text_measurer` for callers that hold a text
   measurement cache across frames. `FramePipeline::layout_root` and
   `FramePipeline::build_frame` take that cache as an argument.
+- `Presenter` now owns the root element it presents and the renderer diagnostics
+  snapshot for its window; native and headless runners drive frames through it
+  instead of holding their own copies.
+- `AppContext` is the single owner of viewport size. `Presenter` no longer keeps a
+  duplicate that had to be synchronized by hand.
 
 ## 0.2.5 - 2026-05-31
 
