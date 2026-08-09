@@ -324,7 +324,9 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
                 eprintln!("{}", telemetry.to_json_line());
             }
 
-            FramePipeline::finish_frame(&mut context);
+            if finish_native_frame(&mut context, frame_committed) {
+                request_automation_redraw(&window);
+            }
 
             // Check if we should quit
             if !context.is_running() {
@@ -600,6 +602,15 @@ fn complete_native_render<E>(
     true
 }
 
+fn finish_native_frame(context: &mut AppContext, rendered: bool) -> bool {
+    FramePipeline::finish_frame(context);
+    if rendered {
+        false
+    } else {
+        context.request_platform_redraw_from(RedrawSource::PlatformRedraw)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -673,6 +684,15 @@ mod tests {
         ));
         assert!(presenter.last_frame().is_some());
         assert!(presenter.renderer_diagnostics().is_some());
+    }
+
+    #[test]
+    fn missing_drawable_requeues_the_platform_redraw() {
+        let mut context = AppContext::new();
+        assert!(context.request_platform_redraw_from(RedrawSource::PlatformRedraw));
+
+        assert!(finish_native_frame(&mut context, false));
+        assert!(context.platform_redraw_pending());
     }
 
     #[test]
