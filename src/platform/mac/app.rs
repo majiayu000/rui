@@ -9,7 +9,7 @@ use crate::core::geometry::{Point, Size};
 use crate::core::presenter::Presenter;
 use crate::core::text_editing::TextInputEvent;
 use crate::core::window::WindowOptions;
-use crate::elements::element::{Element, EventContext, PointerEvent, PointerEventKind};
+use crate::elements::element::{Element, PointerEvent, PointerEventKind};
 use crate::platform::mac::window::create_window;
 use crate::platform::window::{
     PlatformImeEvent, PlatformInputEvent, PlatformMouseEvent, PlatformMouseEventKind,
@@ -17,7 +17,8 @@ use crate::platform::window::{
 };
 use crate::renderer::metal::MetalRenderer;
 use crate::renderer::{
-    RendererBatchDiagnostics, RendererError, RendererFramePhaseDurations, RendererTelemetryRecorder,
+    RendererBatchDiagnostics, RendererDiagnostics, RendererError, RendererFramePhaseDurations,
+    RendererTelemetryRecorder,
 };
 use objc2::MainThreadMarker;
 use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
@@ -53,7 +54,7 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
     E: Element + 'static,
 {
     let mut context = context;
-    let mut root = build_root(&mut context);
+    let root = build_root(&mut context);
 
     // Get main thread marker
     let mtm = MainThreadMarker::new().expect("Must be called from main thread");
@@ -96,10 +97,11 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
         // Activate the application
         app.activate();
 
-        let mut presenter = Presenter::new(options.size);
+        let mut presenter = Presenter::with_root(options.size, root);
 
-        // Main run loop
-        let mut viewport_size = presenter.viewport_size();
+        // Main run loop. AppContext is the single owner of viewport size; the
+        // window options only provide its initial value.
+        let mut viewport_size = options.size;
         context.set_viewport_size(viewport_size);
         let mut last_viewport_size = viewport_size;
         let mut profile_recorder = RendererTelemetryRecorder::enabled_from_env();
@@ -167,7 +169,6 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
             }
 
             let viewport_changed = synchronize_viewport_after_platform_events(
-                &mut presenter,
                 &mut context,
                 viewport_size,
                 last_viewport_size,
@@ -185,27 +186,17 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
                 continue;
             }
 
-            FramePipeline::rebuild_if_needed(&mut context, &mut root, &mut build_root);
+            presenter.rebuild_if_needed(&mut context, &mut build_root);
 
             let layout_started_at = Instant::now();
-            let root_bounds = {
-                let (taffy, text_measurer) = presenter.layout_surfaces_mut();
-                match FramePipeline::layout_root_with_text_measurer(
-                    &mut root,
-                    taffy,
-                    text_measurer,
-                    viewport_size,
-                ) {
-                    Ok(bounds) => bounds,
-                    Err(err) => panic!("Layout failed: {err}"),
-                }
-            };
-            presenter.set_root_bounds(root_bounds);
+            if let Err(err) = presenter.layout(viewport_size) {
+                panic!("Layout failed: {err}");
+            }
             phases.layout_ns = layout_started_at.elapsed().as_nanos();
 
             let dispatch_started_at = Instant::now();
             if viewport_changed {
-                root.handle_window_event(&Event::WindowResize {
+                presenter.handle_window_event(&Event::WindowResize {
                     width: viewport_size.width,
                     height: viewport_size.height,
                 });
@@ -219,12 +210,12 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
                     presenter.set_focused_element(None);
                     Event::Blur(crate::core::event::FocusEvent { focused: false })
                 };
-                root.handle_window_event(&evt);
+                presenter.handle_window_event(&evt);
                 schedule_platform_redraw(&window, &mut context, RedrawSource::PlatformFocus);
             }
 
             if close_requested {
-                root.handle_window_event(&Event::WindowClose);
+                presenter.handle_window_event(&Event::WindowClose);
                 context.quit();
                 schedule_platform_redraw(&window, &mut context, RedrawSource::PlatformLifecycle);
             }
@@ -234,33 +225,14 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
             }
 
             for event in &pointer_events {
-                let hit_target = presenter.hit_test(event.position);
-                let dispatch_target = presenter.pointer_dispatch_target(hit_target);
-                let previous_target = presenter.previous_pointer_target(event.kind);
-                let (stopped, redraw_requested) = {
-                    let (root_bounds, taffy, focused_element) = presenter.event_context_parts_mut();
-                    let mut event_cx = EventContext::new(root_bounds, taffy, focused_element);
-                    event_cx.set_hit_target(dispatch_target);
-                    event_cx.set_previous_hit_target(previous_target);
-
-                    let result = root.dispatch_pointer_event(&mut event_cx, event);
-                    (result.is_stopped(), event_cx.redraw_requested())
-                };
-
-                presenter.update_pointer_tracking(event.kind, stopped, dispatch_target, hit_target);
-
-                if redraw_requested {
+                if presenter.dispatch_pointer_event(event).redraw_requested {
                     schedule_platform_redraw(&window, &mut context, RedrawSource::Element);
                 }
             }
 
             for event in &scroll_events {
-                let redraw_requested = {
-                    let (root_bounds, taffy, focused_element) = presenter.event_context_parts_mut();
-                    let mut event_cx = EventContext::new(root_bounds, taffy, focused_element);
-                    root.handle_scroll_event(&mut event_cx, event);
-                    event_cx.redraw_requested()
-                };
+                let (_, redraw_requested) = presenter
+                    .with_event_context(|root, event_cx| root.handle_scroll_event(event_cx, event));
                 if redraw_requested {
                     schedule_platform_redraw(&window, &mut context, RedrawSource::Element);
                 }
@@ -271,13 +243,10 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
                     OrderedInputEvent::Key { is_down, event } => {
                         let (handled, redraw_requested) =
                             if should_forward_key_event_to_tree(*is_down) {
-                                let (root_bounds, taffy, focused_element) =
-                                    presenter.event_context_parts_mut();
-                                let mut event_cx =
-                                    EventContext::new(root_bounds, taffy, focused_element);
-                                let handled =
-                                    route_key_event(&mut root, &mut context, &mut event_cx, event);
-                                (handled, event_cx.redraw_requested())
+                                let context = &mut context;
+                                presenter.with_event_context(|root, event_cx| {
+                                    route_key_event(root, context, event_cx, event)
+                                })
                             } else {
                                 (false, false)
                             };
@@ -290,14 +259,8 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
                         }
                     }
                     OrderedInputEvent::Text(event) => {
-                        let (handled, redraw_requested) = {
-                            let (root_bounds, taffy, focused_element) =
-                                presenter.event_context_parts_mut();
-                            let mut event_cx =
-                                EventContext::new(root_bounds, taffy, focused_element);
-                            let handled = root.handle_text_input_event(&mut event_cx, event);
-                            (handled, event_cx.redraw_requested())
-                        };
+                        let (handled, redraw_requested) = presenter
+                            .with_event_context(|root, cx| root.handle_text_input_event(cx, event));
                         if handled || redraw_requested {
                             schedule_platform_redraw(
                                 &window,
@@ -316,10 +279,7 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
 
             // Paint phase
             let paint_started_at = Instant::now();
-            {
-                let (taffy, scene) = presenter.paint_surfaces_mut();
-                FramePipeline::paint_root(&mut root, taffy, scene, root_bounds);
-            }
+            presenter.paint();
             phases.paint_ns = paint_started_at.elapsed().as_nanos();
 
             // Get next drawable from the platform window renderer attachment
@@ -333,27 +293,40 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
                     .saturating_duration_since(observed_at)
                     .as_nanos()
             });
-            if let Some(metal_drawable) = metal_drawable
-                && let Err(err) = renderer.render(presenter.scene(), metal_drawable, viewport_size)
-            {
-                panic!("renderer failed: {}", err);
-            }
+            let rendered = match metal_drawable {
+                Some(metal_drawable) => {
+                    if let Err(err) =
+                        renderer.render(presenter.scene(), metal_drawable, viewport_size)
+                    {
+                        panic!("renderer failed: {}", err);
+                    }
+                    true
+                }
+                None => false,
+            };
             phases.render_ns = render_started_at.elapsed().as_nanos();
 
-            if let Some(recorder) = profile_recorder.as_mut() {
-                let diagnostics = renderer.diagnostics();
+            let rendered_diagnostics = rendered.then(|| renderer.diagnostics());
+            let frame_committed = complete_native_render(&mut presenter, rendered_diagnostics);
+
+            if frame_committed && let Some(recorder) = profile_recorder.as_mut() {
+                let diagnostics = match presenter.renderer_diagnostics() {
+                    Some(diagnostics) => diagnostics,
+                    None => panic!("renderer diagnostics were not recorded for this frame"),
+                };
                 let telemetry = recorder.capture_telemetry(
                     "metal",
                     viewport_size,
                     phases,
-                    &diagnostics,
+                    diagnostics,
                     RendererBatchDiagnostics::for_metal_scene(presenter.scene()),
                 );
                 eprintln!("{}", telemetry.to_json_line());
             }
 
-            FramePipeline::finish_frame(&mut context);
-            presenter.complete_frame();
+            if finish_native_frame(&mut context, frame_committed) {
+                request_automation_redraw(&window);
+            }
 
             // Check if we should quit
             if !context.is_running() {
@@ -363,8 +336,8 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
     }
 }
 
+/// Propagates a platform-reported size change to the single viewport-size owner.
 fn synchronize_viewport_after_platform_events(
-    presenter: &mut Presenter,
     context: &mut AppContext,
     viewport_size: Size,
     last_viewport_size: Size,
@@ -373,7 +346,6 @@ fn synchronize_viewport_after_platform_events(
         return false;
     }
 
-    presenter.set_viewport_size(viewport_size);
     context.set_viewport_size(viewport_size);
     context.request_rebuild();
     true
@@ -619,6 +591,26 @@ fn should_forward_key_event_to_tree(is_down: bool) -> bool {
     is_down
 }
 
+fn complete_native_render<E>(
+    presenter: &mut Presenter<E>,
+    diagnostics: Option<RendererDiagnostics>,
+) -> bool {
+    let Some(diagnostics) = diagnostics else {
+        return false;
+    };
+    presenter.complete_presented_frame(Some(diagnostics));
+    true
+}
+
+fn finish_native_frame(context: &mut AppContext, rendered: bool) -> bool {
+    FramePipeline::finish_frame(context);
+    if rendered {
+        false
+    } else {
+        context.request_platform_redraw_from(RedrawSource::PlatformRedraw)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -627,29 +619,80 @@ mod tests {
     fn native_viewport_resize_sync_requests_one_rebuild() {
         let initial_size = Size::new(320.0, 240.0);
         let resized = Size::new(640.0, 480.0);
-        let mut presenter = Presenter::new(initial_size);
         let mut context = AppContext::new();
         context.set_viewport_size(initial_size);
         context.needs_rebuild = false;
 
         assert!(synchronize_viewport_after_platform_events(
-            &mut presenter,
             &mut context,
             resized,
             initial_size,
         ));
-        assert_eq!(presenter.viewport_size(), resized);
         assert_eq!(context.viewport_size(), resized);
         assert!(context.needs_rebuild);
 
         context.needs_rebuild = false;
         assert!(!synchronize_viewport_after_platform_events(
-            &mut presenter,
             &mut context,
             resized,
             resized,
         ));
         assert!(!context.needs_rebuild);
+    }
+
+    #[test]
+    fn presented_frame_reports_the_viewport_owned_by_app_context() {
+        let initial_size = Size::new(320.0, 240.0);
+        let resized = Size::new(640.0, 480.0);
+        let mut context = AppContext::new();
+        context.set_viewport_size(initial_size);
+        let mut presenter = Presenter::with_root(initial_size, crate::elements::div());
+
+        synchronize_viewport_after_platform_events(&mut context, resized, initial_size);
+        let viewport_size = context.viewport_size();
+        if let Err(err) = presenter.layout(viewport_size) {
+            panic!("layout failed: {err}");
+        }
+        presenter.paint();
+        presenter.complete_presented_frame(None);
+
+        // The presenter keeps no viewport of its own, so the recorded frame can
+        // only report what AppContext owns.
+        match presenter.last_frame() {
+            Some(frame) => assert_eq!(frame.viewport_size, resized),
+            None => panic!("expected a recorded frame"),
+        }
+    }
+
+    #[test]
+    fn missing_drawable_does_not_commit_a_presented_frame() {
+        let viewport_size = Size::new(320.0, 240.0);
+        let mut presenter = Presenter::with_root(viewport_size, crate::elements::div());
+        if let Err(err) = presenter.layout(viewport_size) {
+            panic!("layout failed: {err}");
+        }
+        presenter.paint();
+
+        assert!(!complete_native_render(&mut presenter, None));
+
+        assert!(presenter.last_frame().is_none());
+        assert!(presenter.renderer_diagnostics().is_none());
+
+        assert!(complete_native_render(
+            &mut presenter,
+            Some(RendererDiagnostics::headless("test")),
+        ));
+        assert!(presenter.last_frame().is_some());
+        assert!(presenter.renderer_diagnostics().is_some());
+    }
+
+    #[test]
+    fn missing_drawable_requeues_the_platform_redraw() {
+        let mut context = AppContext::new();
+        assert!(context.request_platform_redraw_from(RedrawSource::PlatformRedraw));
+
+        assert!(finish_native_frame(&mut context, false));
+        assert!(context.platform_redraw_pending());
     }
 
     #[test]
