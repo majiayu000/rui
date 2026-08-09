@@ -97,6 +97,7 @@ impl Element for Toolbar {
     }
 
     fn paint(&mut self, cx: &mut PaintContext) {
+        cx.register_accessibility_region(self.id, cx.bounds());
         self.inner.paint(cx);
     }
 

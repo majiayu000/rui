@@ -9,6 +9,7 @@ use crate::core::accessibility::{
     AccessibilityAction, AccessibilityContext, AccessibilityError, AccessibilityNode,
     AccessibilityRole,
 };
+use crate::core::action::{ActionId, ActionOutcome, StandardAction};
 use crate::core::geometry::Point;
 use crate::core::style::Style;
 use crate::elements::element::{
@@ -288,6 +289,29 @@ impl DataTree {
                     .unwrap_or(false)
         })
     }
+
+    fn select_item_id(&mut self, id: ElementId, cx: &EventContext) -> ActionOutcome {
+        let Some((value, label)) = self
+            .visible_items()
+            .into_iter()
+            .find(|visible| visible.item.id == id && visible.item.can_activate())
+            .map(|visible| (visible.item.value.clone(), visible.item.label.clone()))
+        else {
+            return ActionOutcome::Ignored;
+        };
+        if !self.state.can_activate() {
+            return ActionOutcome::Ignored;
+        }
+        if self.selected_value.as_deref() != Some(value.as_str()) {
+            self.selected_value = Some(value.clone());
+            if let Some(handler) = &self.on_select {
+                handler(&value);
+            }
+        }
+        cx.announce_accessibility_action(self.id, format!("{label} selected"));
+        cx.request_redraw();
+        ActionOutcome::handled("advanced_ui.data_tree")
+    }
 }
 
 impl Element for DataTree {
@@ -376,6 +400,7 @@ impl Element for DataTree {
                 item,
                 &self.state,
                 self.selected_value.as_deref(),
+                cx,
             )?);
         }
         Ok(Some(node))
@@ -395,19 +420,21 @@ impl Element for DataTree {
                     return false;
                 }
                 let visible = self.visible_items();
-                let item = visible[release.released_index.expect("selected tree index")].item;
-                let value = item.value.clone();
-                let label = item.label.clone();
-                if self.selected_value.as_deref() != Some(value.as_str()) {
-                    self.selected_value = Some(value.clone());
-                    if let Some(handler) = &self.on_select {
-                        handler(&value);
-                    }
-                }
-                cx.announce_accessibility_action(self.id, format!("{label} selected"));
-                cx.request_redraw();
-                true
+                let id = visible[release.released_index.expect("selected tree index")]
+                    .item
+                    .id;
+                self.select_item_id(id, cx).is_handled()
             }
+        }
+    }
+
+    fn handle_action(&mut self, cx: &mut EventContext, action: &ActionId) -> ActionOutcome {
+        if !matches!(action, ActionId::Standard(StandardAction::Activate)) {
+            return ActionOutcome::Ignored;
+        }
+        match cx.focused_id() {
+            Some(id) => self.select_item_id(id, cx),
+            None => ActionOutcome::Ignored,
         }
     }
 
@@ -467,6 +494,7 @@ fn tree_item_accessibility(
     item: &DataTreeItem,
     state: &InteractionState,
     selected_value: Option<&str>,
+    cx: &AccessibilityContext,
 ) -> Result<AccessibilityNode, AccessibilityError> {
     let mut node =
         AccessibilityNode::label_required(item.id, AccessibilityRole::DataTreeItem, &item.label)?
@@ -474,13 +502,14 @@ fn tree_item_accessibility(
             .with_selected(selected_value == Some(item.value()))
             .with_enabled(!state.disabled() && !item.disabled)
             .with_read_only(state.read_only() || item.read_only)
-            .with_invalid(state.invalid() || item.invalid);
+            .with_invalid(state.invalid() || item.invalid)
+            .with_focused(cx.a11y_has_focus(item.id));
     if state.can_activate() && item.can_activate() {
         node = node.with_action(AccessibilityAction::Activate);
     }
     if item.expanded {
         for child in &item.children {
-            node = node.with_child(tree_item_accessibility(child, state, selected_value)?);
+            node = node.with_child(tree_item_accessibility(child, state, selected_value, cx)?);
         }
     }
     Ok(node)

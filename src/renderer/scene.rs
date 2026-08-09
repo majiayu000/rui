@@ -4,6 +4,7 @@ use crate::core::ElementId;
 use crate::core::geometry::{Bounds, Point};
 use crate::renderer::primitives::Primitive;
 use smallvec::SmallVec;
+use std::collections::HashMap;
 
 /// Draw order for scene layers and hit regions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
@@ -107,6 +108,8 @@ pub struct Scene {
     /// Active render-layer stack.
     active_layers: SmallVec<[LayerId; 8]>,
 
+    accessibility_regions: HashMap<ElementId, Bounds>,
+
     next_hit_order: usize,
 }
 
@@ -118,6 +121,7 @@ impl Scene {
             layer_stack: SmallVec::new(),
             layers: vec![Layer::new(root_id, 0, ZIndex::ROOT, None)],
             active_layers: smallvec::smallvec![root_id],
+            accessibility_regions: HashMap::new(),
             next_hit_order: 0,
         }
     }
@@ -128,6 +132,7 @@ impl Scene {
         self.layer_stack.clear();
         self.layers.clear();
         self.active_layers.clear();
+        self.accessibility_regions.clear();
         let root_id = LayerId(0);
         self.layers.push(Layer::new(root_id, 0, ZIndex::ROOT, None));
         self.active_layers.push(root_id);
@@ -141,6 +146,14 @@ impl Scene {
         if let Some(layer) = self.active_layer_mut() {
             layer.primitive_indices.push(primitive_index);
         }
+    }
+
+    pub(crate) fn accessibility_regions(&self) -> &HashMap<ElementId, Bounds> {
+        &self.accessibility_regions
+    }
+
+    pub(crate) fn register_accessibility_region(&mut self, id: ElementId, bounds: Bounds) {
+        self.accessibility_regions.insert(id, bounds);
     }
 
     /// Push a render layer for future z-ordered painting and hit testing.
@@ -208,6 +221,7 @@ impl Scene {
         z_index: impl Into<ZIndex>,
     ) -> bool {
         let z_index = z_index.into();
+        self.register_accessibility_region(id, bounds);
         let visible_bounds = match self.visible_bounds_for(bounds) {
             Some(bounds) => bounds,
             None => return false,
@@ -445,6 +459,18 @@ mod tests {
     }
 
     #[test]
+    fn hit_regions_also_supply_accessibility_geometry() {
+        let mut scene = Scene::new();
+        let id = ElementId::from(22);
+        let region = bounds(5.0, 6.0, 20.0, 30.0);
+
+        assert!(scene.register_hit_region(id, region));
+        assert_eq!(scene.accessibility_regions().get(&id), Some(&region));
+        scene.clear();
+        assert!(scene.accessibility_regions().is_empty());
+    }
+
+    #[test]
     fn hit_region_can_inherit_active_layer_z_index() {
         let mut scene = Scene::new();
         let root = ElementId::from(1);
@@ -460,10 +486,13 @@ mod tests {
     #[test]
     fn fully_clipped_hit_region_is_not_registered() {
         let mut scene = Scene::new();
+        let id = ElementId::from(1);
+        let region = bounds(20.0, 20.0, 5.0, 5.0);
 
         scene.push_layer(bounds(0.0, 0.0, 10.0, 10.0));
 
-        assert!(!scene.register_hit_region_at(ElementId::from(1), bounds(20.0, 20.0, 5.0, 5.0), 0));
+        assert!(!scene.register_hit_region_at(id, region, 0));
         assert_eq!(scene.hit_test(point(21.0, 21.0)), None);
+        assert_eq!(scene.accessibility_regions().get(&id), Some(&region));
     }
 }

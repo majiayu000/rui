@@ -163,6 +163,7 @@ impl Element for ProgressBar {
 
     fn paint(&mut self, cx: &mut PaintContext) {
         let bounds = cx.bounds();
+        cx.register_accessibility_region(self.id, bounds);
         let radius = self.style.border.radius;
         let state = self.state.into();
         let track = self.background.unwrap_or(self.theme.colors.progress_track);

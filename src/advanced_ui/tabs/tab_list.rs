@@ -6,6 +6,7 @@ use crate::core::accessibility::{
     AccessibilityAction, AccessibilityContext, AccessibilityError, AccessibilityNode,
     AccessibilityRole,
 };
+use crate::core::action::{ActionId, ActionOutcome, StandardAction};
 use crate::core::color::Color;
 use crate::core::event::{KeyCode, KeyEvent};
 use crate::core::geometry::{Bounds, Edges, Point};
@@ -347,6 +348,23 @@ impl Element for TabList {
         match target {
             Some(index) => self.select_index(index, cx),
             None => false,
+        }
+    }
+
+    fn handle_action(&mut self, cx: &mut EventContext, action: &ActionId) -> ActionOutcome {
+        if !matches!(action, ActionId::Standard(StandardAction::Activate)) {
+            return ActionOutcome::Ignored;
+        }
+        let Some(index) = cx
+            .focused_id()
+            .and_then(|focused| self.tabs.iter().position(|tab| tab.id == focused))
+        else {
+            return ActionOutcome::Ignored;
+        };
+        if self.select_index(index, cx) {
+            ActionOutcome::handled("advanced_ui.tab_list")
+        } else {
+            ActionOutcome::Ignored
         }
     }
 

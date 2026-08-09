@@ -104,6 +104,10 @@ impl<'a> PaintContext<'a> {
         self.scene.register_hit_region(id, bounds)
     }
 
+    pub fn register_accessibility_region(&mut self, id: ElementId, bounds: Bounds) {
+        self.scene.register_accessibility_region(id, bounds);
+    }
+
     /// Create a child paint context with new bounds
     pub fn with_bounds(&mut self, bounds: Bounds) -> PaintContext<'_> {
         PaintContext {

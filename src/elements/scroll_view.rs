@@ -288,6 +288,26 @@ impl ScrollView {
         self.state.metrics()
     }
 
+    pub(crate) fn scroll_accessibility(&mut self, forward: bool) -> bool {
+        const DELTA: f32 = 40.0;
+        let (dx, dy) = match self.direction {
+            ScrollDirection::Vertical => (0.0, if forward { DELTA } else { -DELTA }),
+            ScrollDirection::Horizontal => (if forward { DELTA } else { -DELTA }, 0.0),
+            ScrollDirection::Both if forward && self.state.can_scroll_down() => (0.0, DELTA),
+            ScrollDirection::Both if !forward && self.state.can_scroll_up() => (0.0, -DELTA),
+            ScrollDirection::Both => (if forward { DELTA } else { -DELTA }, 0.0),
+        };
+        let before = (self.state.offset_x, self.state.offset_y);
+        self.state.scroll_by(dx, dy);
+        if before == (self.state.offset_x, self.state.offset_y) {
+            return false;
+        }
+        if let Some(handler) = &self.on_scroll {
+            handler(self.state.offset_x, self.state.offset_y);
+        }
+        true
+    }
+
     fn should_show_scrollbar(&self) -> (bool, bool) {
         let show_y = match self.scrollbar_visibility {
             ScrollbarVisibility::Always => true,

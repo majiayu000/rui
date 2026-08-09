@@ -521,9 +521,10 @@ impl Element for Input {
 
     fn paint(&mut self, cx: &mut PaintContext) {
         let bounds = cx.bounds();
+        if let Some(id) = self.id {
+            cx.register_accessibility_region(id, bounds);
+        }
         let (bg, text_color, border_color) = self.colors();
-
-        // Paint background
         cx.paint(Primitive::Quad {
             bounds,
             background: bg.to_rgba(),
@@ -532,7 +533,6 @@ impl Element for Input {
             corner_radii: self.style.border.radius,
         });
 
-        // Paint focus ring
         if self.state.focused {
             let ring_bounds = Bounds::from_xywh(
                 bounds.x() - 2.0,
@@ -591,17 +591,7 @@ impl Element for Input {
             return false;
         }
 
-        let should_be_focused = cx.is_focused(self.id);
-        if self.state.focused != should_be_focused {
-            self.state.focused = should_be_focused;
-            if self.state.focused {
-                if let Some(handler) = &self.on_focus {
-                    handler();
-                }
-            } else if let Some(handler) = &self.on_blur {
-                handler();
-            }
-        }
+        self.sync_focus_from_context(cx);
 
         let inside = cx.bounds().contains(event.position);
         match event.kind {
@@ -677,6 +667,11 @@ impl Element for Input {
     }
 
     fn handle_action(&mut self, cx: &mut EventContext, action: &ActionId) -> ActionOutcome {
+        if matches!(action, ActionId::Custom(name) if name == crate::core::action::SYNC_ACCESSIBILITY_FOCUS_ACTION)
+        {
+            self.sync_focus_from_context(cx);
+            return ActionOutcome::Ignored;
+        }
         if !cx.is_focused(self.id) && !self.state.focused {
             return ActionOutcome::Ignored;
         }

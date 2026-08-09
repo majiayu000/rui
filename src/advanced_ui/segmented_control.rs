@@ -262,6 +262,7 @@ impl Element for SegmentedControl {
                 segment_width,
                 bounds.height(),
             );
+            cx.register_accessibility_region(self.option_ids[index], segment_bounds);
             let selected = option.value == self.selected;
             let hovered = self.indexed_state.hovered_index() == Some(index);
             let mut segment_state = self.state;
@@ -347,7 +348,8 @@ impl Element for SegmentedControl {
             .with_selected(option.value == self.selected)
             .with_enabled(!self.state.disabled())
             .with_read_only(self.state.read_only())
-            .with_invalid(self.state.invalid());
+            .with_invalid(self.state.invalid())
+            .with_focused(cx.a11y_has_focus(id));
             if self.state.can_activate() {
                 child = child.with_action(AccessibilityAction::Activate);
             }
@@ -392,7 +394,19 @@ impl Element for SegmentedControl {
     }
 
     fn handle_action(&mut self, cx: &mut EventContext, action: &ActionId) -> ActionOutcome {
-        if !cx.is_focused(Some(self.id)) || !self.state.can_activate() {
+        if !self.state.can_activate() {
+            return ActionOutcome::Ignored;
+        }
+
+        if matches!(action, ActionId::Standard(StandardAction::Activate))
+            && let Some(index) = cx
+                .focused_id()
+                .and_then(|focused| self.option_ids.iter().position(|id| *id == focused))
+        {
+            return self.select_index(index, cx);
+        }
+
+        if !cx.is_focused(Some(self.id)) {
             return ActionOutcome::Ignored;
         }
 

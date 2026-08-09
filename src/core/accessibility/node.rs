@@ -1,4 +1,5 @@
 use crate::core::ElementId;
+use crate::core::geometry::Bounds;
 
 use super::error::AccessibilityError;
 
@@ -126,6 +127,7 @@ pub struct AccessibilityNode {
     text_selection: Option<AccessibilityTextRange>,
     text_composition: Option<AccessibilityTextRange>,
     scroll_position: Option<AccessibilityScrollPosition>,
+    bounds: Option<Bounds>,
     actions: Vec<AccessibilityAction>,
     children: Vec<AccessibilityNode>,
 }
@@ -147,6 +149,7 @@ impl AccessibilityNode {
             text_selection: None,
             text_composition: None,
             scroll_position: None,
+            bounds: None,
             actions: Vec::new(),
             children: Vec::new(),
         }
@@ -206,6 +209,10 @@ impl AccessibilityNode {
 
     pub fn a11y_scroll_position(&self) -> Option<AccessibilityScrollPosition> {
         self.scroll_position
+    }
+
+    pub fn a11y_bounds(&self) -> Option<Bounds> {
+        self.bounds
     }
 
     pub fn a11y_actions(&self) -> &[AccessibilityAction] {
@@ -297,6 +304,19 @@ impl AccessibilityNode {
         self
     }
 
+    pub fn with_bounds(mut self, bounds: Bounds) -> Self {
+        self.bounds = Some(bounds);
+        self
+    }
+
+    pub(crate) fn set_a11y_bounds(&mut self, bounds: Bounds) {
+        self.bounds = Some(bounds);
+    }
+
+    pub(crate) fn a11y_children_mut(&mut self) -> &mut [AccessibilityNode] {
+        &mut self.children
+    }
+
     pub fn with_action(mut self, action: AccessibilityAction) -> Self {
         if !self.actions.contains(&action) {
             self.actions.push(action);
@@ -349,6 +369,10 @@ impl AccessibilityTree {
 
     pub fn roots(&self) -> &[AccessibilityNode] {
         &self.roots
+    }
+
+    pub(crate) fn roots_mut(&mut self) -> &mut [AccessibilityNode] {
+        &mut self.roots
     }
 
     pub fn find(&self, id: ElementId) -> Option<&AccessibilityNode> {
