@@ -2,6 +2,7 @@
 
 mod accessibility;
 mod app;
+mod frame;
 mod lifecycle;
 mod window;
 

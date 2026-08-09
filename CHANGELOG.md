@@ -21,6 +21,10 @@ All notable project changes should be recorded here.
   instead of holding their own copies.
 - `AppContext` is the single owner of viewport size. `Presenter` no longer keeps a
   duplicate that had to be synchronized by hand.
+- Frames now run through `FramePipeline::run_frame`, driven by `FrameStage::ORDER`.
+  Native and headless runners share that order and only supply the two
+  platform-dependent stages, `DispatchEvents` and `Present`.
+- Added `AppContext::has_frame_work` as the single definition of an idle frame.
 
 ## 0.2.5 - 2026-05-31
 

@@ -167,6 +167,18 @@ impl AppContext {
         }
     }
 
+    pub(crate) fn preserve_frame_work(&mut self) {
+        self.dirty = true;
+    }
+
+    /// Whether anything is pending that a frame would render.
+    ///
+    /// The single definition of "idle" for the frame pipeline; runners must not
+    /// re-derive it from the individual flags.
+    pub fn has_frame_work(&self) -> bool {
+        self.dirty || self.needs_rebuild || !self.pending_updates.is_empty()
+    }
+
     pub fn redraw_source_counts(&self) -> RedrawSourceCounts {
         self.redraw_scheduler.counts
     }

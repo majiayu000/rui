@@ -1,15 +1,17 @@
 //! macOS application runner
 
 use crate::core::ElementId;
-use crate::core::action::route_key_event;
 use crate::core::app::{AppContext, RedrawSource};
-use crate::core::event::{Event, KeyCode, KeyEvent, Modifiers, MouseButton, ScrollEvent};
-use crate::core::frame_pipeline::FramePipeline;
+use crate::core::event::{KeyCode, KeyEvent, Modifiers, MouseButton, ScrollEvent};
+use crate::core::frame_pipeline::{
+    FramePipeline, FramePipelineError, FramePresentation, IdlePolicy,
+};
 use crate::core::geometry::{Point, Size};
 use crate::core::presenter::Presenter;
 use crate::core::text_editing::TextInputEvent;
 use crate::core::window::WindowOptions;
 use crate::elements::element::{Element, PointerEvent, PointerEventKind};
+use crate::platform::mac::frame::{NativeFrameEvents, dispatch_native_events};
 use crate::platform::mac::window::create_window;
 use crate::platform::window::{
     PlatformImeEvent, PlatformInputEvent, PlatformMouseEvent, PlatformMouseEventKind,
@@ -17,8 +19,7 @@ use crate::platform::window::{
 };
 use crate::renderer::metal::MetalRenderer;
 use crate::renderer::{
-    RendererBatchDiagnostics, RendererDiagnostics, RendererError, RendererFramePhaseDurations,
-    RendererTelemetryRecorder,
+    RendererBatchDiagnostics, RendererError, RendererFramePhaseDurations, RendererTelemetryRecorder,
 };
 use objc2::MainThreadMarker;
 use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
@@ -120,8 +121,7 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
             let mut ordered_input_events = Vec::new();
             let mut focus_changed = None;
             let mut close_requested = false;
-            let wait_for_event =
-                !context.dirty && !context.needs_rebuild && context.pending_updates.is_empty();
+            let wait_for_event = !context.has_frame_work();
             let mut platform_events = match window.poll_events_for_app(&app, wait_for_event) {
                 Ok(events) => events,
                 Err(err) => panic!("failed to poll platform window events: {}", err),
@@ -177,137 +177,79 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
                 schedule_platform_redraw(&window, &mut context, RedrawSource::PlatformResize);
             }
 
-            FramePipeline::prepare_frame(&mut context);
+            let frame_events = NativeFrameEvents {
+                viewport_changed,
+                viewport_size,
+                focus_changed,
+                close_requested,
+                automation_focused_element,
+                pointer_events,
+                scroll_events,
+                ordered_input_events,
+            };
+            let mut resize_applied = false;
 
-            if !context.dirty && !context.needs_rebuild && context.pending_updates.is_empty() {
-                if !context.is_running() {
-                    break;
+            // The stage order lives in FrameStage::ORDER, shared with the
+            // headless runner. This runner only supplies the two stages that
+            // depend on the platform: which events arrived, and which backend
+            // receives the painted scene.
+            let outcome = match FramePipeline::run_frame(
+                &mut context,
+                &mut presenter,
+                &mut build_root,
+                viewport_size,
+                IdlePolicy::SkipWhenIdle,
+                |presenter, context| {
+                    resize_applied =
+                        dispatch_native_events(presenter, context, &window, &frame_events);
+                    Ok(())
+                },
+                |presenter, _context| {
+                    let drawable_wait_started_at = Instant::now();
+                    let metal_drawable = window.next_drawable();
+                    phases.drawable_wait_ns = drawable_wait_started_at.elapsed().as_nanos();
+
+                    let render_started_at = Instant::now();
+                    phases.event_to_render_latency_ns = event_observed_at.map(|observed_at| {
+                        render_started_at
+                            .saturating_duration_since(observed_at)
+                            .as_nanos()
+                    });
+                    let presentation = match metal_drawable {
+                        Some(metal_drawable) => {
+                            renderer
+                                .render(presenter.scene(), metal_drawable, viewport_size)
+                                .map_err(|err| {
+                                    FramePipelineError::stage(
+                                        crate::core::frame_pipeline::FrameStage::Present,
+                                        err.to_string(),
+                                    )
+                                })?;
+                            FramePresentation::Presented(Some(renderer.diagnostics()))
+                        }
+                        None => FramePresentation::Deferred,
+                    };
+                    phases.render_ns = render_started_at.elapsed().as_nanos();
+                    Ok(presentation)
+                },
+            ) {
+                Ok(Some(outcome)) => outcome,
+                Ok(None) => {
+                    if !context.is_running() {
+                        break;
+                    }
+                    continue;
                 }
-                continue;
-            }
+                Err(err) => panic!("frame failed: {err}"),
+            };
 
-            presenter.rebuild_if_needed(&mut context, &mut build_root);
-
-            let layout_started_at = Instant::now();
-            if let Err(err) = presenter.layout(viewport_size) {
-                panic!("Layout failed: {err}");
-            }
-            phases.layout_ns = layout_started_at.elapsed().as_nanos();
-
-            let dispatch_started_at = Instant::now();
-            if viewport_changed {
-                presenter.handle_window_event(&Event::WindowResize {
-                    width: viewport_size.width,
-                    height: viewport_size.height,
-                });
+            if resize_applied {
                 last_viewport_size = viewport_size;
             }
-
-            if let Some(is_focused) = focus_changed {
-                let evt = if is_focused {
-                    Event::Focus(crate::core::event::FocusEvent { focused: true })
-                } else {
-                    presenter.set_focused_element(None);
-                    Event::Blur(crate::core::event::FocusEvent { focused: false })
-                };
-                presenter.handle_window_event(&evt);
-                schedule_platform_redraw(&window, &mut context, RedrawSource::PlatformFocus);
-            }
-
-            if close_requested {
-                presenter.handle_window_event(&Event::WindowClose);
-                context.quit();
-                schedule_platform_redraw(&window, &mut context, RedrawSource::PlatformLifecycle);
-            }
-
-            if let Some(focused) = automation_focused_element {
-                presenter.set_focused_element(Some(focused));
-            }
-
-            for event in &pointer_events {
-                if presenter.dispatch_pointer_event(event).redraw_requested {
-                    schedule_platform_redraw(&window, &mut context, RedrawSource::Element);
-                }
-            }
-
-            for event in &scroll_events {
-                let (_, redraw_requested) = presenter
-                    .with_event_context(|root, event_cx| root.handle_scroll_event(event_cx, event));
-                if redraw_requested {
-                    schedule_platform_redraw(&window, &mut context, RedrawSource::Element);
-                }
-            }
-
-            for event in &ordered_input_events {
-                match event {
-                    OrderedInputEvent::Key { is_down, event } => {
-                        let (handled, redraw_requested) =
-                            if should_forward_key_event_to_tree(*is_down) {
-                                let context = &mut context;
-                                presenter.with_event_context(|root, event_cx| {
-                                    route_key_event(root, context, event_cx, event)
-                                })
-                            } else {
-                                (false, false)
-                            };
-                        if handled || redraw_requested {
-                            schedule_platform_redraw(
-                                &window,
-                                &mut context,
-                                RedrawSource::PlatformInput,
-                            );
-                        }
-                    }
-                    OrderedInputEvent::Text(event) => {
-                        let (handled, redraw_requested) = presenter
-                            .with_event_context(|root, cx| root.handle_text_input_event(cx, event));
-                        if handled || redraw_requested {
-                            schedule_platform_redraw(
-                                &window,
-                                &mut context,
-                                RedrawSource::PlatformInput,
-                            );
-                        }
-                    }
-                }
-            }
-
-            if context.consume_runtime_view_notification() {
-                schedule_platform_redraw(&window, &mut context, RedrawSource::ViewNotification);
-            }
-            phases.dispatch_ns = dispatch_started_at.elapsed().as_nanos();
-
-            // Paint phase
-            let paint_started_at = Instant::now();
-            presenter.paint();
-            phases.paint_ns = paint_started_at.elapsed().as_nanos();
-
-            // Get next drawable from the platform window renderer attachment
-            let drawable_wait_started_at = Instant::now();
-            let metal_drawable = window.next_drawable();
-            phases.drawable_wait_ns = drawable_wait_started_at.elapsed().as_nanos();
-
-            let render_started_at = Instant::now();
-            phases.event_to_render_latency_ns = event_observed_at.map(|observed_at| {
-                render_started_at
-                    .saturating_duration_since(observed_at)
-                    .as_nanos()
-            });
-            let rendered = match metal_drawable {
-                Some(metal_drawable) => {
-                    if let Err(err) =
-                        renderer.render(presenter.scene(), metal_drawable, viewport_size)
-                    {
-                        panic!("renderer failed: {}", err);
-                    }
-                    true
-                }
-                None => false,
-            };
-            phases.render_ns = render_started_at.elapsed().as_nanos();
-
-            let rendered_diagnostics = rendered.then(|| renderer.diagnostics());
-            let frame_committed = complete_native_render(&mut presenter, rendered_diagnostics);
+            phases.layout_ns = outcome.durations.layout_ns;
+            phases.dispatch_ns = outcome.durations.dispatch_ns;
+            phases.paint_ns = outcome.durations.paint_ns;
+            let frame_committed = outcome.presented;
 
             if frame_committed && let Some(recorder) = profile_recorder.as_mut() {
                 let diagnostics = match presenter.renderer_diagnostics() {
@@ -324,10 +266,9 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
                 eprintln!("{}", telemetry.to_json_line());
             }
 
-            if finish_native_frame(&mut context, frame_committed) {
+            if mark_deferred_frame_for_retry(&mut context, frame_committed) {
                 request_automation_redraw(&window);
             }
-
             // Check if we should quit
             if !context.is_running() {
                 break;
@@ -371,7 +312,7 @@ fn mark_platform_event_redraw(event: &PlatformWindowEvent, context: &mut AppCont
     context.mark_redraw_from(source);
 }
 
-fn schedule_platform_redraw<W: PlatformWindow>(
+pub(crate) fn schedule_platform_redraw<W: PlatformWindow>(
     window: &W,
     context: &mut AppContext,
     source: RedrawSource,
@@ -423,7 +364,7 @@ fn append_input_event(
 }
 
 #[derive(Debug, Clone)]
-enum OrderedInputEvent {
+pub(crate) enum OrderedInputEvent {
     Key { is_down: bool, event: KeyEvent },
     Text(TextInputEvent),
 }
@@ -587,33 +528,154 @@ fn request_automation_redraw<W: PlatformWindow>(window: &W) {
     }
 }
 
-fn should_forward_key_event_to_tree(is_down: bool) -> bool {
-    is_down
-}
-
-fn complete_native_render<E>(
-    presenter: &mut Presenter<E>,
-    diagnostics: Option<RendererDiagnostics>,
-) -> bool {
-    let Some(diagnostics) = diagnostics else {
-        return false;
-    };
-    presenter.complete_presented_frame(Some(diagnostics));
-    true
-}
-
-fn finish_native_frame(context: &mut AppContext, rendered: bool) -> bool {
-    FramePipeline::finish_frame(context);
-    if rendered {
-        false
-    } else {
-        context.request_platform_redraw_from(RedrawSource::PlatformRedraw)
-    }
+fn mark_deferred_frame_for_retry(context: &mut AppContext, presented: bool) -> bool {
+    !presented && context.request_platform_redraw_from(RedrawSource::PlatformRedraw)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Redraw source each `PlatformWindowEvent` variant is classified as, or
+    /// `None` when the event must not mark a redraw at all.
+    fn classified_source(event: &PlatformWindowEvent) -> Option<RedrawSource> {
+        let mut context = AppContext::new();
+        let before = context.redraw_source_counts();
+        mark_platform_event_redraw(event, &mut context);
+        let after = context.redraw_source_counts();
+
+        let changed = [
+            (RedrawSource::Explicit, before.explicit, after.explicit),
+            (
+                RedrawSource::ViewNotification,
+                before.view_notification,
+                after.view_notification,
+            ),
+            (RedrawSource::Element, before.element, after.element),
+            (
+                RedrawSource::PlatformLifecycle,
+                before.platform_lifecycle,
+                after.platform_lifecycle,
+            ),
+            (
+                RedrawSource::PlatformResize,
+                before.platform_resize,
+                after.platform_resize,
+            ),
+            (
+                RedrawSource::PlatformScaleFactor,
+                before.platform_scale_factor,
+                after.platform_scale_factor,
+            ),
+            (
+                RedrawSource::PlatformFocus,
+                before.platform_focus,
+                after.platform_focus,
+            ),
+            (
+                RedrawSource::PlatformInput,
+                before.platform_input,
+                after.platform_input,
+            ),
+            (
+                RedrawSource::PlatformRedraw,
+                before.platform_redraw,
+                after.platform_redraw,
+            ),
+        ]
+        .into_iter()
+        .filter(|(_, before, after)| after > before)
+        .map(|(source, _, _)| source)
+        .collect::<Vec<_>>();
+
+        match changed.as_slice() {
+            [] => None,
+            [source] => Some(*source),
+            many => panic!("one event marked {} redraw sources: {many:?}", many.len()),
+        }
+    }
+
+    #[test]
+    fn every_platform_event_maps_to_its_redraw_source() {
+        let cases = [
+            (
+                PlatformWindowEvent::Created,
+                Some(RedrawSource::PlatformLifecycle),
+            ),
+            (
+                PlatformWindowEvent::CloseRequested,
+                Some(RedrawSource::PlatformLifecycle),
+            ),
+            (
+                PlatformWindowEvent::QuitRequested,
+                Some(RedrawSource::PlatformLifecycle),
+            ),
+            (
+                PlatformWindowEvent::ReopenRequested,
+                Some(RedrawSource::PlatformLifecycle),
+            ),
+            (
+                PlatformWindowEvent::Minimized(false),
+                Some(RedrawSource::PlatformLifecycle),
+            ),
+            // A window being minimized must not schedule a redraw.
+            (PlatformWindowEvent::Minimized(true), None),
+            (
+                PlatformWindowEvent::Resized(Size::new(320.0, 240.0)),
+                Some(RedrawSource::PlatformResize),
+            ),
+            (
+                PlatformWindowEvent::ScaleFactorChanged(2.0),
+                Some(RedrawSource::PlatformScaleFactor),
+            ),
+            (
+                PlatformWindowEvent::FocusChanged(true),
+                Some(RedrawSource::PlatformFocus),
+            ),
+            (
+                PlatformWindowEvent::FocusChanged(false),
+                Some(RedrawSource::PlatformFocus),
+            ),
+            (
+                PlatformWindowEvent::ApplicationActivated(true),
+                Some(RedrawSource::PlatformFocus),
+            ),
+            (
+                PlatformWindowEvent::ApplicationActivated(false),
+                Some(RedrawSource::PlatformFocus),
+            ),
+            (
+                PlatformWindowEvent::RedrawRequested,
+                Some(RedrawSource::PlatformRedraw),
+            ),
+            (
+                PlatformWindowEvent::Input(PlatformInputEvent::KeyDown(KeyEvent::new(
+                    KeyCode::Enter,
+                    Modifiers::none(),
+                ))),
+                Some(RedrawSource::PlatformInput),
+            ),
+        ];
+
+        for (event, expected) in cases {
+            assert_eq!(
+                classified_source(&event),
+                expected,
+                "unexpected redraw source for {event:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn minimizing_leaves_the_context_clean_while_restoring_dirties_it() {
+        let mut context = AppContext::new();
+        context.dirty = false;
+        mark_platform_event_redraw(&PlatformWindowEvent::Minimized(true), &mut context);
+        assert!(!context.dirty, "minimizing must not request a frame");
+
+        mark_platform_event_redraw(&PlatformWindowEvent::Minimized(false), &mut context);
+        assert!(context.dirty, "restoring must request a frame");
+    }
 
     #[test]
     fn native_viewport_resize_sync_requests_one_rebuild() {
@@ -665,40 +727,12 @@ mod tests {
     }
 
     #[test]
-    fn missing_drawable_does_not_commit_a_presented_frame() {
-        let viewport_size = Size::new(320.0, 240.0);
-        let mut presenter = Presenter::with_root(viewport_size, crate::elements::div());
-        if let Err(err) = presenter.layout(viewport_size) {
-            panic!("layout failed: {err}");
-        }
-        presenter.paint();
-
-        assert!(!complete_native_render(&mut presenter, None));
-
-        assert!(presenter.last_frame().is_none());
-        assert!(presenter.renderer_diagnostics().is_none());
-
-        assert!(complete_native_render(
-            &mut presenter,
-            Some(RendererDiagnostics::headless("test")),
-        ));
-        assert!(presenter.last_frame().is_some());
-        assert!(presenter.renderer_diagnostics().is_some());
-    }
-
-    #[test]
-    fn missing_drawable_requeues_the_platform_redraw() {
+    fn deferred_frame_requeues_the_platform_redraw() {
         let mut context = AppContext::new();
-        assert!(context.request_platform_redraw_from(RedrawSource::PlatformRedraw));
 
-        assert!(finish_native_frame(&mut context, false));
+        assert!(mark_deferred_frame_for_retry(&mut context, false));
         assert!(context.platform_redraw_pending());
-    }
-
-    #[test]
-    fn only_key_down_events_are_forwarded_to_elements() {
-        assert!(should_forward_key_event_to_tree(true));
-        assert!(!should_forward_key_event_to_tree(false));
+        assert!(!mark_deferred_frame_for_retry(&mut context, true));
     }
 
     #[test]
