@@ -53,7 +53,7 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
     E: Element + 'static,
 {
     let mut context = context;
-    let mut root = build_root(&mut context);
+    let root = build_root(&mut context);
 
     // Get main thread marker
     let mtm = MainThreadMarker::new().expect("Must be called from main thread");
@@ -96,7 +96,7 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
         // Activate the application
         app.activate();
 
-        let mut presenter = Presenter::new(options.size, root);
+        let mut presenter = Presenter::with_root(options.size, root);
 
         // Main run loop. AppContext is the single owner of viewport size; the
         // window options only provide its initial value.
@@ -317,7 +317,7 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
             }
 
             FramePipeline::finish_frame(&mut context);
-            presenter.complete_frame(viewport_size);
+            presenter.complete_presented_frame();
 
             // Check if we should quit
             if !context.is_running() {
@@ -617,7 +617,7 @@ mod tests {
         let resized = Size::new(640.0, 480.0);
         let mut context = AppContext::new();
         context.set_viewport_size(initial_size);
-        let mut presenter = Presenter::new(initial_size, crate::elements::div());
+        let mut presenter = Presenter::with_root(initial_size, crate::elements::div());
 
         synchronize_viewport_after_platform_events(&mut context, resized, initial_size);
         let viewport_size = context.viewport_size();
@@ -625,7 +625,7 @@ mod tests {
             panic!("layout failed: {err}");
         }
         presenter.paint();
-        presenter.complete_frame(viewport_size);
+        presenter.complete_presented_frame();
 
         // The presenter keeps no viewport of its own, so the recorded frame can
         // only report what AppContext owns.

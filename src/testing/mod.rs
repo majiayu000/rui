@@ -119,7 +119,7 @@ where
     let mut session = HeadlessSession {
         context,
         build_root,
-        presenter: Presenter::new(viewport_size, root),
+        presenter: Presenter::with_root(viewport_size, root),
     };
     session.frame()?;
     Ok(session)
@@ -169,7 +169,7 @@ where
             .map_err(|err| HeadlessError::Layout {
                 message: err.to_string(),
             })?;
-        self.presenter.complete_frame(viewport_size);
+        self.presenter.complete_presented_frame();
 
         match self.presenter.last_frame() {
             Some(frame) => Ok(frame),

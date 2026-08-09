@@ -14,6 +14,7 @@ The committed baseline lives in `benchmarks/runtime_baselines.json`. It records 
 
 - `layout.flex_tree`
 - `text.measure_raster`
+- `text.multi_frame_layout`
 - `scene.build`
 - `event.pointer_dispatch`
 - `renderer.recording_throughput`
