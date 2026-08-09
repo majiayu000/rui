@@ -33,8 +33,9 @@ pub struct PointerDispatch {
 /// focus, hit-test tracking, pointer capture and the last renderer diagnostics
 /// snapshot. Native window handles and renderer backend resources stay outside.
 ///
-/// Viewport size is deliberately *not* stored here. [`AppContext`] is its single
-/// owner, and it reaches the presenter as an argument to the frame methods.
+/// Authoritative viewport size is deliberately *not* stored here. [`AppContext`]
+/// is its single owner; the presenter only records which viewport produced its
+/// latest layout and painted frame.
 pub struct Presenter<E = ()> {
     root: E,
     legacy_viewport_size: Option<Size>,
@@ -46,6 +47,7 @@ pub struct Presenter<E = ()> {
     last_pointer_hit_target: Option<ElementId>,
     pointer_capture_target: Option<ElementId>,
     renderer_diagnostics: Option<RendererDiagnostics>,
+    laid_out_viewport: Size,
     prepared_frame_viewport: Size,
     last_frame: Option<PresenterFrame>,
 }
@@ -65,6 +67,7 @@ impl<E> Presenter<E> {
             last_pointer_hit_target: None,
             pointer_capture_target: None,
             renderer_diagnostics: None,
+            laid_out_viewport: viewport_size,
             prepared_frame_viewport: viewport_size,
             last_frame: None,
         }
@@ -233,7 +236,7 @@ where
             viewport_size,
         )?;
         self.root_bounds = root_bounds;
-        self.prepared_frame_viewport = viewport_size;
+        self.laid_out_viewport = viewport_size;
         Ok(root_bounds)
     }
 
@@ -245,6 +248,7 @@ where
             &mut self.scene,
             self.root_bounds,
         );
+        self.prepared_frame_viewport = self.laid_out_viewport;
     }
 
     pub fn build_frame<F>(
@@ -266,6 +270,7 @@ where
             viewport_size,
         )?;
         self.root_bounds = root_bounds;
+        self.laid_out_viewport = viewport_size;
         self.prepared_frame_viewport = viewport_size;
         Ok(root_bounds)
     }
@@ -422,6 +427,17 @@ mod tests {
             Ok(_) => {}
             Err(err) => panic!("resized layout failed: {err}"),
         }
+        presenter.complete_presented_frame();
+
+        match presenter.last_frame() {
+            Some(frame) => assert_eq!(
+                frame.viewport_size, viewport_size,
+                "layout alone must not relabel the scene painted for the previous viewport"
+            ),
+            None => panic!("expected a recorded frame"),
+        }
+
+        presenter.paint();
         presenter.complete_presented_frame();
 
         match presenter.last_frame() {
