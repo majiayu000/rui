@@ -187,28 +187,6 @@ where
         );
     }
 
-    pub fn build_frame<F>(
-        &mut self,
-        context: &mut AppContext,
-        build_root: &mut F,
-        viewport_size: Size,
-    ) -> Result<Bounds, FramePipelineError>
-    where
-        F: FnMut(&mut AppContext) -> E,
-    {
-        let root_bounds = FramePipeline::build_frame(
-            context,
-            &mut self.root,
-            build_root,
-            &mut self.taffy,
-            &mut self.scene,
-            &mut self.text_measurer,
-            viewport_size,
-        )?;
-        self.root_bounds = root_bounds;
-        Ok(root_bounds)
-    }
-
     /// Runs `dispatch` against the presented tree with an event context built
     /// from the presenter's own root bounds, layout tree and focus, and reports
     /// whether the tree asked for a redraw.

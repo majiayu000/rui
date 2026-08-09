@@ -7,6 +7,7 @@ use crate::core::action::route_key_event;
 use crate::core::app::{AppContext, RuntimeView};
 use crate::core::entity::Entity;
 use crate::core::event::{Event, KeyEvent, MouseButton, ScrollEvent};
+use crate::core::frame_pipeline::{FramePipeline, IdlePolicy};
 use crate::core::geometry::{Bounds, Point, Size};
 use crate::core::presenter::{Presenter, PresenterFrame};
 use crate::core::view::{View, ViewNotifier};
@@ -164,12 +165,25 @@ where
 
     pub fn frame(&mut self) -> Result<&HeadlessFrame, HeadlessError> {
         let viewport_size = self.context.viewport_size();
-        self.presenter
-            .build_frame(&mut self.context, &mut self.build_root, viewport_size)
-            .map_err(|err| HeadlessError::Layout {
-                message: err.to_string(),
-            })?;
-        self.presenter.complete_frame(viewport_size);
+        // Headless supplies no events and no backend, but runs the same stage
+        // order as the native runner.
+        let outcome = FramePipeline::run_frame(
+            &mut self.context,
+            &mut self.presenter,
+            &mut self.build_root,
+            viewport_size,
+            IdlePolicy::AlwaysDraw,
+            |_, _| {},
+            |_, _| {},
+        )
+        .map_err(|err| HeadlessError::Layout {
+            message: err.to_string(),
+        })?;
+        if outcome.is_none() {
+            return Err(HeadlessError::Layout {
+                message: String::from("headless frame was skipped despite AlwaysDraw"),
+            });
+        }
 
         match self.presenter.last_frame() {
             Some(frame) => Ok(frame),
@@ -182,7 +196,7 @@ where
     pub fn resize(&mut self, viewport_size: Size) -> bool {
         self.context.set_viewport_size(viewport_size);
         self.context.request_rebuild();
-        crate::core::frame_pipeline::FramePipeline::prepare_frame(&mut self.context);
+        FramePipeline::prepare_frame(&mut self.context);
         self.presenter
             .rebuild_if_needed(&mut self.context, &mut self.build_root);
         self.presenter.handle_window_event(&Event::WindowResize {
