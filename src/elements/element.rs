@@ -9,7 +9,7 @@ use crate::core::action::{ActionId, ActionOutcome};
 use crate::core::event::{Cursor, KeyEvent, MouseButton, ScrollEvent};
 use crate::core::geometry::{Bounds, Point, Size};
 use crate::core::style::{Dimension as StyleDimension, Style};
-use crate::core::text_editing::TextInputEvent;
+use crate::core::text_editing::{TextInputEvent, TextInputSnapshot};
 use crate::renderer::text::TextMeasureCache;
 use crate::renderer::{Primitive, Scene};
 use std::cell::{Cell, RefCell};
@@ -342,6 +342,12 @@ pub trait Element: 'static {
         false
     }
 
+    fn text_input_snapshot(&self, focused: ElementId) -> Option<TextInputSnapshot> {
+        self.children()
+            .iter()
+            .find_map(|child| child.text_input_snapshot(focused))
+    }
+
     /// Handle window events
     fn handle_window_event(&mut self, _event: &crate::core::event::Event) -> bool {
         false
@@ -439,6 +445,10 @@ impl AnyElement {
         event: &TextInputEvent,
     ) -> bool {
         self.inner.handle_text_input_event(cx, event)
+    }
+
+    pub fn text_input_snapshot(&self, focused: ElementId) -> Option<TextInputSnapshot> {
+        self.inner.text_input_snapshot(focused)
     }
 
     pub fn handle_window_event(&mut self, event: &crate::core::event::Event) -> bool {

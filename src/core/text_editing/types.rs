@@ -83,6 +83,26 @@ impl Utf16TextRange {
         })?;
         Ok(TextRange::ordered(start_byte, end_byte))
     }
+
+    pub fn from_text_range(text: &str, range: TextRange) -> Result<Self, TextEditError> {
+        if range.end() > text.len() {
+            return Err(TextEditError::InvalidRange {
+                start: range.start(),
+                end: range.end(),
+            });
+        }
+        if !text.is_char_boundary(range.start()) {
+            return Err(TextEditError::InvalidBoundary {
+                index: range.start(),
+            });
+        }
+        if !text.is_char_boundary(range.end()) {
+            return Err(TextEditError::InvalidBoundary { index: range.end() });
+        }
+        let location = text[..range.start()].encode_utf16().count();
+        let length = text[range.start()..range.end()].encode_utf16().count();
+        Self::new(location, length)
+    }
 }
 
 fn utf16_offset_to_byte(text: &str, utf16_offset: usize) -> Option<usize> {
@@ -149,6 +169,39 @@ pub struct TextComposition {
     original_text: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TextInputSnapshot {
+    text: String,
+    selection: TextSelection,
+    composition: Option<TextRange>,
+}
+
+impl TextInputSnapshot {
+    pub fn new(
+        text: impl Into<String>,
+        selection: TextSelection,
+        composition: Option<TextRange>,
+    ) -> Self {
+        Self {
+            text: text.into(),
+            selection,
+            composition,
+        }
+    }
+
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+
+    pub fn selection(&self) -> TextSelection {
+        self.selection
+    }
+
+    pub fn composition(&self) -> Option<TextRange> {
+        self.composition
+    }
+}
+
 impl TextComposition {
     pub fn replacement_range(&self) -> TextRange {
         self.range
@@ -209,5 +262,6 @@ pub enum TextInputEvent {
         text: String,
         replacement_range: Utf16TextRange,
     },
+    SetCompositionSelection(Utf16TextRange),
     CancelComposition,
 }

@@ -355,6 +355,23 @@ impl TextEditBuffer {
         Ok(())
     }
 
+    pub fn set_composition_selection_utf16(
+        &mut self,
+        selection: Utf16TextRange,
+    ) -> Result<(), TextEditError> {
+        let composition = self
+            .composition
+            .as_ref()
+            .ok_or(TextEditError::CompositionMissing)?;
+        let relative = selection.to_text_range(composition.text())?;
+        let composition_start = composition.replacement_range().start();
+        self.selection = TextSelection::new(
+            composition_start + relative.start(),
+            composition_start + relative.end(),
+        );
+        Ok(())
+    }
+
     pub fn cancel_composition(&mut self) -> Result<(), TextEditError> {
         let composition = self
             .composition
@@ -409,6 +426,10 @@ impl TextEditBuffer {
             } => {
                 self.commit_composition_replacing_utf16(&text, replacement_range)?;
                 Ok(changed())
+            }
+            TextInputEvent::SetCompositionSelection(selection) => {
+                self.set_composition_selection_utf16(selection)?;
+                Ok(TextEditOutcome::default())
             }
             TextInputEvent::CancelComposition => {
                 self.cancel_composition()?;

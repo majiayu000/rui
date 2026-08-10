@@ -189,6 +189,7 @@ pub enum PlatformImeEvent {
         text: String,
         replacement_range: Utf16TextRange,
     },
+    SetCompositionSelection(Utf16TextRange),
     CancelComposition,
 }
 
@@ -227,6 +228,9 @@ impl PlatformImeEvent {
                 text,
                 replacement_range,
             },
+            Self::SetCompositionSelection(selection) => {
+                TextInputEvent::SetCompositionSelection(selection)
+            }
             Self::CancelComposition => TextInputEvent::CancelComposition,
         }
     }

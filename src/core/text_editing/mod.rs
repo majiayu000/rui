@@ -11,5 +11,6 @@ pub use clipboard::{Clipboard, MemoryClipboard};
 pub use error::{ClipboardError, TextEditError};
 pub use layout::{CaretGeometry, SelectionRect, TextEditLayout, TextEditPaintStyle, TextLine};
 pub use types::{
-    TextComposition, TextEditOutcome, TextInputEvent, TextRange, TextSelection, Utf16TextRange,
+    TextComposition, TextEditOutcome, TextInputEvent, TextInputSnapshot, TextRange, TextSelection,
+    Utf16TextRange,
 };

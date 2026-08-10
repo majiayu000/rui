@@ -12,7 +12,7 @@ use crate::core::geometry::{Bounds, Edges, Point};
 use crate::core::style::{Corners, Style};
 use crate::core::text_editing::{
     Clipboard, TextEditBuffer, TextEditError, TextEditLayout, TextEditOutcome, TextEditPaintStyle,
-    TextInputEvent, TextRange, TextSelection,
+    TextInputEvent, TextInputSnapshot, TextRange, TextSelection,
 };
 use crate::elements::element::{
     Element, EventContext, LayoutContext, PaintContext, PointerEvent, PointerEventKind,
@@ -496,6 +496,16 @@ impl Element for TextArea {
 
     fn style(&self) -> &Style {
         &self.style
+    }
+
+    fn text_input_snapshot(&self, focused: ElementId) -> Option<TextInputSnapshot> {
+        (self.id == Some(focused)).then(|| {
+            TextInputSnapshot::new(
+                self.state.value.clone(),
+                self.state_selection(),
+                self.state.composition_range,
+            )
+        })
     }
 
     fn layout(&mut self, cx: &mut LayoutContext) -> NodeId {

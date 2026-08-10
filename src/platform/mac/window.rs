@@ -32,7 +32,7 @@ use crate::platform::mac::events::{
 
 pub struct MacWindow {
     window: Retained<NSWindow>,
-    content_view: Retained<RuiContentView>,
+    pub(super) content_view: Retained<RuiContentView>,
     metal_layer: Retained<CAMetalLayer>,
     accessibility_bridge: MacAccessibilityBridge,
     last_content_size: Size,

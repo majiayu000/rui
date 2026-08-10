@@ -13,8 +13,8 @@ use crate::core::event::{KeyCode, KeyEvent, Modifiers};
 use crate::core::geometry::{Bounds, Edges};
 use crate::core::style::{Corners, Style};
 use crate::core::text_editing::{
-    Clipboard, TextEditBuffer, TextEditError, TextEditOutcome, TextInputEvent, TextRange,
-    TextSelection,
+    Clipboard, TextEditBuffer, TextEditError, TextEditOutcome, TextInputEvent, TextInputSnapshot,
+    TextRange, TextSelection,
 };
 use crate::elements::element::{
     Element, EventContext, LayoutContext, PaintContext, PointerEvent, PointerEventKind,
@@ -22,7 +22,6 @@ use crate::elements::element::{
 };
 use crate::renderer::Primitive;
 use taffy::prelude::*;
-use unicode_segmentation::UnicodeSegmentation;
 
 const INPUT_HORIZONTAL_PADDING: f32 = 12.0;
 const INPUT_GRAPHEME_WIDTH: f32 = 7.0;
@@ -461,24 +460,6 @@ impl Input {
             .char
             .is_some_and(|ch| !ch.is_control() || matches!(ch, '\n' | '\r'))
     }
-
-    fn display_offset_for_value_offset(&self, offset: usize) -> Option<usize> {
-        if offset > self.state.value.len() || !self.state.value.is_char_boundary(offset) {
-            return None;
-        }
-
-        if self.input_type == InputType::Password {
-            Some(self.state.value[..offset].graphemes(true).count() * PASSWORD_MASK.len())
-        } else {
-            Some(offset)
-        }
-    }
-
-    fn display_range_for_value_range(&self, range: TextRange) -> Option<TextRange> {
-        let start = self.display_offset_for_value_offset(range.start())?;
-        let end = self.display_offset_for_value_offset(range.end())?;
-        TextRange::new(start, end).ok()
-    }
 }
 
 impl Default for Input {
@@ -494,6 +475,16 @@ impl Element for Input {
 
     fn style(&self) -> &Style {
         &self.style
+    }
+
+    fn text_input_snapshot(&self, focused: ElementId) -> Option<TextInputSnapshot> {
+        (self.id == Some(focused)).then(|| {
+            TextInputSnapshot::new(
+                self.state.value.clone(),
+                self.state_selection(),
+                self.state.composition_range,
+            )
+        })
     }
 
     fn layout(&mut self, cx: &mut LayoutContext) -> NodeId {

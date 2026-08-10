@@ -18,6 +18,9 @@ use crate::elements::element::Element;
 use crate::platform::mac::accessibility::MacAccessibilityActionRequest;
 use crate::platform::mac::accessibility::MacAccessibilityRequest;
 use crate::platform::mac::app::{OrderedInputEvent, schedule_platform_redraw};
+use crate::platform::mac::ime_state::{
+    NativeImeState, cancel_composition_if_owner_lost, dispatch_text_input_event,
+};
 use crate::platform::mac::window::MacWindow;
 
 /// Backend-neutral events collected from one poll of the platform window.
@@ -28,41 +31,6 @@ pub(crate) struct NativeFrameEvents {
     pub close_requested: bool,
     pub automation_focused_element: Option<ElementId>,
     pub ordered_input_events: Vec<OrderedInputEvent>,
-}
-
-#[derive(Debug, Default)]
-pub(crate) struct NativeImeState {
-    composition_owner: Option<ElementId>,
-}
-
-impl NativeImeState {
-    fn target_for_event(
-        &mut self,
-        event: &TextInputEvent,
-        focused: Option<ElementId>,
-    ) -> Option<ElementId> {
-        match event {
-            TextInputEvent::InsertText(_) | TextInputEvent::InsertTextReplacing { .. } => focused,
-            TextInputEvent::BeginComposition(_)
-            | TextInputEvent::BeginCompositionReplacing { .. } => {
-                self.composition_owner = focused;
-                focused
-            }
-            TextInputEvent::UpdateComposition(_)
-            | TextInputEvent::UpdateCompositionReplacing { .. } => self.composition_owner,
-            TextInputEvent::CommitComposition(_)
-            | TextInputEvent::CommitCompositionReplacing { .. }
-            | TextInputEvent::CancelComposition => self.composition_owner.take(),
-        }
-    }
-
-    fn cancel_owner_after_focus_change(&mut self, focused: Option<ElementId>) -> Option<ElementId> {
-        if self.composition_owner.is_some() && self.composition_owner != focused {
-            self.composition_owner.take()
-        } else {
-            None
-        }
-    }
 }
 
 /// Runs the `DispatchEvents` stage for the native runner.
@@ -151,57 +119,6 @@ where
     }
 
     events.viewport_changed
-}
-
-fn dispatch_text_input_event<E>(
-    presenter: &mut Presenter<E>,
-    ime_state: &mut NativeImeState,
-    event: &TextInputEvent,
-) -> (bool, bool)
-where
-    E: Element,
-{
-    let Some(target) = ime_state.target_for_event(event, presenter.focused_element()) else {
-        log::error!("discarded macOS text input event without a focused composition owner");
-        return (false, false);
-    };
-    dispatch_text_input_event_to(presenter, target, event)
-}
-
-fn dispatch_text_input_event_to<E>(
-    presenter: &mut Presenter<E>,
-    target: ElementId,
-    event: &TextInputEvent,
-) -> (bool, bool)
-where
-    E: Element,
-{
-    let focused = presenter.focused_element();
-    *presenter.focused_element_mut() = Some(target);
-    let result = presenter
-        .with_event_context(|root, event_cx| root.handle_text_input_event(event_cx, event));
-    *presenter.focused_element_mut() = focused;
-    result
-}
-
-fn cancel_composition_if_owner_lost<E>(
-    presenter: &mut Presenter<E>,
-    window: &MacWindow,
-    ime_state: &mut NativeImeState,
-) -> bool
-where
-    E: Element,
-{
-    let Some(owner) = ime_state.cancel_owner_after_focus_change(presenter.focused_element()) else {
-        return false;
-    };
-    let (handled, redraw_requested) =
-        dispatch_text_input_event_to(presenter, owner, &TextInputEvent::CancelComposition);
-    window.discard_marked_text();
-    if !handled {
-        log::error!("failed to cancel macOS composition for its previous focused owner");
-    }
-    handled || redraw_requested
 }
 
 fn dispatch_accessibility_action<E>(

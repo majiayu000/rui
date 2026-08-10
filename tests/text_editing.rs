@@ -121,6 +121,28 @@ fn text_editing_composition_honors_concrete_utf16_replacement_ranges() {
 }
 
 #[test]
+fn text_editing_applies_marked_selection_relative_to_composition_text() {
+    let mut buffer = TextEditBuffer::with_text("ab");
+    must(buffer.set_cursor(1));
+    must(buffer.apply_text_input_event(TextInputEvent::BeginComposition("a😀z".to_string())));
+
+    must(
+        buffer.apply_text_input_event(TextInputEvent::SetCompositionSelection(must(
+            Utf16TextRange::new(1, 2),
+        ))),
+    );
+    assert_eq!(buffer.selection(), TextSelection::new(2, 6));
+
+    let error = buffer
+        .apply_text_input_event(TextInputEvent::SetCompositionSelection(must(
+            Utf16TextRange::new(2, 0),
+        )))
+        .expect_err("selection inside a surrogate pair must fail");
+    assert!(matches!(error, TextEditError::InvalidUtf16Range { .. }));
+    assert_eq!(buffer.selection(), TextSelection::new(2, 6));
+}
+
+#[test]
 fn text_editing_grapheme_delete_keeps_unicode_clusters_intact() {
     let mut buffer = TextEditBuffer::with_text("a e\u{301} 🧑‍💻");
     must(buffer.delete_backward());

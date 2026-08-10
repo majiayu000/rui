@@ -22,11 +22,18 @@ fn appkit_replacement_range(range: NSRange) -> Result<Option<Utf16TextRange>, Te
     Utf16TextRange::new(range.location, range.length).map(Some)
 }
 
+fn ns_range(range: Option<Utf16TextRange>) -> NSRange {
+    range.map_or_else(not_found_range, |range| {
+        NSRange::new(range.location(), range.length())
+    })
+}
+
 #[derive(Debug)]
 struct MacImeSession {
     events: VecDeque<PlatformImeEvent>,
     marked_text: Option<String>,
     selected_range: NSRange,
+    marked_range: NSRange,
 }
 
 impl Default for MacImeSession {
@@ -35,6 +42,7 @@ impl Default for MacImeSession {
             events: VecDeque::new(),
             marked_text: None,
             selected_range: not_found_range(),
+            marked_range: not_found_range(),
         }
     }
 }
@@ -42,7 +50,19 @@ impl Default for MacImeSession {
 impl MacImeSession {
     fn insert_text(&mut self, text: &str, replacement_range: NSRange) -> Result<(), TextEditError> {
         let replacement_range = appkit_replacement_range(replacement_range)?;
-        let event = if self.marked_text.take().is_some() {
+        let had_marked_text = self.marked_text.take().is_some();
+        let insertion_start = replacement_range
+            .map(Utf16TextRange::location)
+            .or_else(|| {
+                had_marked_text
+                    .then_some(self.marked_range.location)
+                    .filter(|location| *location != NSNotFound as NSUInteger)
+            })
+            .or_else(|| {
+                (self.selected_range.location != NSNotFound as NSUInteger)
+                    .then_some(self.selected_range.location)
+            });
+        let event = if had_marked_text {
             replacement_range.map_or_else(
                 || PlatformImeEvent::Commit(text.to_string()),
                 |replacement_range| PlatformImeEvent::CommitReplacing {
@@ -59,8 +79,21 @@ impl MacImeSession {
                 },
             )
         };
+        let selected_range = match insertion_start {
+            Some(start) => {
+                let location = start.checked_add(text.encode_utf16().count()).ok_or(
+                    TextEditError::InvalidUtf16Range {
+                        location: start,
+                        length: text.encode_utf16().count(),
+                    },
+                )?;
+                NSRange::new(location, 0)
+            }
+            None => not_found_range(),
+        };
         self.events.push_back(event);
-        self.selected_range = not_found_range();
+        self.marked_range = not_found_range();
+        self.selected_range = selected_range;
         Ok(())
     }
 
@@ -71,6 +104,33 @@ impl MacImeSession {
         replacement_range: NSRange,
     ) -> Result<(), TextEditError> {
         let replacement_range = appkit_replacement_range(replacement_range)?;
+        let marked_selection = Utf16TextRange::new(selected_range.location, selected_range.length)?;
+        marked_selection.to_text_range(text)?;
+        let marked_start = replacement_range
+            .map(Utf16TextRange::location)
+            .or_else(|| {
+                (self.marked_range.location != NSNotFound as NSUInteger)
+                    .then_some(self.marked_range.location)
+            })
+            .or_else(|| {
+                (self.selected_range.location != NSNotFound as NSUInteger)
+                    .then_some(self.selected_range.location)
+            });
+        let document_ranges = match marked_start {
+            Some(marked_start) => {
+                let marked_range = Utf16TextRange::new(marked_start, text.encode_utf16().count())?;
+                let selected_location = marked_start
+                    .checked_add(marked_selection.location())
+                    .ok_or(TextEditError::InvalidUtf16Range {
+                        location: marked_start,
+                        length: marked_selection.location(),
+                    })?;
+                let selected_range =
+                    Utf16TextRange::new(selected_location, marked_selection.length())?;
+                (ns_range(Some(selected_range)), ns_range(Some(marked_range)))
+            }
+            None => (not_found_range(), not_found_range()),
+        };
         let event = if self.marked_text.is_some() {
             replacement_range.map_or_else(
                 || PlatformImeEvent::UpdateComposition(text.to_string()),
@@ -89,8 +149,11 @@ impl MacImeSession {
             )
         };
         self.marked_text = Some(text.to_string());
-        self.selected_range = selected_range;
         self.events.push_back(event);
+        self.events
+            .push_back(PlatformImeEvent::SetCompositionSelection(marked_selection));
+        self.selected_range = document_ranges.0;
+        self.marked_range = document_ranges.1;
         Ok(())
     }
 
@@ -98,19 +161,24 @@ impl MacImeSession {
         if self.marked_text.take().is_some() {
             self.events.push_back(PlatformImeEvent::CancelComposition);
         }
-        self.selected_range = not_found_range();
+        self.marked_range = not_found_range();
     }
 
     fn commit_marked_text(&mut self) {
         if let Some(text) = self.marked_text.take() {
             self.events.push_back(PlatformImeEvent::Commit(text));
         }
-        self.selected_range = not_found_range();
+        self.selected_range = if self.marked_range.location == NSNotFound as NSUInteger {
+            not_found_range()
+        } else {
+            NSRange::new(self.marked_range.location + self.marked_range.length, 0)
+        };
+        self.marked_range = not_found_range();
     }
 
     fn discard_marked_text(&mut self) -> bool {
         let had_marked_text = self.marked_text.take().is_some();
-        self.selected_range = not_found_range();
+        self.marked_range = not_found_range();
         had_marked_text
     }
 
@@ -119,15 +187,20 @@ impl MacImeSession {
     }
 
     fn marked_range(&self) -> NSRange {
-        self.marked_text
-            .as_deref()
-            .map_or_else(not_found_range, |text| {
-                NSRange::new(0, text.encode_utf16().count())
-            })
+        self.marked_range
     }
 
     fn selected_range(&self) -> NSRange {
         self.selected_range
+    }
+
+    fn update_text_input_ranges(
+        &mut self,
+        selected_range: Option<Utf16TextRange>,
+        marked_range: Option<Utf16TextRange>,
+    ) {
+        self.selected_range = ns_range(selected_range);
+        self.marked_range = ns_range(marked_range);
     }
 
     fn drain_events(&mut self) -> Vec<PlatformImeEvent> {
@@ -293,6 +366,17 @@ impl RuiContentView {
             input_context.discardMarkedText();
         }
     }
+
+    pub(crate) fn update_text_input_ranges(
+        &self,
+        selected_range: Option<Utf16TextRange>,
+        marked_range: Option<Utf16TextRange>,
+    ) {
+        self.ivars()
+            .ime
+            .borrow_mut()
+            .update_text_input_ranges(selected_range, marked_range);
+    }
 }
 
 pub(crate) fn append_ime_events_after_native_dispatch(
@@ -333,189 +417,5 @@ fn text_from_native_object(object: &AnyObject) -> Option<String> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::platform::window::PlatformImeEvent;
-    use objc2_foundation::{NSNotFound, NSRange};
-
-    #[test]
-    fn ime_session_emits_begin_update_commit_and_cancel() {
-        let mut session = MacImeSession::default();
-
-        session
-            .set_marked_text("你", NSRange::new(1, 0), not_found_range())
-            .expect("composition should begin");
-        session
-            .set_marked_text("你好", NSRange::new(2, 0), not_found_range())
-            .expect("composition should update");
-        session
-            .insert_text("您好", not_found_range())
-            .expect("composition should commit");
-        session
-            .set_marked_text("draft", NSRange::new(5, 0), not_found_range())
-            .expect("composition should begin");
-        session.cancel_composition();
-
-        assert_eq!(
-            session.drain_events(),
-            vec![
-                PlatformImeEvent::BeginComposition("你".to_string()),
-                PlatformImeEvent::UpdateComposition("你好".to_string()),
-                PlatformImeEvent::Commit("您好".to_string()),
-                PlatformImeEvent::BeginComposition("draft".to_string()),
-                PlatformImeEvent::CancelComposition,
-            ]
-        );
-        assert!(!session.has_marked_text());
-    }
-
-    #[test]
-    fn ime_session_uses_appkit_not_found_sentinel() {
-        let session = MacImeSession::default();
-
-        assert_eq!(session.selected_range().location, NSNotFound as NSUInteger);
-    }
-
-    #[test]
-    fn ime_session_uses_utf16_lengths_for_appkit_ranges() {
-        let mut session = MacImeSession::default();
-
-        session
-            .set_marked_text("a😀", NSRange::new(3, 0), not_found_range())
-            .expect("composition should begin");
-
-        assert_eq!(session.marked_range(), NSRange::new(0, 3));
-        assert_eq!(session.selected_range(), NSRange::new(3, 0));
-    }
-
-    #[test]
-    fn ime_session_plain_insert_does_not_fake_a_composition_commit() {
-        let mut session = MacImeSession::default();
-
-        session
-            .insert_text("a", not_found_range())
-            .expect("plain insert should succeed");
-
-        assert_eq!(
-            session.drain_events(),
-            vec![PlatformImeEvent::InsertText("a".to_string())]
-        );
-    }
-
-    #[test]
-    fn ime_session_preserves_concrete_replacement_ranges_for_all_text_callbacks() {
-        let mut session = MacImeSession::default();
-        session
-            .insert_text("plain", NSRange::new(1, 2))
-            .expect("plain replacement should be accepted");
-        session
-            .set_marked_text("draft", NSRange::new(5, 0), NSRange::new(3, 4))
-            .expect("marked replacement should begin");
-        session
-            .set_marked_text("updated", NSRange::new(7, 0), NSRange::new(3, 5))
-            .expect("marked replacement should update");
-        session
-            .insert_text("committed", NSRange::new(3, 7))
-            .expect("marked replacement should commit");
-
-        assert_eq!(
-            session.drain_events(),
-            vec![
-                PlatformImeEvent::InsertTextReplacing {
-                    text: "plain".to_string(),
-                    replacement_range: Utf16TextRange::new(1, 2)
-                        .expect("test range should be valid"),
-                },
-                PlatformImeEvent::BeginCompositionReplacing {
-                    text: "draft".to_string(),
-                    replacement_range: Utf16TextRange::new(3, 4)
-                        .expect("test range should be valid"),
-                },
-                PlatformImeEvent::UpdateCompositionReplacing {
-                    text: "updated".to_string(),
-                    replacement_range: Utf16TextRange::new(3, 5)
-                        .expect("test range should be valid"),
-                },
-                PlatformImeEvent::CommitReplacing {
-                    text: "committed".to_string(),
-                    replacement_range: Utf16TextRange::new(3, 7)
-                        .expect("test range should be valid"),
-                },
-            ]
-        );
-    }
-
-    #[test]
-    fn ime_session_unmark_commits_current_marked_text() {
-        let mut session = MacImeSession::default();
-
-        session
-            .set_marked_text("pending", NSRange::new(7, 0), not_found_range())
-            .expect("composition should begin");
-        session.commit_marked_text();
-
-        assert_eq!(
-            session.drain_events(),
-            vec![
-                PlatformImeEvent::BeginComposition("pending".to_string()),
-                PlatformImeEvent::Commit("pending".to_string()),
-            ]
-        );
-        assert!(!session.has_marked_text());
-        assert_eq!(session.selected_range(), not_found_range());
-    }
-
-    #[test]
-    fn ime_session_keeps_empty_marked_text_until_commit_or_cancel() {
-        let mut committed = MacImeSession::default();
-        committed
-            .set_marked_text("draft", NSRange::new(5, 0), not_found_range())
-            .expect("composition should begin");
-        committed
-            .set_marked_text("", NSRange::new(0, 0), not_found_range())
-            .expect("composition should update");
-
-        assert!(committed.has_marked_text());
-        assert_eq!(committed.marked_range(), NSRange::new(0, 0));
-        committed.commit_marked_text();
-        assert_eq!(
-            committed.drain_events(),
-            vec![
-                PlatformImeEvent::BeginComposition("draft".to_string()),
-                PlatformImeEvent::UpdateComposition(String::new()),
-                PlatformImeEvent::Commit(String::new()),
-            ]
-        );
-
-        let mut cancelled = MacImeSession::default();
-        cancelled
-            .set_marked_text("draft", NSRange::new(5, 0), not_found_range())
-            .expect("composition should begin");
-        cancelled
-            .set_marked_text("", NSRange::new(0, 0), not_found_range())
-            .expect("composition should update");
-        cancelled.cancel_composition();
-        assert_eq!(
-            cancelled.drain_events(),
-            vec![
-                PlatformImeEvent::BeginComposition("draft".to_string()),
-                PlatformImeEvent::UpdateComposition(String::new()),
-                PlatformImeEvent::CancelComposition,
-            ]
-        );
-    }
-
-    #[test]
-    fn ime_session_discards_marked_text_without_queuing_an_event() {
-        let mut session = MacImeSession::default();
-        session
-            .set_marked_text("draft", NSRange::new(5, 0), not_found_range())
-            .expect("composition should begin");
-        session.drain_events();
-
-        assert!(session.discard_marked_text());
-        assert!(!session.has_marked_text());
-        assert_eq!(session.selected_range(), not_found_range());
-        assert!(session.drain_events().is_empty());
-    }
-}
+#[path = "text_input_tests.rs"]
+mod tests;

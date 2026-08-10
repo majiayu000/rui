@@ -4,6 +4,7 @@ mod accessibility;
 mod app;
 mod events;
 mod frame;
+mod ime_state;
 mod lifecycle;
 mod text_input;
 mod window;

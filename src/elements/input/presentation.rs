@@ -12,6 +12,24 @@ use crate::renderer::Primitive;
 use unicode_segmentation::UnicodeSegmentation;
 
 impl Input {
+    pub(super) fn display_offset_for_value_offset(&self, offset: usize) -> Option<usize> {
+        if offset > self.state.value.len() || !self.state.value.is_char_boundary(offset) {
+            return None;
+        }
+
+        if self.input_type == InputType::Password {
+            Some(self.state.value[..offset].graphemes(true).count() * PASSWORD_MASK.len())
+        } else {
+            Some(offset)
+        }
+    }
+
+    pub(super) fn display_range_for_value_range(&self, range: TextRange) -> Option<TextRange> {
+        let start = self.display_offset_for_value_offset(range.start())?;
+        let end = self.display_offset_for_value_offset(range.end())?;
+        TextRange::new(start, end).ok()
+    }
+
     pub(super) fn sync_focus_from_context(&mut self, cx: &mut EventContext<'_>) -> bool {
         let focused = cx.is_focused(self.id);
         if self.state.focused == focused {

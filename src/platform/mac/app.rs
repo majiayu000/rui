@@ -115,7 +115,7 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
         let mut profile_recorder = RendererTelemetryRecorder::enabled_from_env();
         let mut native_dogfood_automation =
             NativeDogfoodAutomation::load_from_environment(options.size);
-        let mut native_ime_state = crate::platform::mac::frame::NativeImeState::default();
+        let mut native_ime_state = crate::platform::mac::ime_state::NativeImeState::default();
 
         // Render loop (event-driven)
         loop {
@@ -261,6 +261,12 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
             phases.dispatch_ns = outcome.durations.dispatch_ns;
             phases.paint_ns = outcome.durations.paint_ns;
             let frame_committed = outcome.presented;
+
+            if let Err(err) =
+                crate::platform::mac::ime_state::sync_text_input_snapshot(&presenter, &window)
+            {
+                panic!("failed to synchronize native text input state: {err}");
+            }
 
             let accessibility_tree = match presenter.accessibility_tree() {
                 Ok(tree) => tree,
