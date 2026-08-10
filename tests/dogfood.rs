@@ -200,6 +200,11 @@ fn native_dogfood_script_contract_launches_example_and_profile() {
         "\"status\":\"passed\"",
         "\"script_requires_minimize_reopen\":true",
         "rui.renderer.profile.v1",
+        "rm -f -- \"$PROFILE_PATH\" \"$RENDERER_PROFILE_PATH\" \"$LOG_PATH\"",
+        "RUI_NATIVE_DOGFOOD_PROFILE=\"$PROFILE_PATH\"",
+        "cargo build --example native_dogfood >\"$LOG_PATH\" 2>&1",
+        "\"$LOG_PATH\" >\"$RENDERER_PROFILE_PATH\"",
+        "validate_renderer_profile -- \"$RENDERER_PROFILE_PATH\"",
     ] {
         assert!(
             script.contains(required),

@@ -35,20 +35,20 @@ if [[ "$PROFILE_PATH" == "$RENDERER_PROFILE_PATH" \
   echo "native dogfood artifact paths must be distinct" >&2
   exit 2
 fi
-rm -f "$PROFILE" "$RENDERER_PROFILE" "$LOG"
+rm -f -- "$PROFILE_PATH" "$RENDERER_PROFILE_PATH" "$LOG_PATH"
 
-RUI_NATIVE_DOGFOOD_PROFILE="$PROFILE" \
+RUI_NATIVE_DOGFOOD_PROFILE="$PROFILE_PATH" \
 RUI_NATIVE_DOGFOOD_TEXT="$TEXT" \
 RUI_NATIVE_DOGFOOD_INTERACTIVE=1 \
 RUI_NATIVE_DOGFOOD_AUTOMATION=1 \
-cargo build --example native_dogfood >"$LOG" 2>&1
+cargo build --example native_dogfood >"$LOG_PATH" 2>&1
 
-RUI_NATIVE_DOGFOOD_PROFILE="$PROFILE" \
+RUI_NATIVE_DOGFOOD_PROFILE="$PROFILE_PATH" \
 RUI_NATIVE_DOGFOOD_TEXT="$TEXT" \
 RUI_NATIVE_DOGFOOD_INTERACTIVE=1 \
 RUI_NATIVE_DOGFOOD_AUTOMATION=1 \
 RUI_PROFILE=1 \
-cargo run --example native_dogfood >>"$LOG" 2>&1 &
+cargo run --example native_dogfood >>"$LOG_PATH" 2>&1 &
 app_pid=$!
 
 cleanup() {
@@ -74,44 +74,44 @@ done
 
 if [[ -z "${exit_code:-}" ]]; then
   echo "native dogfood timed out waiting for profile-producing exit" >&2
-  echo "cargo log: $LOG" >&2
+  echo "cargo log: $LOG_PATH" >&2
   exit 1
 fi
 
 if [[ "$exit_code" -ne 0 ]]; then
   echo "native dogfood exited with status $exit_code" >&2
-  echo "cargo log: $LOG" >&2
+  echo "cargo log: $LOG_PATH" >&2
   exit "$exit_code"
 fi
 
 trap - EXIT
 
-if [[ ! -s "$PROFILE" ]]; then
-  echo "native dogfood did not write RUI_NATIVE_DOGFOOD_PROFILE at $PROFILE" >&2
-  echo "cargo log: $LOG" >&2
+if [[ ! -s "$PROFILE_PATH" ]]; then
+  echo "native dogfood did not write RUI_NATIVE_DOGFOOD_PROFILE at $PROFILE_PATH" >&2
+  echo "cargo log: $LOG_PATH" >&2
   exit 1
 fi
 
-grep -q '"status":"passed"' "$PROFILE"
-grep -q "\"typed_text\":\"$TEXT\"" "$PROFILE"
-grep -q '"script_requires_minimize_reopen":true' "$PROFILE"
+grep -q '"status":"passed"' "$PROFILE_PATH"
+grep -q "\"typed_text\":\"$TEXT\"" "$PROFILE_PATH"
+grep -q '"script_requires_minimize_reopen":true' "$PROFILE_PATH"
 
 awk 'index($0, "{\"schema\":\"rui.renderer.profile.v1\"") == 1 { print }' \
-  "$LOG" >"$RENDERER_PROFILE"
+  "$LOG_PATH" >"$RENDERER_PROFILE_PATH"
 
-if [[ ! -s "$RENDERER_PROFILE" ]]; then
-  echo "native dogfood did not capture RUI_PROFILE renderer telemetry at $RENDERER_PROFILE" >&2
-  echo "cargo log: $LOG" >&2
+if [[ ! -s "$RENDERER_PROFILE_PATH" ]]; then
+  echo "native dogfood did not capture RUI_PROFILE renderer telemetry at $RENDERER_PROFILE_PATH" >&2
+  echo "cargo log: $LOG_PATH" >&2
   exit 1
 fi
 
-if ! cargo run --quiet --example validate_renderer_profile -- "$RENDERER_PROFILE" \
-  >>"$LOG" 2>&1; then
+if ! cargo run --quiet --example validate_renderer_profile -- "$RENDERER_PROFILE_PATH" \
+  >>"$LOG_PATH" 2>&1; then
   echo "native dogfood renderer telemetry validation failed" >&2
-  echo "renderer profile: $RENDERER_PROFILE" >&2
-  echo "cargo log: $LOG" >&2
+  echo "renderer profile: $RENDERER_PROFILE_PATH" >&2
+  echo "cargo log: $LOG_PATH" >&2
   exit 1
 fi
 
-echo "native dogfood profile: $PROFILE"
-echo "renderer telemetry profile: $RENDERER_PROFILE"
+echo "native dogfood profile: $PROFILE_PATH"
+echo "renderer telemetry profile: $RENDERER_PROFILE_PATH"
