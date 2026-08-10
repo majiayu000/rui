@@ -110,6 +110,86 @@ fn rejects_case_only_aliases_on_case_insensitive_filesystems() {
     );
 }
 
+#[test]
+fn canonicalizes_leading_dash_artifact_paths_without_option_injection() {
+    let temp = DogfoodTestDir::new("leading-dash");
+    let fake_bin = temp.path().join("bin");
+    fs::create_dir(&fake_bin).expect("fake bin directory should be created");
+    let app = temp.path().join("native_dogfood");
+    write_executable(
+        &app,
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+printf '{"status":"passed","typed_text":"%s","script_requires_minimize_reopen":true}\n' \
+  "$RUI_NATIVE_DOGFOOD_TEXT" >"$RUI_NATIVE_DOGFOOD_PROFILE"
+printf '{"schema":"rui.renderer.profile.v1","status":"passed"}\n'
+"#,
+    );
+    install_fake_cargo(&fake_bin, &app, &temp.path().join("cargo.invoked"));
+    let unrelated = temp.path().join("unrelated.txt");
+    fs::write(&unrelated, "preserve").expect("unrelated artifact should be written");
+
+    let output = run_native_dogfood_script(&temp, &fake_bin, &app)
+        .current_dir(temp.path())
+        .env("RUI_NATIVE_DOGFOOD_PROFILE", "-r")
+        .env("RUI_NATIVE_DOGFOOD_RENDERER_PROFILE", "renderer.jsonl")
+        .env("RUI_NATIVE_DOGFOOD_LOG", "dogfood.log")
+        .output()
+        .expect("native dogfood script should run");
+
+    assert!(output.status.success(), "stderr={}", stderr(&output));
+    assert_eq!(
+        fs::read_to_string(temp.path().join("-r")).expect("leading-dash profile should be written"),
+        "{\"status\":\"passed\",\"typed_text\":\"rui-native-dogfood\",\"script_requires_minimize_reopen\":true}\n"
+    );
+    assert_eq!(
+        fs::read_to_string(&unrelated).expect("unrelated artifact should remain"),
+        "preserve"
+    );
+}
+
+#[test]
+fn canonicalization_failure_stops_before_removing_other_artifacts() {
+    let temp = DogfoodTestDir::new("canonical-failure");
+    let fake_bin = temp.path().join("bin");
+    fs::create_dir(&fake_bin).expect("fake bin directory should be created");
+    let app = temp.path().join("native_dogfood");
+    write_executable(&app, "#!/usr/bin/env bash\nexit 0\n");
+    let cargo_invoked = temp.path().join("cargo.invoked");
+    install_fake_cargo(&fake_bin, &app, &cargo_invoked);
+    let blocked_parent = temp.path().join("not-a-directory");
+    let renderer = temp.path().join("renderer.jsonl");
+    let log = temp.path().join("dogfood.log");
+    fs::write(&blocked_parent, "file").expect("blocking file should be written");
+    fs::write(&renderer, "renderer-preserve").expect("renderer sentinel should be written");
+    fs::write(&log, "log-preserve").expect("log sentinel should be written");
+
+    let output = run_native_dogfood_script(&temp, &fake_bin, &app)
+        .env(
+            "RUI_NATIVE_DOGFOOD_PROFILE",
+            blocked_parent.join("profile.json"),
+        )
+        .env("RUI_NATIVE_DOGFOOD_RENDERER_PROFILE", &renderer)
+        .env("RUI_NATIVE_DOGFOOD_LOG", &log)
+        .output()
+        .expect("native dogfood script should run");
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(stderr(&output).contains("artifact paths could not be canonicalized"));
+    assert_eq!(
+        fs::read_to_string(&renderer).expect("renderer sentinel should remain"),
+        "renderer-preserve"
+    );
+    assert_eq!(
+        fs::read_to_string(&log).expect("log sentinel should remain"),
+        "log-preserve"
+    );
+    assert!(
+        !cargo_invoked.exists(),
+        "build must not start after path failure"
+    );
+}
+
 struct DogfoodTestDir(PathBuf);
 
 impl DogfoodTestDir {

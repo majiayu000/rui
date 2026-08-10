@@ -10,11 +10,11 @@ canonical_artifact_path() {
   local path="$1"
   local directory
   local filename
-  directory="$(dirname "$path")"
-  filename="$(basename "$path")"
-  mkdir -p "$directory"
-  directory="$(cd "$directory" && pwd -P)"
-  printf '%s/%s\n' "$directory" "$filename"
+  directory="$(dirname -- "$path")" || return 1
+  filename="$(basename -- "$path")" || return 1
+  mkdir -p -- "$directory" || return 1
+  directory="$(cd -- "$directory" && pwd -P)" || return 1
+  printf '%s/%s\n' "$directory" "$filename" || return 1
 }
 
 TEXT="${RUI_NATIVE_DOGFOOD_TEXT:-rui-native-dogfood}"
@@ -26,9 +26,12 @@ fi
 PROFILE="${RUI_NATIVE_DOGFOOD_PROFILE:-target/rui-native-dogfood-profile.json}"
 RENDERER_PROFILE="${RUI_NATIVE_DOGFOOD_RENDERER_PROFILE:-target/rui-native-dogfood-renderer-profile.jsonl}"
 LOG="${RUI_NATIVE_DOGFOOD_LOG:-target/rui-native-dogfood.log}"
-PROFILE_PATH="$(canonical_artifact_path "$PROFILE")"
-RENDERER_PROFILE_PATH="$(canonical_artifact_path "$RENDERER_PROFILE")"
-LOG_PATH="$(canonical_artifact_path "$LOG")"
+if ! PROFILE_PATH="$(canonical_artifact_path "$PROFILE")" \
+  || ! RENDERER_PROFILE_PATH="$(canonical_artifact_path "$RENDERER_PROFILE")" \
+  || ! LOG_PATH="$(canonical_artifact_path "$LOG")"; then
+  echo "native dogfood artifact paths could not be canonicalized" >&2
+  exit 2
+fi
 if [[ "$PROFILE_PATH" == "$RENDERER_PROFILE_PATH" \
   || "$PROFILE_PATH" == "$LOG_PATH" \
   || "$RENDERER_PROFILE_PATH" == "$LOG_PATH" ]]; then
