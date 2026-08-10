@@ -36,8 +36,10 @@ impl NativeImeState {
     pub(crate) fn cancel_owner_after_focus_change(
         &mut self,
         focused: Option<ElementId>,
+        owner_exists: bool,
     ) -> Option<ElementId> {
-        if self.composition_owner.is_some() && self.composition_owner != focused {
+        if self.composition_owner.is_some() && (self.composition_owner != focused || !owner_exists)
+        {
             self.composition_owner.take()
         } else {
             None
@@ -57,6 +59,11 @@ where
         log::error!("discarded macOS text input event without a focused composition owner");
         return (false, false);
     };
+    if !presenter.root().contains_id(target) {
+        ime_state.cancel_owner_after_focus_change(presenter.focused_element(), false);
+        log::error!("discarded macOS text input event for a removed element");
+        return (false, false);
+    }
     dispatch_text_input_event_to(presenter, target, event)
 }
 
@@ -84,7 +91,7 @@ pub(crate) fn cancel_composition_if_owner_lost<E>(
 where
     E: Element,
 {
-    let Some(owner) = ime_state.cancel_owner_after_focus_change(presenter.focused_element()) else {
+    let Some(owner) = take_lost_composition_owner(presenter, ime_state) else {
         return false;
     };
     let (handled, redraw_requested) =
@@ -94,6 +101,25 @@ where
         log::error!("failed to cancel macOS composition for its previous focused owner");
     }
     handled || redraw_requested
+}
+
+fn take_lost_composition_owner<E>(
+    presenter: &mut Presenter<E>,
+    ime_state: &mut NativeImeState,
+) -> Option<ElementId>
+where
+    E: Element,
+{
+    if presenter
+        .focused_element()
+        .is_some_and(|focused| !presenter.root().contains_id(focused))
+    {
+        presenter.set_focused_element(None);
+    }
+    let owner_exists = ime_state
+        .composition_owner
+        .is_none_or(|owner| presenter.root().contains_id(owner));
+    ime_state.cancel_owner_after_focus_change(presenter.focused_element(), owner_exists)
 }
 
 pub(crate) fn sync_text_input_snapshot<E>(
@@ -144,7 +170,9 @@ fn text_input_ranges(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::Size;
     use crate::core::text_editing::{TextRange, TextSelection};
+    use crate::elements::{div, input};
 
     #[test]
     fn snapshot_ranges_are_document_absolute_utf16_offsets() {
@@ -157,5 +185,36 @@ mod tests {
         assert_eq!(selected, Utf16TextRange::new(1, 2).expect("valid range"));
         assert_eq!(marked, Utf16TextRange::new(1, 3).ok());
         assert_eq!(caret, Utf16TextRange::new(3, 0).expect("valid caret"));
+    }
+
+    #[test]
+    fn rebuild_that_removes_the_owner_clears_stale_focus_and_composition() {
+        let owner = ElementId::new();
+        let viewport = Size::new(200.0, 80.0);
+        let mut presenter = Presenter::with_root(viewport, div().child(input().id(owner)));
+        presenter.set_focused_element(Some(owner));
+        let mut ime_state = NativeImeState::default();
+        assert_eq!(
+            ime_state.target_for_event(
+                &TextInputEvent::BeginComposition("marked".to_string()),
+                Some(owner)
+            ),
+            Some(owner)
+        );
+
+        *presenter.root_mut() = div();
+
+        assert_eq!(
+            take_lost_composition_owner(&mut presenter, &mut ime_state),
+            Some(owner)
+        );
+        assert_eq!(presenter.focused_element(), None);
+        assert_eq!(
+            ime_state.target_for_event(
+                &TextInputEvent::UpdateComposition("stale".to_string()),
+                None
+            ),
+            None
+        );
     }
 }

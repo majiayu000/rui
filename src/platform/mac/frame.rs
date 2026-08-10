@@ -47,6 +47,10 @@ pub(crate) fn dispatch_native_events<E>(
 where
     E: Element,
 {
+    if cancel_composition_if_owner_lost(presenter, window, ime_state) {
+        schedule_platform_redraw(window, context, RedrawSource::PlatformInput);
+    }
+
     if events.viewport_changed {
         presenter.handle_window_event(&Event::WindowResize {
             width: events.viewport_size.width,
@@ -421,9 +425,12 @@ mod tests {
             ),
             Some(first)
         );
-        assert_eq!(state.cancel_owner_after_focus_change(Some(first)), None);
         assert_eq!(
-            state.cancel_owner_after_focus_change(Some(second)),
+            state.cancel_owner_after_focus_change(Some(first), true),
+            None
+        );
+        assert_eq!(
+            state.cancel_owner_after_focus_change(Some(second), true),
             Some(first)
         );
         assert_eq!(
