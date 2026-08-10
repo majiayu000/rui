@@ -8,7 +8,7 @@ mod types;
 
 pub use buffer::TextEditBuffer;
 pub use clipboard::{Clipboard, MemoryClipboard};
-pub use error::{ClipboardError, TextEditError};
+pub use error::{ClipboardError, TextEditError, Utf16TextRangeError};
 pub use layout::{
     CaretGeometry, SelectionRect, TextEditLayout, TextEditPaintStyle, TextInputGeometry, TextLine,
 };

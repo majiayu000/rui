@@ -1,4 +1,4 @@
-use super::error::TextEditError;
+use super::error::{TextEditError, Utf16TextRangeError};
 use super::layout::TextInputGeometry;
 use crate::core::geometry::Bounds;
 
@@ -51,10 +51,10 @@ pub struct Utf16TextRange {
 }
 
 impl Utf16TextRange {
-    pub fn new(location: usize, length: usize) -> Result<Self, TextEditError> {
+    pub fn new(location: usize, length: usize) -> Result<Self, Utf16TextRangeError> {
         location
             .checked_add(length)
-            .ok_or(TextEditError::InvalidUtf16Range { location, length })?;
+            .ok_or_else(|| Utf16TextRangeError::new(location, length))?;
         Ok(Self { location, length })
     }
 
@@ -66,23 +66,19 @@ impl Utf16TextRange {
         self.length
     }
 
-    pub fn to_text_range(self, text: &str) -> Result<TextRange, TextEditError> {
-        let end =
-            self.location
-                .checked_add(self.length)
-                .ok_or(TextEditError::InvalidUtf16Range {
-                    location: self.location,
-                    length: self.length,
-                })?;
-        let start_byte =
-            utf16_offset_to_byte(text, self.location).ok_or(TextEditError::InvalidUtf16Range {
-                location: self.location,
-                length: self.length,
-            })?;
-        let end_byte = utf16_offset_to_byte(text, end).ok_or(TextEditError::InvalidUtf16Range {
-            location: self.location,
-            length: self.length,
-        })?;
+    pub fn end(self) -> usize {
+        self.location + self.length
+    }
+
+    pub fn to_text_range(self, text: &str) -> Result<TextRange, Utf16TextRangeError> {
+        let end = self
+            .location
+            .checked_add(self.length)
+            .ok_or_else(|| Utf16TextRangeError::new(self.location, self.length))?;
+        let start_byte = utf16_offset_to_byte(text, self.location)
+            .ok_or_else(|| Utf16TextRangeError::new(self.location, self.length))?;
+        let end_byte = utf16_offset_to_byte(text, end)
+            .ok_or_else(|| Utf16TextRangeError::new(self.location, self.length))?;
         Ok(TextRange::ordered(start_byte, end_byte))
     }
 
@@ -103,7 +99,7 @@ impl Utf16TextRange {
         }
         let location = text[..range.start()].encode_utf16().count();
         let length = text[range.start()..range.end()].encode_utf16().count();
-        Self::new(location, length)
+        Ok(Self { location, length })
     }
 }
 

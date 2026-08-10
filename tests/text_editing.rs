@@ -4,6 +4,7 @@ use rui::core::geometry::Point;
 use rui::core::text_editing::{
     ClipboardError, MemoryClipboard, TextEditBuffer, TextEditError, TextEditLayout,
     TextEditPaintStyle, TextInputCommand, TextInputEvent, TextRange, TextSelection, Utf16TextRange,
+    Utf16TextRangeError,
 };
 use rui::renderer::Primitive;
 use rui::renderer::text::{TextMeasureCache, TextRequest};
@@ -22,6 +23,13 @@ fn must<T>(result: Result<T, TextEditError>) -> T {
     }
 }
 
+fn must_utf16<T>(result: Result<T, Utf16TextRangeError>) -> T {
+    match result {
+        Ok(value) => value,
+        Err(err) => panic!("UTF-16 range construction failed: {err}"),
+    }
+}
+
 #[test]
 fn text_input_event_retains_its_exhaustive_legacy_shape() {
     fn classify(event: TextInputEvent) -> u8 {
@@ -35,6 +43,22 @@ fn text_input_event_retains_its_exhaustive_legacy_shape() {
     }
 
     assert_eq!(classify(TextInputEvent::CancelComposition), 5);
+}
+
+#[test]
+fn text_edit_error_retains_its_exhaustive_legacy_shape() {
+    fn classify(error: TextEditError) -> u8 {
+        match error {
+            TextEditError::InvalidRange { .. } => 1,
+            TextEditError::InvalidBoundary { .. } => 2,
+            TextEditError::CompositionMissing => 3,
+            TextEditError::CompositionActive => 4,
+            TextEditError::MultilineDisabled => 5,
+            TextEditError::Clipboard(_) => 6,
+        }
+    }
+
+    assert_eq!(classify(TextEditError::CompositionMissing), 3);
 }
 
 fn assert_close(left: f32, right: f32) {
@@ -83,7 +107,7 @@ fn text_editing_commit_without_active_composition_inserts_text() {
 #[test]
 fn text_editing_replacement_ranges_convert_utf16_without_splitting_surrogates() {
     let mut buffer = TextEditBuffer::with_text("a😀bc");
-    let emoji = must(Utf16TextRange::new(1, 2));
+    let emoji = must_utf16(Utf16TextRange::new(1, 2));
 
     must(
         buffer.apply_text_input_command(TextInputCommand::InsertTextReplacing {
@@ -95,7 +119,7 @@ fn text_editing_replacement_ranges_convert_utf16_without_splitting_surrogates() 
     assert_eq!(buffer.text(), "aXbc");
     assert_eq!(buffer.cursor(), 2);
 
-    let invalid = must(Utf16TextRange::new(0, 1));
+    let invalid = must_utf16(Utf16TextRange::new(0, 1));
     let mut surrogate = TextEditBuffer::with_text("😀");
     let error = surrogate
         .apply_text_input_command(TextInputCommand::InsertTextReplacing {
@@ -103,12 +127,12 @@ fn text_editing_replacement_ranges_convert_utf16_without_splitting_surrogates() 
             replacement_range: invalid,
         })
         .expect_err("a range ending inside a surrogate pair must fail");
-    assert!(matches!(error, TextEditError::InvalidUtf16Range { .. }));
+    assert_eq!(error, TextEditError::InvalidRange { start: 0, end: 1 });
     assert_eq!(surrogate.text(), "😀");
 
     assert!(matches!(
         Utf16TextRange::new(usize::MAX, 1),
-        Err(TextEditError::InvalidUtf16Range { .. })
+        Err(error) if error.location() == usize::MAX && error.length() == 1
     ));
 }
 
@@ -118,7 +142,7 @@ fn text_editing_composition_honors_concrete_utf16_replacement_ranges() {
     must(
         buffer.apply_text_input_command(TextInputCommand::BeginCompositionReplacing {
             text: "你".to_string(),
-            replacement_range: must(Utf16TextRange::new(1, 2)),
+            replacement_range: must_utf16(Utf16TextRange::new(1, 2)),
         }),
     );
     assert_eq!(buffer.text(), "a你bc");
@@ -126,7 +150,7 @@ fn text_editing_composition_honors_concrete_utf16_replacement_ranges() {
     must(
         buffer.apply_text_input_command(TextInputCommand::UpdateCompositionReplacing {
             text: "好".to_string(),
-            replacement_range: must(Utf16TextRange::new(1, 1)),
+            replacement_range: must_utf16(Utf16TextRange::new(1, 1)),
         }),
     );
     assert_eq!(buffer.text(), "a好bc");
@@ -142,18 +166,18 @@ fn text_editing_applies_marked_selection_relative_to_composition_text() {
     must(buffer.apply_text_input_event(TextInputEvent::BeginComposition("a😀z".to_string())));
 
     must(
-        buffer.apply_text_input_command(TextInputCommand::SetCompositionSelection(must(
+        buffer.apply_text_input_command(TextInputCommand::SetCompositionSelection(must_utf16(
             Utf16TextRange::new(1, 2),
         ))),
     );
     assert_eq!(buffer.selection(), TextSelection::new(2, 6));
 
     let error = buffer
-        .apply_text_input_command(TextInputCommand::SetCompositionSelection(must(
+        .apply_text_input_command(TextInputCommand::SetCompositionSelection(must_utf16(
             Utf16TextRange::new(2, 0),
         )))
         .expect_err("selection inside a surrogate pair must fail");
-    assert!(matches!(error, TextEditError::InvalidUtf16Range { .. }));
+    assert_eq!(error, TextEditError::InvalidRange { start: 2, end: 2 });
     assert_eq!(buffer.selection(), TextSelection::new(2, 6));
 }
 

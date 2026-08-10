@@ -22,7 +22,9 @@ fn appkit_replacement_range(range: NSRange) -> Result<Option<Utf16TextRange>, Te
     if range.location == NSNotFound as NSUInteger {
         return Ok(None);
     }
-    Utf16TextRange::new(range.location, range.length).map(Some)
+    Utf16TextRange::new(range.location, range.length)
+        .map(Some)
+        .map_err(Into::into)
 }
 
 fn ns_range(range: Option<Utf16TextRange>) -> NSRange {
@@ -115,12 +117,7 @@ impl MacImeSession {
         };
         let selected_range = match insertion_start {
             Some(start) => {
-                let location = start.checked_add(text.encode_utf16().count()).ok_or(
-                    TextEditError::InvalidUtf16Range {
-                        location: start,
-                        length: text.encode_utf16().count(),
-                    },
-                )?;
+                let location = Utf16TextRange::new(start, text.encode_utf16().count())?.end();
                 NSRange::new(location, 0)
             }
             None => not_found_range(),
@@ -154,12 +151,8 @@ impl MacImeSession {
         let document_ranges = match marked_start {
             Some(marked_start) => {
                 let marked_range = Utf16TextRange::new(marked_start, text.encode_utf16().count())?;
-                let selected_location = marked_start
-                    .checked_add(marked_selection.location())
-                    .ok_or(TextEditError::InvalidUtf16Range {
-                        location: marked_start,
-                        length: marked_selection.location(),
-                    })?;
+                let selected_location =
+                    Utf16TextRange::new(marked_start, marked_selection.location())?.end();
                 let selected_range =
                     Utf16TextRange::new(selected_location, marked_selection.length())?;
                 (ns_range(Some(selected_range)), ns_range(Some(marked_range)))

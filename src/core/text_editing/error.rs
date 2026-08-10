@@ -4,7 +4,6 @@ use std::fmt;
 pub enum TextEditError {
     InvalidRange { start: usize, end: usize },
     InvalidBoundary { index: usize },
-    InvalidUtf16Range { location: usize, length: usize },
     CompositionMissing,
     CompositionActive,
     MultilineDisabled,
@@ -20,12 +19,6 @@ impl fmt::Display for TextEditError {
             Self::InvalidBoundary { index } => {
                 write!(f, "index {index} is not a UTF-8 character boundary")
             }
-            Self::InvalidUtf16Range { location, length } => {
-                write!(
-                    f,
-                    "invalid UTF-16 text range at {location} with length {length}"
-                )
-            }
             Self::CompositionMissing => write!(f, "no active text composition"),
             Self::CompositionActive => write!(f, "text composition is already active"),
             Self::MultilineDisabled => write!(f, "multiline editing is disabled"),
@@ -39,6 +32,47 @@ impl std::error::Error for TextEditError {}
 impl From<ClipboardError> for TextEditError {
     fn from(value: ClipboardError) -> Self {
         Self::Clipboard(value)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Utf16TextRangeError {
+    location: usize,
+    length: usize,
+}
+
+impl Utf16TextRangeError {
+    pub(crate) fn new(location: usize, length: usize) -> Self {
+        Self { location, length }
+    }
+
+    pub fn location(self) -> usize {
+        self.location
+    }
+
+    pub fn length(self) -> usize {
+        self.length
+    }
+}
+
+impl fmt::Display for Utf16TextRangeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "invalid UTF-16 text range at {} with length {}",
+            self.location, self.length
+        )
+    }
+}
+
+impl std::error::Error for Utf16TextRangeError {}
+
+impl From<Utf16TextRangeError> for TextEditError {
+    fn from(value: Utf16TextRangeError) -> Self {
+        Self::InvalidRange {
+            start: value.location,
+            end: value.location.saturating_add(value.length),
+        }
     }
 }
 
