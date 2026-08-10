@@ -1,6 +1,6 @@
 use crate::core::geometry::Bounds;
-use crate::core::text_editing::{TextEditError, Utf16TextRange};
-use crate::platform::window::{PlatformImeEvent, PlatformInputEvent, PlatformWindowEvent};
+use crate::core::text_editing::{TextEditError, TextInputCommand, Utf16TextRange};
+use crate::platform::window::{PlatformInputEvent, PlatformWindowEvent};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, Sel};
 use objc2::{DefinedClass, MainThreadOnly, define_class, msg_send, sel};
@@ -49,7 +49,7 @@ fn appkit_view_caret_rect(caret_bounds: Bounds, view_height: f64) -> NSRect {
 
 #[derive(Debug)]
 struct MacImeSession {
-    events: VecDeque<PlatformImeEvent>,
+    events: VecDeque<TextInputCommand>,
     marked_text: Option<String>,
     selected_range: NSRange,
     marked_range: NSRange,
@@ -87,16 +87,16 @@ impl MacImeSession {
             });
         let event = if had_marked_text {
             replacement_range.map_or_else(
-                || PlatformImeEvent::Commit(text.to_string()),
-                |replacement_range| PlatformImeEvent::CommitReplacing {
+                || TextInputCommand::CommitComposition(text.to_string()),
+                |replacement_range| TextInputCommand::CommitCompositionReplacing {
                     text: text.to_string(),
                     replacement_range,
                 },
             )
         } else {
             replacement_range.map_or_else(
-                || PlatformImeEvent::InsertText(text.to_string()),
-                |replacement_range| PlatformImeEvent::InsertTextReplacing {
+                || TextInputCommand::InsertText(text.to_string()),
+                |replacement_range| TextInputCommand::InsertTextReplacing {
                     text: text.to_string(),
                     replacement_range,
                 },
@@ -157,16 +157,16 @@ impl MacImeSession {
         };
         let event = if self.marked_text.is_some() {
             replacement_range.map_or_else(
-                || PlatformImeEvent::UpdateComposition(text.to_string()),
-                |replacement_range| PlatformImeEvent::UpdateCompositionReplacing {
+                || TextInputCommand::UpdateComposition(text.to_string()),
+                |replacement_range| TextInputCommand::UpdateCompositionReplacing {
                     text: text.to_string(),
                     replacement_range,
                 },
             )
         } else {
             replacement_range.map_or_else(
-                || PlatformImeEvent::BeginComposition(text.to_string()),
-                |replacement_range| PlatformImeEvent::BeginCompositionReplacing {
+                || TextInputCommand::BeginComposition(text.to_string()),
+                |replacement_range| TextInputCommand::BeginCompositionReplacing {
                     text: text.to_string(),
                     replacement_range,
                 },
@@ -175,7 +175,7 @@ impl MacImeSession {
         self.marked_text = Some(text.to_string());
         self.events.push_back(event);
         self.events
-            .push_back(PlatformImeEvent::SetCompositionSelection(marked_selection));
+            .push_back(TextInputCommand::SetCompositionSelection(marked_selection));
         self.selected_range = document_ranges.0;
         self.marked_range = document_ranges.1;
         self.caret_range = collapsed_at_end(self.selected_range);
@@ -184,14 +184,15 @@ impl MacImeSession {
 
     fn cancel_composition(&mut self) {
         if self.marked_text.take().is_some() {
-            self.events.push_back(PlatformImeEvent::CancelComposition);
+            self.events.push_back(TextInputCommand::CancelComposition);
         }
         self.marked_range = not_found_range();
     }
 
     fn commit_marked_text(&mut self) {
         if let Some(text) = self.marked_text.take() {
-            self.events.push_back(PlatformImeEvent::Commit(text));
+            self.events
+                .push_back(TextInputCommand::CommitComposition(text));
         }
         self.selected_range = collapsed_at_end(self.marked_range);
         self.caret_range = self.selected_range;
@@ -241,7 +242,7 @@ impl MacImeSession {
         (self.caret_range, self.caret_bounds)
     }
 
-    fn drain_events(&mut self) -> Vec<PlatformImeEvent> {
+    fn drain_events(&mut self) -> Vec<TextInputCommand> {
         self.events.drain(..).collect()
     }
 }
@@ -407,7 +408,7 @@ impl RuiContentView {
         unsafe { msg_send![super(this), initWithFrame: frame] }
     }
 
-    pub(crate) fn drain_ime_events(&self) -> Vec<PlatformImeEvent> {
+    pub(crate) fn drain_ime_events(&self) -> Vec<TextInputCommand> {
         self.ivars().ime.borrow_mut().drain_events()
     }
 
@@ -437,9 +438,9 @@ impl RuiContentView {
     }
 }
 
-pub(crate) fn append_ime_events_after_native_dispatch(
+pub(crate) fn suppress_key_down_for_ime(
     events: &mut Vec<PlatformWindowEvent>,
-    ime_events: Vec<PlatformImeEvent>,
+    ime_events: &[TextInputCommand],
 ) -> bool {
     if ime_events.is_empty() {
         return false;
@@ -457,11 +458,6 @@ pub(crate) fn append_ime_events_after_native_dispatch(
         false
     };
 
-    events.extend(
-        ime_events
-            .into_iter()
-            .map(|event| PlatformWindowEvent::Input(PlatformInputEvent::Ime(event))),
-    );
     consumed_key_down
 }
 

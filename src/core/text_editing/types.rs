@@ -255,6 +255,17 @@ pub struct TextEditOutcome {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TextInputEvent {
     InsertText(String),
+    BeginComposition(String),
+    UpdateComposition(String),
+    CommitComposition(String),
+    CancelComposition,
+}
+
+/// Internal-compatible command channel for platform text input extensions.
+#[doc(hidden)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TextInputCommand {
+    InsertText(String),
     InsertTextReplacing {
         text: String,
         replacement_range: Utf16TextRange,
@@ -276,4 +287,37 @@ pub enum TextInputEvent {
     },
     SetCompositionSelection(Utf16TextRange),
     CancelComposition,
+}
+
+impl TextInputCommand {
+    pub fn into_legacy_event(self) -> Option<TextInputEvent> {
+        match self {
+            Self::InsertText(text) | Self::InsertTextReplacing { text, .. } => {
+                Some(TextInputEvent::InsertText(text))
+            }
+            Self::BeginComposition(text) | Self::BeginCompositionReplacing { text, .. } => {
+                Some(TextInputEvent::BeginComposition(text))
+            }
+            Self::UpdateComposition(text) | Self::UpdateCompositionReplacing { text, .. } => {
+                Some(TextInputEvent::UpdateComposition(text))
+            }
+            Self::CommitComposition(text) | Self::CommitCompositionReplacing { text, .. } => {
+                Some(TextInputEvent::CommitComposition(text))
+            }
+            Self::SetCompositionSelection(_) => None,
+            Self::CancelComposition => Some(TextInputEvent::CancelComposition),
+        }
+    }
+}
+
+impl From<TextInputEvent> for TextInputCommand {
+    fn from(event: TextInputEvent) -> Self {
+        match event {
+            TextInputEvent::InsertText(text) => Self::InsertText(text),
+            TextInputEvent::BeginComposition(text) => Self::BeginComposition(text),
+            TextInputEvent::UpdateComposition(text) => Self::UpdateComposition(text),
+            TextInputEvent::CommitComposition(text) => Self::CommitComposition(text),
+            TextInputEvent::CancelComposition => Self::CancelComposition,
+        }
+    }
 }

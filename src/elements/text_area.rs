@@ -13,8 +13,8 @@ use crate::core::event::{Cursor, KeyCode, KeyEvent};
 use crate::core::geometry::{Bounds, Edges};
 use crate::core::style::{Corners, Style};
 use crate::core::text_editing::{
-    Clipboard, TextEditBuffer, TextEditError, TextEditOutcome, TextInputEvent, TextInputSnapshot,
-    TextRange, TextSelection,
+    Clipboard, TextEditBuffer, TextEditError, TextEditOutcome, TextInputCommand, TextInputEvent,
+    TextInputSnapshot, TextRange, TextSelection,
 };
 use crate::elements::element::{
     Element, EventContext, LayoutContext, PaintContext, PointerEvent, PointerEventKind,
@@ -204,14 +204,7 @@ impl TextArea {
         &mut self,
         event: TextInputEvent,
     ) -> Result<TextEditOutcome, TextEditError> {
-        if !self.can_edit() {
-            return Ok(TextEditOutcome::default());
-        }
-        self.sync_editor_from_public_state_if_needed()?;
-        let outcome = self.editor.apply_text_input_event(event)?;
-        self.sync_state_from_editor();
-        self.emit_change_if_needed(outcome.changed);
-        Ok(outcome)
+        self.apply_text_input_command(event.into())
     }
 
     pub fn apply_key_event(&mut self, event: &KeyEvent) -> Result<TextEditOutcome, TextEditError> {
@@ -581,19 +574,15 @@ impl Element for TextArea {
     }
 
     fn handle_text_input_event(&mut self, cx: &mut EventContext, event: &TextInputEvent) -> bool {
-        if !cx.is_focused(self.id) && !self.state.focused {
-            return false;
-        }
-        match self.apply_text_input_event(event.clone()) {
-            Ok(_) => {
-                cx.request_redraw();
-                true
-            }
-            Err(err) => {
-                log::error!("text area text input event failed: {err}");
-                false
-            }
-        }
+        self.handle_text_input_command_impl(cx, &event.clone().into())
+    }
+
+    fn handle_text_input_command(
+        &mut self,
+        cx: &mut EventContext,
+        command: &TextInputCommand,
+    ) -> bool {
+        self.handle_text_input_command_impl(cx, command)
     }
 
     fn handle_action(&mut self, cx: &mut EventContext, action: &ActionId) -> ActionOutcome {

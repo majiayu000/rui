@@ -278,6 +278,7 @@ mod tests {
     use crate::core::action::ActionOutcome;
     use crate::core::geometry::Bounds;
     use crate::core::style::Style;
+    use crate::core::text_editing::TextInputCommand;
     use crate::elements::Input;
     use crate::elements::element::{EventContext, LayoutContext, PaintContext};
     use std::cell::RefCell;
@@ -420,7 +421,7 @@ mod tests {
 
         assert_eq!(
             state.target_for_event(
-                &TextInputEvent::BeginComposition("draft".to_string()),
+                &TextInputCommand::BeginComposition("draft".to_string()),
                 Some(first),
             ),
             Some(first)
@@ -435,7 +436,7 @@ mod tests {
         );
         assert_eq!(
             state.target_for_event(
-                &TextInputEvent::UpdateComposition("stale".to_string()),
+                &TextInputCommand::UpdateComposition("stale".to_string()),
                 Some(second),
             ),
             None

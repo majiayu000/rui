@@ -1,6 +1,5 @@
 use super::*;
 use crate::core::geometry::Bounds;
-use crate::platform::window::PlatformImeEvent;
 use objc2_foundation::{NSNotFound, NSRange};
 
 fn utf16_range(location: usize, length: usize) -> Utf16TextRange {
@@ -10,8 +9,8 @@ fn utf16_range(location: usize, length: usize) -> Utf16TextRange {
     }
 }
 
-fn selection_event(location: usize, length: usize) -> PlatformImeEvent {
-    PlatformImeEvent::SetCompositionSelection(utf16_range(location, length))
+fn selection_event(location: usize, length: usize) -> TextInputCommand {
+    TextInputCommand::SetCompositionSelection(utf16_range(location, length))
 }
 
 #[test]
@@ -35,14 +34,14 @@ fn ime_session_emits_begin_update_commit_and_cancel() {
     assert_eq!(
         session.drain_events(),
         vec![
-            PlatformImeEvent::BeginComposition("你".to_string()),
+            TextInputCommand::BeginComposition("你".to_string()),
             selection_event(1, 0),
-            PlatformImeEvent::UpdateComposition("你好".to_string()),
+            TextInputCommand::UpdateComposition("你好".to_string()),
             selection_event(2, 0),
-            PlatformImeEvent::Commit("您好".to_string()),
-            PlatformImeEvent::BeginComposition("draft".to_string()),
+            TextInputCommand::CommitComposition("您好".to_string()),
+            TextInputCommand::BeginComposition("draft".to_string()),
             selection_event(5, 0),
-            PlatformImeEvent::CancelComposition,
+            TextInputCommand::CancelComposition,
         ]
     );
     assert!(!session.has_marked_text());
@@ -78,7 +77,7 @@ fn ime_session_plain_insert_does_not_fake_a_composition_commit() {
 
     assert_eq!(
         session.drain_events(),
-        vec![PlatformImeEvent::InsertText("a".to_string())]
+        vec![TextInputCommand::InsertText("a".to_string())]
     );
 }
 
@@ -101,21 +100,21 @@ fn ime_session_preserves_concrete_replacement_ranges_for_all_text_callbacks() {
     assert_eq!(
         session.drain_events(),
         vec![
-            PlatformImeEvent::InsertTextReplacing {
+            TextInputCommand::InsertTextReplacing {
                 text: "plain".to_string(),
                 replacement_range: utf16_range(1, 2),
             },
-            PlatformImeEvent::BeginCompositionReplacing {
+            TextInputCommand::BeginCompositionReplacing {
                 text: "draft".to_string(),
                 replacement_range: utf16_range(3, 4),
             },
             selection_event(5, 0),
-            PlatformImeEvent::UpdateCompositionReplacing {
+            TextInputCommand::UpdateCompositionReplacing {
                 text: "updated".to_string(),
                 replacement_range: utf16_range(3, 5),
             },
             selection_event(7, 0),
-            PlatformImeEvent::CommitReplacing {
+            TextInputCommand::CommitCompositionReplacing {
                 text: "committed".to_string(),
                 replacement_range: utf16_range(3, 7),
             },
@@ -141,9 +140,9 @@ fn ime_session_unmark_commits_current_marked_text() {
     assert_eq!(
         session.drain_events(),
         vec![
-            PlatformImeEvent::BeginComposition("pending".to_string()),
+            TextInputCommand::BeginComposition("pending".to_string()),
             selection_event(7, 0),
-            PlatformImeEvent::Commit("pending".to_string()),
+            TextInputCommand::CommitComposition("pending".to_string()),
         ]
     );
     assert!(!session.has_marked_text());
@@ -166,14 +165,14 @@ fn ime_session_keeps_empty_marked_text_until_commit_or_cancel() {
     assert_eq!(
         committed.drain_events(),
         vec![
-            PlatformImeEvent::BeginCompositionReplacing {
+            TextInputCommand::BeginCompositionReplacing {
                 text: "draft".to_string(),
                 replacement_range: utf16_range(0, 0),
             },
             selection_event(5, 0),
-            PlatformImeEvent::UpdateComposition(String::new()),
+            TextInputCommand::UpdateComposition(String::new()),
             selection_event(0, 0),
-            PlatformImeEvent::Commit(String::new()),
+            TextInputCommand::CommitComposition(String::new()),
         ]
     );
 
@@ -188,14 +187,14 @@ fn ime_session_keeps_empty_marked_text_until_commit_or_cancel() {
     assert_eq!(
         cancelled.drain_events(),
         vec![
-            PlatformImeEvent::BeginCompositionReplacing {
+            TextInputCommand::BeginCompositionReplacing {
                 text: "draft".to_string(),
                 replacement_range: utf16_range(0, 0),
             },
             selection_event(5, 0),
-            PlatformImeEvent::UpdateComposition(String::new()),
+            TextInputCommand::UpdateComposition(String::new()),
             selection_event(0, 0),
-            PlatformImeEvent::CancelComposition,
+            TextInputCommand::CancelComposition,
         ]
     );
 }

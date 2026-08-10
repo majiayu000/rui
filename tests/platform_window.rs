@@ -4,6 +4,21 @@ use rui::platform::{
     PlatformWindowFeature, PlatformWindowFeatures, UnsupportedPlatformWindow,
     validate_window_options,
 };
+
+#[test]
+fn platform_ime_event_retains_its_exhaustive_legacy_shape() {
+    fn classify(event: PlatformImeEvent) -> u8 {
+        match event {
+            PlatformImeEvent::InsertText(_) => 1,
+            PlatformImeEvent::BeginComposition(_) => 2,
+            PlatformImeEvent::UpdateComposition(_) => 3,
+            PlatformImeEvent::Commit(_) => 4,
+            PlatformImeEvent::CancelComposition => 5,
+        }
+    }
+
+    assert_eq!(classify(PlatformImeEvent::CancelComposition), 5);
+}
 use rui::renderer::RendererError;
 use std::fs;
 use std::path::{Path, PathBuf};

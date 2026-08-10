@@ -5,7 +5,7 @@ use crate::core::action::{ActionId, ActionOutcome};
 use crate::core::color::Color;
 use crate::core::geometry::Bounds;
 use crate::core::style::{Display, FlexDirection, Style};
-use crate::core::text_editing::TextInputEvent;
+use crate::core::text_editing::{TextInputCommand, TextInputEvent};
 use crate::elements::element::{
     AnyElement, Element, EventContext, LayoutContext, PaintContext, PointerEvent, PointerEventKind,
     style_to_taffy,
@@ -235,6 +235,20 @@ impl Element for ListItem {
             self.content.handle_text_input_event(&mut child_cx, event)
         } else {
             self.content.handle_text_input_event(cx, event)
+        }
+    }
+
+    fn handle_text_input_command(
+        &mut self,
+        cx: &mut EventContext,
+        command: &TextInputCommand,
+    ) -> bool {
+        if let Some(content_node) = self.content_node {
+            let bounds = cx.child_bounds(content_node).unwrap_or(cx.bounds());
+            self.content
+                .handle_text_input_command(&mut cx.with_bounds(bounds), command)
+        } else {
+            self.content.handle_text_input_command(cx, command)
         }
     }
 
@@ -595,6 +609,24 @@ impl Element for List {
         }
 
         false
+    }
+
+    fn handle_text_input_command(
+        &mut self,
+        cx: &mut EventContext,
+        command: &TextInputCommand,
+    ) -> bool {
+        if let Some(focused) = cx.focused_id() {
+            for item in self.items.iter_mut().rev() {
+                if item.contains_id(focused) {
+                    return item.handle_text_input_command(cx, command);
+                }
+            }
+        }
+        self.items
+            .iter_mut()
+            .rev()
+            .any(|item| item.handle_text_input_command(cx, command))
     }
 
     fn handle_window_event(&mut self, event: &crate::core::event::Event) -> bool {

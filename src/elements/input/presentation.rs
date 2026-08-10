@@ -8,8 +8,8 @@ use crate::core::event::{Cursor, KeyCode, KeyEvent};
 use crate::core::geometry::{Bounds, Edges, Point};
 use crate::core::style::Corners;
 use crate::core::text_editing::{
-    TextEditError, TextEditLayout, TextEditOutcome, TextEditPaintStyle, TextInputSnapshot,
-    TextRange, TextSelection,
+    TextEditError, TextEditLayout, TextEditOutcome, TextEditPaintStyle, TextInputCommand,
+    TextInputSnapshot, TextRange, TextSelection,
 };
 use crate::elements::element::{EventContext, PaintContext};
 use crate::renderer::Primitive;
@@ -17,6 +17,40 @@ use crate::renderer::text::{TextMeasureCache, TextRequest};
 use unicode_segmentation::UnicodeSegmentation;
 
 impl Input {
+    pub fn apply_text_input_command(
+        &mut self,
+        command: TextInputCommand,
+    ) -> Result<TextEditOutcome, TextEditError> {
+        if !self.can_edit() {
+            return Ok(TextEditOutcome::default());
+        }
+        self.sync_editor_from_public_state_if_needed()?;
+        let outcome = self.editor.apply_text_input_command(command)?;
+        self.sync_state_from_editor();
+        self.emit_change_if_needed(outcome.changed);
+        Ok(outcome)
+    }
+
+    pub(super) fn handle_text_input_command_impl(
+        &mut self,
+        cx: &mut EventContext,
+        command: &TextInputCommand,
+    ) -> bool {
+        if !cx.is_focused(self.id) && !self.state.focused {
+            return false;
+        }
+        match self.apply_text_input_command(command.clone()) {
+            Ok(_) => {
+                cx.request_redraw();
+                true
+            }
+            Err(err) => {
+                log::error!("input text input command failed: {err}");
+                false
+            }
+        }
+    }
+
     pub(super) fn apply_shaped_navigation(
         &mut self,
         event: &KeyEvent,

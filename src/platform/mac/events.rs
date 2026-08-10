@@ -1,5 +1,8 @@
+use crate::core::text_editing::{TextInputCommand, TextInputEvent};
 use crate::platform::mac::accessibility::MacAccessibilityActionRequest;
-use crate::platform::window::{PlatformWindowError, PlatformWindowEvent};
+use crate::platform::window::{
+    PlatformImeEvent, PlatformInputEvent, PlatformWindowError, PlatformWindowEvent,
+};
 use objc2::MainThreadMarker;
 use objc2_app_kit::{NSApplication, NSEvent, NSEventModifierFlags, NSEventType};
 use objc2_foundation::{NSDate, NSPoint};
@@ -10,7 +13,31 @@ const MAC_APPLICATION_EVENT_SUBTYPE: i16 = 0;
 
 pub(crate) enum MacWindowEvent {
     Platform(PlatformWindowEvent),
+    Text(TextInputCommand),
     Accessibility(MacAccessibilityActionRequest),
+}
+
+impl MacWindowEvent {
+    pub(crate) fn into_platform_event(self) -> Option<PlatformWindowEvent> {
+        match self {
+            Self::Platform(event) => Some(event),
+            Self::Text(command) => command.into_legacy_event().map(|event| {
+                let ime = match event {
+                    TextInputEvent::InsertText(text) => PlatformImeEvent::InsertText(text),
+                    TextInputEvent::BeginComposition(text) => {
+                        PlatformImeEvent::BeginComposition(text)
+                    }
+                    TextInputEvent::UpdateComposition(text) => {
+                        PlatformImeEvent::UpdateComposition(text)
+                    }
+                    TextInputEvent::CommitComposition(text) => PlatformImeEvent::Commit(text),
+                    TextInputEvent::CancelComposition => PlatformImeEvent::CancelComposition,
+                };
+                PlatformWindowEvent::Input(PlatformInputEvent::Ime(ime))
+            }),
+            Self::Accessibility(_) => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

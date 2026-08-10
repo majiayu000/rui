@@ -10,7 +10,7 @@ use crate::platform::mac::events::{
 };
 use crate::platform::mac::key_suppression::SuppressedKeyUps;
 use crate::platform::mac::lifecycle::{MacLifecycleDelegate, MacLifecycleEvent};
-use crate::platform::mac::text_input::{RuiContentView, append_ime_events_after_native_dispatch};
+use crate::platform::mac::text_input::{RuiContentView, suppress_key_down_for_ime};
 use crate::platform::window::{
     PlatformInputEvent, PlatformMouseEvent, PlatformMouseEventKind, PlatformRendererAttachment,
     PlatformRendererTarget, PlatformWindow, PlatformWindowError, PlatformWindowEvent,
@@ -206,15 +206,14 @@ impl MacWindow {
                 );
             }
             app.sendEvent(&event);
-            let consumed_key_down = append_ime_events_after_native_dispatch(
-                &mut platform_events,
-                self.content_view.drain_ime_events(),
-            );
+            let ime_events = self.content_view.drain_ime_events();
+            let consumed_key_down = suppress_key_down_for_ime(&mut platform_events, &ime_events);
             if event_type == NSEventType::KeyDown {
                 self.suppressed_key_ups
                     .record_key_down(event.keyCode(), consumed_key_down);
             }
             append_platform_events(&mut events, platform_events);
+            events.extend(ime_events.into_iter().map(MacWindowEvent::Text));
             let mut lifecycle_events = Vec::new();
             self.push_delegate_lifecycle_events(&mut lifecycle_events)?;
             append_platform_events(&mut events, lifecycle_events);
@@ -414,9 +413,10 @@ impl PlatformWindow for MacWindow {
         self.poll_events_for_app(&app, false).map(|events| {
             events
                 .into_iter()
-                .map(|event| match event {
-                    MacWindowEvent::Platform(event) => event,
-                    MacWindowEvent::Accessibility(_) => PlatformWindowEvent::RedrawRequested,
+                .map(|event| {
+                    event
+                        .into_platform_event()
+                        .unwrap_or(PlatformWindowEvent::RedrawRequested)
                 })
                 .collect()
         })

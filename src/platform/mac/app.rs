@@ -149,6 +149,10 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
                         context.mark_redraw_from(RedrawSource::PlatformInput);
                         ordered_input_events.push(OrderedInputEvent::Accessibility(request));
                     }
+                    MacWindowEvent::Text(command) => {
+                        context.mark_redraw_from(RedrawSource::PlatformInput);
+                        ordered_input_events.push(OrderedInputEvent::Text(command));
+                    }
                     MacWindowEvent::Platform(event) => {
                         mark_platform_event_redraw(&event, &mut context);
                         match event {
@@ -369,12 +373,14 @@ fn append_input_event(
             event,
         }),
         PlatformInputEvent::Ime(PlatformImeEvent::Commit(text)) => {
-            ordered_input_events.push(OrderedInputEvent::Text(TextInputEvent::CommitComposition(
-                text,
-            )));
+            ordered_input_events.push(OrderedInputEvent::Text(
+                TextInputEvent::CommitComposition(text).into(),
+            ));
         }
         PlatformInputEvent::Ime(event) => {
-            ordered_input_events.push(OrderedInputEvent::Text(event.into_text_input_event()));
+            ordered_input_events.push(OrderedInputEvent::Text(
+                event.into_text_input_event().into(),
+            ));
         }
         PlatformInputEvent::Mouse(event) => {
             let kind = match event.kind {
@@ -399,7 +405,7 @@ pub(crate) enum OrderedInputEvent {
     Pointer(PointerEvent),
     Scroll(ScrollEvent),
     Key { is_down: bool, event: KeyEvent },
-    Text(TextInputEvent),
+    Text(crate::core::text_editing::TextInputCommand),
     Accessibility(MacAccessibilityActionRequest),
 }
 

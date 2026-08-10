@@ -1,5 +1,16 @@
 use super::*;
-use crate::platform::PlatformImeEvent;
+use crate::core::text_editing::TextInputCommand;
+
+fn append_test_ime_events(
+    platform_events: &mut Vec<PlatformWindowEvent>,
+    commands: Vec<TextInputCommand>,
+) -> (bool, Vec<MacWindowEvent>) {
+    let consumed = suppress_key_down_for_ime(platform_events, &commands);
+    let mut events = Vec::new();
+    append_platform_events(&mut events, std::mem::take(platform_events));
+    events.extend(commands.into_iter().map(MacWindowEvent::Text));
+    (consumed, events)
+}
 
 #[test]
 fn clipboard_text_or_error_rejects_missing_text() {
@@ -26,16 +37,15 @@ fn native_ime_callbacks_suppress_consumed_key_down_without_duplication() {
         KeyEvent::new(KeyCode::A, Modifiers::none()).with_char('a'),
     ))];
 
-    append_ime_events_after_native_dispatch(
+    let (consumed, events) = append_test_ime_events(
         &mut events,
-        vec![PlatformImeEvent::InsertText("a".to_string())],
+        vec![TextInputCommand::InsertText("a".to_string())],
     );
 
+    assert!(consumed);
     assert!(matches!(
         &events[..],
-        [
-        PlatformWindowEvent::Input(PlatformInputEvent::Ime(PlatformImeEvent::InsertText(text)))
-        ] if text == "a"
+        [MacWindowEvent::Text(TextInputCommand::InsertText(text))] if text == "a"
     ));
 }
 
@@ -45,16 +55,15 @@ fn native_ime_commit_suppresses_the_raw_confirmation_key() {
         KeyEvent::new(KeyCode::Enter, Modifiers::none()),
     ))];
 
-    append_ime_events_after_native_dispatch(
+    let (consumed, events) = append_test_ime_events(
         &mut events,
-        vec![PlatformImeEvent::Commit("你".to_string())],
+        vec![TextInputCommand::CommitComposition("你".to_string())],
     );
 
+    assert!(consumed);
     assert!(matches!(
         &events[..],
-        [PlatformWindowEvent::Input(PlatformInputEvent::Ime(
-            PlatformImeEvent::Commit(text)
-        ))] if text == "你"
+        [MacWindowEvent::Text(TextInputCommand::CommitComposition(text))] if text == "你"
     ));
 }
 
@@ -62,27 +71,22 @@ fn native_ime_commit_suppresses_the_raw_confirmation_key() {
 fn native_ime_callbacks_preserve_full_composition_order() {
     let mut events = Vec::new();
 
-    append_ime_events_after_native_dispatch(
+    let (consumed, events) = append_test_ime_events(
         &mut events,
         vec![
-            PlatformImeEvent::BeginComposition("你".to_string()),
-            PlatformImeEvent::UpdateComposition("你好".to_string()),
-            PlatformImeEvent::CancelComposition,
+            TextInputCommand::BeginComposition("你".to_string()),
+            TextInputCommand::UpdateComposition("你好".to_string()),
+            TextInputCommand::CancelComposition,
         ],
     );
 
+    assert!(!consumed);
     assert!(matches!(
         &events[..],
         [
-            PlatformWindowEvent::Input(PlatformInputEvent::Ime(
-                PlatformImeEvent::BeginComposition(begin)
-            )),
-            PlatformWindowEvent::Input(PlatformInputEvent::Ime(
-                PlatformImeEvent::UpdateComposition(update)
-            )),
-            PlatformWindowEvent::Input(PlatformInputEvent::Ime(
-                PlatformImeEvent::CancelComposition
-            )),
+            MacWindowEvent::Text(TextInputCommand::BeginComposition(begin)),
+            MacWindowEvent::Text(TextInputCommand::UpdateComposition(update)),
+            MacWindowEvent::Text(TextInputCommand::CancelComposition),
         ] if begin == "你" && update == "你好"
     ));
 }
@@ -93,12 +97,12 @@ fn native_composition_cancel_suppresses_the_raw_escape_key() {
         KeyEvent::new(KeyCode::Escape, Modifiers::none()),
     ))];
 
-    append_ime_events_after_native_dispatch(&mut events, vec![PlatformImeEvent::CancelComposition]);
+    let (consumed, events) =
+        append_test_ime_events(&mut events, vec![TextInputCommand::CancelComposition]);
 
+    assert!(consumed);
     assert!(matches!(
         &events[..],
-        [PlatformWindowEvent::Input(PlatformInputEvent::Ime(
-            PlatformImeEvent::CancelComposition
-        ))]
+        [MacWindowEvent::Text(TextInputCommand::CancelComposition)]
     ));
 }

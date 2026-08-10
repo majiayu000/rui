@@ -7,7 +7,7 @@ use crate::core::style::{
     AlignItems, Background, BorderStyle, Corners, Dimension as StyleDimension, Display,
     FlexDirection, JustifyContent, Overflow, Position, Shadow, Style,
 };
-use crate::core::text_editing::TextInputEvent;
+use crate::core::text_editing::{TextInputCommand, TextInputEvent};
 use crate::elements::element::{
     AnyElement, Element, EventContext, LayoutContext, PaintContext, PointerEvent, PointerEventKind,
     dispatch_action_to_children, style_to_taffy,
@@ -649,6 +649,24 @@ impl Element for Div {
         }
 
         false
+    }
+
+    fn handle_text_input_command(
+        &mut self,
+        cx: &mut EventContext,
+        command: &TextInputCommand,
+    ) -> bool {
+        if let Some(focused) = cx.focused_id() {
+            for child in self.children.iter_mut().rev() {
+                if child.contains_id(focused) {
+                    return child.handle_text_input_command(cx, command);
+                }
+            }
+        }
+        self.children
+            .iter_mut()
+            .rev()
+            .any(|child| child.handle_text_input_command(cx, command))
     }
 
     fn handle_window_event(&mut self, event: &crate::core::event::Event) -> bool {

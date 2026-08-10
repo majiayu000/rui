@@ -9,7 +9,7 @@ use crate::core::action::{ActionId, ActionOutcome};
 use crate::core::event::{Cursor, KeyEvent, MouseButton, ScrollEvent};
 use crate::core::geometry::{Bounds, Point, Size};
 use crate::core::style::{Dimension as StyleDimension, Style};
-use crate::core::text_editing::{TextInputEvent, TextInputSnapshot};
+use crate::core::text_editing::{TextInputCommand, TextInputEvent, TextInputSnapshot};
 use crate::renderer::text::TextMeasureCache;
 use crate::renderer::{Primitive, Scene};
 use std::cell::{Cell, RefCell};
@@ -345,6 +345,18 @@ pub trait Element: 'static {
         false
     }
 
+    #[doc(hidden)]
+    fn handle_text_input_command(
+        &mut self,
+        cx: &mut EventContext,
+        command: &TextInputCommand,
+    ) -> bool {
+        command
+            .clone()
+            .into_legacy_event()
+            .is_some_and(|event| self.handle_text_input_event(cx, &event))
+    }
+
     fn text_input_snapshot(&self, focused: ElementId) -> Option<TextInputSnapshot> {
         self.children()
             .iter()
@@ -452,6 +464,14 @@ impl AnyElement {
         event: &TextInputEvent,
     ) -> bool {
         self.inner.handle_text_input_event(cx, event)
+    }
+
+    pub fn handle_text_input_command(
+        &mut self,
+        cx: &mut EventContext,
+        command: &TextInputCommand,
+    ) -> bool {
+        self.inner.handle_text_input_command(cx, command)
     }
 
     pub fn text_input_snapshot(&self, focused: ElementId) -> Option<TextInputSnapshot> {

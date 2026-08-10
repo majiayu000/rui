@@ -1,7 +1,8 @@
 use super::clipboard::Clipboard;
 use super::error::TextEditError;
 use super::types::{
-    TextComposition, TextEditOutcome, TextInputEvent, TextRange, TextSelection, Utf16TextRange,
+    TextComposition, TextEditOutcome, TextInputCommand, TextInputEvent, TextRange, TextSelection,
+    Utf16TextRange,
 };
 use crate::core::event::{KeyCode, KeyEvent};
 use unicode_segmentation::UnicodeSegmentation;
@@ -388,50 +389,58 @@ impl TextEditBuffer {
         &mut self,
         event: TextInputEvent,
     ) -> Result<TextEditOutcome, TextEditError> {
-        match event {
-            TextInputEvent::InsertText(text) => self.insert_text(&text),
-            TextInputEvent::InsertTextReplacing {
+        self.apply_text_input_command(event.into())
+    }
+
+    #[doc(hidden)]
+    pub fn apply_text_input_command(
+        &mut self,
+        command: TextInputCommand,
+    ) -> Result<TextEditOutcome, TextEditError> {
+        match command {
+            TextInputCommand::InsertText(text) => self.insert_text(&text),
+            TextInputCommand::InsertTextReplacing {
                 text,
                 replacement_range,
             } => self.insert_text_replacing_utf16(&text, replacement_range),
-            TextInputEvent::BeginComposition(text) => {
+            TextInputCommand::BeginComposition(text) => {
                 self.begin_composition(&text)?;
                 Ok(changed())
             }
-            TextInputEvent::BeginCompositionReplacing {
+            TextInputCommand::BeginCompositionReplacing {
                 text,
                 replacement_range,
             } => {
                 self.begin_composition_replacing_utf16(&text, replacement_range)?;
                 Ok(changed())
             }
-            TextInputEvent::UpdateComposition(text) => {
+            TextInputCommand::UpdateComposition(text) => {
                 self.update_composition(&text)?;
                 Ok(changed())
             }
-            TextInputEvent::UpdateCompositionReplacing {
+            TextInputCommand::UpdateCompositionReplacing {
                 text,
                 replacement_range,
             } => {
                 self.update_composition_replacing_utf16(&text, replacement_range)?;
                 Ok(changed())
             }
-            TextInputEvent::CommitComposition(text) => {
+            TextInputCommand::CommitComposition(text) => {
                 self.commit_composition(&text)?;
                 Ok(changed())
             }
-            TextInputEvent::CommitCompositionReplacing {
+            TextInputCommand::CommitCompositionReplacing {
                 text,
                 replacement_range,
             } => {
                 self.commit_composition_replacing_utf16(&text, replacement_range)?;
                 Ok(changed())
             }
-            TextInputEvent::SetCompositionSelection(selection) => {
+            TextInputCommand::SetCompositionSelection(selection) => {
                 self.set_composition_selection_utf16(selection)?;
                 Ok(TextEditOutcome::default())
             }
-            TextInputEvent::CancelComposition => {
+            TextInputCommand::CancelComposition => {
                 self.cancel_composition()?;
                 Ok(changed())
             }

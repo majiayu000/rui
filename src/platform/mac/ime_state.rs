@@ -2,7 +2,9 @@
 
 use crate::core::ElementId;
 use crate::core::presenter::Presenter;
-use crate::core::text_editing::{TextEditError, TextInputEvent, TextInputSnapshot, Utf16TextRange};
+use crate::core::text_editing::{
+    TextEditError, TextInputCommand, TextInputSnapshot, Utf16TextRange,
+};
 use crate::elements::element::Element;
 use crate::platform::mac::window::MacWindow;
 
@@ -14,22 +16,24 @@ pub(crate) struct NativeImeState {
 impl NativeImeState {
     pub(crate) fn target_for_event(
         &mut self,
-        event: &TextInputEvent,
+        event: &TextInputCommand,
         focused: Option<ElementId>,
     ) -> Option<ElementId> {
         match event {
-            TextInputEvent::InsertText(_) | TextInputEvent::InsertTextReplacing { .. } => focused,
-            TextInputEvent::BeginComposition(_)
-            | TextInputEvent::BeginCompositionReplacing { .. } => {
+            TextInputCommand::InsertText(_) | TextInputCommand::InsertTextReplacing { .. } => {
+                focused
+            }
+            TextInputCommand::BeginComposition(_)
+            | TextInputCommand::BeginCompositionReplacing { .. } => {
                 self.composition_owner = focused;
                 focused
             }
-            TextInputEvent::UpdateComposition(_)
-            | TextInputEvent::UpdateCompositionReplacing { .. }
-            | TextInputEvent::SetCompositionSelection(_) => self.composition_owner,
-            TextInputEvent::CommitComposition(_)
-            | TextInputEvent::CommitCompositionReplacing { .. }
-            | TextInputEvent::CancelComposition => self.composition_owner.take(),
+            TextInputCommand::UpdateComposition(_)
+            | TextInputCommand::UpdateCompositionReplacing { .. }
+            | TextInputCommand::SetCompositionSelection(_) => self.composition_owner,
+            TextInputCommand::CommitComposition(_)
+            | TextInputCommand::CommitCompositionReplacing { .. }
+            | TextInputCommand::CancelComposition => self.composition_owner.take(),
         }
     }
 
@@ -50,7 +54,7 @@ impl NativeImeState {
 pub(crate) fn dispatch_text_input_event<E>(
     presenter: &mut Presenter<E>,
     ime_state: &mut NativeImeState,
-    event: &TextInputEvent,
+    event: &TextInputCommand,
 ) -> (bool, bool)
 where
     E: Element,
@@ -70,7 +74,7 @@ where
 fn dispatch_text_input_event_to<E>(
     presenter: &mut Presenter<E>,
     target: ElementId,
-    event: &TextInputEvent,
+    event: &TextInputCommand,
 ) -> (bool, bool)
 where
     E: Element,
@@ -78,7 +82,7 @@ where
     let focused = presenter.focused_element();
     *presenter.focused_element_mut() = Some(target);
     let result = presenter
-        .with_event_context(|root, event_cx| root.handle_text_input_event(event_cx, event));
+        .with_event_context(|root, event_cx| root.handle_text_input_command(event_cx, event));
     *presenter.focused_element_mut() = focused;
     result
 }
@@ -95,7 +99,7 @@ where
         return false;
     };
     let (handled, redraw_requested) =
-        dispatch_text_input_event_to(presenter, owner, &TextInputEvent::CancelComposition);
+        dispatch_text_input_event_to(presenter, owner, &TextInputCommand::CancelComposition);
     window.discard_marked_text();
     if !handled {
         log::error!("failed to cancel macOS composition for its previous focused owner");
@@ -196,7 +200,7 @@ mod tests {
         let mut ime_state = NativeImeState::default();
         assert_eq!(
             ime_state.target_for_event(
-                &TextInputEvent::BeginComposition("marked".to_string()),
+                &TextInputCommand::BeginComposition("marked".to_string()),
                 Some(owner)
             ),
             Some(owner)
@@ -211,7 +215,7 @@ mod tests {
         assert_eq!(presenter.focused_element(), None);
         assert_eq!(
             ime_state.target_for_event(
-                &TextInputEvent::UpdateComposition("stale".to_string()),
+                &TextInputCommand::UpdateComposition("stale".to_string()),
                 None
             ),
             None
