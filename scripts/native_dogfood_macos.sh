@@ -53,8 +53,10 @@ rm -f -- "$PROFILE_PATH" "$RENDERER_PROFILE_PATH" "$LOG_PATH"
 
 POLL_ATTEMPTS="${RUI_NATIVE_DOGFOOD_POLL_ATTEMPTS:-200}"
 POLL_INTERVAL="${RUI_NATIVE_DOGFOOD_POLL_INTERVAL:-0.1}"
+TERMINATION_GRACE="${RUI_NATIVE_DOGFOOD_TERMINATION_GRACE:-1}"
 if [[ ! "$POLL_ATTEMPTS" =~ ^[1-9][0-9]*$ \
-  || ! "$POLL_INTERVAL" =~ ^(0|[1-9][0-9]*)(\.[0-9]+)?$ ]]; then
+  || ! "$POLL_INTERVAL" =~ ^(0|[1-9][0-9]*)(\.[0-9]+)?$ \
+  || ! "$TERMINATION_GRACE" =~ ^(0|[1-9][0-9]*)(\.[0-9]+)?$ ]]; then
   echo "native dogfood polling controls must be positive numeric values" >&2
   exit 2
 fi
@@ -84,6 +86,10 @@ app_pid=$!
 cleanup() {
   if kill -0 "$app_pid" 2>/dev/null; then
     kill "$app_pid" 2>/dev/null || true
+    sleep "$TERMINATION_GRACE"
+    if kill -0 "$app_pid" 2>/dev/null; then
+      kill -KILL "$app_pid" 2>/dev/null || true
+    fi
   fi
   wait "$app_pid" 2>/dev/null || true
 }
