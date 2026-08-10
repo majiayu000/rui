@@ -37,30 +37,62 @@ if [[ "$PROFILE_PATH" == "$RENDERER_PROFILE_PATH" \
 fi
 rm -f -- "$PROFILE_PATH" "$RENDERER_PROFILE_PATH" "$LOG_PATH"
 
+if ! { : >"$PROFILE_PATH" && : >"$RENDERER_PROFILE_PATH" && : >"$LOG_PATH"; }; then
+  rm -f -- "$PROFILE_PATH" "$RENDERER_PROFILE_PATH" "$LOG_PATH"
+  echo "native dogfood artifact paths must be writable regular files" >&2
+  exit 2
+fi
+if [[ "$PROFILE_PATH" -ef "$RENDERER_PROFILE_PATH" \
+  || "$PROFILE_PATH" -ef "$LOG_PATH" \
+  || "$RENDERER_PROFILE_PATH" -ef "$LOG_PATH" ]]; then
+  rm -f -- "$PROFILE_PATH" "$RENDERER_PROFILE_PATH" "$LOG_PATH"
+  echo "native dogfood artifact paths must be distinct filesystem entries" >&2
+  exit 2
+fi
+rm -f -- "$PROFILE_PATH" "$RENDERER_PROFILE_PATH" "$LOG_PATH"
+
+POLL_ATTEMPTS="${RUI_NATIVE_DOGFOOD_POLL_ATTEMPTS:-200}"
+POLL_INTERVAL="${RUI_NATIVE_DOGFOOD_POLL_INTERVAL:-0.1}"
+if [[ ! "$POLL_ATTEMPTS" =~ ^[1-9][0-9]*$ \
+  || ! "$POLL_INTERVAL" =~ ^(0|[1-9][0-9]*)(\.[0-9]+)?$ ]]; then
+  echo "native dogfood polling controls must be positive numeric values" >&2
+  exit 2
+fi
+
 RUI_NATIVE_DOGFOOD_PROFILE="$PROFILE_PATH" \
 RUI_NATIVE_DOGFOOD_TEXT="$TEXT" \
 RUI_NATIVE_DOGFOOD_INTERACTIVE=1 \
 RUI_NATIVE_DOGFOOD_AUTOMATION=1 \
-cargo build --example native_dogfood >"$LOG_PATH" 2>&1
+cargo build --example native_dogfood --message-format=json-render-diagnostics \
+  >"$LOG_PATH" 2>&1
+
+APP_PATH="$(sed -n 's/.*"executable":"\([^"]*\)".*/\1/p' "$LOG_PATH" | tail -n 1)"
+if [[ -z "$APP_PATH" || ! -x "$APP_PATH" ]]; then
+  echo "native dogfood build did not report an executable example artifact" >&2
+  echo "cargo log: $LOG_PATH" >&2
+  exit 1
+fi
 
 RUI_NATIVE_DOGFOOD_PROFILE="$PROFILE_PATH" \
 RUI_NATIVE_DOGFOOD_TEXT="$TEXT" \
 RUI_NATIVE_DOGFOOD_INTERACTIVE=1 \
 RUI_NATIVE_DOGFOOD_AUTOMATION=1 \
 RUI_PROFILE=1 \
-cargo run --example native_dogfood >>"$LOG_PATH" 2>&1 &
+"$APP_PATH" >>"$LOG_PATH" 2>&1 &
 app_pid=$!
 
 cleanup() {
   if kill -0 "$app_pid" 2>/dev/null; then
     kill "$app_pid" 2>/dev/null || true
-    wait "$app_pid" 2>/dev/null || true
   fi
+  wait "$app_pid" 2>/dev/null || true
 }
 trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 exit_code=
-for _ in $(seq 1 200); do
+for _ in $(seq 1 "$POLL_ATTEMPTS"); do
   if ! kill -0 "$app_pid" 2>/dev/null; then
     if wait "$app_pid"; then
       exit_code=0
@@ -69,7 +101,7 @@ for _ in $(seq 1 200); do
     fi
     break
   fi
-  sleep 0.1
+  sleep "$POLL_INTERVAL"
 done
 
 if [[ -z "${exit_code:-}" ]]; then
@@ -85,6 +117,7 @@ if [[ "$exit_code" -ne 0 ]]; then
 fi
 
 trap - EXIT
+trap - INT TERM
 
 if [[ ! -s "$PROFILE_PATH" ]]; then
   echo "native dogfood did not write RUI_NATIVE_DOGFOOD_PROFILE at $PROFILE_PATH" >&2

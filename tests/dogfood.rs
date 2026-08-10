@@ -23,6 +23,14 @@ use rui::core::event::{KeyCode, KeyEvent, Modifiers};
 use rui::core::text_editing::{TextEditBuffer, TextInputEvent};
 use rui::core::{ElementId, Point, Size};
 use rui::testing::{mount, mount_view};
+#[cfg(target_os = "macos")]
+use std::fs;
+#[cfg(target_os = "macos")]
+use std::os::unix::fs::PermissionsExt;
+#[cfg(target_os = "macos")]
+use std::path::{Path, PathBuf};
+#[cfg(target_os = "macos")]
+use std::process::{Command, Output};
 
 #[test]
 fn dogfood_loads_repository_owned_data() {
@@ -188,7 +196,7 @@ fn native_dogfood_script_contract_launches_example_and_profile() {
 
     for required in [
         "cargo build --example native_dogfood",
-        "cargo run --example native_dogfood",
+        "--message-format=json-render-diagnostics",
         "RUI_NATIVE_DOGFOOD_PROFILE",
         "RUI_NATIVE_DOGFOOD_RENDERER_PROFILE",
         "RUI_PROFILE=1",
@@ -196,13 +204,15 @@ fn native_dogfood_script_contract_launches_example_and_profile() {
         "RUI_NATIVE_DOGFOOD_AUTOMATION=1",
         "canonical_artifact_path",
         "native dogfood artifact paths must be distinct",
+        "native dogfood artifact paths must be distinct filesystem entries",
+        "-ef \"$RENDERER_PROFILE_PATH\"",
         "cargo run --quiet --example validate_renderer_profile",
         "\"status\":\"passed\"",
         "\"script_requires_minimize_reopen\":true",
         "rui.renderer.profile.v1",
         "rm -f -- \"$PROFILE_PATH\" \"$RENDERER_PROFILE_PATH\" \"$LOG_PATH\"",
         "RUI_NATIVE_DOGFOOD_PROFILE=\"$PROFILE_PATH\"",
-        "cargo build --example native_dogfood >\"$LOG_PATH\" 2>&1",
+        "\"$APP_PATH\" >>\"$LOG_PATH\" 2>&1 &",
         "\"$LOG_PATH\" >\"$RENDERER_PROFILE_PATH\"",
         "validate_renderer_profile -- \"$RENDERER_PROFILE_PATH\"",
     ] {
@@ -211,6 +221,10 @@ fn native_dogfood_script_contract_launches_example_and_profile() {
             "native dogfood script should contain `{required}`"
         );
     }
+    assert!(
+        !script.contains("cargo run --example native_dogfood"),
+        "native dogfood should launch the built application directly"
+    );
 
     for required in [
         "RUI_NATIVE_DOGFOOD_PROFILE",
@@ -271,6 +285,178 @@ fn native_dogfood_script_contract_launches_example_and_profile() {
         mac_window.contains("fn set_minimized") && mac_window.contains("deminiaturize"),
         "macOS window should support native minimize and reopen"
     );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn native_dogfood_timeout_terminates_the_actual_application_process() {
+    let temp = DogfoodTestDir::new("timeout");
+    let fake_bin = temp.path().join("bin");
+    fs::create_dir(&fake_bin).expect("fake bin directory should be created");
+    let app = temp.path().join("native_dogfood");
+    let pid_file = temp.path().join("app.pid");
+    let terminated_file = temp.path().join("app.terminated");
+    write_executable(
+        &app,
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+trap 'printf terminated >"$FAKE_TERMINATED_FILE"; exit 0' TERM
+printf '%s\n' "$$" >"$FAKE_PID_FILE"
+while :; do sleep 0.05; done
+"#,
+    );
+    install_fake_cargo(&fake_bin, &app, &temp.path().join("cargo.invoked"));
+
+    let output = run_native_dogfood_script(&temp, &fake_bin, &app)
+        .env("FAKE_PID_FILE", &pid_file)
+        .env("FAKE_TERMINATED_FILE", &terminated_file)
+        .env("RUI_NATIVE_DOGFOOD_POLL_ATTEMPTS", "20")
+        .env("RUI_NATIVE_DOGFOOD_POLL_INTERVAL", "0.02")
+        .output()
+        .expect("native dogfood script should run");
+
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("timed out waiting for profile-producing exit"));
+    assert_eq!(
+        fs::read_to_string(&terminated_file).expect("termination marker should be written"),
+        "terminated"
+    );
+    let pid = fs::read_to_string(&pid_file).expect("application pid should be recorded");
+    assert!(
+        !Command::new("kill")
+            .args(["-0", pid.trim()])
+            .output()
+            .expect("kill probe should run")
+            .status
+            .success(),
+        "timed-out application process should no longer exist"
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn native_dogfood_rejects_case_only_aliases_on_case_insensitive_filesystems() {
+    let temp = DogfoodTestDir::new("case-alias");
+    let upper = temp.path().join("Profile.json");
+    let lower = temp.path().join("profile.json");
+    fs::write(&upper, "probe").expect("filesystem probe should be written");
+    let case_insensitive = lower.exists();
+    fs::remove_file(&upper).expect("filesystem probe should be removed");
+    if !case_insensitive {
+        return;
+    }
+
+    let fake_bin = temp.path().join("bin");
+    fs::create_dir(&fake_bin).expect("fake bin directory should be created");
+    let app = temp.path().join("native_dogfood");
+    write_executable(&app, "#!/usr/bin/env bash\nexit 0\n");
+    let cargo_invoked = temp.path().join("cargo.invoked");
+    install_fake_cargo(&fake_bin, &app, &cargo_invoked);
+    let output = run_native_dogfood_script(&temp, &fake_bin, &app)
+        .env("RUI_NATIVE_DOGFOOD_PROFILE", &upper)
+        .env("RUI_NATIVE_DOGFOOD_RENDERER_PROFILE", &lower)
+        .output()
+        .expect("native dogfood script should run");
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(stderr(&output).contains("distinct filesystem entries"));
+    assert!(
+        !cargo_invoked.exists(),
+        "build must not start for aliased artifacts"
+    );
+}
+
+#[cfg(target_os = "macos")]
+struct DogfoodTestDir(PathBuf);
+
+#[cfg(target_os = "macos")]
+impl DogfoodTestDir {
+    fn new(label: &str) -> Self {
+        let path = std::env::temp_dir().join(format!(
+            "rui-dogfood-{label}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock should follow the Unix epoch")
+                .as_nanos()
+        ));
+        fs::create_dir(&path).expect("dogfood test directory should be created");
+        Self(path)
+    }
+
+    fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl Drop for DogfoodTestDir {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn write_executable(path: &Path, contents: &str) {
+    fs::write(path, contents).expect("test executable should be written");
+    let mut permissions = fs::metadata(path)
+        .expect("test executable metadata should exist")
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(path, permissions).expect("test executable should become executable");
+}
+
+#[cfg(target_os = "macos")]
+fn install_fake_cargo(fake_bin: &Path, app: &Path, invoked: &Path) {
+    let cargo = fake_bin.join("cargo");
+    write_executable(
+        &cargo,
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+printf invoked >"$FAKE_CARGO_INVOKED"
+if [[ "$*" == *"build --example native_dogfood"* ]]; then
+  printf '{"executable":"%s"}\n' "$FAKE_APP_PATH"
+  exit 0
+fi
+if [[ "$*" == *"validate_renderer_profile"* ]]; then
+  exit 0
+fi
+exit 9
+"#,
+    );
+    assert!(app.is_absolute());
+    assert!(invoked.is_absolute());
+}
+
+#[cfg(target_os = "macos")]
+fn run_native_dogfood_script(temp: &DogfoodTestDir, fake_bin: &Path, app: &Path) -> Command {
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut command = Command::new(manifest_dir.join("scripts/native_dogfood_macos.sh"));
+    let path = format!(
+        "{}:{}",
+        fake_bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    command
+        .current_dir(manifest_dir)
+        .env("PATH", path)
+        .env("FAKE_APP_PATH", app)
+        .env("FAKE_CARGO_INVOKED", temp.path().join("cargo.invoked"))
+        .env(
+            "RUI_NATIVE_DOGFOOD_PROFILE",
+            temp.path().join("profile.json"),
+        )
+        .env(
+            "RUI_NATIVE_DOGFOOD_RENDERER_PROFILE",
+            temp.path().join("renderer.jsonl"),
+        )
+        .env("RUI_NATIVE_DOGFOOD_LOG", temp.path().join("dogfood.log"));
+    command
+}
+
+#[cfg(target_os = "macos")]
+fn stderr(output: &Output) -> String {
+    String::from_utf8_lossy(&output.stderr).into_owned()
 }
 
 #[test]
