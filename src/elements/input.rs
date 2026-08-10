@@ -84,6 +84,7 @@ pub struct Input {
     on_blur: Option<Box<dyn Fn()>>,
     layout_node: Option<NodeId>,
     paint_tokens: Option<InputPaintTokens>,
+    caret_bounds: Option<Bounds>,
 }
 
 impl Input {
@@ -110,6 +111,7 @@ impl Input {
             on_blur: None,
             layout_node: None,
             paint_tokens: None,
+            caret_bounds: None,
         }
     }
 
@@ -478,13 +480,7 @@ impl Element for Input {
     }
 
     fn text_input_snapshot(&self, focused: ElementId) -> Option<TextInputSnapshot> {
-        (self.id == Some(focused)).then(|| {
-            TextInputSnapshot::new(
-                self.state.value.clone(),
-                self.state_selection(),
-                self.state.composition_range,
-            )
-        })
+        self.native_text_input_snapshot(focused)
     }
 
     fn layout(&mut self, cx: &mut LayoutContext) -> NodeId {
@@ -572,7 +568,7 @@ impl Element for Input {
             });
         }
 
-        self.paint_cursor(cx, bounds);
+        self.caret_bounds = self.paint_cursor(cx, bounds);
         cx.scene.pop_layer();
     }
 

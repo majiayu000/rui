@@ -2,16 +2,31 @@ use super::{
     INPUT_CARET_WIDTH, INPUT_GRAPHEME_WIDTH, INPUT_HORIZONTAL_PADDING,
     INPUT_MARKED_UNDERLINE_HEIGHT, Input, InputType, PASSWORD_MASK,
 };
+use crate::core::ElementId;
 use crate::core::color::{Color, Rgba};
 use crate::core::event::Cursor;
 use crate::core::geometry::{Bounds, Edges, Point};
 use crate::core::style::Corners;
-use crate::core::text_editing::{TextEditLayout, TextEditPaintStyle, TextRange};
+use crate::core::text_editing::{TextEditLayout, TextEditPaintStyle, TextInputSnapshot, TextRange};
 use crate::elements::element::{EventContext, PaintContext};
 use crate::renderer::Primitive;
 use unicode_segmentation::UnicodeSegmentation;
 
 impl Input {
+    pub(super) fn native_text_input_snapshot(
+        &self,
+        focused: ElementId,
+    ) -> Option<TextInputSnapshot> {
+        (self.id == Some(focused)).then(|| {
+            TextInputSnapshot::new(
+                self.state.value.clone(),
+                self.state_selection(),
+                self.state.composition_range,
+            )
+            .with_caret_bounds(self.caret_bounds)
+        })
+    }
+
     pub(super) fn display_offset_for_value_offset(&self, offset: usize) -> Option<usize> {
         if offset > self.state.value.len() || !self.state.value.is_char_boundary(offset) {
             return None;
@@ -204,9 +219,9 @@ impl Input {
         }
     }
 
-    pub(super) fn paint_cursor(&self, cx: &mut PaintContext, bounds: Bounds) {
+    pub(super) fn paint_cursor(&self, cx: &mut PaintContext, bounds: Bounds) -> Option<Bounds> {
         if !self.state.focused {
-            return;
+            return None;
         }
 
         let Some(cursor) = self.display_offset_for_value_offset(self.normalize_cursor_position())
@@ -215,7 +230,7 @@ impl Input {
                 "input cursor paint failed: cursor {} is not a valid display offset",
                 self.state.cursor_position
             );
-            return;
+            return None;
         };
 
         let layout = self.text_layout_for_bounds(bounds);
@@ -232,8 +247,18 @@ impl Input {
                 .to_rgba(),
         );
         match layout.caret_primitive(cursor, self.text_origin(bounds), style) {
-            Ok(primitive) => cx.paint(primitive),
-            Err(err) => log::error!("input caret paint failed: {err}"),
+            Ok(primitive) => {
+                let caret_bounds = match &primitive {
+                    Primitive::Quad { bounds, .. } => Some(*bounds),
+                    _ => None,
+                };
+                cx.paint(primitive);
+                caret_bounds
+            }
+            Err(err) => {
+                log::error!("input caret paint failed: {err}");
+                None
+            }
         }
     }
 }

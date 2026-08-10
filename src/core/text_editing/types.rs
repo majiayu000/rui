@@ -1,4 +1,5 @@
 use super::error::TextEditError;
+use crate::core::geometry::Bounds;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TextRange {
@@ -169,11 +170,12 @@ pub struct TextComposition {
     original_text: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TextInputSnapshot {
     text: String,
     selection: TextSelection,
     composition: Option<TextRange>,
+    caret_bounds: Option<Bounds>,
 }
 
 impl TextInputSnapshot {
@@ -186,7 +188,13 @@ impl TextInputSnapshot {
             text: text.into(),
             selection,
             composition,
+            caret_bounds: None,
         }
+    }
+
+    pub fn with_caret_bounds(mut self, caret_bounds: Option<Bounds>) -> Self {
+        self.caret_bounds = caret_bounds;
+        self
     }
 
     pub fn text(&self) -> &str {
@@ -199,6 +207,10 @@ impl TextInputSnapshot {
 
     pub fn composition(&self) -> Option<TextRange> {
         self.composition
+    }
+
+    pub fn caret_bounds(&self) -> Option<Bounds> {
+        self.caret_bounds
     }
 }
 

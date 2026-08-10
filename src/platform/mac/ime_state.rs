@@ -104,30 +104,41 @@ where
     E: Element,
 {
     let Some(focused) = presenter.focused_element() else {
-        window.content_view.update_text_input_ranges(None, None);
+        window
+            .content_view
+            .update_text_input_state(None, None, None, None);
         return Ok(());
     };
     let Some(snapshot) = presenter.root().text_input_snapshot(focused) else {
-        window.content_view.update_text_input_ranges(None, None);
+        window
+            .content_view
+            .update_text_input_state(None, None, None, None);
         return Ok(());
     };
-    let (selected_range, marked_range) = text_input_ranges(&snapshot)?;
-    window
-        .content_view
-        .update_text_input_ranges(Some(selected_range), marked_range);
+    let (selected_range, marked_range, caret_range) = text_input_ranges(&snapshot)?;
+    window.content_view.update_text_input_state(
+        Some(selected_range),
+        marked_range,
+        Some(caret_range),
+        snapshot.caret_bounds(),
+    );
     Ok(())
 }
 
 fn text_input_ranges(
     snapshot: &TextInputSnapshot,
-) -> Result<(Utf16TextRange, Option<Utf16TextRange>), TextEditError> {
+) -> Result<(Utf16TextRange, Option<Utf16TextRange>, Utf16TextRange), TextEditError> {
     let selected_range =
         Utf16TextRange::from_text_range(snapshot.text(), snapshot.selection().normalized_range())?;
     let marked_range = snapshot
         .composition()
         .map(|range| Utf16TextRange::from_text_range(snapshot.text(), range))
         .transpose()?;
-    Ok((selected_range, marked_range))
+    let caret_range = Utf16TextRange::from_text_range(
+        snapshot.text(),
+        crate::core::text_editing::TextRange::collapsed(snapshot.selection().head()),
+    )?;
+    Ok((selected_range, marked_range, caret_range))
 }
 
 #[cfg(test)]
@@ -140,10 +151,11 @@ mod tests {
         let snapshot =
             TextInputSnapshot::new("a😀z", TextSelection::new(1, 5), TextRange::new(1, 6).ok());
 
-        let (selected, marked) =
+        let (selected, marked, caret) =
             text_input_ranges(&snapshot).expect("snapshot ranges should convert");
 
         assert_eq!(selected, Utf16TextRange::new(1, 2).expect("valid range"));
         assert_eq!(marked, Utf16TextRange::new(1, 3).ok());
+        assert_eq!(caret, Utf16TextRange::new(3, 0).expect("valid caret"));
     }
 }

@@ -1,3 +1,4 @@
+use crate::core::geometry::Bounds;
 use crate::core::text_editing::{TextEditError, Utf16TextRange};
 use crate::platform::window::{PlatformImeEvent, PlatformInputEvent, PlatformWindowEvent};
 use objc2::rc::Retained;
@@ -6,7 +7,7 @@ use objc2::{DefinedClass, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{NSEvent, NSTextInputClient, NSView};
 use objc2_foundation::{
     MainThreadMarker, NSArray, NSAttributedString, NSAttributedStringKey, NSNotFound,
-    NSObjectProtocol, NSPoint, NSRange, NSRangePointer, NSRect, NSString, NSUInteger,
+    NSObjectProtocol, NSPoint, NSRange, NSRangePointer, NSRect, NSSize, NSString, NSUInteger,
 };
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -28,12 +29,32 @@ fn ns_range(range: Option<Utf16TextRange>) -> NSRange {
     })
 }
 
+fn collapsed_at_end(range: NSRange) -> NSRange {
+    if range.location == NSNotFound as NSUInteger {
+        not_found_range()
+    } else {
+        NSRange::new(range.location + range.length, 0)
+    }
+}
+
+fn appkit_view_caret_rect(caret_bounds: Bounds, view_height: f64) -> NSRect {
+    NSRect::new(
+        NSPoint::new(
+            caret_bounds.x() as f64,
+            view_height - caret_bounds.max_y() as f64,
+        ),
+        NSSize::new(0.0, caret_bounds.height() as f64),
+    )
+}
+
 #[derive(Debug)]
 struct MacImeSession {
     events: VecDeque<PlatformImeEvent>,
     marked_text: Option<String>,
     selected_range: NSRange,
     marked_range: NSRange,
+    caret_range: NSRange,
+    caret_bounds: Option<Bounds>,
 }
 
 impl Default for MacImeSession {
@@ -43,6 +64,8 @@ impl Default for MacImeSession {
             marked_text: None,
             selected_range: not_found_range(),
             marked_range: not_found_range(),
+            caret_range: not_found_range(),
+            caret_bounds: None,
         }
     }
 }
@@ -94,6 +117,7 @@ impl MacImeSession {
         self.events.push_back(event);
         self.marked_range = not_found_range();
         self.selected_range = selected_range;
+        self.caret_range = selected_range;
         Ok(())
     }
 
@@ -154,6 +178,7 @@ impl MacImeSession {
             .push_back(PlatformImeEvent::SetCompositionSelection(marked_selection));
         self.selected_range = document_ranges.0;
         self.marked_range = document_ranges.1;
+        self.caret_range = collapsed_at_end(self.selected_range);
         Ok(())
     }
 
@@ -168,11 +193,8 @@ impl MacImeSession {
         if let Some(text) = self.marked_text.take() {
             self.events.push_back(PlatformImeEvent::Commit(text));
         }
-        self.selected_range = if self.marked_range.location == NSNotFound as NSUInteger {
-            not_found_range()
-        } else {
-            NSRange::new(self.marked_range.location + self.marked_range.length, 0)
-        };
+        self.selected_range = collapsed_at_end(self.marked_range);
+        self.caret_range = self.selected_range;
         self.marked_range = not_found_range();
     }
 
@@ -194,13 +216,29 @@ impl MacImeSession {
         self.selected_range
     }
 
-    fn update_text_input_ranges(
+    fn update_text_input_state(
         &mut self,
         selected_range: Option<Utf16TextRange>,
         marked_range: Option<Utf16TextRange>,
-    ) {
-        self.selected_range = ns_range(selected_range);
-        self.marked_range = ns_range(marked_range);
+        caret_range: Option<Utf16TextRange>,
+        caret_bounds: Option<Bounds>,
+    ) -> bool {
+        let selected_range = ns_range(selected_range);
+        let marked_range = ns_range(marked_range);
+        let caret_range = ns_range(caret_range);
+        let changed = self.selected_range != selected_range
+            || self.marked_range != marked_range
+            || self.caret_range != caret_range
+            || self.caret_bounds != caret_bounds;
+        self.selected_range = selected_range;
+        self.marked_range = marked_range;
+        self.caret_range = caret_range;
+        self.caret_bounds = caret_bounds;
+        changed
+    }
+
+    fn caret_geometry(&self) -> (NSRange, Option<Bounds>) {
+        (self.caret_range, self.caret_bounds)
     }
 
     fn drain_events(&mut self) -> Vec<PlatformImeEvent> {
@@ -330,15 +368,28 @@ define_class!(
         #[unsafe(method(firstRectForCharacterRange:actualRange:))]
         unsafe fn firstRectForCharacterRange_actualRange(
             &self,
-            range: NSRange,
+            _range: NSRange,
             actual_range: NSRangePointer,
         ) -> NSRect {
+            let (caret_range, caret_bounds) = self.ivars().ime.borrow().caret_geometry();
+            let Some(caret_bounds) = caret_bounds else {
+                if let Some(actual_range) = unsafe { actual_range.as_mut() } {
+                    *actual_range = not_found_range();
+                }
+                return NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(0.0, 0.0));
+            };
+            let Some(window) = self.window() else {
+                if let Some(actual_range) = unsafe { actual_range.as_mut() } {
+                    *actual_range = not_found_range();
+                }
+                return NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(0.0, 0.0));
+            };
             if let Some(actual_range) = unsafe { actual_range.as_mut() } {
-                *actual_range = range;
+                *actual_range = caret_range;
             }
-            let bounds = self.bounds();
-            self.window()
-                .map_or(bounds, |window| window.convertRectToScreen(bounds))
+            let bounds = appkit_view_caret_rect(caret_bounds, self.bounds().size.height);
+            let window_bounds = self.convertRect_toView(bounds, None);
+            window.convertRectToScreen(window_bounds)
         }
 
         #[unsafe(method(characterIndexForPoint:))]
@@ -367,15 +418,22 @@ impl RuiContentView {
         }
     }
 
-    pub(crate) fn update_text_input_ranges(
+    pub(crate) fn update_text_input_state(
         &self,
         selected_range: Option<Utf16TextRange>,
         marked_range: Option<Utf16TextRange>,
+        caret_range: Option<Utf16TextRange>,
+        caret_bounds: Option<Bounds>,
     ) {
-        self.ivars()
-            .ime
-            .borrow_mut()
-            .update_text_input_ranges(selected_range, marked_range);
+        let changed = self.ivars().ime.borrow_mut().update_text_input_state(
+            selected_range,
+            marked_range,
+            caret_range,
+            caret_bounds,
+        );
+        if changed && let Some(input_context) = self.inputContext() {
+            input_context.invalidateCharacterCoordinates();
+        }
     }
 }
 

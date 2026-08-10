@@ -56,6 +56,7 @@ pub struct TextArea {
     on_focus: Option<Box<dyn Fn()>>,
     on_blur: Option<Box<dyn Fn()>>,
     layout_node: Option<NodeId>,
+    caret_bounds: Option<Bounds>,
 }
 
 impl TextArea {
@@ -78,6 +79,7 @@ impl TextArea {
             on_focus: None,
             on_blur: None,
             layout_node: None,
+            caret_bounds: None,
         }
     }
 
@@ -462,9 +464,9 @@ impl TextArea {
         }
     }
 
-    fn paint_cursor(&self, cx: &mut PaintContext, bounds: Bounds) {
+    fn paint_cursor(&self, cx: &mut PaintContext, bounds: Bounds) -> Option<Bounds> {
         if !self.state.focused {
-            return;
+            return None;
         }
         let layout = self.text_layout();
         let style = TextEditPaintStyle::new(
@@ -477,8 +479,18 @@ impl TextArea {
             self.text_origin(bounds),
             style,
         ) {
-            Ok(primitive) => cx.paint(primitive),
-            Err(err) => log::error!("text area caret paint failed: {err}"),
+            Ok(primitive) => {
+                let caret_bounds = match &primitive {
+                    Primitive::Quad { bounds, .. } => Some(*bounds),
+                    _ => None,
+                };
+                cx.paint(primitive);
+                caret_bounds
+            }
+            Err(err) => {
+                log::error!("text area caret paint failed: {err}");
+                None
+            }
         }
     }
 }
@@ -505,6 +517,7 @@ impl Element for TextArea {
                 self.state_selection(),
                 self.state.composition_range,
             )
+            .with_caret_bounds(self.caret_bounds)
         })
     }
 
@@ -576,7 +589,7 @@ impl Element for TextArea {
             });
         }
 
-        self.paint_cursor(cx, bounds);
+        self.caret_bounds = self.paint_cursor(cx, bounds);
         cx.scene.pop_layer();
     }
 

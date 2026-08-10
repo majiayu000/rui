@@ -1,4 +1,5 @@
 use super::*;
+use crate::core::geometry::Bounds;
 use crate::platform::window::PlatformImeEvent;
 use objc2_foundation::{NSNotFound, NSRange};
 
@@ -57,7 +58,7 @@ fn ime_session_uses_appkit_not_found_sentinel() {
 #[test]
 fn ime_session_reports_document_absolute_utf16_ranges() {
     let mut session = MacImeSession::default();
-    session.update_text_input_ranges(Some(utf16_range(4, 0)), None);
+    session.update_text_input_state(Some(utf16_range(4, 0)), None, Some(utf16_range(4, 0)), None);
 
     session
         .set_marked_text("a😀", NSRange::new(3, 0), not_found_range())
@@ -125,7 +126,12 @@ fn ime_session_preserves_concrete_replacement_ranges_for_all_text_callbacks() {
 #[test]
 fn ime_session_unmark_commits_current_marked_text() {
     let mut session = MacImeSession::default();
-    session.update_text_input_ranges(Some(utf16_range(10, 0)), None);
+    session.update_text_input_state(
+        Some(utf16_range(10, 0)),
+        None,
+        Some(utf16_range(10, 0)),
+        None,
+    );
 
     session
         .set_marked_text("pending", NSRange::new(7, 0), not_found_range())
@@ -206,4 +212,32 @@ fn ime_session_discards_marked_text_without_queuing_an_event() {
     assert!(!session.has_marked_text());
     assert_eq!(session.marked_range(), not_found_range());
     assert!(session.drain_events().is_empty());
+}
+
+#[test]
+fn caret_rect_is_zero_width_and_flips_framework_y_into_appkit_view_space() {
+    let rect = appkit_view_caret_rect(Bounds::from_xywh(12.0, 25.0, 1.5, 20.0), 100.0);
+
+    assert_eq!(rect.origin, NSPoint::new(12.0, 55.0));
+    assert_eq!(rect.size, NSSize::new(0.0, 20.0));
+}
+
+#[test]
+fn ime_session_reports_the_actual_caret_range_and_geometry() {
+    let mut session = MacImeSession::default();
+    let bounds = Bounds::from_xywh(20.0, 30.0, 1.5, 18.0);
+
+    assert!(session.update_text_input_state(
+        Some(utf16_range(2, 3)),
+        None,
+        Some(utf16_range(5, 0)),
+        Some(bounds),
+    ));
+    assert_eq!(session.caret_geometry(), (NSRange::new(5, 0), Some(bounds)));
+    assert!(!session.update_text_input_state(
+        Some(utf16_range(2, 3)),
+        None,
+        Some(utf16_range(5, 0)),
+        Some(bounds),
+    ));
 }
