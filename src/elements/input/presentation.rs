@@ -9,7 +9,7 @@ use crate::core::geometry::{Bounds, Edges, Point};
 use crate::core::style::Corners;
 use crate::core::text_editing::{
     TextEditError, TextEditLayout, TextEditOutcome, TextEditPaintStyle, TextInputCommand,
-    TextInputSnapshot, TextRange, TextSelection,
+    TextInputGeometry, TextInputSnapshot, TextRange, TextSelection,
 };
 use crate::elements::element::{EventContext, PaintContext};
 use crate::renderer::Primitive;
@@ -134,7 +134,23 @@ impl Input {
                 self.state.composition_range,
             )
             .with_caret_bounds(self.caret_bounds)
+            .with_geometry(self.native_text_input_geometry())
         })
+    }
+
+    fn native_text_input_geometry(&self) -> Option<TextInputGeometry> {
+        if self.input_type == InputType::Password {
+            return None;
+        }
+        let layout = self.current_text_layout()?;
+        let caret = layout
+            .caret_for_offset(self.state_selection().head())
+            .ok()?;
+        let bounds = self.caret_bounds?;
+        Some(TextInputGeometry::new(
+            layout.clone(),
+            Point::new(bounds.x() - caret.position.x, bounds.y() - caret.position.y),
+        ))
     }
 
     pub(super) fn display_offset_for_value_offset(&self, offset: usize) -> Option<usize> {

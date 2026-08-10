@@ -8,7 +8,7 @@ use crate::core::geometry::{Bounds, Edges, Point};
 use crate::core::style::Corners;
 use crate::core::text_editing::{
     TextEditError, TextEditLayout, TextEditOutcome, TextEditPaintStyle, TextInputCommand,
-    TextRange, TextSelection,
+    TextInputGeometry, TextRange, TextSelection,
 };
 use crate::elements::element::{EventContext, PaintContext};
 use crate::renderer::Primitive;
@@ -114,10 +114,22 @@ impl TextArea {
         Ok(true)
     }
 
-    fn current_text_layout(&self) -> Option<&TextEditLayout> {
+    pub(super) fn current_text_layout(&self) -> Option<&TextEditLayout> {
         self.text_layout
             .as_ref()
             .filter(|layout| layout.text() == self.state.value)
+    }
+
+    pub(super) fn native_text_input_geometry(&self) -> Option<TextInputGeometry> {
+        let layout = self.current_text_layout()?;
+        let caret = layout
+            .caret_for_offset(self.state_selection().head())
+            .ok()?;
+        let bounds = self.caret_bounds?;
+        Some(TextInputGeometry::new(
+            layout.clone(),
+            Point::new(bounds.x() - caret.position.x, bounds.y() - caret.position.y),
+        ))
     }
 
     pub(super) fn update_text_layout(&mut self, cache: &mut TextMeasureCache) {

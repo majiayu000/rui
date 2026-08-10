@@ -136,17 +136,18 @@ where
     let Some(focused) = presenter.focused_element() else {
         window
             .content_view
-            .update_text_input_state(None, None, None, None);
+            .update_text_input_state(None, None, None, None, None);
         return Ok(());
     };
     let Some(snapshot) = presenter.root().text_input_snapshot(focused) else {
         window
             .content_view
-            .update_text_input_state(None, None, None, None);
+            .update_text_input_state(None, None, None, None, None);
         return Ok(());
     };
     let (selected_range, marked_range, caret_range) = text_input_ranges(&snapshot)?;
     window.content_view.update_text_input_state(
+        Some(snapshot.clone()),
         Some(selected_range),
         marked_range,
         Some(caret_range),

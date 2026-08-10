@@ -422,6 +422,7 @@ impl Element for TextArea {
                 self.state.composition_range,
             )
             .with_caret_bounds(self.caret_bounds)
+            .with_geometry(self.native_text_input_geometry())
         })
     }
 

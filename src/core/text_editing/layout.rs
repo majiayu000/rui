@@ -87,6 +87,52 @@ pub struct TextEditLayout {
     line_height: f32,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextInputGeometry {
+    layout: TextEditLayout,
+    origin: Point,
+}
+
+impl TextInputGeometry {
+    pub fn new(layout: TextEditLayout, origin: Point) -> Self {
+        Self { layout, origin }
+    }
+
+    pub fn first_bounds_for_range(
+        &self,
+        range: TextRange,
+    ) -> Result<Option<(TextRange, Bounds)>, TextEditError> {
+        if range.is_empty() {
+            let caret = self.layout.caret_for_offset(range.start())?;
+            return Ok(Some((
+                range,
+                Bounds::from_xywh(
+                    self.origin.x + caret.position.x,
+                    self.origin.y + caret.position.y,
+                    0.0,
+                    caret.height,
+                ),
+            )));
+        }
+        Ok(self.layout.selection_rects(range)?.first().map(|rect| {
+            (
+                rect.range,
+                Bounds::from_xywh(
+                    self.origin.x + rect.bounds.x(),
+                    self.origin.y + rect.bounds.y(),
+                    rect.bounds.width(),
+                    rect.bounds.height(),
+                ),
+            )
+        }))
+    }
+
+    pub fn offset_for_point(&self, point: Point) -> usize {
+        self.layout
+            .offset_for_point(Point::new(point.x - self.origin.x, point.y - self.origin.y))
+    }
+}
+
 impl TextEditLayout {
     pub fn new(text: impl Into<String>, grapheme_width: f32, line_height: f32) -> Self {
         let text = text.into();

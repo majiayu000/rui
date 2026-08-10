@@ -1,5 +1,7 @@
-use crate::core::geometry::Bounds;
-use crate::core::text_editing::{TextEditError, TextInputCommand, Utf16TextRange};
+use crate::core::geometry::{Bounds, Point};
+use crate::core::text_editing::{
+    TextEditError, TextInputCommand, TextInputSnapshot, Utf16TextRange,
+};
 use crate::platform::window::{PlatformInputEvent, PlatformWindowEvent};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, Sel};
@@ -47,6 +49,13 @@ fn appkit_view_caret_rect(caret_bounds: Bounds, view_height: f64) -> NSRect {
     )
 }
 
+fn appkit_view_rect(bounds: Bounds, view_height: f64) -> NSRect {
+    NSRect::new(
+        NSPoint::new(bounds.x() as f64, view_height - bounds.max_y() as f64),
+        NSSize::new(bounds.width() as f64, bounds.height() as f64),
+    )
+}
+
 #[derive(Debug)]
 struct MacImeSession {
     events: VecDeque<TextInputCommand>,
@@ -55,6 +64,7 @@ struct MacImeSession {
     marked_range: NSRange,
     caret_range: NSRange,
     caret_bounds: Option<Bounds>,
+    snapshot: Option<TextInputSnapshot>,
 }
 
 impl Default for MacImeSession {
@@ -66,6 +76,7 @@ impl Default for MacImeSession {
             marked_range: not_found_range(),
             caret_range: not_found_range(),
             caret_bounds: None,
+            snapshot: None,
         }
     }
 }
@@ -219,6 +230,7 @@ impl MacImeSession {
 
     fn update_text_input_state(
         &mut self,
+        snapshot: Option<TextInputSnapshot>,
         selected_range: Option<Utf16TextRange>,
         marked_range: Option<Utf16TextRange>,
         caret_range: Option<Utf16TextRange>,
@@ -230,12 +242,45 @@ impl MacImeSession {
         let changed = self.selected_range != selected_range
             || self.marked_range != marked_range
             || self.caret_range != caret_range
-            || self.caret_bounds != caret_bounds;
+            || self.caret_bounds != caret_bounds
+            || self.snapshot != snapshot;
         self.selected_range = selected_range;
         self.marked_range = marked_range;
         self.caret_range = caret_range;
         self.caret_bounds = caret_bounds;
+        self.snapshot = snapshot;
         changed
+    }
+
+    fn attributed_substring(&self, range: NSRange) -> Option<(NSRange, String)> {
+        let snapshot = self.snapshot.as_ref()?;
+        let utf16 = appkit_replacement_range(range).ok()??;
+        let range = utf16.to_text_range(snapshot.text()).ok()?;
+        Some((
+            ns_range(Some(utf16)),
+            snapshot.text()[range.start()..range.end()].to_string(),
+        ))
+    }
+
+    fn range_geometry(&self, range: NSRange) -> Option<(NSRange, Bounds)> {
+        let snapshot = self.snapshot.as_ref()?;
+        let geometry = snapshot.geometry()?;
+        let requested = appkit_replacement_range(range).ok()??;
+        let requested = requested.to_text_range(snapshot.text()).ok()?;
+        let (actual, bounds) = geometry.first_bounds_for_range(requested).ok()??;
+        let actual = Utf16TextRange::from_text_range(snapshot.text(), actual).ok()?;
+        Some((ns_range(Some(actual)), bounds))
+    }
+
+    fn character_index_for_point(&self, point: Point) -> Option<NSUInteger> {
+        let snapshot = self.snapshot.as_ref()?;
+        let offset = snapshot.geometry()?.offset_for_point(point);
+        Utf16TextRange::from_text_range(
+            snapshot.text(),
+            crate::core::text_editing::TextRange::collapsed(offset),
+        )
+        .ok()
+        .map(Utf16TextRange::location)
     }
 
     fn caret_geometry(&self) -> (NSRange, Option<Bounds>) {
@@ -355,10 +400,25 @@ define_class!(
         #[unsafe(method_id(attributedSubstringForProposedRange:actualRange:))]
         unsafe fn attributedSubstringForProposedRange_actualRange(
             &self,
-            _range: NSRange,
-            _actual_range: NSRangePointer,
+            range: NSRange,
+            actual_range: NSRangePointer,
         ) -> Option<Retained<NSAttributedString>> {
-            None
+            match self.ivars().ime.borrow().attributed_substring(range) {
+                Some((range, text)) => {
+                    if let Some(actual_range) = unsafe { actual_range.as_mut() } {
+                        *actual_range = range;
+                    }
+                    Some(NSAttributedString::from_nsstring(&NSString::from_str(
+                        &text,
+                    )))
+                }
+                None => {
+                    if let Some(actual_range) = unsafe { actual_range.as_mut() } {
+                        *actual_range = not_found_range();
+                    }
+                    None
+                }
+            }
         }
 
         #[unsafe(method_id(validAttributesForMarkedText))]
@@ -369,11 +429,15 @@ define_class!(
         #[unsafe(method(firstRectForCharacterRange:actualRange:))]
         unsafe fn firstRectForCharacterRange_actualRange(
             &self,
-            _range: NSRange,
+            range: NSRange,
             actual_range: NSRangePointer,
         ) -> NSRect {
-            let (caret_range, caret_bounds) = self.ivars().ime.borrow().caret_geometry();
-            let Some(caret_bounds) = caret_bounds else {
+            let geometry = self.ivars().ime.borrow().range_geometry(range);
+            let fallback = (range.length == 0).then(|| {
+                let (range, bounds) = self.ivars().ime.borrow().caret_geometry();
+                bounds.map(|bounds| (range, bounds))
+            });
+            let Some((actual, bounds)) = geometry.or_else(|| fallback.flatten()) else {
                 if let Some(actual_range) = unsafe { actual_range.as_mut() } {
                     *actual_range = not_found_range();
                 }
@@ -386,16 +450,33 @@ define_class!(
                 return NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(0.0, 0.0));
             };
             if let Some(actual_range) = unsafe { actual_range.as_mut() } {
-                *actual_range = caret_range;
+                *actual_range = actual;
             }
-            let bounds = appkit_view_caret_rect(caret_bounds, self.bounds().size.height);
+            let bounds = if range.length == 0 {
+                appkit_view_caret_rect(bounds, self.bounds().size.height)
+            } else {
+                appkit_view_rect(bounds, self.bounds().size.height)
+            };
             let window_bounds = self.convertRect_toView(bounds, None);
             window.convertRectToScreen(window_bounds)
         }
 
         #[unsafe(method(characterIndexForPoint:))]
-        fn characterIndexForPoint(&self, _point: NSPoint) -> NSUInteger {
-            NSNotFound as NSUInteger
+        fn characterIndexForPoint(&self, point: NSPoint) -> NSUInteger {
+            let Some(window) = self.window() else {
+                return NSNotFound as NSUInteger;
+            };
+            let window_point = window.convertPointFromScreen(point);
+            let view_point = self.convertPoint_fromView(window_point, None);
+            let framework_point = Point::new(
+                view_point.x as f32,
+                (self.bounds().size.height - view_point.y) as f32,
+            );
+            self.ivars()
+                .ime
+                .borrow()
+                .character_index_for_point(framework_point)
+                .unwrap_or(NSNotFound as NSUInteger)
         }
     }
 );
@@ -421,12 +502,14 @@ impl RuiContentView {
 
     pub(crate) fn update_text_input_state(
         &self,
+        snapshot: Option<TextInputSnapshot>,
         selected_range: Option<Utf16TextRange>,
         marked_range: Option<Utf16TextRange>,
         caret_range: Option<Utf16TextRange>,
         caret_bounds: Option<Bounds>,
     ) {
         let changed = self.ivars().ime.borrow_mut().update_text_input_state(
+            snapshot,
             selected_range,
             marked_range,
             caret_range,

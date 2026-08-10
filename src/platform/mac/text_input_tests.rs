@@ -1,5 +1,8 @@
 use super::*;
 use crate::core::geometry::Bounds;
+use crate::core::text_editing::{
+    TextEditLayout, TextInputGeometry, TextInputSnapshot, TextSelection,
+};
 use objc2_foundation::{NSNotFound, NSRange};
 
 fn utf16_range(location: usize, length: usize) -> Utf16TextRange {
@@ -57,7 +60,13 @@ fn ime_session_uses_appkit_not_found_sentinel() {
 #[test]
 fn ime_session_reports_document_absolute_utf16_ranges() {
     let mut session = MacImeSession::default();
-    session.update_text_input_state(Some(utf16_range(4, 0)), None, Some(utf16_range(4, 0)), None);
+    session.update_text_input_state(
+        None,
+        Some(utf16_range(4, 0)),
+        None,
+        Some(utf16_range(4, 0)),
+        None,
+    );
 
     session
         .set_marked_text("a😀", NSRange::new(3, 0), not_found_range())
@@ -126,6 +135,7 @@ fn ime_session_preserves_concrete_replacement_ranges_for_all_text_callbacks() {
 fn ime_session_unmark_commits_current_marked_text() {
     let mut session = MacImeSession::default();
     session.update_text_input_state(
+        None,
         Some(utf16_range(10, 0)),
         None,
         Some(utf16_range(10, 0)),
@@ -227,6 +237,7 @@ fn ime_session_reports_the_actual_caret_range_and_geometry() {
     let bounds = Bounds::from_xywh(20.0, 30.0, 1.5, 18.0);
 
     assert!(session.update_text_input_state(
+        None,
         Some(utf16_range(2, 3)),
         None,
         Some(utf16_range(5, 0)),
@@ -234,9 +245,47 @@ fn ime_session_reports_the_actual_caret_range_and_geometry() {
     ));
     assert_eq!(session.caret_geometry(), (NSRange::new(5, 0), Some(bounds)));
     assert!(!session.update_text_input_state(
+        None,
         Some(utf16_range(2, 3)),
         None,
         Some(utf16_range(5, 0)),
         Some(bounds),
     ));
+}
+
+#[test]
+fn ime_session_answers_document_substring_range_and_point_queries() {
+    let text = "a😀z";
+    let geometry = TextInputGeometry::new(
+        TextEditLayout::new(text, 10.0, 20.0),
+        Point::new(20.0, 30.0),
+    );
+    let snapshot = TextInputSnapshot::new(text, TextSelection::collapsed(text.len()), None)
+        .with_geometry(Some(geometry));
+    let mut session = MacImeSession::default();
+    session.update_text_input_state(
+        Some(snapshot),
+        Some(utf16_range(4, 0)),
+        None,
+        Some(utf16_range(4, 0)),
+        Some(Bounds::from_xywh(50.0, 30.0, 1.5, 20.0)),
+    );
+
+    assert_eq!(
+        session.attributed_substring(NSRange::new(1, 2)),
+        Some((NSRange::new(1, 2), "😀".to_string()))
+    );
+    let (actual, bounds) = session
+        .range_geometry(NSRange::new(1, 2))
+        .expect("emoji geometry should be available");
+    assert_eq!(actual, NSRange::new(1, 2));
+    assert_eq!(bounds, Bounds::from_xywh(30.0, 30.0, 10.0, 20.0));
+    assert_eq!(
+        session.character_index_for_point(Point::new(20.0, 30.0)),
+        Some(0)
+    );
+    assert_eq!(
+        session.character_index_for_point(Point::new(60.0, 30.0)),
+        Some(4)
+    );
 }
