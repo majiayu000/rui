@@ -4,13 +4,15 @@ use objc2::runtime::{AnyObject, Sel};
 use objc2::{DefinedClass, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{NSEvent, NSTextInputClient, NSView};
 use objc2_foundation::{
-    MainThreadMarker, NSArray, NSAttributedString, NSAttributedStringKey, NSObjectProtocol,
-    NSPoint, NSRange, NSRangePointer, NSRect, NSString, NSUInteger,
+    MainThreadMarker, NSArray, NSAttributedString, NSAttributedStringKey, NSNotFound,
+    NSObjectProtocol, NSPoint, NSRange, NSRangePointer, NSRect, NSString, NSUInteger,
 };
 use std::cell::RefCell;
 use std::collections::VecDeque;
 
-const NOT_FOUND_RANGE: NSRange = NSRange::new(usize::MAX, 0);
+fn not_found_range() -> NSRange {
+    NSRange::new(NSNotFound as NSUInteger, 0)
+}
 
 #[derive(Debug)]
 struct MacImeSession {
@@ -24,7 +26,7 @@ impl Default for MacImeSession {
         Self {
             events: VecDeque::new(),
             marked_text: None,
-            selected_range: NOT_FOUND_RANGE,
+            selected_range: not_found_range(),
         }
     }
 }
@@ -38,7 +40,7 @@ impl MacImeSession {
             self.events
                 .push_back(PlatformImeEvent::InsertText(text.to_string()));
         }
-        self.selected_range = NOT_FOUND_RANGE;
+        self.selected_range = not_found_range();
     }
 
     fn set_marked_text(&mut self, text: &str, selected_range: NSRange) {
@@ -56,14 +58,14 @@ impl MacImeSession {
         if self.marked_text.take().is_some() {
             self.events.push_back(PlatformImeEvent::CancelComposition);
         }
-        self.selected_range = NOT_FOUND_RANGE;
+        self.selected_range = not_found_range();
     }
 
     fn commit_marked_text(&mut self) {
         if let Some(text) = self.marked_text.take() {
             self.events.push_back(PlatformImeEvent::Commit(text));
         }
-        self.selected_range = NOT_FOUND_RANGE;
+        self.selected_range = not_found_range();
     }
 
     fn has_marked_text(&self) -> bool {
@@ -71,9 +73,11 @@ impl MacImeSession {
     }
 
     fn marked_range(&self) -> NSRange {
-        self.marked_text.as_deref().map_or(NOT_FOUND_RANGE, |text| {
-            NSRange::new(0, text.encode_utf16().count())
-        })
+        self.marked_text
+            .as_deref()
+            .map_or_else(not_found_range, |text| {
+                NSRange::new(0, text.encode_utf16().count())
+            })
     }
 
     fn selected_range(&self) -> NSRange {
@@ -205,7 +209,7 @@ define_class!(
 
         #[unsafe(method(characterIndexForPoint:))]
         fn characterIndexForPoint(&self, _point: NSPoint) -> NSUInteger {
-            usize::MAX
+            NSNotFound as NSUInteger
         }
     }
 );
@@ -282,7 +286,7 @@ fn text_from_native_object(object: &AnyObject) -> Option<String> {
 mod tests {
     use super::*;
     use crate::platform::window::PlatformImeEvent;
-    use objc2_foundation::NSRange;
+    use objc2_foundation::{NSNotFound, NSRange};
 
     #[test]
     fn ime_session_emits_begin_update_commit_and_cancel() {
@@ -305,6 +309,13 @@ mod tests {
             ]
         );
         assert!(!session.has_marked_text());
+    }
+
+    #[test]
+    fn ime_session_uses_appkit_not_found_sentinel() {
+        let session = MacImeSession::default();
+
+        assert_eq!(session.selected_range().location, NSNotFound as NSUInteger);
     }
 
     #[test]
@@ -344,7 +355,7 @@ mod tests {
             ]
         );
         assert!(!session.has_marked_text());
-        assert_eq!(session.selected_range(), NOT_FOUND_RANGE);
+        assert_eq!(session.selected_range(), not_found_range());
     }
 
     #[test]
