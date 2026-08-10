@@ -42,15 +42,17 @@ impl NativeImeState {
         focused: Option<ElementId>,
     ) -> Option<ElementId> {
         match event {
-            TextInputEvent::InsertText(_) => focused,
-            TextInputEvent::BeginComposition(_) => {
+            TextInputEvent::InsertText(_) | TextInputEvent::InsertTextReplacing { .. } => focused,
+            TextInputEvent::BeginComposition(_)
+            | TextInputEvent::BeginCompositionReplacing { .. } => {
                 self.composition_owner = focused;
                 focused
             }
-            TextInputEvent::UpdateComposition(_) => self.composition_owner,
-            TextInputEvent::CommitComposition(_) | TextInputEvent::CancelComposition => {
-                self.composition_owner.take()
-            }
+            TextInputEvent::UpdateComposition(_)
+            | TextInputEvent::UpdateCompositionReplacing { .. } => self.composition_owner,
+            TextInputEvent::CommitComposition(_)
+            | TextInputEvent::CommitCompositionReplacing { .. }
+            | TextInputEvent::CancelComposition => self.composition_owner.take(),
         }
     }
 

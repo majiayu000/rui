@@ -1,6 +1,8 @@
 use super::clipboard::Clipboard;
 use super::error::TextEditError;
-use super::types::{TextComposition, TextEditOutcome, TextInputEvent, TextRange, TextSelection};
+use super::types::{
+    TextComposition, TextEditOutcome, TextInputEvent, TextRange, TextSelection, Utf16TextRange,
+};
 use crate::core::event::{KeyCode, KeyEvent};
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -98,6 +100,24 @@ impl TextEditBuffer {
             self.commit_current_composition()?;
         }
         let range = self.selected_range();
+        self.replace_range_internal(range, text)?;
+        self.selection = TextSelection::collapsed(range.start() + text.len());
+        Ok(TextEditOutcome {
+            changed: !text.is_empty() || !range.is_empty(),
+            submitted: false,
+        })
+    }
+
+    pub fn insert_text_replacing_utf16(
+        &mut self,
+        text: &str,
+        replacement_range: Utf16TextRange,
+    ) -> Result<TextEditOutcome, TextEditError> {
+        self.ensure_text_allowed(text)?;
+        let range = replacement_range.to_text_range(&self.text)?;
+        if self.composition.is_some() {
+            self.commit_current_composition()?;
+        }
         self.replace_range_internal(range, text)?;
         self.selection = TextSelection::collapsed(range.start() + text.len());
         Ok(TextEditOutcome {
@@ -206,7 +226,27 @@ impl TextEditBuffer {
             return Err(TextEditError::CompositionActive);
         }
         self.ensure_text_allowed(text)?;
-        let original_range = self.selected_range();
+        self.begin_composition_in_range(text, self.selected_range())
+    }
+
+    pub fn begin_composition_replacing_utf16(
+        &mut self,
+        text: &str,
+        replacement_range: Utf16TextRange,
+    ) -> Result<(), TextEditError> {
+        if self.composition.is_some() {
+            return Err(TextEditError::CompositionActive);
+        }
+        self.ensure_text_allowed(text)?;
+        let replacement_range = replacement_range.to_text_range(&self.text)?;
+        self.begin_composition_in_range(text, replacement_range)
+    }
+
+    fn begin_composition_in_range(
+        &mut self,
+        text: &str,
+        original_range: TextRange,
+    ) -> Result<(), TextEditError> {
         let original_text = self.text[original_range.start()..original_range.end()].to_string();
         self.replace_range_internal(original_range, text)?;
         let range = TextRange::ordered(original_range.start(), original_range.start() + text.len());
@@ -241,6 +281,44 @@ impl TextEditBuffer {
         Ok(())
     }
 
+    pub fn update_composition_replacing_utf16(
+        &mut self,
+        text: &str,
+        replacement_range: Utf16TextRange,
+    ) -> Result<(), TextEditError> {
+        self.ensure_text_allowed(text)?;
+        let replacement_range = replacement_range.to_text_range(&self.text)?;
+        let composition = self
+            .composition
+            .clone()
+            .ok_or(TextEditError::CompositionMissing)?;
+        let (original_range, original_text) =
+            if replacement_range == composition.replacement_range() {
+                (
+                    composition.original_replacement_range(),
+                    composition.original_text().to_string(),
+                )
+            } else {
+                (
+                    replacement_range,
+                    self.text[replacement_range.start()..replacement_range.end()].to_string(),
+                )
+            };
+        self.replace_range_internal(replacement_range, text)?;
+        let range = TextRange::ordered(
+            replacement_range.start(),
+            replacement_range.start() + text.len(),
+        );
+        self.selection = TextSelection::collapsed(range.end());
+        self.composition = Some(TextComposition::new(
+            range,
+            text.to_string(),
+            original_range,
+            original_text,
+        ));
+        Ok(())
+    }
+
     pub fn commit_composition(&mut self, text: &str) -> Result<(), TextEditError> {
         self.ensure_text_allowed(text)?;
         if let Some(composition) = self.composition.take() {
@@ -252,6 +330,19 @@ impl TextEditBuffer {
             self.replace_range_internal(range, text)?;
             self.selection = TextSelection::collapsed(range.start() + text.len());
         }
+        Ok(())
+    }
+
+    pub fn commit_composition_replacing_utf16(
+        &mut self,
+        text: &str,
+        replacement_range: Utf16TextRange,
+    ) -> Result<(), TextEditError> {
+        self.ensure_text_allowed(text)?;
+        let replacement_range = replacement_range.to_text_range(&self.text)?;
+        self.composition = None;
+        self.replace_range_internal(replacement_range, text)?;
+        self.selection = TextSelection::collapsed(replacement_range.start() + text.len());
         Ok(())
     }
 
@@ -282,16 +373,41 @@ impl TextEditBuffer {
     ) -> Result<TextEditOutcome, TextEditError> {
         match event {
             TextInputEvent::InsertText(text) => self.insert_text(&text),
+            TextInputEvent::InsertTextReplacing {
+                text,
+                replacement_range,
+            } => self.insert_text_replacing_utf16(&text, replacement_range),
             TextInputEvent::BeginComposition(text) => {
                 self.begin_composition(&text)?;
+                Ok(changed())
+            }
+            TextInputEvent::BeginCompositionReplacing {
+                text,
+                replacement_range,
+            } => {
+                self.begin_composition_replacing_utf16(&text, replacement_range)?;
                 Ok(changed())
             }
             TextInputEvent::UpdateComposition(text) => {
                 self.update_composition(&text)?;
                 Ok(changed())
             }
+            TextInputEvent::UpdateCompositionReplacing {
+                text,
+                replacement_range,
+            } => {
+                self.update_composition_replacing_utf16(&text, replacement_range)?;
+                Ok(changed())
+            }
             TextInputEvent::CommitComposition(text) => {
                 self.commit_composition(&text)?;
+                Ok(changed())
+            }
+            TextInputEvent::CommitCompositionReplacing {
+                text,
+                replacement_range,
+            } => {
+                self.commit_composition_replacing_utf16(&text, replacement_range)?;
                 Ok(changed())
             }
             TextInputEvent::CancelComposition => {

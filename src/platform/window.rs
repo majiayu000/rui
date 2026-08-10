@@ -2,7 +2,7 @@
 
 use crate::core::event::{KeyEvent, MouseButton, ScrollEvent};
 use crate::core::geometry::{Point, Size};
-use crate::core::text_editing::TextInputEvent;
+use crate::core::text_editing::{TextInputEvent, Utf16TextRange};
 use crate::core::window::WindowOptions;
 use crate::renderer::RendererError;
 use std::error::Error;
@@ -170,9 +170,25 @@ pub enum PlatformInputEvent {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PlatformImeEvent {
     InsertText(String),
+    InsertTextReplacing {
+        text: String,
+        replacement_range: Utf16TextRange,
+    },
     BeginComposition(String),
+    BeginCompositionReplacing {
+        text: String,
+        replacement_range: Utf16TextRange,
+    },
     UpdateComposition(String),
+    UpdateCompositionReplacing {
+        text: String,
+        replacement_range: Utf16TextRange,
+    },
     Commit(String),
+    CommitReplacing {
+        text: String,
+        replacement_range: Utf16TextRange,
+    },
     CancelComposition,
 }
 
@@ -180,9 +196,37 @@ impl PlatformImeEvent {
     pub fn into_text_input_event(self) -> TextInputEvent {
         match self {
             Self::InsertText(text) => TextInputEvent::InsertText(text),
+            Self::InsertTextReplacing {
+                text,
+                replacement_range,
+            } => TextInputEvent::InsertTextReplacing {
+                text,
+                replacement_range,
+            },
             Self::BeginComposition(text) => TextInputEvent::BeginComposition(text),
+            Self::BeginCompositionReplacing {
+                text,
+                replacement_range,
+            } => TextInputEvent::BeginCompositionReplacing {
+                text,
+                replacement_range,
+            },
             Self::UpdateComposition(text) => TextInputEvent::UpdateComposition(text),
+            Self::UpdateCompositionReplacing {
+                text,
+                replacement_range,
+            } => TextInputEvent::UpdateCompositionReplacing {
+                text,
+                replacement_range,
+            },
             Self::Commit(text) => TextInputEvent::CommitComposition(text),
+            Self::CommitReplacing {
+                text,
+                replacement_range,
+            } => TextInputEvent::CommitCompositionReplacing {
+                text,
+                replacement_range,
+            },
             Self::CancelComposition => TextInputEvent::CancelComposition,
         }
     }

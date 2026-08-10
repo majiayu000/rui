@@ -43,6 +43,66 @@ impl TextRange {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Utf16TextRange {
+    location: usize,
+    length: usize,
+}
+
+impl Utf16TextRange {
+    pub fn new(location: usize, length: usize) -> Result<Self, TextEditError> {
+        location
+            .checked_add(length)
+            .ok_or(TextEditError::InvalidUtf16Range { location, length })?;
+        Ok(Self { location, length })
+    }
+
+    pub fn location(self) -> usize {
+        self.location
+    }
+
+    pub fn length(self) -> usize {
+        self.length
+    }
+
+    pub fn to_text_range(self, text: &str) -> Result<TextRange, TextEditError> {
+        let end =
+            self.location
+                .checked_add(self.length)
+                .ok_or(TextEditError::InvalidUtf16Range {
+                    location: self.location,
+                    length: self.length,
+                })?;
+        let start_byte =
+            utf16_offset_to_byte(text, self.location).ok_or(TextEditError::InvalidUtf16Range {
+                location: self.location,
+                length: self.length,
+            })?;
+        let end_byte = utf16_offset_to_byte(text, end).ok_or(TextEditError::InvalidUtf16Range {
+            location: self.location,
+            length: self.length,
+        })?;
+        Ok(TextRange::ordered(start_byte, end_byte))
+    }
+}
+
+fn utf16_offset_to_byte(text: &str, utf16_offset: usize) -> Option<usize> {
+    if utf16_offset == 0 {
+        return Some(0);
+    }
+    let mut utf16_position = 0;
+    for (byte_index, ch) in text.char_indices() {
+        if utf16_position == utf16_offset {
+            return Some(byte_index);
+        }
+        utf16_position += ch.len_utf16();
+        if utf16_position > utf16_offset {
+            return None;
+        }
+    }
+    (utf16_position == utf16_offset).then_some(text.len())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TextSelection {
     anchor: usize,
     head: usize,
@@ -130,8 +190,24 @@ pub struct TextEditOutcome {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TextInputEvent {
     InsertText(String),
+    InsertTextReplacing {
+        text: String,
+        replacement_range: Utf16TextRange,
+    },
     BeginComposition(String),
+    BeginCompositionReplacing {
+        text: String,
+        replacement_range: Utf16TextRange,
+    },
     UpdateComposition(String),
+    UpdateCompositionReplacing {
+        text: String,
+        replacement_range: Utf16TextRange,
+    },
     CommitComposition(String),
+    CommitCompositionReplacing {
+        text: String,
+        replacement_range: Utf16TextRange,
+    },
     CancelComposition,
 }

@@ -4,6 +4,7 @@ use std::fmt;
 pub enum TextEditError {
     InvalidRange { start: usize, end: usize },
     InvalidBoundary { index: usize },
+    InvalidUtf16Range { location: usize, length: usize },
     CompositionMissing,
     CompositionActive,
     MultilineDisabled,
@@ -18,6 +19,12 @@ impl fmt::Display for TextEditError {
             }
             Self::InvalidBoundary { index } => {
                 write!(f, "index {index} is not a UTF-8 character boundary")
+            }
+            Self::InvalidUtf16Range { location, length } => {
+                write!(
+                    f,
+                    "invalid UTF-16 text range at {location} with length {length}"
+                )
             }
             Self::CompositionMissing => write!(f, "no active text composition"),
             Self::CompositionActive => write!(f, "text composition is already active"),

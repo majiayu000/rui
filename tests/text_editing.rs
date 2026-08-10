@@ -3,7 +3,7 @@ use rui::core::event::{KeyCode, KeyEvent, Modifiers};
 use rui::core::geometry::Point;
 use rui::core::text_editing::{
     ClipboardError, MemoryClipboard, TextEditBuffer, TextEditError, TextEditLayout,
-    TextEditPaintStyle, TextInputEvent, TextRange, TextSelection,
+    TextEditPaintStyle, TextInputEvent, TextRange, TextSelection, Utf16TextRange,
 };
 use rui::renderer::Primitive;
 use rui::renderer::text::{TextMeasureCache, TextRequest};
@@ -63,6 +63,61 @@ fn text_editing_commit_without_active_composition_inserts_text() {
     assert_eq!(buffer.text(), "hello 你好");
     assert!(buffer.composition().is_none());
     assert_eq!(buffer.cursor(), "hello 你好".len());
+}
+
+#[test]
+fn text_editing_replacement_ranges_convert_utf16_without_splitting_surrogates() {
+    let mut buffer = TextEditBuffer::with_text("a😀bc");
+    let emoji = must(Utf16TextRange::new(1, 2));
+
+    must(
+        buffer.apply_text_input_event(TextInputEvent::InsertTextReplacing {
+            text: "X".to_string(),
+            replacement_range: emoji,
+        }),
+    );
+
+    assert_eq!(buffer.text(), "aXbc");
+    assert_eq!(buffer.cursor(), 2);
+
+    let invalid = must(Utf16TextRange::new(0, 1));
+    let mut surrogate = TextEditBuffer::with_text("😀");
+    let error = surrogate
+        .apply_text_input_event(TextInputEvent::InsertTextReplacing {
+            text: "X".to_string(),
+            replacement_range: invalid,
+        })
+        .expect_err("a range ending inside a surrogate pair must fail");
+    assert!(matches!(error, TextEditError::InvalidUtf16Range { .. }));
+    assert_eq!(surrogate.text(), "😀");
+
+    assert!(matches!(
+        Utf16TextRange::new(usize::MAX, 1),
+        Err(TextEditError::InvalidUtf16Range { .. })
+    ));
+}
+
+#[test]
+fn text_editing_composition_honors_concrete_utf16_replacement_ranges() {
+    let mut buffer = TextEditBuffer::with_text("a😀bc");
+    must(
+        buffer.apply_text_input_event(TextInputEvent::BeginCompositionReplacing {
+            text: "你".to_string(),
+            replacement_range: must(Utf16TextRange::new(1, 2)),
+        }),
+    );
+    assert_eq!(buffer.text(), "a你bc");
+
+    must(
+        buffer.apply_text_input_event(TextInputEvent::UpdateCompositionReplacing {
+            text: "好".to_string(),
+            replacement_range: must(Utf16TextRange::new(1, 1)),
+        }),
+    );
+    assert_eq!(buffer.text(), "a好bc");
+
+    must(buffer.apply_text_input_event(TextInputEvent::CancelComposition));
+    assert_eq!(buffer.text(), "a😀bc");
 }
 
 #[test]
