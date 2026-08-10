@@ -32,6 +32,12 @@ fn clipboard_text_or_error_rejects_missing_text() {
 }
 
 #[test]
+fn target_window_event_ends_poll_batch_before_the_next_native_callback() {
+    assert!(event_ends_poll_batch(17, 17));
+    assert!(!event_ends_poll_batch(23, 17));
+}
+
+#[test]
 fn native_ime_callbacks_suppress_consumed_key_down_without_duplication() {
     let mut events = vec![PlatformWindowEvent::Input(PlatformInputEvent::KeyDown(
         KeyEvent::new(KeyCode::A, Modifiers::none()).with_char('a'),

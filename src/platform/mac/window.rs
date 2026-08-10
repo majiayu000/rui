@@ -165,7 +165,7 @@ impl MacWindow {
         ) {
             expiration = NSDate::distantPast();
 
-            if event.windowNumber() != window_number {
+            if !event_ends_poll_batch(event.windowNumber(), window_number) {
                 if event.r#type() == NSEventType::KeyUp {
                     self.suppressed_key_ups.forget_key_up(event.keyCode());
                 }
@@ -183,13 +183,13 @@ impl MacWindow {
                         events.push(MacWindowEvent::Platform(
                             PlatformWindowEvent::RedrawRequested,
                         ));
-                        continue;
+                        break;
                     }
                     Some(MacApplicationEvent::Accessibility) => {
                         if let Some(request) = self.accessibility_bridge.take_action_request() {
                             events.push(MacWindowEvent::Accessibility(request));
                         }
-                        continue;
+                        break;
                     }
                     None => {}
                 }
@@ -217,6 +217,7 @@ impl MacWindow {
             let mut lifecycle_events = Vec::new();
             self.push_delegate_lifecycle_events(&mut lifecycle_events)?;
             append_platform_events(&mut events, lifecycle_events);
+            break;
         }
 
         let mut lifecycle_events = Vec::new();
@@ -315,6 +316,10 @@ impl MacWindow {
 
         Ok(())
     }
+}
+
+fn event_ends_poll_batch(event_window_number: isize, target_window_number: isize) -> bool {
+    event_window_number == target_window_number
 }
 
 impl PlatformWindow for MacWindow {
