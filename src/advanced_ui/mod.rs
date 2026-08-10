@@ -23,12 +23,13 @@ use crate::core::color::Color;
 use crate::core::event::Cursor;
 use crate::core::geometry::{Edges, Point, Size};
 use crate::core::style::{Dimension, Shadow, Style};
-use crate::core::text_editing::TextInputEvent;
+use crate::core::text_editing::{TextInputCommand, TextInputEvent, TextInputSnapshot};
 use crate::elements::element::{
     AnyElement, Element, EventContext, LayoutContext, PaintContext, PointerEvent,
 };
 use crate::elements::text::{FontWeight, TextAlign};
 use crate::elements::{Div, Text as RawText, div, text as raw_text};
+use crate::renderer::text::TextMeasureCache;
 use taffy::prelude::NodeId;
 
 pub use button::{Button, button};
@@ -75,6 +76,10 @@ macro_rules! impl_div_wrapper_element {
                 self.inner.paint(cx);
             }
 
+            fn refresh_text_geometry(&mut self, text_measurer: &mut TextMeasureCache) {
+                self.inner.refresh_text_geometry(text_measurer);
+            }
+
             fn handle_pointer_event(
                 &mut self,
                 cx: &mut EventContext,
@@ -113,6 +118,18 @@ macro_rules! impl_div_wrapper_element {
                 event: &TextInputEvent,
             ) -> bool {
                 self.inner.handle_text_input_event(cx, event)
+            }
+
+            fn handle_text_input_command(
+                &mut self,
+                cx: &mut EventContext,
+                command: &TextInputCommand,
+            ) -> bool {
+                self.inner.handle_text_input_command(cx, command)
+            }
+
+            fn text_input_snapshot(&self, focused: ElementId) -> Option<TextInputSnapshot> {
+                self.inner.text_input_snapshot(focused)
             }
 
             fn handle_window_event(&mut self, event: &crate::core::event::Event) -> bool {
@@ -577,6 +594,10 @@ impl Element for Text {
         self.inner.paint(cx);
     }
 
+    fn refresh_text_geometry(&mut self, text_measurer: &mut TextMeasureCache) {
+        self.inner.refresh_text_geometry(text_measurer);
+    }
+
     fn accessibility(
         &self,
         cx: &AccessibilityContext,
@@ -660,6 +681,10 @@ impl Element for Hoverable {
         self.inner.paint(cx);
     }
 
+    fn refresh_text_geometry(&mut self, text_measurer: &mut TextMeasureCache) {
+        self.inner.refresh_text_geometry(text_measurer);
+    }
+
     fn handle_pointer_event(&mut self, cx: &mut EventContext, event: &PointerEvent) -> bool {
         let inside = cx.bounds().contains(event.position);
 
@@ -723,6 +748,18 @@ impl Element for Hoverable {
 
     fn handle_text_input_event(&mut self, cx: &mut EventContext, event: &TextInputEvent) -> bool {
         self.inner.handle_text_input_event(cx, event)
+    }
+
+    fn handle_text_input_command(
+        &mut self,
+        cx: &mut EventContext,
+        command: &TextInputCommand,
+    ) -> bool {
+        self.inner.handle_text_input_command(cx, command)
+    }
+
+    fn text_input_snapshot(&self, focused: ElementId) -> Option<TextInputSnapshot> {
+        self.inner.text_input_snapshot(focused)
     }
 
     fn handle_window_event(&mut self, event: &crate::core::event::Event) -> bool {
