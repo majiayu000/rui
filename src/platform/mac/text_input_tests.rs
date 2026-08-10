@@ -285,7 +285,19 @@ fn ime_session_answers_document_substring_range_and_point_queries() {
         Some(0)
     );
     assert_eq!(
-        session.character_index_for_point(Point::new(60.0, 30.0)),
-        Some(4)
+        session.character_index_for_point(Point::new(31.0, 35.0)),
+        Some(1)
     );
+    assert_eq!(
+        session.character_index_for_point(Point::new(41.0, 35.0)),
+        Some(3)
+    );
+    for point in [
+        Point::new(19.0, 35.0),
+        Point::new(50.0, 35.0),
+        Point::new(25.0, 29.0),
+        Point::new(25.0, 50.0),
+    ] {
+        assert_eq!(session.character_index_for_point(point), None);
+    }
 }

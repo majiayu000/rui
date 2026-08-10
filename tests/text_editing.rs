@@ -311,6 +311,27 @@ fn text_editing_layout_reports_caret_and_selection_geometry() {
 }
 
 #[test]
+fn text_editing_strict_character_hit_testing_rejects_points_outside_glyphs() {
+    let geometry = rui::core::text_editing::TextInputGeometry::new(
+        TextEditLayout::new("ab", 10.0, 20.0),
+        Point::new(30.0, 40.0),
+    );
+
+    assert_eq!(
+        geometry.text_offset_for_point(Point::new(31.0, 41.0)),
+        Some(0)
+    );
+    assert_eq!(
+        geometry.text_offset_for_point(Point::new(41.0, 41.0)),
+        Some(1)
+    );
+    assert_eq!(geometry.text_offset_for_point(Point::new(29.0, 41.0)), None);
+    assert_eq!(geometry.text_offset_for_point(Point::new(50.0, 41.0)), None);
+    assert_eq!(geometry.text_offset_for_point(Point::new(31.0, 39.0)), None);
+    assert_eq!(geometry.text_offset_for_point(Point::new(31.0, 60.0)), None);
+}
+
+#[test]
 fn text_editing_layout_exposes_renderer_primitives_for_caret_and_selection() {
     let layout = TextEditLayout::new("ab\ncde", 10.0, 20.0);
     let style = TextEditPaintStyle::new(2.0, Rgba::RED, Rgba::BLUE.with_alpha(0.25));

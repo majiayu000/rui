@@ -267,7 +267,7 @@ impl MacImeSession {
 
     fn character_index_for_point(&self, point: Point) -> Option<NSUInteger> {
         let snapshot = self.snapshot.as_ref()?;
-        let offset = snapshot.geometry()?.offset_for_point(point);
+        let offset = snapshot.geometry()?.text_offset_for_point(point)?;
         Utf16TextRange::from_text_range(
             snapshot.text(),
             crate::core::text_editing::TextRange::collapsed(offset),

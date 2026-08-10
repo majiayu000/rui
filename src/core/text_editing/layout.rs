@@ -131,6 +131,11 @@ impl TextInputGeometry {
         self.layout
             .offset_for_point(Point::new(point.x - self.origin.x, point.y - self.origin.y))
     }
+
+    pub fn text_offset_for_point(&self, point: Point) -> Option<usize> {
+        self.layout
+            .text_offset_for_point(Point::new(point.x - self.origin.x, point.y - self.origin.y))
+    }
 }
 
 impl TextEditLayout {
@@ -347,6 +352,25 @@ impl TextEditLayout {
                 .min(self.lines.len().saturating_sub(1) as f32) as usize
         };
         self.closest_offset_on_line(line_index, point.x)
+    }
+
+    pub fn text_offset_for_point(&self, point: Point) -> Option<usize> {
+        let line_index = self.lines.iter().position(|line| {
+            point.y >= line.origin.y && point.y < line.origin.y + self.line_height
+        })?;
+        self.clusters
+            .iter()
+            .filter(|cluster| cluster.line_index == line_index)
+            .find(|cluster| {
+                let start = cluster
+                    .x_offset
+                    .min(cluster.x_offset + cluster.advance_width);
+                let end = cluster
+                    .x_offset
+                    .max(cluster.x_offset + cluster.advance_width);
+                point.x >= start && point.x < end
+            })
+            .map(|cluster| cluster.byte_start)
     }
 
     pub fn visual_offset_left(&self, offset: usize) -> Result<usize, TextEditError> {
