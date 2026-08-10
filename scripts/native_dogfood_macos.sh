@@ -6,6 +6,17 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
   exit 1
 fi
 
+canonical_artifact_path() {
+  local path="$1"
+  local directory
+  local filename
+  directory="$(dirname "$path")"
+  filename="$(basename "$path")"
+  mkdir -p "$directory"
+  directory="$(cd "$directory" && pwd -P)"
+  printf '%s/%s\n' "$directory" "$filename"
+}
+
 TEXT="${RUI_NATIVE_DOGFOOD_TEXT:-rui-native-dogfood}"
 if [[ "$TEXT" == *[^A-Za-z0-9_-]* ]]; then
   echo "RUI_NATIVE_DOGFOOD_TEXT may only contain ASCII letters, numbers, hyphen, and underscore" >&2
@@ -15,7 +26,15 @@ fi
 PROFILE="${RUI_NATIVE_DOGFOOD_PROFILE:-target/rui-native-dogfood-profile.json}"
 RENDERER_PROFILE="${RUI_NATIVE_DOGFOOD_RENDERER_PROFILE:-target/rui-native-dogfood-renderer-profile.jsonl}"
 LOG="${RUI_NATIVE_DOGFOOD_LOG:-target/rui-native-dogfood.log}"
-mkdir -p "$(dirname "$PROFILE")" "$(dirname "$RENDERER_PROFILE")" "$(dirname "$LOG")"
+PROFILE_PATH="$(canonical_artifact_path "$PROFILE")"
+RENDERER_PROFILE_PATH="$(canonical_artifact_path "$RENDERER_PROFILE")"
+LOG_PATH="$(canonical_artifact_path "$LOG")"
+if [[ "$PROFILE_PATH" == "$RENDERER_PROFILE_PATH" \
+  || "$PROFILE_PATH" == "$LOG_PATH" \
+  || "$RENDERER_PROFILE_PATH" == "$LOG_PATH" ]]; then
+  echo "native dogfood artifact paths must be distinct" >&2
+  exit 2
+fi
 rm -f "$PROFILE" "$RENDERER_PROFILE" "$LOG"
 
 RUI_NATIVE_DOGFOOD_PROFILE="$PROFILE" \
@@ -86,24 +105,13 @@ if [[ ! -s "$RENDERER_PROFILE" ]]; then
   exit 1
 fi
 
-for metric in \
-  frame_interval_ns \
-  event_to_render_latency_ns \
-  layout_ns \
-  dispatch_ns \
-  paint_ns \
-  render_ns \
-  render_p95_ns \
-  render_p99_ns \
-  jank_count
-do
-  if ! grep -Eq "\"${metric}\":[0-9]+" "$RENDERER_PROFILE"; then
-    echo "renderer telemetry did not contain a numeric $metric value" >&2
-    echo "renderer profile: $RENDERER_PROFILE" >&2
-    echo "cargo log: $LOG" >&2
-    exit 1
-  fi
-done
+if ! cargo run --quiet --example validate_renderer_profile -- "$RENDERER_PROFILE" \
+  >>"$LOG" 2>&1; then
+  echo "native dogfood renderer telemetry validation failed" >&2
+  echo "renderer profile: $RENDERER_PROFILE" >&2
+  echo "cargo log: $LOG" >&2
+  exit 1
+fi
 
 echo "native dogfood profile: $PROFILE"
 echo "renderer telemetry profile: $RENDERER_PROFILE"

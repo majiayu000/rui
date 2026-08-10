@@ -72,3 +72,19 @@ fn native_ime_callbacks_preserve_full_composition_order() {
         ] if begin == "你" && update == "你好"
     ));
 }
+
+#[test]
+fn native_composition_cancel_suppresses_the_raw_escape_key() {
+    let mut events = vec![PlatformWindowEvent::Input(PlatformInputEvent::KeyDown(
+        KeyEvent::new(KeyCode::Escape, Modifiers::none()),
+    ))];
+
+    append_ime_events_after_native_dispatch(&mut events, vec![PlatformImeEvent::CancelComposition]);
+
+    assert!(matches!(
+        &events[..],
+        [PlatformWindowEvent::Input(PlatformInputEvent::Ime(
+            PlatformImeEvent::CancelComposition
+        ))]
+    ));
+}

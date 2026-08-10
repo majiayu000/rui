@@ -42,11 +42,6 @@ impl MacImeSession {
     }
 
     fn set_marked_text(&mut self, text: &str, selected_range: NSRange) {
-        if text.is_empty() {
-            self.cancel_composition();
-            return;
-        }
-
         let event = if self.marked_text.is_some() {
             PlatformImeEvent::UpdateComposition(text.to_string())
         } else {
@@ -236,7 +231,19 @@ pub(crate) fn append_ime_events_after_native_dispatch(
         return;
     }
 
-    if ime_events.iter().any(|event| {
+    let cancels_composition = ime_events
+        .iter()
+        .any(|event| matches!(event, PlatformImeEvent::CancelComposition));
+    if cancels_composition
+        && let Some(index) = events.iter().rposition(|event| {
+            matches!(
+                event,
+                PlatformWindowEvent::Input(PlatformInputEvent::KeyDown(_))
+            )
+        })
+    {
+        events.remove(index);
+    } else if ime_events.iter().any(|event| {
         matches!(
             event,
             PlatformImeEvent::InsertText(_)
@@ -338,5 +345,37 @@ mod tests {
         );
         assert!(!session.has_marked_text());
         assert_eq!(session.selected_range(), NOT_FOUND_RANGE);
+    }
+
+    #[test]
+    fn ime_session_keeps_empty_marked_text_until_commit_or_cancel() {
+        let mut committed = MacImeSession::default();
+        committed.set_marked_text("draft", NSRange::new(5, 0));
+        committed.set_marked_text("", NSRange::new(0, 0));
+
+        assert!(committed.has_marked_text());
+        assert_eq!(committed.marked_range(), NSRange::new(0, 0));
+        committed.commit_marked_text();
+        assert_eq!(
+            committed.drain_events(),
+            vec![
+                PlatformImeEvent::BeginComposition("draft".to_string()),
+                PlatformImeEvent::UpdateComposition(String::new()),
+                PlatformImeEvent::Commit(String::new()),
+            ]
+        );
+
+        let mut cancelled = MacImeSession::default();
+        cancelled.set_marked_text("draft", NSRange::new(5, 0));
+        cancelled.set_marked_text("", NSRange::new(0, 0));
+        cancelled.cancel_composition();
+        assert_eq!(
+            cancelled.drain_events(),
+            vec![
+                PlatformImeEvent::BeginComposition("draft".to_string()),
+                PlatformImeEvent::UpdateComposition(String::new()),
+                PlatformImeEvent::CancelComposition,
+            ]
+        );
     }
 }
