@@ -230,47 +230,29 @@ impl RuiContentView {
 pub(crate) fn append_ime_events_after_native_dispatch(
     events: &mut Vec<PlatformWindowEvent>,
     ime_events: Vec<PlatformImeEvent>,
-) {
+) -> bool {
     if ime_events.is_empty() {
-        return;
+        return false;
     }
 
-    let cancels_composition = ime_events
-        .iter()
-        .any(|event| matches!(event, PlatformImeEvent::CancelComposition));
-    if cancels_composition
-        && let Some(index) = events.iter().rposition(|event| {
-            matches!(
-                event,
-                PlatformWindowEvent::Input(PlatformInputEvent::KeyDown(_))
-            )
-        })
-    {
-        events.remove(index);
-    } else if ime_events.iter().any(|event| {
+    let consumed_key_down = if let Some(index) = events.iter().rposition(|event| {
         matches!(
             event,
-            PlatformImeEvent::InsertText(_)
-                | PlatformImeEvent::BeginComposition(_)
-                | PlatformImeEvent::UpdateComposition(_)
-                | PlatformImeEvent::Commit(_)
+            PlatformWindowEvent::Input(PlatformInputEvent::KeyDown(_))
         )
-    }) && let Some(PlatformWindowEvent::Input(PlatformInputEvent::KeyDown(key))) =
-        events.iter_mut().rev().find(|event| {
-            matches!(
-                event,
-                PlatformWindowEvent::Input(PlatformInputEvent::KeyDown(_))
-            )
-        })
-    {
-        key.char = None;
-    }
+    }) {
+        events.remove(index);
+        true
+    } else {
+        false
+    };
 
     events.extend(
         ime_events
             .into_iter()
             .map(|event| PlatformWindowEvent::Input(PlatformInputEvent::Ime(event))),
     );
+    consumed_key_down
 }
 
 fn text_from_native_object(object: &AnyObject) -> Option<String> {

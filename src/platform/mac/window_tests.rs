@@ -21,7 +21,7 @@ fn clipboard_text_or_error_rejects_missing_text() {
 }
 
 #[test]
-fn native_ime_callbacks_replace_key_char_text_without_duplication() {
+fn native_ime_callbacks_suppress_consumed_key_down_without_duplication() {
     let mut events = vec![PlatformWindowEvent::Input(PlatformInputEvent::KeyDown(
         KeyEvent::new(KeyCode::A, Modifiers::none()).with_char('a'),
     ))];
@@ -31,16 +31,30 @@ fn native_ime_callbacks_replace_key_char_text_without_duplication() {
         vec![PlatformImeEvent::InsertText("a".to_string())],
     );
 
-    match &events[0] {
-        PlatformWindowEvent::Input(PlatformInputEvent::KeyDown(event)) => {
-            assert_eq!(event.char, None);
-        }
-        other => panic!("expected key-down event, got {other:?}"),
-    }
     assert!(matches!(
-        &events[1],
+        &events[..],
+        [
         PlatformWindowEvent::Input(PlatformInputEvent::Ime(PlatformImeEvent::InsertText(text)))
-            if text == "a"
+        ] if text == "a"
+    ));
+}
+
+#[test]
+fn native_ime_commit_suppresses_the_raw_confirmation_key() {
+    let mut events = vec![PlatformWindowEvent::Input(PlatformInputEvent::KeyDown(
+        KeyEvent::new(KeyCode::Enter, Modifiers::none()),
+    ))];
+
+    append_ime_events_after_native_dispatch(
+        &mut events,
+        vec![PlatformImeEvent::Commit("你".to_string())],
+    );
+
+    assert!(matches!(
+        &events[..],
+        [PlatformWindowEvent::Input(PlatformInputEvent::Ime(
+            PlatformImeEvent::Commit(text)
+        ))] if text == "你"
     ));
 }
 
@@ -87,4 +101,14 @@ fn native_composition_cancel_suppresses_the_raw_escape_key() {
             PlatformImeEvent::CancelComposition
         ))]
     ));
+}
+
+#[test]
+fn consumed_native_key_suppresses_only_the_matching_key_up() {
+    let mut suppressed = SuppressedKeyUps::default();
+    suppressed.record_consumed_key_down(36);
+
+    assert!(suppressed.should_emit_key_up(0));
+    assert!(!suppressed.should_emit_key_up(36));
+    assert!(suppressed.should_emit_key_up(36));
 }

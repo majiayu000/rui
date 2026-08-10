@@ -23,6 +23,7 @@ use objc2_app_kit::{
 };
 use objc2_foundation::{NSDate, NSDefaultRunLoopMode, NSPoint, NSRect, NSSize, NSString};
 use objc2_quartz_core::CAMetalLayer;
+use std::collections::HashSet;
 
 use crate::platform::mac::events::{
     MAC_REDRAW_EVENT_DATA, MacApplicationEvent, MacWindowEvent, append_platform_events,
@@ -40,7 +41,23 @@ pub struct MacWindow {
     last_visible: bool,
     last_miniaturized: bool,
     created_event_pending: bool,
+    suppressed_key_ups: SuppressedKeyUps,
     lifecycle_delegate: Retained<MacLifecycleDelegate>,
+}
+
+#[derive(Debug, Default)]
+struct SuppressedKeyUps {
+    key_codes: HashSet<u16>,
+}
+
+impl SuppressedKeyUps {
+    fn record_consumed_key_down(&mut self, key_code: u16) {
+        self.key_codes.insert(key_code);
+    }
+
+    fn should_emit_key_up(&mut self, key_code: u16) -> bool {
+        !self.key_codes.remove(&key_code)
+    }
 }
 
 impl MacWindow {
@@ -188,16 +205,24 @@ impl MacWindow {
             }
 
             let mut platform_events = Vec::new();
-            append_platform_events_from_native_event(
-                &event,
-                self.last_content_size,
-                &mut platform_events,
-            );
+            let suppress_key_up = event_type == NSEventType::KeyUp
+                && !self.suppressed_key_ups.should_emit_key_up(event.keyCode());
+            if !suppress_key_up {
+                append_platform_events_from_native_event(
+                    &event,
+                    self.last_content_size,
+                    &mut platform_events,
+                );
+            }
             app.sendEvent(&event);
-            append_ime_events_after_native_dispatch(
+            let consumed_key_down = append_ime_events_after_native_dispatch(
                 &mut platform_events,
                 self.content_view.drain_ime_events(),
             );
+            if consumed_key_down && event_type == NSEventType::KeyDown {
+                self.suppressed_key_ups
+                    .record_consumed_key_down(event.keyCode());
+            }
             append_platform_events(&mut events, platform_events);
             let mut lifecycle_events = Vec::new();
             self.push_delegate_lifecycle_events(&mut lifecycle_events)?;
@@ -736,6 +761,7 @@ pub unsafe fn create_window(
         last_visible: false,
         last_miniaturized: false,
         created_event_pending: true,
+        suppressed_key_ups: SuppressedKeyUps::default(),
         lifecycle_delegate,
     })
 }
