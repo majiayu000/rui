@@ -4,6 +4,11 @@ use crate::core::event::{KeyCode, KeyEvent, Modifiers, MouseButton, ScrollEvent}
 use crate::core::geometry::{Point, Size};
 use crate::core::window::WindowOptions;
 use crate::platform::mac::MacAccessibilityBridge;
+use crate::platform::mac::events::{
+    MAC_REDRAW_EVENT_DATA, MacApplicationEvent, MacWindowEvent, append_platform_events,
+    application_event, post_application_event,
+};
+use crate::platform::mac::key_suppression::SuppressedKeyUps;
 use crate::platform::mac::lifecycle::{MacLifecycleDelegate, MacLifecycleEvent};
 use crate::platform::mac::text_input::{RuiContentView, append_ime_events_after_native_dispatch};
 use crate::platform::window::{
@@ -23,12 +28,6 @@ use objc2_app_kit::{
 };
 use objc2_foundation::{NSDate, NSDefaultRunLoopMode, NSPoint, NSRect, NSSize, NSString};
 use objc2_quartz_core::CAMetalLayer;
-use std::collections::HashSet;
-
-use crate::platform::mac::events::{
-    MAC_REDRAW_EVENT_DATA, MacApplicationEvent, MacWindowEvent, append_platform_events,
-    application_event, post_application_event,
-};
 
 pub struct MacWindow {
     window: Retained<NSWindow>,
@@ -43,21 +42,6 @@ pub struct MacWindow {
     created_event_pending: bool,
     suppressed_key_ups: SuppressedKeyUps,
     lifecycle_delegate: Retained<MacLifecycleDelegate>,
-}
-
-#[derive(Debug, Default)]
-struct SuppressedKeyUps {
-    key_codes: HashSet<u16>,
-}
-
-impl SuppressedKeyUps {
-    fn record_consumed_key_down(&mut self, key_code: u16) {
-        self.key_codes.insert(key_code);
-    }
-
-    fn should_emit_key_up(&mut self, key_code: u16) -> bool {
-        !self.key_codes.remove(&key_code)
-    }
 }
 
 impl MacWindow {
@@ -182,6 +166,9 @@ impl MacWindow {
             expiration = NSDate::distantPast();
 
             if event.windowNumber() != window_number {
+                if event.r#type() == NSEventType::KeyUp {
+                    self.suppressed_key_ups.forget_key_up(event.keyCode());
+                }
                 app.sendEvent(&event);
                 let mut lifecycle_events = Vec::new();
                 self.push_delegate_lifecycle_events(&mut lifecycle_events)?;
@@ -223,9 +210,9 @@ impl MacWindow {
                 &mut platform_events,
                 self.content_view.drain_ime_events(),
             );
-            if consumed_key_down && event_type == NSEventType::KeyDown {
+            if event_type == NSEventType::KeyDown {
                 self.suppressed_key_ups
-                    .record_consumed_key_down(event.keyCode());
+                    .record_key_down(event.keyCode(), consumed_key_down);
             }
             append_platform_events(&mut events, platform_events);
             let mut lifecycle_events = Vec::new();
@@ -266,6 +253,9 @@ impl MacWindow {
         let focused = self.is_focused();
         if focused != self.last_focused {
             self.last_focused = focused;
+            if !focused {
+                self.suppressed_key_ups.clear();
+            }
             events.push(PlatformWindowEvent::FocusChanged(focused));
         }
 
@@ -305,6 +295,9 @@ impl MacWindow {
                 }
                 MacLifecycleEvent::FocusChanged(focused) => {
                     self.last_focused = focused;
+                    if !focused {
+                        self.suppressed_key_ups.clear();
+                    }
                     events.push(PlatformWindowEvent::FocusChanged(focused));
                 }
                 MacLifecycleEvent::Resized => {

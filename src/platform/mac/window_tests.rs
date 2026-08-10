@@ -102,13 +102,3 @@ fn native_composition_cancel_suppresses_the_raw_escape_key() {
         ))]
     ));
 }
-
-#[test]
-fn consumed_native_key_suppresses_only_the_matching_key_up() {
-    let mut suppressed = SuppressedKeyUps::default();
-    suppressed.record_consumed_key_down(36);
-
-    assert!(suppressed.should_emit_key_up(0));
-    assert!(!suppressed.should_emit_key_up(36));
-    assert!(suppressed.should_emit_key_up(36));
-}

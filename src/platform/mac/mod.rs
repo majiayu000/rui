@@ -5,6 +5,7 @@ mod app;
 mod events;
 mod frame;
 mod ime_state;
+mod key_suppression;
 mod lifecycle;
 mod text_input;
 mod window;
