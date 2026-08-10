@@ -321,6 +321,87 @@ fn input_uses_shaped_visual_order_for_rtl_arrow_navigation() {
 }
 
 #[test]
+fn input_mixed_bidi_navigation_and_hit_testing_preserve_caret_affinity() {
+    use crate::renderer::text::{TextDirection, TextMeasureCache, TextRequest};
+    use unicode_segmentation::UnicodeSegmentation;
+
+    let text = "abc שלום";
+    let id = ElementId::new();
+    let mut inp = Input::new().id(id).value(text).w(240.0);
+    inp.state.focused = true;
+    let (taffy, bounds) = layout_input(&mut inp, Size::new(280.0, 56.0));
+    let mut focused = Some(id);
+    let mut cx = EventContext::new(bounds, &taffy, &mut focused);
+
+    assert!(inp.handle_key_event(&mut cx, &key_event(KeyCode::Home)));
+    let mut visited = vec![inp.visual_caret.expect("Home should set visual affinity")];
+    for _ in 0..text.graphemes(true).count() {
+        assert!(inp.handle_key_event(&mut cx, &key_event(KeyCode::ArrowRight)));
+        visited.push(
+            inp.visual_caret
+                .expect("visual navigation should retain affinity"),
+        );
+    }
+    assert!(visited.windows(2).all(|pair| pair[0].x() < pair[1].x()));
+    let mut offsets = std::collections::HashSet::new();
+    assert!(visited.iter().any(|caret| !offsets.insert(caret.offset())));
+
+    let mut cache = TextMeasureCache::new();
+    let plan = cache
+        .shape_single_line(TextRequest::new(text, 14.0, 400, None, 1.0))
+        .expect("mixed bidi text should shape");
+    let rtl = plan
+        .clusters()
+        .iter()
+        .find(|cluster| cluster.direction == TextDirection::RightToLeft)
+        .expect("mixed bidi plan should include RTL text");
+    let boundary = rtl.byte_start;
+    let upstream = plan
+        .clusters()
+        .iter()
+        .find(|cluster| cluster.byte_end == boundary)
+        .map(|cluster| cluster.x_offset + cluster.advance_width)
+        .expect("LTR side of bidi boundary should exist");
+    let downstream = rtl.x_offset + rtl.advance_width;
+    let origin_x = bounds.x() + INPUT_HORIZONTAL_PADDING;
+
+    for expected_x in [upstream, downstream] {
+        let event = PointerEvent {
+            kind: PointerEventKind::Down,
+            position: Point::new(origin_x + expected_x, bounds.center().y),
+            button: Some(crate::core::event::MouseButton::Left),
+        };
+        assert!(
+            inp.handle_pointer_event(&mut cx, &event),
+            "pointer {:?} should be inside {bounds:?}",
+            event.position
+        );
+        assert_eq!(inp.state.cursor_position, boundary);
+        let caret = inp
+            .visual_caret
+            .expect("pointer hit should retain affinity");
+        assert!((caret.x() - expected_x).abs() < 0.01);
+
+        let mut scene = Scene::new();
+        let mut paint_cx = PaintContext::new(&mut scene, bounds, &taffy);
+        inp.paint(&mut paint_cx);
+        let painted = inp
+            .caret_bounds
+            .expect("focused input should paint a caret");
+        assert!((painted.x() - (origin_x + expected_x)).abs() < 0.01);
+
+        let geometry = inp
+            .native_text_input_geometry()
+            .expect("painted input should expose native caret geometry");
+        let (_, native) = geometry
+            .first_bounds_for_range(range(boundary, boundary))
+            .expect("native geometry query should succeed")
+            .expect("collapsed selection should have caret geometry");
+        assert!((native.x() - painted.x()).abs() < 0.01);
+    }
+}
+
+#[test]
 fn input_pointer_hit_testing_uses_shaped_cluster_advances() {
     use crate::renderer::text::{TextMeasureCache, TextRequest};
 

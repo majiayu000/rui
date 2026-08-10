@@ -14,7 +14,7 @@ use crate::core::geometry::{Bounds, Edges};
 use crate::core::style::{Corners, Style};
 use crate::core::text_editing::{
     Clipboard, TextEditBuffer, TextEditError, TextEditOutcome, TextInputCommand, TextInputEvent,
-    TextInputSnapshot, TextRange, TextSelection,
+    TextInputSnapshot, TextRange, TextSelection, VisualCaret,
 };
 use crate::elements::element::{
     Element, EventContext, LayoutContext, PaintContext, PointerEvent, PointerEventKind,
@@ -59,6 +59,7 @@ pub struct TextArea {
     on_blur: Option<Box<dyn Fn()>>,
     caret_bounds: Option<Bounds>,
     text_layout: Option<crate::core::text_editing::TextEditLayout>,
+    visual_caret: Option<VisualCaret>,
 }
 
 impl TextArea {
@@ -82,6 +83,7 @@ impl TextArea {
             on_blur: None,
             caret_bounds: None,
             text_layout: None,
+            visual_caret: None,
         }
     }
 
@@ -212,6 +214,7 @@ impl TextArea {
             return Ok(TextEditOutcome::default());
         }
         self.sync_editor_from_public_state_if_needed()?;
+        self.visual_caret = None;
         let outcome = self.editor.apply_key_event(event)?;
         self.sync_state_from_editor();
         self.emit_change_if_needed(outcome.changed);
@@ -237,6 +240,7 @@ impl TextArea {
             return Ok(TextEditOutcome::default());
         }
         self.sync_editor_from_public_state_if_needed()?;
+        self.visual_caret = None;
         let outcome = self.editor.cut_selection_to(clipboard)?;
         self.sync_state_from_editor();
         self.emit_change_if_needed(outcome.changed);
@@ -251,6 +255,7 @@ impl TextArea {
             return Ok(TextEditOutcome::default());
         }
         self.sync_editor_from_public_state_if_needed()?;
+        self.visual_caret = None;
         let outcome = self.editor.paste_from(clipboard)?;
         self.sync_state_from_editor();
         self.emit_change_if_needed(outcome.changed);
@@ -317,6 +322,7 @@ impl TextArea {
         let mut editor = TextEditBuffer::multiline_with_text(self.state.value.clone());
         editor.set_selection(self.state_selection())?;
         self.editor = editor;
+        self.visual_caret = None;
         self.sync_state_from_editor();
         Ok(())
     }
@@ -607,6 +613,7 @@ impl Element for TextArea {
             return ActionOutcome::Ignored;
         }
 
+        self.visual_caret = None;
         let result = self
             .sync_editor_from_public_state_if_needed()
             .and_then(|_| {

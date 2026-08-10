@@ -25,6 +25,7 @@ impl Input {
             return Ok(TextEditOutcome::default());
         }
         self.sync_editor_from_public_state_if_needed()?;
+        self.visual_caret = None;
         let outcome = self.editor.apply_text_input_command(command)?;
         self.sync_state_from_editor();
         self.emit_change_if_needed(outcome.changed);
@@ -61,26 +62,40 @@ impl Input {
         let selection = self.state_selection();
         let display_head = self.display_offset_for_value_offset(selection.head())?;
         let layout = self.current_text_layout()?;
-        let display_target = if !event.modifiers.shift && !selection.is_collapsed() {
+        let current = self
+            .visual_caret
+            .filter(|caret| caret.offset() == display_head)
+            .map(Ok)
+            .unwrap_or_else(|| layout.visual_caret_for_offset(display_head));
+        let current = match current {
+            Ok(caret) => caret,
+            Err(err) => return Some(Err(err)),
+        };
+        let visual_target = if !event.modifiers.shift && !selection.is_collapsed() {
             let range = self.display_range_for_value_range(selection.normalized_range())?;
             match event.key {
-                KeyCode::ArrowLeft => layout.visual_selection_edge(range, false),
-                KeyCode::ArrowRight => layout.visual_selection_edge(range, true),
+                KeyCode::ArrowLeft => layout.visual_selection_caret(range, false),
+                KeyCode::ArrowRight => layout.visual_selection_caret(range, true),
                 _ => return None,
             }
         } else {
             match event.key {
-                KeyCode::ArrowLeft => layout.visual_offset_left(display_head),
-                KeyCode::ArrowRight => layout.visual_offset_right(display_head),
-                KeyCode::ArrowUp | KeyCode::Home => layout.visual_line_start(display_head),
-                KeyCode::ArrowDown | KeyCode::End => layout.visual_line_end(display_head),
+                KeyCode::ArrowLeft => layout.visual_caret_horizontal(current, false),
+                KeyCode::ArrowRight => layout.visual_caret_horizontal(current, true),
+                KeyCode::ArrowUp | KeyCode::Home => {
+                    layout.visual_line_edge_caret(display_head, false)
+                }
+                KeyCode::ArrowDown | KeyCode::End => {
+                    layout.visual_line_edge_caret(display_head, true)
+                }
                 _ => return None,
             }
         };
-        let display_target = match display_target {
+        let visual_target = match visual_target {
             Ok(target) => target,
             Err(err) => return Some(Err(err)),
         };
+        let display_target = visual_target.offset();
         let target = self.value_offset_for_display_offset(display_target)?;
         Some((|| {
             self.sync_editor_from_public_state_if_needed()?;
@@ -90,6 +105,7 @@ impl Input {
                 TextSelection::collapsed(target)
             };
             self.editor.set_selection(selection)?;
+            self.visual_caret = Some(visual_target);
             self.sync_state_from_editor();
             Ok(TextEditOutcome::default())
         })())
@@ -101,17 +117,19 @@ impl Input {
         bounds: Bounds,
     ) -> Result<bool, TextEditError> {
         let origin = self.text_origin(bounds);
-        let display_target = match self.current_text_layout() {
+        let visual_target = match self.current_text_layout() {
             Some(layout) => {
-                layout.offset_for_point(Point::new(point.x - origin.x, point.y - origin.y))
+                layout.visual_caret_for_point(Point::new(point.x - origin.x, point.y - origin.y))
             }
             None => return Ok(false),
         };
+        let display_target = visual_target.offset();
         let Some(target) = self.value_offset_for_display_offset(display_target) else {
             return Ok(false);
         };
         self.sync_editor_from_public_state_if_needed()?;
         self.editor.set_cursor(target)?;
+        self.visual_caret = Some(visual_target);
         self.sync_state_from_editor();
         Ok(true)
     }
@@ -138,19 +156,27 @@ impl Input {
         })
     }
 
-    fn native_text_input_geometry(&self) -> Option<TextInputGeometry> {
+    pub(super) fn native_text_input_geometry(&self) -> Option<TextInputGeometry> {
         if self.input_type == InputType::Password {
             return None;
         }
         let layout = self.current_text_layout()?;
-        let caret = layout
-            .caret_for_offset(self.state_selection().head())
-            .ok()?;
+        let display_head = self.display_offset_for_value_offset(self.state_selection().head())?;
+        let caret = match self
+            .visual_caret
+            .filter(|caret| caret.offset() == display_head)
+        {
+            Some(caret) => layout.caret_geometry_for_visual_caret(caret).ok()?,
+            None => layout.caret_for_offset(display_head).ok()?,
+        };
         let bounds = self.caret_bounds?;
-        Some(TextInputGeometry::new(
-            layout.clone(),
-            Point::new(bounds.x() - caret.position.x, bounds.y() - caret.position.y),
-        ))
+        Some(
+            TextInputGeometry::new(
+                layout.clone(),
+                Point::new(bounds.x() - caret.position.x, bounds.y() - caret.position.y),
+            )
+            .with_visual_caret(self.visual_caret),
+        )
     }
 
     pub(super) fn display_offset_for_value_offset(&self, offset: usize) -> Option<usize> {
@@ -423,7 +449,12 @@ impl Input {
                 .with_alpha(0.22)
                 .to_rgba(),
         );
-        match layout.caret_primitive(cursor, self.text_origin(bounds), style) {
+        match layout.caret_primitive_for_visual_caret(
+            cursor,
+            self.visual_caret,
+            self.text_origin(bounds),
+            style,
+        ) {
             Ok(primitive) => {
                 let caret_bounds = match &primitive {
                     Primitive::Quad { bounds, .. } => Some(*bounds),

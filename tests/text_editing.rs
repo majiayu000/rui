@@ -483,6 +483,41 @@ fn text_editing_selection_uses_visual_cluster_bounds_for_rtl_shape_plans() {
 }
 
 #[test]
+fn text_editing_mixed_bidi_selection_uses_disjoint_visual_rects() {
+    let text = "abc שלום";
+    let mut cache = TextMeasureCache::new();
+    let plan = cache
+        .shape_single_line(TextRequest::new(text, 24.0, 400, None, 1.2))
+        .unwrap_or_else(|err| panic!("mixed bidi shaping failed: {err:?}"));
+    let layout = must(TextEditLayout::from_shape_plan(text, &plan));
+    let latin = plan
+        .clusters()
+        .iter()
+        .rev()
+        .find(|cluster| cluster.direction == rui::renderer::text::TextDirection::LeftToRight)
+        .unwrap_or_else(|| panic!("mixed bidi plan had no LTR cluster"));
+    let rtl = plan
+        .clusters()
+        .iter()
+        .find(|cluster| cluster.direction == rui::renderer::text::TextDirection::RightToLeft)
+        .unwrap_or_else(|| panic!("mixed bidi plan had no RTL cluster"));
+
+    let rects = must(layout.selection_rects(range(latin.byte_start, rtl.byte_end)));
+    assert_eq!(rects.len(), 2);
+    assert!(rects[0].bounds.max_x() < rects[1].bounds.x());
+    let selected_width = plan
+        .clusters()
+        .iter()
+        .filter(|cluster| cluster.byte_end > latin.byte_start && cluster.byte_start < rtl.byte_end)
+        .map(|cluster| cluster.advance_width)
+        .sum::<f32>();
+    assert_close(
+        rects.iter().map(|rect| rect.bounds.width()).sum(),
+        selected_width,
+    );
+}
+
+#[test]
 fn text_editing_shape_layout_drives_rtl_navigation_and_hit_testing() {
     let text = "שלום";
     let mut cache = TextMeasureCache::new();

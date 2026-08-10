@@ -14,7 +14,7 @@ use crate::core::geometry::{Bounds, Edges};
 use crate::core::style::{Corners, Style};
 use crate::core::text_editing::{
     Clipboard, TextEditBuffer, TextEditError, TextEditOutcome, TextInputCommand, TextInputEvent,
-    TextInputSnapshot, TextRange, TextSelection,
+    TextInputSnapshot, TextRange, TextSelection, VisualCaret,
 };
 use crate::elements::element::{
     Element, EventContext, LayoutContext, PaintContext, PointerEvent, PointerEventKind,
@@ -85,6 +85,7 @@ pub struct Input {
     paint_tokens: Option<InputPaintTokens>,
     caret_bounds: Option<Bounds>,
     text_layout: Option<crate::core::text_editing::TextEditLayout>,
+    visual_caret: Option<VisualCaret>,
 }
 
 impl Input {
@@ -112,6 +113,7 @@ impl Input {
             paint_tokens: None,
             caret_bounds: None,
             text_layout: None,
+            visual_caret: None,
         }
     }
 
@@ -255,6 +257,7 @@ impl Input {
             return Ok(TextEditOutcome::default());
         }
         self.sync_editor_from_public_state_if_needed()?;
+        self.visual_caret = None;
         let outcome = if event.key == KeyCode::Escape {
             TextEditOutcome {
                 changed: false,
@@ -298,6 +301,7 @@ impl Input {
             return Ok(TextEditOutcome::default());
         }
         self.sync_editor_from_public_state_if_needed()?;
+        self.visual_caret = None;
         let outcome = self.editor.cut_selection_to(clipboard)?;
         self.sync_state_from_editor();
         self.emit_change_if_needed(outcome.changed);
@@ -312,6 +316,7 @@ impl Input {
             return Ok(TextEditOutcome::default());
         }
         self.sync_editor_from_public_state_if_needed()?;
+        self.visual_caret = None;
         let outcome = self.editor.paste_from(clipboard)?;
         self.sync_state_from_editor();
         self.emit_change_if_needed(outcome.changed);
@@ -354,6 +359,7 @@ impl Input {
         let mut editor = TextEditBuffer::with_text(self.state.value.clone());
         editor.set_selection(self.state_selection())?;
         self.editor = editor;
+        self.visual_caret = None;
         self.sync_state_from_editor();
         Ok(())
     }
@@ -678,6 +684,7 @@ impl Element for Input {
         }
 
         if *action == StandardAction::SelectAll {
+            self.visual_caret = None;
             let result = self
                 .sync_editor_from_public_state_if_needed()
                 .and_then(|_| {

@@ -7,6 +7,8 @@ use crate::renderer::Primitive;
 use crate::renderer::text::{TextDirection, TextShapePlan};
 use unicode_segmentation::UnicodeSegmentation;
 
+mod navigation;
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TextLine {
     range: TextRange,
@@ -34,6 +36,30 @@ pub struct CaretGeometry {
     pub height: f32,
     pub line_index: usize,
     pub column: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CaretAffinity {
+    Upstream,
+    Downstream,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct VisualCaret {
+    offset: usize,
+    affinity: CaretAffinity,
+    x: f32,
+}
+
+impl VisualCaret {
+    pub(crate) fn offset(self) -> usize {
+        self.offset
+    }
+
+    #[cfg(test)]
+    pub(crate) fn x(self) -> f32 {
+        self.x
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -91,11 +117,21 @@ pub struct TextEditLayout {
 pub struct TextInputGeometry {
     layout: TextEditLayout,
     origin: Point,
+    visual_caret: Option<VisualCaret>,
 }
 
 impl TextInputGeometry {
     pub fn new(layout: TextEditLayout, origin: Point) -> Self {
-        Self { layout, origin }
+        Self {
+            layout,
+            origin,
+            visual_caret: None,
+        }
+    }
+
+    pub(crate) fn with_visual_caret(mut self, visual_caret: Option<VisualCaret>) -> Self {
+        self.visual_caret = visual_caret;
+        self
     }
 
     pub fn first_bounds_for_range(
@@ -103,7 +139,13 @@ impl TextInputGeometry {
         range: TextRange,
     ) -> Result<Option<(TextRange, Bounds)>, TextEditError> {
         if range.is_empty() {
-            let caret = self.layout.caret_for_offset(range.start())?;
+            let caret = match self
+                .visual_caret
+                .filter(|caret| caret.offset() == range.start())
+            {
+                Some(caret) => self.layout.caret_geometry_for_visual_caret(caret)?,
+                None => self.layout.caret_for_offset(range.start())?,
+            };
             return Ok(Some((
                 range,
                 Bounds::from_xywh(
@@ -321,23 +363,64 @@ impl TextEditLayout {
                 continue;
             }
 
-            let (start_x, end_x) = self
-                .visual_bounds_for_range_on_line(line_index, start, end)
-                .unwrap_or_else(|| {
+            let mut visual_runs = self
+                .clusters
+                .iter()
+                .filter(|cluster| cluster.line_index == line_index)
+                .filter(|cluster| cluster.byte_end > start && cluster.byte_start < end)
+                .map(|cluster| {
                     (
-                        self.x_for_offset_on_line(line_index, start),
-                        self.x_for_offset_on_line(line_index, end),
+                        line.origin.x + cluster.x_offset,
+                        line.origin.x + cluster.x_offset + cluster.advance_width,
+                        cluster.byte_start.max(start),
+                        cluster.byte_end.min(end),
                     )
+                })
+                .collect::<Vec<_>>();
+            visual_runs.sort_by(|left, right| left.0.total_cmp(&right.0));
+
+            if visual_runs.is_empty() {
+                let start_x = self.x_for_offset_on_line(line_index, start);
+                let end_x = self.x_for_offset_on_line(line_index, end);
+                rects.push(SelectionRect {
+                    bounds: Bounds::from_xywh(
+                        start_x.min(end_x),
+                        line.origin.y,
+                        (end_x - start_x).abs(),
+                        self.line_height,
+                    ),
+                    range: TextRange::ordered(start, end),
                 });
-            rects.push(SelectionRect {
-                bounds: Bounds::from_xywh(
-                    start_x,
-                    line.origin.y,
-                    (end_x - start_x).max(0.0),
-                    self.line_height,
-                ),
-                range: TextRange::ordered(start, end),
-            });
+                continue;
+            }
+
+            let mut merged: Vec<(f32, f32, usize, usize)> = Vec::new();
+            for run in visual_runs {
+                if let Some(last) = merged.last_mut()
+                    && run.0 <= last.1 + f32::EPSILON
+                    && run.2 <= last.3
+                    && run.3 >= last.2
+                {
+                    last.1 = last.1.max(run.1);
+                    last.2 = last.2.min(run.2);
+                    last.3 = last.3.max(run.3);
+                } else {
+                    merged.push(run);
+                }
+            }
+            rects.extend(
+                merged
+                    .into_iter()
+                    .map(|(start_x, end_x, start, end)| SelectionRect {
+                        bounds: Bounds::from_xywh(
+                            start_x,
+                            line.origin.y,
+                            (end_x - start_x).max(0.0),
+                            self.line_height,
+                        ),
+                        range: TextRange::ordered(start, end),
+                    }),
+            );
         }
         Ok(rects)
     }
@@ -373,58 +456,27 @@ impl TextEditLayout {
             .map(|cluster| cluster.byte_start)
     }
 
-    pub fn visual_offset_left(&self, offset: usize) -> Result<usize, TextEditError> {
-        self.visual_offset_horizontal(offset, false)
-    }
-
-    pub fn visual_offset_right(&self, offset: usize) -> Result<usize, TextEditError> {
-        self.visual_offset_horizontal(offset, true)
-    }
-
-    pub fn visual_offset_up(&self, offset: usize) -> Result<usize, TextEditError> {
-        self.visual_offset_vertical(offset, false)
-    }
-
-    pub fn visual_offset_down(&self, offset: usize) -> Result<usize, TextEditError> {
-        self.visual_offset_vertical(offset, true)
-    }
-
-    pub fn visual_line_start(&self, offset: usize) -> Result<usize, TextEditError> {
-        self.visual_line_edge(offset, false)
-    }
-
-    pub fn visual_line_end(&self, offset: usize) -> Result<usize, TextEditError> {
-        self.visual_line_edge(offset, true)
-    }
-
-    pub fn visual_selection_edge(
-        &self,
-        range: TextRange,
-        right: bool,
-    ) -> Result<usize, TextEditError> {
-        self.ensure_layout_range(range)?;
-        let start_line = self.line_index_for_offset(range.start());
-        let end_line = self.line_index_for_offset(range.end());
-        if start_line != end_line {
-            return Ok(if right { range.end() } else { range.start() });
-        }
-        let start_x = self.x_for_offset_on_line(start_line, range.start());
-        let end_x = self.x_for_offset_on_line(end_line, range.end());
-        Ok(if (start_x <= end_x) == right {
-            range.end()
-        } else {
-            range.start()
-        })
-    }
-
     pub fn caret_primitive(
         &self,
         offset: usize,
         paint_origin: impl Into<Point>,
         style: TextEditPaintStyle,
     ) -> Result<Primitive, TextEditError> {
+        self.caret_primitive_for_visual_caret(offset, None, paint_origin, style)
+    }
+
+    pub(crate) fn caret_primitive_for_visual_caret(
+        &self,
+        offset: usize,
+        visual_caret: Option<VisualCaret>,
+        paint_origin: impl Into<Point>,
+        style: TextEditPaintStyle,
+    ) -> Result<Primitive, TextEditError> {
         let paint_origin = paint_origin.into();
-        let caret = self.caret_for_offset(offset)?;
+        let caret = match visual_caret.filter(|caret| caret.offset() == offset) {
+            Some(caret) => self.caret_geometry_for_visual_caret(caret)?,
+            None => self.caret_for_offset(offset)?,
+        };
         Ok(Primitive::Quad {
             bounds: Bounds::from_xywh(
                 paint_origin.x + caret.position.x,
@@ -473,98 +525,6 @@ impl TextEditLayout {
         }
         self.ensure_layout_boundary(range.start())?;
         self.ensure_layout_boundary(range.end())
-    }
-
-    fn visual_offset_horizontal(
-        &self,
-        offset: usize,
-        move_right: bool,
-    ) -> Result<usize, TextEditError> {
-        self.ensure_layout_boundary(offset)?;
-        let line_index = self.line_index_for_offset(offset);
-        let mut stops = self.caret_stops_on_line(line_index);
-        stops.sort_by(|left, right| left.1.total_cmp(&right.1));
-        let current_x = self.x_for_offset_on_line(line_index, offset);
-        let target = if move_right {
-            stops
-                .iter()
-                .find(|(_, x)| *x > current_x + f32::EPSILON)
-                .map(|(offset, _)| *offset)
-                .or_else(|| {
-                    (line_index + 1 < self.lines.len())
-                        .then(|| self.visual_edge_offset(line_index + 1, false))
-                })
-        } else {
-            stops
-                .iter()
-                .rev()
-                .find(|(_, x)| *x < current_x - f32::EPSILON)
-                .map(|(offset, _)| *offset)
-                .or_else(|| (line_index > 0).then(|| self.visual_edge_offset(line_index - 1, true)))
-        };
-        Ok(target.unwrap_or(offset))
-    }
-
-    fn visual_offset_vertical(
-        &self,
-        offset: usize,
-        move_down: bool,
-    ) -> Result<usize, TextEditError> {
-        self.ensure_layout_boundary(offset)?;
-        let line_index = self.line_index_for_offset(offset);
-        let target_line = if move_down {
-            (line_index + 1 < self.lines.len()).then_some(line_index + 1)
-        } else {
-            line_index.checked_sub(1)
-        };
-        Ok(target_line
-            .map(|line| {
-                self.closest_offset_on_line(line, self.x_for_offset_on_line(line_index, offset))
-            })
-            .unwrap_or(offset))
-    }
-
-    fn visual_line_edge(&self, offset: usize, right: bool) -> Result<usize, TextEditError> {
-        self.ensure_layout_boundary(offset)?;
-        Ok(self.visual_edge_offset(self.line_index_for_offset(offset), right))
-    }
-
-    fn visual_edge_offset(&self, line_index: usize, right: bool) -> usize {
-        self.caret_stops_on_line(line_index)
-            .into_iter()
-            .min_by(|left, right_stop| {
-                let order = left.1.total_cmp(&right_stop.1);
-                if right { order.reverse() } else { order }
-            })
-            .map(|(offset, _)| offset)
-            .unwrap_or(self.lines[line_index].range.start())
-    }
-
-    fn closest_offset_on_line(&self, line_index: usize, x: f32) -> usize {
-        self.caret_stops_on_line(line_index)
-            .into_iter()
-            .min_by(|left, right| (left.1 - x).abs().total_cmp(&(right.1 - x).abs()))
-            .map(|(offset, _)| offset)
-            .unwrap_or(self.lines[line_index].range.start())
-    }
-
-    fn caret_stops_on_line(&self, line_index: usize) -> Vec<(usize, f32)> {
-        let line = self.lines[line_index];
-        let mut offsets = vec![line.range.start(), line.range.end()];
-        for cluster in self
-            .clusters
-            .iter()
-            .filter(|cluster| cluster.line_index == line_index)
-        {
-            offsets.push(cluster.byte_start);
-            offsets.push(cluster.byte_end);
-        }
-        offsets.sort_unstable();
-        offsets.dedup();
-        offsets
-            .into_iter()
-            .map(|offset| (offset, self.x_for_offset_on_line(line_index, offset)))
-            .collect()
     }
 
     fn ensure_layout_boundary(&self, offset: usize) -> Result<(), TextEditError> {
@@ -631,29 +591,6 @@ impl TextEditLayout {
         }
 
         line.origin.x + line.size.width
-    }
-
-    fn visual_bounds_for_range_on_line(
-        &self,
-        line_index: usize,
-        start: usize,
-        end: usize,
-    ) -> Option<(f32, f32)> {
-        let line = self.lines[line_index];
-        let mut min_x = f32::INFINITY;
-        let mut max_x = f32::NEG_INFINITY;
-
-        for cluster in self
-            .clusters
-            .iter()
-            .filter(|cluster| cluster.line_index == line_index)
-            .filter(|cluster| cluster.byte_end > start && cluster.byte_start < end)
-        {
-            min_x = min_x.min(line.origin.x + cluster.x_offset);
-            max_x = max_x.max(line.origin.x + cluster.x_offset + cluster.advance_width);
-        }
-
-        min_x.is_finite().then_some((min_x, max_x))
     }
 }
 

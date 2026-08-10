@@ -23,6 +23,7 @@ impl TextArea {
             return Ok(TextEditOutcome::default());
         }
         self.sync_editor_from_public_state_if_needed()?;
+        self.visual_caret = None;
         let outcome = self.editor.apply_text_input_command(command)?;
         self.sync_state_from_editor();
         self.emit_change_if_needed(outcome.changed);
@@ -58,31 +59,41 @@ impl TextArea {
         }
         let selection = self.state_selection();
         let layout = self.current_text_layout()?;
-        let target = if !event.modifiers.shift && !selection.is_collapsed() {
+        let current = self
+            .visual_caret
+            .filter(|caret| caret.offset() == selection.head())
+            .map(Ok)
+            .unwrap_or_else(|| layout.visual_caret_for_offset(selection.head()));
+        let current = match current {
+            Ok(caret) => caret,
+            Err(err) => return Some(Err(err)),
+        };
+        let visual_target = if !event.modifiers.shift && !selection.is_collapsed() {
             match event.key {
                 KeyCode::ArrowLeft => {
-                    layout.visual_selection_edge(selection.normalized_range(), false)
+                    layout.visual_selection_caret(selection.normalized_range(), false)
                 }
                 KeyCode::ArrowRight => {
-                    layout.visual_selection_edge(selection.normalized_range(), true)
+                    layout.visual_selection_caret(selection.normalized_range(), true)
                 }
                 _ => return None,
             }
         } else {
             match event.key {
-                KeyCode::ArrowLeft => layout.visual_offset_left(selection.head()),
-                KeyCode::ArrowRight => layout.visual_offset_right(selection.head()),
-                KeyCode::ArrowUp => layout.visual_offset_up(selection.head()),
-                KeyCode::ArrowDown => layout.visual_offset_down(selection.head()),
-                KeyCode::Home => layout.visual_line_start(selection.head()),
-                KeyCode::End => layout.visual_line_end(selection.head()),
+                KeyCode::ArrowLeft => layout.visual_caret_horizontal(current, false),
+                KeyCode::ArrowRight => layout.visual_caret_horizontal(current, true),
+                KeyCode::ArrowUp => layout.visual_caret_vertical(current, false),
+                KeyCode::ArrowDown => layout.visual_caret_vertical(current, true),
+                KeyCode::Home => layout.visual_line_edge_caret(selection.head(), false),
+                KeyCode::End => layout.visual_line_edge_caret(selection.head(), true),
                 _ => return None,
             }
         };
-        let target = match target {
+        let visual_target = match visual_target {
             Ok(target) => target,
             Err(err) => return Some(Err(err)),
         };
+        let target = visual_target.offset();
         Some((|| {
             self.sync_editor_from_public_state_if_needed()?;
             let selection = if event.modifiers.shift {
@@ -91,6 +102,7 @@ impl TextArea {
                 TextSelection::collapsed(target)
             };
             self.editor.set_selection(selection)?;
+            self.visual_caret = Some(visual_target);
             self.sync_state_from_editor();
             Ok(TextEditOutcome::default())
         })())
@@ -102,14 +114,16 @@ impl TextArea {
         bounds: Bounds,
     ) -> Result<bool, TextEditError> {
         let origin = self.text_origin(bounds);
-        let target = match self.current_text_layout() {
+        let visual_target = match self.current_text_layout() {
             Some(layout) => {
-                layout.offset_for_point(Point::new(point.x - origin.x, point.y - origin.y))
+                layout.visual_caret_for_point(Point::new(point.x - origin.x, point.y - origin.y))
             }
             None => return Ok(false),
         };
+        let target = visual_target.offset();
         self.sync_editor_from_public_state_if_needed()?;
         self.editor.set_cursor(target)?;
+        self.visual_caret = Some(visual_target);
         self.sync_state_from_editor();
         Ok(true)
     }
@@ -122,14 +136,22 @@ impl TextArea {
 
     pub(super) fn native_text_input_geometry(&self) -> Option<TextInputGeometry> {
         let layout = self.current_text_layout()?;
-        let caret = layout
-            .caret_for_offset(self.state_selection().head())
-            .ok()?;
+        let selection_head = self.state_selection().head();
+        let caret = match self
+            .visual_caret
+            .filter(|caret| caret.offset() == selection_head)
+        {
+            Some(caret) => layout.caret_geometry_for_visual_caret(caret).ok()?,
+            None => layout.caret_for_offset(selection_head).ok()?,
+        };
         let bounds = self.caret_bounds?;
-        Some(TextInputGeometry::new(
-            layout.clone(),
-            Point::new(bounds.x() - caret.position.x, bounds.y() - caret.position.y),
-        ))
+        Some(
+            TextInputGeometry::new(
+                layout.clone(),
+                Point::new(bounds.x() - caret.position.x, bounds.y() - caret.position.y),
+            )
+            .with_visual_caret(self.visual_caret),
+        )
     }
 
     pub(super) fn update_text_layout(&mut self, cache: &mut TextMeasureCache) {
@@ -227,8 +249,9 @@ impl TextArea {
             Color::hex(0x6366f1).to_rgba(),
             Color::hex(0x6366f1).with_alpha(0.22).to_rgba(),
         );
-        match self.text_layout().caret_primitive(
+        match self.text_layout().caret_primitive_for_visual_caret(
             self.normalize_cursor_position(),
+            self.visual_caret,
             self.text_origin(bounds),
             style,
         ) {

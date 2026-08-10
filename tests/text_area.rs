@@ -215,6 +215,34 @@ fn text_area_uses_shaped_visual_order_for_rtl_navigation() {
 }
 
 #[test]
+fn text_area_mixed_bidi_navigation_crosses_both_run_boundary_affinities() {
+    use unicode_segmentation::UnicodeSegmentation;
+
+    let text = "abc שלום";
+    let id = rui::core::ElementId::new();
+    let mut area = TextArea::new().id(id).value(text);
+    let (taffy, bounds) = layout_text_area(&mut area);
+    let mut focused = Some(id);
+    let mut cx = EventContext::new(bounds, &taffy, &mut focused);
+
+    assert!(area.handle_key_event(&mut cx, &key_event(KeyCode::Home)));
+    let mut offsets = vec![area.cursor_position()];
+    for _ in 0..text.graphemes(true).count() {
+        assert!(area.handle_key_event(&mut cx, &key_event(KeyCode::ArrowRight)));
+        offsets.push(area.cursor_position());
+    }
+
+    let mut unique_offsets = std::collections::HashSet::new();
+    assert!(offsets.iter().any(|offset| !unique_offsets.insert(*offset)));
+    let right_edge = match offsets.last() {
+        Some(offset) => *offset,
+        None => panic!("navigation should record at least one caret"),
+    };
+    assert!(area.handle_key_event(&mut cx, &key_event(KeyCode::End)));
+    assert_eq!(area.cursor_position(), right_edge);
+}
+
+#[test]
 fn text_area_pointer_hit_testing_uses_multiline_shaped_geometry() {
     use rui::core::event::MouseButton;
     use rui::core::geometry::Point;
