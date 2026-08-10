@@ -5,10 +5,11 @@ use crate::core::geometry::{Point, Size};
 use crate::core::window::WindowOptions;
 use crate::platform::mac::MacAccessibilityBridge;
 use crate::platform::mac::lifecycle::{MacLifecycleDelegate, MacLifecycleEvent};
+use crate::platform::mac::text_input::{RuiContentView, append_ime_events_after_native_dispatch};
 use crate::platform::window::{
-    PlatformImeEvent, PlatformInputEvent, PlatformMouseEvent, PlatformMouseEventKind,
-    PlatformRendererAttachment, PlatformRendererTarget, PlatformWindow, PlatformWindowError,
-    PlatformWindowEvent, PlatformWindowFeatures, PlatformWindowState, validate_window_options,
+    PlatformInputEvent, PlatformMouseEvent, PlatformMouseEventKind, PlatformRendererAttachment,
+    PlatformRendererTarget, PlatformWindow, PlatformWindowError, PlatformWindowEvent,
+    PlatformWindowFeatures, PlatformWindowState, validate_window_options,
 };
 use metal::Device;
 use metal::foreign_types::ForeignType;
@@ -30,6 +31,7 @@ use crate::platform::mac::events::{
 
 pub struct MacWindow {
     window: Retained<NSWindow>,
+    content_view: Retained<RuiContentView>,
     metal_layer: Retained<CAMetalLayer>,
     accessibility_bridge: MacAccessibilityBridge,
     last_content_size: Size,
@@ -191,8 +193,12 @@ impl MacWindow {
                 self.last_content_size,
                 &mut platform_events,
             );
-            append_platform_events(&mut events, platform_events);
             app.sendEvent(&event);
+            append_ime_events_after_native_dispatch(
+                &mut platform_events,
+                self.content_view.drain_ime_events(),
+            );
+            append_platform_events(&mut events, platform_events);
             let mut lifecycle_events = Vec::new();
             self.push_delegate_lifecycle_events(&mut lifecycle_events)?;
             append_platform_events(&mut events, lifecycle_events);
@@ -459,25 +465,9 @@ fn append_platform_events_from_native_event(
     }
 
     if event_type == NSEventType::KeyDown {
-        let mut key_event = key_event_from_native_event(event);
-        let committed_text = committed_text_from_native_event(event);
-        let commit_represented_by_key = committed_text
-            .as_deref()
-            .is_some_and(|text| committed_text_matches_key_event(text, &key_event));
-        if committed_text.is_some() && !commit_represented_by_key {
-            key_event.char = None;
-        }
         events.push(PlatformWindowEvent::Input(PlatformInputEvent::KeyDown(
-            key_event,
+            key_event_from_native_event(event),
         )));
-        if let Some(text) = committed_text {
-            if commit_represented_by_key {
-                return;
-            }
-            events.push(PlatformWindowEvent::Input(PlatformInputEvent::Ime(
-                PlatformImeEvent::Commit(text),
-            )));
-        }
     } else if event_type == NSEventType::KeyUp {
         events.push(PlatformWindowEvent::Input(PlatformInputEvent::KeyUp(
             key_event_from_native_event(event),
@@ -583,26 +573,6 @@ fn key_event_from_native_event(event: &NSEvent) -> KeyEvent {
     }
 
     key_event
-}
-
-fn committed_text_from_native_event(event: &NSEvent) -> Option<String> {
-    if event.isARepeat() {
-        return None;
-    }
-
-    let text = event.characters()?.to_string();
-    if text.is_empty() || text.chars().all(char::is_control) {
-        return None;
-    }
-    Some(text)
-}
-
-fn committed_text_matches_key_event(text: &str, event: &KeyEvent) -> bool {
-    let mut chars = text.chars();
-    let Some(first) = chars.next() else {
-        return false;
-    };
-    chars.next().is_none() && event.char == Some(first)
 }
 
 fn clipboard_text_or_error(text: Option<String>) -> Result<String, PlatformWindowError> {
@@ -711,8 +681,9 @@ pub unsafe fn create_window(
     let title = NSString::from_str(&options.title);
     window.setTitle(&title);
 
-    // Get content view
-    let content_view = window.contentView().expect("No content view");
+    let content_frame = NSRect::new(NSPoint::new(0.0, 0.0), frame.size);
+    let content_view = RuiContentView::new(content_frame, mtm);
+    window.setContentView(Some(&content_view));
 
     // Create Metal layer
     let metal_layer = CAMetalLayer::new();
@@ -749,11 +720,14 @@ pub unsafe fn create_window(
     // Center window on screen
     window.center();
 
-    let accessibility_bridge =
-        MacAccessibilityBridge::attached_to(content_view.clone(), window.windowNumber());
+    let accessibility_bridge = MacAccessibilityBridge::attached_to(
+        Retained::into_super(content_view.clone()),
+        window.windowNumber(),
+    );
 
     Ok(MacWindow {
         window,
+        content_view,
         metal_layer,
         accessibility_bridge,
         last_content_size: options.size,

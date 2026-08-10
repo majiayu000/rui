@@ -11,6 +11,9 @@ All notable project changes should be recorded here.
 
 ### Runtime
 
+- macOS native windows now route AppKit text input through `NSTextInputClient`,
+  including composition begin, update, commit, and cancel events without
+  duplicating the corresponding key text.
 - Added `LayoutContext::with_text_measurer` for callers that hold a text
   measurement cache across frames. The cache-aware pipeline entry points are
   `FramePipeline::layout_root_with_text_measurer` and

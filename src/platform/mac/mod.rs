@@ -5,6 +5,7 @@ mod app;
 mod events;
 mod frame;
 mod lifecycle;
+mod text_input;
 mod window;
 
 pub use accessibility::MacAccessibilityBridge;

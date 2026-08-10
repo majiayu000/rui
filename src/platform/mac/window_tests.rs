@@ -1,4 +1,5 @@
 use super::*;
+use crate::platform::PlatformImeEvent;
 
 #[test]
 fn clipboard_text_or_error_rejects_missing_text() {
@@ -20,12 +21,54 @@ fn clipboard_text_or_error_rejects_missing_text() {
 }
 
 #[test]
-fn committed_text_only_matches_single_char_key_events() {
-    let a_key = KeyEvent::new(KeyCode::A, Modifiers::none()).with_char('a');
-    assert!(committed_text_matches_key_event("a", &a_key));
-    assert!(!committed_text_matches_key_event("ab", &a_key));
-    assert!(!committed_text_matches_key_event("", &a_key));
+fn native_ime_callbacks_replace_key_char_text_without_duplication() {
+    let mut events = vec![PlatformWindowEvent::Input(PlatformInputEvent::KeyDown(
+        KeyEvent::new(KeyCode::A, Modifiers::none()).with_char('a'),
+    ))];
 
-    let ime_key = KeyEvent::new(KeyCode::Unknown(0), Modifiers::none());
-    assert!(!committed_text_matches_key_event("好", &ime_key));
+    append_ime_events_after_native_dispatch(
+        &mut events,
+        vec![PlatformImeEvent::InsertText("a".to_string())],
+    );
+
+    match &events[0] {
+        PlatformWindowEvent::Input(PlatformInputEvent::KeyDown(event)) => {
+            assert_eq!(event.char, None);
+        }
+        other => panic!("expected key-down event, got {other:?}"),
+    }
+    assert!(matches!(
+        &events[1],
+        PlatformWindowEvent::Input(PlatformInputEvent::Ime(PlatformImeEvent::InsertText(text)))
+            if text == "a"
+    ));
+}
+
+#[test]
+fn native_ime_callbacks_preserve_full_composition_order() {
+    let mut events = Vec::new();
+
+    append_ime_events_after_native_dispatch(
+        &mut events,
+        vec![
+            PlatformImeEvent::BeginComposition("你".to_string()),
+            PlatformImeEvent::UpdateComposition("你好".to_string()),
+            PlatformImeEvent::CancelComposition,
+        ],
+    );
+
+    assert!(matches!(
+        &events[..],
+        [
+            PlatformWindowEvent::Input(PlatformInputEvent::Ime(
+                PlatformImeEvent::BeginComposition(begin)
+            )),
+            PlatformWindowEvent::Input(PlatformInputEvent::Ime(
+                PlatformImeEvent::UpdateComposition(update)
+            )),
+            PlatformWindowEvent::Input(PlatformInputEvent::Ime(
+                PlatformImeEvent::CancelComposition
+            )),
+        ] if begin == "你" && update == "你好"
+    ));
 }
