@@ -7,9 +7,11 @@ use crate::core::accessibility::{AccessibilityContext, AccessibilityError, Acces
 use crate::core::event::ScrollEvent;
 use crate::core::geometry::Size;
 use crate::core::style::{AlignItems, FlexDirection, Style};
+use crate::core::text_editing::{TextInputCommand, TextInputEvent, TextInputSnapshot};
 use crate::elements::element::{
     Element, EventContext, LayoutContext, PaintContext, PointerEvent, style_to_taffy,
 };
+use crate::renderer::text::TextMeasureCache;
 use taffy::prelude::NodeId;
 
 pub struct Tabs {
@@ -212,6 +214,17 @@ impl Element for Tabs {
         }
     }
 
+    fn refresh_text_geometry(&mut self, text_measurer: &mut TextMeasureCache) {
+        self.tab_list.refresh_text_geometry(text_measurer);
+        if let Some(index) = self
+            .panels
+            .iter()
+            .position(|panel| panel.value() == self.tab_list.selected_value())
+        {
+            self.panels[index].refresh_text_geometry(text_measurer);
+        }
+    }
+
     fn handle_pointer_event(&mut self, cx: &mut EventContext, event: &PointerEvent) -> bool {
         if let Some(tab_list_node) = self.tab_list_node
             && let Some(bounds) = cx.child_bounds(tab_list_node)
@@ -263,6 +276,29 @@ impl Element for Tabs {
         }
 
         false
+    }
+
+    fn handle_text_input_event(&mut self, cx: &mut EventContext, event: &TextInputEvent) -> bool {
+        self.panels
+            .iter_mut()
+            .find(|panel| panel.value() == self.tab_list.selected_value())
+            .is_some_and(|panel| panel.handle_text_input_event(cx, event))
+    }
+
+    fn handle_text_input_command(
+        &mut self,
+        cx: &mut EventContext,
+        command: &TextInputCommand,
+    ) -> bool {
+        self.panels
+            .iter_mut()
+            .find(|panel| panel.value() == self.tab_list.selected_value())
+            .is_some_and(|panel| panel.handle_text_input_command(cx, command))
+    }
+
+    fn text_input_snapshot(&self, focused: ElementId) -> Option<TextInputSnapshot> {
+        self.selected_panel()
+            .and_then(|(_, panel)| panel.text_input_snapshot(focused))
     }
 
     fn accessibility_nodes(

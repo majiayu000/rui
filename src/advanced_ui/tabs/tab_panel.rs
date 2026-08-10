@@ -7,10 +7,12 @@ use crate::core::accessibility::{
 use crate::core::color::Color;
 use crate::core::event::ScrollEvent;
 use crate::core::style::Style;
+use crate::core::text_editing::{TextInputCommand, TextInputEvent, TextInputSnapshot};
 use crate::elements::element::{
     AnyElement, Element, EventContext, LayoutContext, PaintContext, PointerEvent,
 };
 use crate::elements::{Div, div};
+use crate::renderer::text::TextMeasureCache;
 use taffy::prelude::NodeId;
 
 pub struct TabPanel {
@@ -138,6 +140,10 @@ impl Element for TabPanel {
         self.inner.paint(cx);
     }
 
+    fn refresh_text_geometry(&mut self, text_measurer: &mut TextMeasureCache) {
+        self.inner.refresh_text_geometry(text_measurer);
+    }
+
     fn accessibility(
         &self,
         cx: &AccessibilityContext,
@@ -164,6 +170,22 @@ impl Element for TabPanel {
 
     fn handle_scroll_event(&mut self, cx: &mut EventContext, event: &ScrollEvent) -> bool {
         self.inner.handle_scroll_event(cx, event)
+    }
+
+    fn handle_text_input_event(&mut self, cx: &mut EventContext, event: &TextInputEvent) -> bool {
+        self.inner.handle_text_input_event(cx, event)
+    }
+
+    fn handle_text_input_command(
+        &mut self,
+        cx: &mut EventContext,
+        command: &TextInputCommand,
+    ) -> bool {
+        self.inner.handle_text_input_command(cx, command)
+    }
+
+    fn text_input_snapshot(&self, focused: ElementId) -> Option<TextInputSnapshot> {
+        self.inner.text_input_snapshot(focused)
     }
 
     fn children(&self) -> &[AnyElement] {

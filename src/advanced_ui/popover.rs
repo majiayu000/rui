@@ -10,10 +10,12 @@ use crate::core::geometry::{Bounds, Edges};
 use crate::core::style::{
     AlignItems, Corners, Display, FlexDirection, JustifyContent, Position, Style,
 };
+use crate::core::text_editing::{TextInputCommand, TextInputEvent, TextInputSnapshot};
 use crate::elements::element::{
     AnyElement, Element, EventContext, LayoutContext, PaintContext, PointerEvent, style_to_taffy,
 };
 use crate::renderer::Primitive;
+use crate::renderer::text::TextMeasureCache;
 use taffy::prelude::*;
 
 type DismissHandler = Box<dyn Fn()>;
@@ -155,6 +157,12 @@ impl Element for Popover {
         }
     }
 
+    fn refresh_text_geometry(&mut self, text_measurer: &mut TextMeasureCache) {
+        for child in self.children.iter_mut().take(usize::from(self.open) + 1) {
+            child.refresh_text_geometry(text_measurer);
+        }
+    }
+
     fn accessibility(
         &self,
         cx: &AccessibilityContext,
@@ -230,6 +238,46 @@ impl Element for Popover {
             }
         }
         false
+    }
+
+    fn handle_text_input_event(&mut self, cx: &mut EventContext, event: &TextInputEvent) -> bool {
+        if !self.state.can_activate() {
+            return false;
+        }
+        self.children
+            .iter_mut()
+            .take(usize::from(self.open) + 1)
+            .rev()
+            .any(|child| child.handle_text_input_event(cx, event))
+    }
+
+    fn handle_text_input_command(
+        &mut self,
+        cx: &mut EventContext,
+        command: &TextInputCommand,
+    ) -> bool {
+        if !self.state.can_activate() {
+            return false;
+        }
+        let visible = self.visible_child_count();
+        if let Some(focused) = cx.focused_id()
+            && let Some(child) = self.children[..visible]
+                .iter_mut()
+                .rev()
+                .find(|child| child.contains_id(focused))
+        {
+            return child.handle_text_input_command(cx, command);
+        }
+        self.children[..visible]
+            .iter_mut()
+            .rev()
+            .any(|child| child.handle_text_input_command(cx, command))
+    }
+
+    fn text_input_snapshot(&self, focused: ElementId) -> Option<TextInputSnapshot> {
+        self.children[..self.visible_child_count()]
+            .iter()
+            .find_map(|child| child.text_input_snapshot(focused))
     }
 
     fn children(&self) -> &[AnyElement] {
@@ -406,6 +454,12 @@ impl Element for Dialog {
         self.content[0].paint(&mut content_cx);
     }
 
+    fn refresh_text_geometry(&mut self, text_measurer: &mut TextMeasureCache) {
+        if self.open {
+            self.content[0].refresh_text_geometry(text_measurer);
+        }
+    }
+
     fn accessibility(
         &self,
         cx: &AccessibilityContext,
@@ -479,6 +533,26 @@ impl Element for Dialog {
         }
 
         self.modal
+    }
+
+    fn handle_text_input_event(&mut self, cx: &mut EventContext, event: &TextInputEvent) -> bool {
+        self.open && self.state.can_activate() && self.content[0].handle_text_input_event(cx, event)
+    }
+
+    fn handle_text_input_command(
+        &mut self,
+        cx: &mut EventContext,
+        command: &TextInputCommand,
+    ) -> bool {
+        self.open
+            && self.state.can_activate()
+            && self.content[0].handle_text_input_command(cx, command)
+    }
+
+    fn text_input_snapshot(&self, focused: ElementId) -> Option<TextInputSnapshot> {
+        self.open
+            .then(|| self.content[0].text_input_snapshot(focused))
+            .flatten()
     }
 
     fn children(&self) -> &[AnyElement] {
