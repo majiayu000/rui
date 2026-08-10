@@ -35,6 +35,29 @@ fn typed_char_event(ch: char) -> KeyEvent {
     KeyEvent::new(KeyCode::Unknown(ch as u32), Modifiers::none()).with_char(ch)
 }
 
+fn layout_text_area(area: &mut TextArea) -> (TaffyTree<rui::core::ElementId>, Bounds) {
+    let viewport = Size::new(240.0, 120.0);
+    let mut taffy = TaffyTree::new();
+    let node = area.layout(&mut LayoutContext::new(&mut taffy, viewport));
+    taffy
+        .compute_layout(
+            node,
+            taffy::Size {
+                width: AvailableSpace::Definite(viewport.width),
+                height: AvailableSpace::Definite(viewport.height),
+            },
+        )
+        .expect("text area layout should compute");
+    let layout = taffy.layout(node).expect("text area layout should exist");
+    let bounds = Bounds::from_xywh(
+        layout.location.x,
+        layout.location.y,
+        layout.size.width,
+        layout.size.height,
+    );
+    (taffy, bounds)
+}
+
 #[test]
 fn text_area_supports_multiline_editing_ime_and_clipboard() {
     let mut area = TextArea::new().value("ab");
@@ -176,4 +199,46 @@ fn text_area_paint_clips_multiline_content_to_bounds() {
             .iter()
             .any(|primitive| matches!(primitive, Primitive::PopClip))
     );
+}
+
+#[test]
+fn text_area_uses_shaped_visual_order_for_rtl_navigation() {
+    let id = rui::core::ElementId::new();
+    let mut area = TextArea::new().id(id).value("שלום");
+    let (taffy, bounds) = layout_text_area(&mut area);
+    let before = area.cursor_position();
+    let mut focused = Some(id);
+    let mut cx = EventContext::new(bounds, &taffy, &mut focused);
+
+    assert!(area.handle_key_event(&mut cx, &key_event(KeyCode::ArrowRight)));
+    assert!(area.cursor_position() < before);
+}
+
+#[test]
+fn text_area_pointer_hit_testing_uses_multiline_shaped_geometry() {
+    use rui::core::event::MouseButton;
+    use rui::core::geometry::Point;
+    use rui::elements::element::{PointerEvent, PointerEventKind};
+    use rui::renderer::text::{TextMeasureCache, TextRequest};
+
+    let id = rui::core::ElementId::new();
+    let mut area = TextArea::new().id(id).value("Wi\nnext");
+    let (taffy, bounds) = layout_text_area(&mut area);
+    let mut cache = TextMeasureCache::new();
+    let plan = cache
+        .shape_single_line(TextRequest::new("Wi", 14.0, 400, None, 1.0))
+        .expect("test text should shape");
+    let mut focused = None;
+    let mut cx = EventContext::new(bounds, &taffy, &mut focused);
+    let event = PointerEvent {
+        kind: PointerEventKind::Down,
+        position: Point::new(
+            bounds.x() + 12.0 + plan.clusters()[0].advance_width,
+            bounds.y() + 20.0,
+        ),
+        button: Some(MouseButton::Left),
+    };
+
+    assert!(area.handle_pointer_event(&mut cx, &event));
+    assert_eq!(area.cursor_position(), 1);
 }

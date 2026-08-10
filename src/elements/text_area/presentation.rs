@@ -1,0 +1,187 @@
+use super::{
+    TEXT_AREA_CARET_WIDTH, TEXT_AREA_HORIZONTAL_PADDING, TEXT_AREA_LINE_HEIGHT,
+    TEXT_AREA_MARKED_UNDERLINE_HEIGHT, TEXT_AREA_VERTICAL_PADDING, TextArea,
+};
+use crate::core::color::{Color, Rgba};
+use crate::core::event::{KeyCode, KeyEvent};
+use crate::core::geometry::{Bounds, Edges, Point};
+use crate::core::style::Corners;
+use crate::core::text_editing::{
+    TextEditError, TextEditLayout, TextEditOutcome, TextEditPaintStyle, TextRange, TextSelection,
+};
+use crate::elements::element::PaintContext;
+use crate::renderer::Primitive;
+use crate::renderer::text::{TextMeasureCache, TextRequest};
+
+impl TextArea {
+    pub(super) fn apply_shaped_navigation(
+        &mut self,
+        event: &KeyEvent,
+    ) -> Option<Result<TextEditOutcome, TextEditError>> {
+        if event.modifiers.alt || event.modifiers.ctrl || event.modifiers.meta {
+            return None;
+        }
+        let selection = self.state_selection();
+        if !event.modifiers.shift && !selection.is_collapsed() {
+            return None;
+        }
+        let layout = self.current_text_layout()?;
+        let target = match event.key {
+            KeyCode::ArrowLeft => layout.visual_offset_left(selection.head()),
+            KeyCode::ArrowRight => layout.visual_offset_right(selection.head()),
+            KeyCode::ArrowUp => layout.visual_offset_up(selection.head()),
+            KeyCode::ArrowDown => layout.visual_offset_down(selection.head()),
+            KeyCode::Home => layout.visual_line_start(selection.head()),
+            KeyCode::End => layout.visual_line_end(selection.head()),
+            _ => return None,
+        };
+        let target = match target {
+            Ok(target) => target,
+            Err(err) => return Some(Err(err)),
+        };
+        Some((|| {
+            self.sync_editor_from_public_state_if_needed()?;
+            let selection = if event.modifiers.shift {
+                TextSelection::new(self.editor.selection().anchor(), target)
+            } else {
+                TextSelection::collapsed(target)
+            };
+            self.editor.set_selection(selection)?;
+            self.sync_state_from_editor();
+            Ok(TextEditOutcome::default())
+        })())
+    }
+
+    pub(super) fn set_cursor_from_shaped_point(
+        &mut self,
+        point: Point,
+        bounds: Bounds,
+    ) -> Result<bool, TextEditError> {
+        let origin = self.text_origin(bounds);
+        let target = match self.current_text_layout() {
+            Some(layout) => {
+                layout.offset_for_point(Point::new(point.x - origin.x, point.y - origin.y))
+            }
+            None => return Ok(false),
+        };
+        self.sync_editor_from_public_state_if_needed()?;
+        self.editor.set_cursor(target)?;
+        self.sync_state_from_editor();
+        Ok(true)
+    }
+
+    fn current_text_layout(&self) -> Option<&TextEditLayout> {
+        self.text_layout
+            .as_ref()
+            .filter(|layout| layout.text() == self.state.value)
+    }
+
+    pub(super) fn update_text_layout(&mut self, cache: &mut TextMeasureCache) {
+        let plans = self
+            .state
+            .value
+            .split('\n')
+            .map(|line| {
+                cache
+                    .shape_single_line(TextRequest::new(line, 14.0, 400, None, 1.0))
+                    .unwrap_or_else(|err| panic!("text area shaping failed: {err:?}"))
+            })
+            .collect::<Vec<_>>();
+        self.text_layout = Some(
+            TextEditLayout::from_line_shape_plans(
+                self.state.value.clone(),
+                &plans,
+                TEXT_AREA_LINE_HEIGHT,
+            )
+            .unwrap_or_else(|err| panic!("text area layout failed: {err}")),
+        );
+    }
+
+    pub(super) fn text_layout(&self) -> &TextEditLayout {
+        self.text_layout
+            .as_ref()
+            .unwrap_or_else(|| panic!("text area layout was not prepared before paint"))
+    }
+
+    pub(super) fn text_origin(&self, bounds: Bounds) -> Point {
+        Point::new(
+            bounds.x() + TEXT_AREA_HORIZONTAL_PADDING,
+            bounds.y() + TEXT_AREA_VERTICAL_PADDING,
+        )
+    }
+
+    pub(super) fn text_width(&self, bounds: Bounds) -> f32 {
+        bounds.width() - (TEXT_AREA_HORIZONTAL_PADDING * 2.0)
+    }
+
+    pub(super) fn paint_selection_and_marked_text(&self, cx: &mut PaintContext, bounds: Bounds) {
+        if !self.state.focused {
+            return;
+        }
+        let layout = self.text_layout();
+        let style = TextEditPaintStyle::new(
+            TEXT_AREA_CARET_WIDTH,
+            Color::hex(0x6366f1).to_rgba(),
+            Color::hex(0x6366f1).with_alpha(0.22).to_rgba(),
+        );
+        let paint_origin = self.text_origin(bounds);
+
+        if let (Some(start), Some(end)) = (self.state.selection_start, self.state.selection_end)
+            && let Ok(range) = TextRange::new(start, end)
+            && let Ok(primitives) = layout.selection_primitives(range, paint_origin, style)
+        {
+            for primitive in primitives {
+                cx.paint(primitive);
+            }
+        }
+
+        if let Some(range) = self.state.composition_range
+            && let Ok(rects) = layout.selection_rects(range)
+        {
+            for rect in rects {
+                cx.paint(Primitive::Quad {
+                    bounds: Bounds::from_xywh(
+                        paint_origin.x + rect.bounds.x(),
+                        paint_origin.y + rect.bounds.y() + rect.bounds.height()
+                            - TEXT_AREA_MARKED_UNDERLINE_HEIGHT,
+                        rect.bounds.width(),
+                        TEXT_AREA_MARKED_UNDERLINE_HEIGHT,
+                    ),
+                    background: Color::hex(0x6366f1).to_rgba(),
+                    border_color: Rgba::TRANSPARENT,
+                    border_widths: Edges::ZERO,
+                    corner_radii: Corners::ZERO,
+                });
+            }
+        }
+    }
+
+    pub(super) fn paint_cursor(&self, cx: &mut PaintContext, bounds: Bounds) -> Option<Bounds> {
+        if !self.state.focused {
+            return None;
+        }
+        let style = TextEditPaintStyle::new(
+            TEXT_AREA_CARET_WIDTH,
+            Color::hex(0x6366f1).to_rgba(),
+            Color::hex(0x6366f1).with_alpha(0.22).to_rgba(),
+        );
+        match self.text_layout().caret_primitive(
+            self.normalize_cursor_position(),
+            self.text_origin(bounds),
+            style,
+        ) {
+            Ok(primitive) => {
+                let caret_bounds = match &primitive {
+                    Primitive::Quad { bounds, .. } => Some(*bounds),
+                    _ => None,
+                };
+                cx.paint(primitive);
+                caret_bounds
+            }
+            Err(err) => {
+                log::error!("text area caret paint failed: {err}");
+                None
+            }
+        }
+    }
+}

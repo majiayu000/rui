@@ -24,7 +24,6 @@ use crate::renderer::Primitive;
 use taffy::prelude::*;
 
 const INPUT_HORIZONTAL_PADDING: f32 = 12.0;
-const INPUT_GRAPHEME_WIDTH: f32 = 7.0;
 const INPUT_CARET_WIDTH: f32 = 1.5;
 const INPUT_MARKED_UNDERLINE_HEIGHT: f32 = 2.0;
 const PASSWORD_MASK: &str = "\u{2022}";
@@ -85,6 +84,7 @@ pub struct Input {
     layout_node: Option<NodeId>,
     paint_tokens: Option<InputPaintTokens>,
     caret_bounds: Option<Bounds>,
+    text_layout: Option<crate::core::text_editing::TextEditLayout>,
 }
 
 impl Input {
@@ -112,6 +112,7 @@ impl Input {
             layout_node: None,
             paint_tokens: None,
             caret_bounds: None,
+            text_layout: None,
         }
     }
 
@@ -484,6 +485,7 @@ impl Element for Input {
     }
 
     fn layout(&mut self, cx: &mut LayoutContext) -> NodeId {
+        self.update_text_layout(cx.text_measurer(), self.height.unwrap_or(40.0));
         let mut style = style_to_taffy(&self.style);
         style.size.height = Dimension::Length(self.height.unwrap_or(40.0));
         if let Some(w) = self.width {
@@ -588,6 +590,16 @@ impl Element for Input {
             }
             PointerEventKind::Down => {
                 if inside {
+                    if matches!(
+                        event.button,
+                        None | Some(crate::core::event::MouseButton::Left)
+                    ) {
+                        match self.set_cursor_from_shaped_point(event.position, cx.bounds()) {
+                            Ok(true) => cx.request_redraw(),
+                            Ok(false) => {}
+                            Err(err) => log::error!("input pointer text positioning failed: {err}"),
+                        }
+                    }
                     if !self.state.focused {
                         self.state.focused = true;
                         if let Some(handler) = &self.on_focus {
@@ -641,7 +653,10 @@ impl Element for Input {
             return false;
         }
 
-        match self.apply_key_event(event) {
+        let result = self
+            .apply_shaped_navigation(event)
+            .unwrap_or_else(|| self.apply_key_event(event));
+        match result {
             Ok(_) => {
                 cx.request_redraw();
                 true

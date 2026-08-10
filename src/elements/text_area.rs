@@ -1,18 +1,20 @@
 //! Multiline text area element.
 
+mod presentation;
+
 use crate::core::ElementId;
 use crate::core::accessibility::{
     AccessibilityAction, AccessibilityContext, AccessibilityError, AccessibilityNode,
     AccessibilityRole, AccessibilityTextRange,
 };
 use crate::core::action::{ActionId, ActionOutcome, StandardAction};
-use crate::core::color::{Color, Rgba};
+use crate::core::color::Color;
 use crate::core::event::{Cursor, KeyCode, KeyEvent};
-use crate::core::geometry::{Bounds, Edges, Point};
+use crate::core::geometry::{Bounds, Edges};
 use crate::core::style::{Corners, Style};
 use crate::core::text_editing::{
-    Clipboard, TextEditBuffer, TextEditError, TextEditLayout, TextEditOutcome, TextEditPaintStyle,
-    TextInputEvent, TextInputSnapshot, TextRange, TextSelection,
+    Clipboard, TextEditBuffer, TextEditError, TextEditOutcome, TextInputEvent, TextInputSnapshot,
+    TextRange, TextSelection,
 };
 use crate::elements::element::{
     Element, EventContext, LayoutContext, PaintContext, PointerEvent, PointerEventKind,
@@ -23,7 +25,6 @@ use taffy::prelude::*;
 
 const TEXT_AREA_HORIZONTAL_PADDING: f32 = 12.0;
 const TEXT_AREA_VERTICAL_PADDING: f32 = 10.0;
-const TEXT_AREA_GRAPHEME_WIDTH: f32 = 7.0;
 const TEXT_AREA_LINE_HEIGHT: f32 = 20.0;
 const TEXT_AREA_CARET_WIDTH: f32 = 1.5;
 const TEXT_AREA_MARKED_UNDERLINE_HEIGHT: f32 = 2.0;
@@ -57,6 +58,7 @@ pub struct TextArea {
     on_blur: Option<Box<dyn Fn()>>,
     layout_node: Option<NodeId>,
     caret_bounds: Option<Bounds>,
+    text_layout: Option<crate::core::text_editing::TextEditLayout>,
 }
 
 impl TextArea {
@@ -80,6 +82,7 @@ impl TextArea {
             on_blur: None,
             layout_node: None,
             caret_bounds: None,
+            text_layout: None,
         }
     }
 
@@ -402,97 +405,6 @@ impl TextArea {
             .char
             .is_some_and(|ch| !ch.is_control() || matches!(ch, '\n' | '\r'))
     }
-
-    fn text_layout(&self) -> TextEditLayout {
-        TextEditLayout::new(
-            self.state.value.clone(),
-            TEXT_AREA_GRAPHEME_WIDTH,
-            TEXT_AREA_LINE_HEIGHT,
-        )
-    }
-
-    fn text_origin(&self, bounds: Bounds) -> Point {
-        Point::new(
-            bounds.x() + TEXT_AREA_HORIZONTAL_PADDING,
-            bounds.y() + TEXT_AREA_VERTICAL_PADDING,
-        )
-    }
-
-    fn text_width(&self, bounds: Bounds) -> f32 {
-        bounds.width() - (TEXT_AREA_HORIZONTAL_PADDING * 2.0)
-    }
-
-    fn paint_selection_and_marked_text(&self, cx: &mut PaintContext, bounds: Bounds) {
-        if !self.state.focused {
-            return;
-        }
-        let layout = self.text_layout();
-        let style = TextEditPaintStyle::new(
-            TEXT_AREA_CARET_WIDTH,
-            Color::hex(0x6366f1).to_rgba(),
-            Color::hex(0x6366f1).with_alpha(0.22).to_rgba(),
-        );
-        let paint_origin = self.text_origin(bounds);
-
-        if let (Some(start), Some(end)) = (self.state.selection_start, self.state.selection_end)
-            && let Ok(range) = TextRange::new(start, end)
-            && let Ok(primitives) = layout.selection_primitives(range, paint_origin, style)
-        {
-            for primitive in primitives {
-                cx.paint(primitive);
-            }
-        }
-
-        if let Some(range) = self.state.composition_range
-            && let Ok(rects) = layout.selection_rects(range)
-        {
-            for rect in rects {
-                cx.paint(Primitive::Quad {
-                    bounds: Bounds::from_xywh(
-                        paint_origin.x + rect.bounds.x(),
-                        paint_origin.y + rect.bounds.y() + rect.bounds.height()
-                            - TEXT_AREA_MARKED_UNDERLINE_HEIGHT,
-                        rect.bounds.width(),
-                        TEXT_AREA_MARKED_UNDERLINE_HEIGHT,
-                    ),
-                    background: Color::hex(0x6366f1).to_rgba(),
-                    border_color: Rgba::TRANSPARENT,
-                    border_widths: Edges::ZERO,
-                    corner_radii: Corners::ZERO,
-                });
-            }
-        }
-    }
-
-    fn paint_cursor(&self, cx: &mut PaintContext, bounds: Bounds) -> Option<Bounds> {
-        if !self.state.focused {
-            return None;
-        }
-        let layout = self.text_layout();
-        let style = TextEditPaintStyle::new(
-            TEXT_AREA_CARET_WIDTH,
-            Color::hex(0x6366f1).to_rgba(),
-            Color::hex(0x6366f1).with_alpha(0.22).to_rgba(),
-        );
-        match layout.caret_primitive(
-            self.normalize_cursor_position(),
-            self.text_origin(bounds),
-            style,
-        ) {
-            Ok(primitive) => {
-                let caret_bounds = match &primitive {
-                    Primitive::Quad { bounds, .. } => Some(*bounds),
-                    _ => None,
-                };
-                cx.paint(primitive);
-                caret_bounds
-            }
-            Err(err) => {
-                log::error!("text area caret paint failed: {err}");
-                None
-            }
-        }
-    }
 }
 
 impl Default for TextArea {
@@ -522,6 +434,7 @@ impl Element for TextArea {
     }
 
     fn layout(&mut self, cx: &mut LayoutContext) -> NodeId {
+        self.update_text_layout(cx.text_measurer());
         let mut style = style_to_taffy(&self.style);
         style.size.height = Dimension::Length(self.height);
         if let Some(w) = self.width {
@@ -608,6 +521,18 @@ impl Element for TextArea {
             }
             PointerEventKind::Down => {
                 if inside {
+                    if matches!(
+                        event.button,
+                        None | Some(crate::core::event::MouseButton::Left)
+                    ) {
+                        match self.set_cursor_from_shaped_point(event.position, cx.bounds()) {
+                            Ok(true) => cx.request_redraw(),
+                            Ok(false) => {}
+                            Err(err) => {
+                                log::error!("text area pointer positioning failed: {err}")
+                            }
+                        }
+                    }
                     if !self.state.focused {
                         self.state.focused = true;
                         if let Some(handler) = &self.on_focus {
@@ -638,7 +563,10 @@ impl Element for TextArea {
         if !Self::key_event_is_text_editing(event) {
             return false;
         }
-        match self.apply_key_event(event) {
+        let result = self
+            .apply_shaped_navigation(event)
+            .unwrap_or_else(|| self.apply_key_event(event));
+        match result {
             Ok(_) => {
                 cx.request_redraw();
                 true

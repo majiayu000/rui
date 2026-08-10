@@ -423,6 +423,78 @@ fn text_editing_selection_uses_visual_cluster_bounds_for_rtl_shape_plans() {
 }
 
 #[test]
+fn text_editing_shape_layout_drives_rtl_navigation_and_hit_testing() {
+    let text = "שלום";
+    let mut cache = TextMeasureCache::new();
+    let plan = cache
+        .shape_single_line(TextRequest::new(text, 24.0, 400, None, 1.2))
+        .unwrap_or_else(|err| panic!("text shaping failed: {err:?}"));
+    let layout = must(TextEditLayout::from_shape_plan(text, &plan));
+
+    let logical_end = text.len();
+    let right = must(layout.visual_offset_right(logical_end));
+    assert_ne!(right, logical_end);
+    assert!(
+        must(layout.caret_for_offset(right)).position.x
+            > must(layout.caret_for_offset(logical_end)).position.x
+    );
+    assert_eq!(must(layout.visual_line_start(0)), logical_end);
+    assert_eq!(must(layout.visual_line_end(0)), 0);
+
+    let first = &plan.clusters()[0];
+    let hit = layout.offset_for_point(Point::new(
+        first.x_offset + first.advance_width,
+        plan.metrics().size.height / 2.0,
+    ));
+    assert!(hit == first.byte_start || hit == first.byte_end);
+}
+
+#[test]
+fn text_editing_multiline_shape_layout_uses_visual_x_for_vertical_navigation() {
+    let text = "Wi\nשלום";
+    let mut cache = TextMeasureCache::new();
+    let plans = [
+        cache
+            .shape_single_line(TextRequest::new("Wi", 14.0, 400, None, 1.0))
+            .unwrap_or_else(|err| panic!("first line shaping failed: {err:?}")),
+        cache
+            .shape_single_line(TextRequest::new("שלום", 14.0, 400, None, 1.0))
+            .unwrap_or_else(|err| panic!("second line shaping failed: {err:?}")),
+    ];
+    let layout = must(TextEditLayout::from_line_shape_plans(text, &plans, 20.0));
+    let second_line_end = text.len();
+    let target = must(layout.visual_offset_up(second_line_end));
+    let source_x = must(layout.caret_for_offset(second_line_end)).position.x;
+    let target_x = must(layout.caret_for_offset(target)).position.x;
+    let alternatives = [
+        must(layout.caret_for_offset(0)).position.x,
+        must(layout.caret_for_offset(1)).position.x,
+        must(layout.caret_for_offset(2)).position.x,
+    ];
+
+    assert!(
+        alternatives
+            .iter()
+            .all(|x| { (target_x - source_x).abs() <= (*x - source_x).abs() + f32::EPSILON })
+    );
+    assert_eq!(must(layout.visual_offset_down(target)), second_line_end);
+}
+
+#[test]
+fn text_editing_shaped_layout_clamps_negative_line_height() {
+    let mut cache = TextMeasureCache::new();
+    let plan = cache
+        .shape_single_line(TextRequest::new("text", 14.0, 400, None, 1.0))
+        .unwrap_or_else(|err| panic!("text shaping failed: {err:?}"));
+    let layout = must(TextEditLayout::from_shape_plan_with_line_height(
+        "text", &plan, -10.0,
+    ));
+
+    assert_eq!(layout.lines()[0].measured_size().height, 0.0);
+    assert_eq!(must(layout.caret_for_offset(0)).height, 0.0);
+}
+
+#[test]
 fn text_editing_layout_rejects_mid_grapheme_geometry_offsets() {
     let layout = TextEditLayout::new("e\u{301}", 10.0, 20.0);
     let error = match layout.caret_for_offset(1) {

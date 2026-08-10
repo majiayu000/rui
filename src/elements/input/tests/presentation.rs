@@ -187,6 +187,8 @@ fn test_cursor_type_all_input_types() {
 
 #[test]
 fn input_paints_selection_marked_text_and_layout_caret() {
+    use crate::renderer::text::{TextMeasureCache, TextRequest};
+
     let mut inp = Input::new().value("hello");
     inp.state.focused = true;
     inp.state.selection_start = Some(1);
@@ -204,11 +206,21 @@ fn input_paints_selection_marked_text_and_layout_caret() {
             _ => None,
         })
         .collect();
+    let mut cache = TextMeasureCache::new();
+    let plan = cache
+        .shape_single_line(TextRequest::new("hello", 14.0, 400, None, 1.0))
+        .expect("test text should shape");
+    let expected_selection_width: f32 = plan
+        .clusters()
+        .iter()
+        .filter(|cluster| cluster.byte_end > 1 && cluster.byte_start < 4)
+        .map(|cluster| cluster.advance_width)
+        .sum();
 
     assert!(
-        quads
-            .iter()
-            .any(|(bounds, background)| background.a == 0.22 && bounds.width() == 21.0),
+        quads.iter().any(|(bounds, background)| {
+            background.a == 0.22 && (bounds.width() - expected_selection_width).abs() < 0.01
+        }),
         "selection paint primitive should cover the selected grapheme range"
     );
     assert!(
@@ -226,6 +238,90 @@ fn input_paints_selection_marked_text_and_layout_caret() {
         }),
         "caret primitive should come from the text edit layout"
     );
+}
+
+#[test]
+fn input_caret_uses_the_same_proportional_shape_plan_as_rendered_text() {
+    use crate::renderer::text::{TextMeasureCache, TextRequest};
+
+    let mut inp = Input::new().value("Wi");
+    inp.state.focused = true;
+    inp.state.cursor_position = 1;
+
+    let primitives = painted_primitives(inp);
+    let caret_x = primitives
+        .iter()
+        .find_map(|primitive| match primitive {
+            Primitive::Quad {
+                bounds, background, ..
+            } if *background == Color::hex(0x6366f1).to_rgba()
+                && bounds.width() == INPUT_CARET_WIDTH
+                && bounds.height() == 20.0 =>
+            {
+                Some(bounds.x())
+            }
+            _ => None,
+        })
+        .expect("focused input should paint a caret");
+    let mut cache = TextMeasureCache::new();
+    let plan = cache
+        .shape_single_line(TextRequest::new("Wi", 14.0, 400, None, 1.0))
+        .expect("test text should shape");
+    let expected = INPUT_HORIZONTAL_PADDING + plan.clusters()[0].advance_width;
+
+    assert!((caret_x - expected).abs() < 0.01);
+}
+
+#[test]
+fn input_uses_shaped_visual_order_for_rtl_arrow_navigation() {
+    let id = ElementId::new();
+    let mut inp = Input::new().id(id).value("שלום");
+    inp.state.focused = true;
+    let (taffy, bounds) = layout_input(&mut inp, Size::new(240.0, 56.0));
+    let before = inp.state.cursor_position;
+    let mut focused = Some(id);
+    let mut cx = EventContext::new(bounds, &taffy, &mut focused);
+
+    assert!(inp.handle_key_event(&mut cx, &key_event(KeyCode::ArrowRight)));
+    assert!(inp.state.cursor_position < before);
+    let layout = inp.text_layout.as_ref().expect("layout should be retained");
+    let before_x = layout
+        .caret_for_offset(before)
+        .expect("old caret should be valid")
+        .position
+        .x;
+    let after_x = layout
+        .caret_for_offset(inp.state.cursor_position)
+        .expect("new caret should be valid")
+        .position
+        .x;
+    assert!(after_x > before_x);
+}
+
+#[test]
+fn input_pointer_hit_testing_uses_shaped_cluster_advances() {
+    use crate::renderer::text::{TextMeasureCache, TextRequest};
+
+    let id = ElementId::new();
+    let mut inp = Input::new().id(id).value("Wi");
+    let (taffy, bounds) = layout_input(&mut inp, Size::new(240.0, 56.0));
+    let mut cache = TextMeasureCache::new();
+    let plan = cache
+        .shape_single_line(TextRequest::new("Wi", 14.0, 400, None, 1.0))
+        .expect("test text should shape");
+    let mut focused = None;
+    let mut cx = EventContext::new(bounds, &taffy, &mut focused);
+    let event = PointerEvent {
+        kind: PointerEventKind::Down,
+        position: Point::new(
+            bounds.x() + INPUT_HORIZONTAL_PADDING + plan.clusters()[0].advance_width,
+            bounds.center().y,
+        ),
+        button: Some(crate::core::event::MouseButton::Left),
+    };
+
+    assert!(inp.handle_pointer_event(&mut cx, &event));
+    assert_eq!(inp.state.cursor_position, 1);
 }
 
 // ==================== Element Trait Tests ====================

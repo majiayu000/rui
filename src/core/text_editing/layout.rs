@@ -4,7 +4,7 @@ use crate::core::color::Rgba;
 use crate::core::geometry::{Bounds, Edges, Point, Size};
 use crate::core::style::Corners;
 use crate::renderer::Primitive;
-use crate::renderer::text::TextShapePlan;
+use crate::renderer::text::{TextDirection, TextShapePlan};
 use unicode_segmentation::UnicodeSegmentation;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -49,6 +49,7 @@ struct EditClusterGeometry {
     line_index: usize,
     x_offset: f32,
     advance_width: f32,
+    direction: TextDirection,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -128,8 +129,17 @@ impl TextEditLayout {
         text: impl Into<String>,
         plan: &TextShapePlan,
     ) -> Result<Self, TextEditError> {
-        let text = text.into();
         let line_height = plan.metrics().size.height;
+        Self::from_shape_plan_with_line_height(text, plan, line_height)
+    }
+
+    pub fn from_shape_plan_with_line_height(
+        text: impl Into<String>,
+        plan: &TextShapePlan,
+        line_height: f32,
+    ) -> Result<Self, TextEditError> {
+        let text = text.into();
+        let line_height = line_height.max(0.0);
         let line = TextLine {
             range: TextRange::ordered(0, text.len()),
             origin: Point::new(0.0, 0.0),
@@ -153,6 +163,7 @@ impl TextEditLayout {
                 line_index: 0,
                 x_offset: cluster.x_offset,
                 advance_width: cluster.advance_width,
+                direction: cluster.direction,
             });
         }
 
@@ -164,8 +175,66 @@ impl TextEditLayout {
         })
     }
 
+    pub fn from_line_shape_plans(
+        text: impl Into<String>,
+        plans: &[TextShapePlan],
+        line_height: f32,
+    ) -> Result<Self, TextEditError> {
+        let text = text.into();
+        let line_height = line_height.max(0.0);
+        let ranges = line_ranges(&text);
+        if ranges.len() != plans.len() {
+            return Err(TextEditError::InvalidRange {
+                start: plans.len(),
+                end: ranges.len(),
+            });
+        }
+
+        let mut lines = Vec::with_capacity(ranges.len());
+        let mut clusters = Vec::new();
+        for (line_index, ((start, end), plan)) in ranges.into_iter().zip(plans).enumerate() {
+            let line_text = &text[start..end];
+            lines.push(TextLine {
+                range: TextRange::ordered(start, end),
+                origin: Point::new(0.0, line_index as f32 * line_height),
+                size: Size::new(plan.metrics().size.width, line_height),
+            });
+            for cluster in plan.clusters() {
+                if cluster.byte_end > line_text.len()
+                    || !line_text.is_char_boundary(cluster.byte_start)
+                    || !line_text.is_char_boundary(cluster.byte_end)
+                    || line_text[cluster.byte_start..cluster.byte_end] != cluster.text
+                {
+                    return Err(TextEditError::InvalidRange {
+                        start: start + cluster.byte_start,
+                        end: start + cluster.byte_end,
+                    });
+                }
+                clusters.push(EditClusterGeometry {
+                    byte_start: start + cluster.byte_start,
+                    byte_end: start + cluster.byte_end,
+                    line_index,
+                    x_offset: cluster.x_offset,
+                    advance_width: cluster.advance_width,
+                    direction: cluster.direction,
+                });
+            }
+        }
+
+        Ok(Self {
+            text,
+            lines,
+            clusters,
+            line_height,
+        })
+    }
+
     pub fn lines(&self) -> &[TextLine] {
         &self.lines
+    }
+
+    pub fn text(&self) -> &str {
+        &self.text
     }
 
     pub fn caret_for_offset(&self, offset: usize) -> Result<CaretGeometry, TextEditError> {
@@ -220,6 +289,42 @@ impl TextEditLayout {
             });
         }
         Ok(rects)
+    }
+
+    pub fn offset_for_point(&self, point: Point) -> usize {
+        let line_index = if self.line_height <= 0.0 {
+            0
+        } else {
+            (point.y / self.line_height)
+                .floor()
+                .max(0.0)
+                .min(self.lines.len().saturating_sub(1) as f32) as usize
+        };
+        self.closest_offset_on_line(line_index, point.x)
+    }
+
+    pub fn visual_offset_left(&self, offset: usize) -> Result<usize, TextEditError> {
+        self.visual_offset_horizontal(offset, false)
+    }
+
+    pub fn visual_offset_right(&self, offset: usize) -> Result<usize, TextEditError> {
+        self.visual_offset_horizontal(offset, true)
+    }
+
+    pub fn visual_offset_up(&self, offset: usize) -> Result<usize, TextEditError> {
+        self.visual_offset_vertical(offset, false)
+    }
+
+    pub fn visual_offset_down(&self, offset: usize) -> Result<usize, TextEditError> {
+        self.visual_offset_vertical(offset, true)
+    }
+
+    pub fn visual_line_start(&self, offset: usize) -> Result<usize, TextEditError> {
+        self.visual_line_edge(offset, false)
+    }
+
+    pub fn visual_line_end(&self, offset: usize) -> Result<usize, TextEditError> {
+        self.visual_line_edge(offset, true)
     }
 
     pub fn caret_primitive(
@@ -280,6 +385,98 @@ impl TextEditLayout {
         self.ensure_layout_boundary(range.end())
     }
 
+    fn visual_offset_horizontal(
+        &self,
+        offset: usize,
+        move_right: bool,
+    ) -> Result<usize, TextEditError> {
+        self.ensure_layout_boundary(offset)?;
+        let line_index = self.line_index_for_offset(offset);
+        let mut stops = self.caret_stops_on_line(line_index);
+        stops.sort_by(|left, right| left.1.total_cmp(&right.1));
+        let current_x = self.x_for_offset_on_line(line_index, offset);
+        let target = if move_right {
+            stops
+                .iter()
+                .find(|(_, x)| *x > current_x + f32::EPSILON)
+                .map(|(offset, _)| *offset)
+                .or_else(|| {
+                    (line_index + 1 < self.lines.len())
+                        .then(|| self.visual_edge_offset(line_index + 1, false))
+                })
+        } else {
+            stops
+                .iter()
+                .rev()
+                .find(|(_, x)| *x < current_x - f32::EPSILON)
+                .map(|(offset, _)| *offset)
+                .or_else(|| (line_index > 0).then(|| self.visual_edge_offset(line_index - 1, true)))
+        };
+        Ok(target.unwrap_or(offset))
+    }
+
+    fn visual_offset_vertical(
+        &self,
+        offset: usize,
+        move_down: bool,
+    ) -> Result<usize, TextEditError> {
+        self.ensure_layout_boundary(offset)?;
+        let line_index = self.line_index_for_offset(offset);
+        let target_line = if move_down {
+            (line_index + 1 < self.lines.len()).then_some(line_index + 1)
+        } else {
+            line_index.checked_sub(1)
+        };
+        Ok(target_line
+            .map(|line| {
+                self.closest_offset_on_line(line, self.x_for_offset_on_line(line_index, offset))
+            })
+            .unwrap_or(offset))
+    }
+
+    fn visual_line_edge(&self, offset: usize, right: bool) -> Result<usize, TextEditError> {
+        self.ensure_layout_boundary(offset)?;
+        Ok(self.visual_edge_offset(self.line_index_for_offset(offset), right))
+    }
+
+    fn visual_edge_offset(&self, line_index: usize, right: bool) -> usize {
+        self.caret_stops_on_line(line_index)
+            .into_iter()
+            .min_by(|left, right_stop| {
+                let order = left.1.total_cmp(&right_stop.1);
+                if right { order.reverse() } else { order }
+            })
+            .map(|(offset, _)| offset)
+            .unwrap_or(self.lines[line_index].range.start())
+    }
+
+    fn closest_offset_on_line(&self, line_index: usize, x: f32) -> usize {
+        self.caret_stops_on_line(line_index)
+            .into_iter()
+            .min_by(|left, right| (left.1 - x).abs().total_cmp(&(right.1 - x).abs()))
+            .map(|(offset, _)| offset)
+            .unwrap_or(self.lines[line_index].range.start())
+    }
+
+    fn caret_stops_on_line(&self, line_index: usize) -> Vec<(usize, f32)> {
+        let line = self.lines[line_index];
+        let mut offsets = vec![line.range.start(), line.range.end()];
+        for cluster in self
+            .clusters
+            .iter()
+            .filter(|cluster| cluster.line_index == line_index)
+        {
+            offsets.push(cluster.byte_start);
+            offsets.push(cluster.byte_end);
+        }
+        offsets.sort_unstable();
+        offsets.dedup();
+        offsets
+            .into_iter()
+            .map(|offset| (offset, self.x_for_offset_on_line(line_index, offset)))
+            .collect()
+    }
+
     fn ensure_layout_boundary(&self, offset: usize) -> Result<(), TextEditError> {
         if offset > self.text.len() || !self.text.is_char_boundary(offset) {
             return Err(TextEditError::InvalidBoundary { index: offset });
@@ -315,10 +512,19 @@ impl TextEditLayout {
             .iter()
             .filter(|cluster| cluster.line_index == line_index)
             .find_map(|cluster| {
+                let rtl = cluster.direction == TextDirection::RightToLeft;
                 if offset == cluster.byte_start {
-                    Some(line.origin.x + cluster.x_offset)
+                    Some(
+                        line.origin.x
+                            + cluster.x_offset
+                            + if rtl { cluster.advance_width } else { 0.0 },
+                    )
                 } else if offset == cluster.byte_end {
-                    Some(line.origin.x + cluster.x_offset + cluster.advance_width)
+                    Some(
+                        line.origin.x
+                            + cluster.x_offset
+                            + if rtl { 0.0 } else { cluster.advance_width },
+                    )
                 } else {
                     None
                 }
@@ -377,6 +583,20 @@ fn line_for(
     }
 }
 
+fn line_ranges(text: &str) -> Vec<(usize, usize)> {
+    let mut ranges = Vec::new();
+    let mut start = 0;
+    for part in text.split_inclusive('\n') {
+        let end = start + part.trim_end_matches('\n').len();
+        ranges.push((start, end));
+        start += part.len();
+    }
+    if ranges.is_empty() || text.ends_with('\n') {
+        ranges.push((start, start));
+    }
+    ranges
+}
+
 fn push_fixed_clusters(
     text: &str,
     range: TextRange,
@@ -393,6 +613,7 @@ fn push_fixed_clusters(
             line_index,
             x_offset,
             advance_width: grapheme_width,
+            direction: TextDirection::LeftToRight,
         });
         x_offset += grapheme_width;
     }
