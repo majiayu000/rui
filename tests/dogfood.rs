@@ -185,10 +185,22 @@ fn native_dogfood_script_contract_launches_example_and_profile() {
         "cargo build --example native_dogfood",
         "cargo run --example native_dogfood",
         "RUI_NATIVE_DOGFOOD_PROFILE",
+        "RUI_NATIVE_DOGFOOD_RENDERER_PROFILE",
+        "RUI_PROFILE=1",
         "RUI_NATIVE_DOGFOOD_INTERACTIVE=1",
         "RUI_NATIVE_DOGFOOD_AUTOMATION=1",
         "\"status\":\"passed\"",
         "\"script_requires_minimize_reopen\":true",
+        "rui.renderer.profile.v1",
+        "frame_interval_ns",
+        "event_to_render_latency_ns",
+        "layout_ns",
+        "dispatch_ns",
+        "paint_ns",
+        "render_ns",
+        "render_p95_ns",
+        "render_p99_ns",
+        "jank_count",
     ] {
         assert!(
             script.contains(required),
@@ -210,12 +222,8 @@ fn native_dogfood_script_contract_launches_example_and_profile() {
         );
     }
     assert!(
-        !script.contains("RUI_PROFILE"),
-        "native dogfood script should not reuse renderer telemetry RUI_PROFILE"
-    );
-    assert!(
         !example.contains("RUI_PROFILE"),
-        "native dogfood example should not reuse renderer telemetry RUI_PROFILE"
+        "native dogfood example should leave renderer telemetry capture to the driver"
     );
 
     for required in [

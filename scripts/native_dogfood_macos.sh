@@ -13,9 +13,10 @@ if [[ "$TEXT" == *[^A-Za-z0-9_-]* ]]; then
 fi
 
 PROFILE="${RUI_NATIVE_DOGFOOD_PROFILE:-target/rui-native-dogfood-profile.json}"
+RENDERER_PROFILE="${RUI_NATIVE_DOGFOOD_RENDERER_PROFILE:-target/rui-native-dogfood-renderer-profile.jsonl}"
 LOG="${RUI_NATIVE_DOGFOOD_LOG:-target/rui-native-dogfood.log}"
-mkdir -p "$(dirname "$PROFILE")" "$(dirname "$LOG")"
-rm -f "$PROFILE" "$LOG"
+mkdir -p "$(dirname "$PROFILE")" "$(dirname "$RENDERER_PROFILE")" "$(dirname "$LOG")"
+rm -f "$PROFILE" "$RENDERER_PROFILE" "$LOG"
 
 RUI_NATIVE_DOGFOOD_PROFILE="$PROFILE" \
 RUI_NATIVE_DOGFOOD_TEXT="$TEXT" \
@@ -27,6 +28,7 @@ RUI_NATIVE_DOGFOOD_PROFILE="$PROFILE" \
 RUI_NATIVE_DOGFOOD_TEXT="$TEXT" \
 RUI_NATIVE_DOGFOOD_INTERACTIVE=1 \
 RUI_NATIVE_DOGFOOD_AUTOMATION=1 \
+RUI_PROFILE=1 \
 cargo run --example native_dogfood >>"$LOG" 2>&1 &
 app_pid=$!
 
@@ -75,4 +77,33 @@ grep -q '"status":"passed"' "$PROFILE"
 grep -q "\"typed_text\":\"$TEXT\"" "$PROFILE"
 grep -q '"script_requires_minimize_reopen":true' "$PROFILE"
 
+awk 'index($0, "{\"schema\":\"rui.renderer.profile.v1\"") == 1 { print }' \
+  "$LOG" >"$RENDERER_PROFILE"
+
+if [[ ! -s "$RENDERER_PROFILE" ]]; then
+  echo "native dogfood did not capture RUI_PROFILE renderer telemetry at $RENDERER_PROFILE" >&2
+  echo "cargo log: $LOG" >&2
+  exit 1
+fi
+
+for metric in \
+  frame_interval_ns \
+  event_to_render_latency_ns \
+  layout_ns \
+  dispatch_ns \
+  paint_ns \
+  render_ns \
+  render_p95_ns \
+  render_p99_ns \
+  jank_count
+do
+  if ! grep -Eq "\"${metric}\":[0-9]+" "$RENDERER_PROFILE"; then
+    echo "renderer telemetry did not contain a numeric $metric value" >&2
+    echo "renderer profile: $RENDERER_PROFILE" >&2
+    echo "cargo log: $LOG" >&2
+    exit 1
+  fi
+done
+
 echo "native dogfood profile: $PROFILE"
+echo "renderer telemetry profile: $RENDERER_PROFILE"
