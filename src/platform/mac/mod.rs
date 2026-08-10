@@ -12,4 +12,5 @@ mod window;
 
 pub use accessibility::MacAccessibilityBridge;
 pub use app::{run_app, run_app_with_options};
+pub use events::MacPlatformEvent;
 pub use window::{MacWindow, MacWindowBackend};

@@ -1,3 +1,4 @@
+use super::window::MacWindow;
 use crate::core::text_editing::{TextInputCommand, TextInputEvent};
 use crate::platform::mac::accessibility::MacAccessibilityActionRequest;
 use crate::platform::window::{
@@ -17,11 +18,39 @@ pub(crate) enum MacWindowEvent {
     Accessibility(MacAccessibilityActionRequest),
 }
 
+/// Ordered macOS events with lossless native text-input commands.
+///
+/// Use [`MacWindow::poll_events_with_text_commands`] when replacement ranges
+/// and marked-text selections must be preserved.
+#[derive(Debug, Clone)]
+pub enum MacPlatformEvent {
+    Platform(PlatformWindowEvent),
+    Text(TextInputCommand),
+}
+
 impl MacWindowEvent {
-    pub(crate) fn into_platform_event(self) -> Option<PlatformWindowEvent> {
+    pub(crate) fn into_public_event(self) -> MacPlatformEvent {
         match self {
-            Self::Platform(event) => Some(event),
-            Self::Text(command) => command.into_legacy_event().map(|event| {
+            Self::Platform(event) => MacPlatformEvent::Platform(event),
+            Self::Text(command) => MacPlatformEvent::Text(command),
+            Self::Accessibility(_) => {
+                MacPlatformEvent::Platform(PlatformWindowEvent::RedrawRequested)
+            }
+        }
+    }
+
+    pub(crate) fn try_into_platform_event(
+        self,
+    ) -> Result<PlatformWindowEvent, PlatformWindowError> {
+        match self {
+            Self::Platform(event) => Ok(event),
+            Self::Text(command) if command_has_lossless_legacy_representation(&command) => {
+                let Some(event) = command.into_legacy_event() else {
+                    return Err(PlatformWindowError::backend(
+                        "macos",
+                        "legacy text input command did not produce a platform IME event",
+                    ));
+                };
                 let ime = match event {
                     TextInputEvent::InsertText(text) => PlatformImeEvent::InsertText(text),
                     TextInputEvent::BeginComposition(text) => {
@@ -33,10 +62,43 @@ impl MacWindowEvent {
                     TextInputEvent::CommitComposition(text) => PlatformImeEvent::Commit(text),
                     TextInputEvent::CancelComposition => PlatformImeEvent::CancelComposition,
                 };
-                PlatformWindowEvent::Input(PlatformInputEvent::Ime(ime))
-            }),
-            Self::Accessibility(_) => None,
+                Ok(PlatformWindowEvent::Input(PlatformInputEvent::Ime(ime)))
+            }
+            Self::Text(_) => Err(PlatformWindowError::backend(
+                "macos",
+                "native text input command cannot be represented by PlatformImeEvent; use MacWindow::poll_events_with_text_commands",
+            )),
+            Self::Accessibility(_) => Ok(PlatformWindowEvent::RedrawRequested),
         }
+    }
+}
+
+fn command_has_lossless_legacy_representation(command: &TextInputCommand) -> bool {
+    matches!(
+        command,
+        TextInputCommand::InsertText(_)
+            | TextInputCommand::BeginComposition(_)
+            | TextInputCommand::UpdateComposition(_)
+            | TextInputCommand::CommitComposition(_)
+            | TextInputCommand::CancelComposition
+    )
+}
+
+impl MacWindow {
+    /// Polls one native event without discarding extended text-input data.
+    pub fn poll_events_with_text_commands(
+        &mut self,
+    ) -> Result<Vec<MacPlatformEvent>, PlatformWindowError> {
+        let mtm = MainThreadMarker::new().ok_or_else(|| {
+            PlatformWindowError::backend("macos", "event polling must run on the main thread")
+        })?;
+        let app = NSApplication::sharedApplication(mtm);
+        self.poll_events_for_app(&app, false).map(|events| {
+            events
+                .into_iter()
+                .map(MacWindowEvent::into_public_event)
+                .collect()
+        })
     }
 }
 

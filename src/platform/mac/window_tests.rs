@@ -1,5 +1,6 @@
 use super::*;
-use crate::core::text_editing::TextInputCommand;
+use crate::core::text_editing::{TextInputCommand, Utf16TextRange};
+use crate::platform::mac::MacPlatformEvent;
 
 fn append_test_ime_events(
     platform_events: &mut Vec<PlatformWindowEvent>,
@@ -35,6 +36,39 @@ fn clipboard_text_or_error_rejects_missing_text() {
 fn target_window_event_ends_poll_batch_before_the_next_native_callback() {
     assert!(event_ends_poll_batch(17, 17));
     assert!(!event_ends_poll_batch(23, 17));
+}
+
+#[test]
+fn public_mac_poll_event_preserves_rich_text_commands() {
+    let replacement_range = match Utf16TextRange::new(2, 3) {
+        Ok(range) => range,
+        Err(err) => panic!("valid range rejected: {err}"),
+    };
+    let command = TextInputCommand::InsertTextReplacing {
+        text: "replacement".to_string(),
+        replacement_range,
+    };
+
+    assert!(matches!(
+        MacWindowEvent::Text(command.clone()).into_public_event(),
+        MacPlatformEvent::Text(actual) if actual == command
+    ));
+    assert!(
+        MacWindowEvent::Text(command)
+            .try_into_platform_event()
+            .is_err()
+    );
+
+    let selection = TextInputCommand::SetCompositionSelection(replacement_range);
+    assert!(matches!(
+        MacWindowEvent::Text(selection.clone()).into_public_event(),
+        MacPlatformEvent::Text(actual) if actual == selection
+    ));
+    assert!(
+        MacWindowEvent::Text(selection)
+            .try_into_platform_event()
+            .is_err()
+    );
 }
 
 #[test]

@@ -415,16 +415,10 @@ impl PlatformWindow for MacWindow {
             PlatformWindowError::backend("macos", "event polling must run on the main thread")
         })?;
         let app = NSApplication::sharedApplication(mtm);
-        self.poll_events_for_app(&app, false).map(|events| {
-            events
-                .into_iter()
-                .map(|event| {
-                    event
-                        .into_platform_event()
-                        .unwrap_or(PlatformWindowEvent::RedrawRequested)
-                })
-                .collect()
-        })
+        self.poll_events_for_app(&app, false)?
+            .into_iter()
+            .map(MacWindowEvent::try_into_platform_event)
+            .collect()
     }
 
     fn renderer_attachment(&self) -> Result<PlatformRendererAttachment, PlatformWindowError> {
