@@ -1,5 +1,27 @@
 use super::support::*;
 
+#[test]
+fn refresh_text_geometry_rebuilds_a_layout_invalidated_by_input() {
+    let mut input = Input::new().value("a");
+    let _ = layout_input(&mut input, Size::new(240.0, 56.0));
+    assert_eq!(
+        input.current_text_layout().map(|layout| layout.text()),
+        Some("a")
+    );
+
+    input
+        .apply_text_input_event(TextInputEvent::InsertText("b".to_string()))
+        .expect("input mutation should apply");
+    assert!(input.current_text_layout().is_none());
+
+    let mut text_measurer = crate::renderer::text::TextMeasureCache::new();
+    Element::refresh_text_geometry(&mut input, &mut text_measurer);
+    assert_eq!(
+        input.current_text_layout().map(|layout| layout.text()),
+        Some("ab")
+    );
+}
+
 // ==================== display_text Tests ====================
 
 #[test]

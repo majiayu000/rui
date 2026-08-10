@@ -11,6 +11,7 @@ use crate::elements::element::{
     style_to_taffy,
 };
 use crate::renderer::Primitive;
+use crate::renderer::text::TextMeasureCache;
 use smallvec::SmallVec;
 use taffy::prelude::*;
 
@@ -492,6 +493,12 @@ impl Element for ScrollView {
 
     fn children(&self) -> &[AnyElement] {
         &self.children
+    }
+
+    fn refresh_text_geometry(&mut self, text_measurer: &mut TextMeasureCache) {
+        for child in &mut self.children {
+            child.refresh_text_geometry(text_measurer);
+        }
     }
 
     fn handle_pointer_event(&mut self, cx: &mut EventContext, event: &PointerEvent) -> bool {

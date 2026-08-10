@@ -21,6 +21,7 @@ use crate::elements::element::{
     style_to_taffy,
 };
 use crate::renderer::Primitive;
+use crate::renderer::text::TextMeasureCache;
 use taffy::prelude::*;
 
 const INPUT_HORIZONTAL_PADDING: f32 = 12.0;
@@ -81,7 +82,6 @@ pub struct Input {
     on_cancel: Option<Box<dyn Fn()>>,
     on_focus: Option<Box<dyn Fn()>>,
     on_blur: Option<Box<dyn Fn()>>,
-    layout_node: Option<NodeId>,
     paint_tokens: Option<InputPaintTokens>,
     caret_bounds: Option<Bounds>,
     text_layout: Option<crate::core::text_editing::TextEditLayout>,
@@ -109,7 +109,6 @@ impl Input {
             on_cancel: None,
             on_focus: None,
             on_blur: None,
-            layout_node: None,
             paint_tokens: None,
             caret_bounds: None,
             text_layout: None,
@@ -504,8 +503,11 @@ impl Element for Input {
             .taffy
             .new_leaf(style)
             .expect("Failed to create input layout node");
-        self.layout_node = Some(node);
         node
+    }
+
+    fn refresh_text_geometry(&mut self, text_measurer: &mut TextMeasureCache) {
+        self.refresh_text_layout_if_stale(text_measurer);
     }
 
     fn paint(&mut self, cx: &mut PaintContext) {

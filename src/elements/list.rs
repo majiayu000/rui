@@ -12,6 +12,7 @@ use crate::elements::element::{
 };
 use crate::elements::text::{FontWeight, TextAlign};
 use crate::renderer::Primitive;
+use crate::renderer::text::TextMeasureCache;
 use smallvec::SmallVec;
 use taffy::prelude::*;
 
@@ -179,6 +180,10 @@ impl Element for ListItem {
         } else {
             self.content.paint(cx);
         }
+    }
+
+    fn refresh_text_geometry(&mut self, text_measurer: &mut TextMeasureCache) {
+        self.content.refresh_text_geometry(text_measurer);
     }
 
     fn handle_pointer_event(&mut self, cx: &mut EventContext, event: &PointerEvent) -> bool {
@@ -479,6 +484,12 @@ impl Element for List {
 
             let mut child_cx = cx.with_bounds(content_bounds);
             item.paint(&mut child_cx);
+        }
+    }
+
+    fn refresh_text_geometry(&mut self, text_measurer: &mut TextMeasureCache) {
+        for item in &mut self.items {
+            item.refresh_text_geometry(text_measurer);
         }
     }
 

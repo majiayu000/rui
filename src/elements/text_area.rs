@@ -21,6 +21,7 @@ use crate::elements::element::{
     style_to_taffy,
 };
 use crate::renderer::Primitive;
+use crate::renderer::text::TextMeasureCache;
 use taffy::prelude::*;
 
 const TEXT_AREA_HORIZONTAL_PADDING: f32 = 12.0;
@@ -56,7 +57,6 @@ pub struct TextArea {
     on_change: Option<Box<dyn Fn(&str)>>,
     on_focus: Option<Box<dyn Fn()>>,
     on_blur: Option<Box<dyn Fn()>>,
-    layout_node: Option<NodeId>,
     caret_bounds: Option<Bounds>,
     text_layout: Option<crate::core::text_editing::TextEditLayout>,
 }
@@ -80,7 +80,6 @@ impl TextArea {
             on_change: None,
             on_focus: None,
             on_blur: None,
-            layout_node: None,
             caret_bounds: None,
             text_layout: None,
         }
@@ -453,8 +452,11 @@ impl Element for TextArea {
             .taffy
             .new_leaf(style)
             .expect("Failed to create text area layout node");
-        self.layout_node = Some(node);
         node
+    }
+
+    fn refresh_text_geometry(&mut self, text_measurer: &mut TextMeasureCache) {
+        self.refresh_text_layout_if_stale(text_measurer);
     }
 
     fn paint(&mut self, cx: &mut PaintContext) {

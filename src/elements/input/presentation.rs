@@ -82,7 +82,7 @@ impl Input {
         Ok(true)
     }
 
-    fn current_text_layout(&self) -> Option<&TextEditLayout> {
+    pub(super) fn current_text_layout(&self) -> Option<&TextEditLayout> {
         let display = self.input_layout_text();
         self.text_layout
             .as_ref()
@@ -235,6 +235,12 @@ impl Input {
                 Err(err) => panic!("input text layout failed: {err}"),
             },
         );
+    }
+
+    pub(super) fn refresh_text_layout_if_stale(&mut self, cache: &mut TextMeasureCache) {
+        if self.current_text_layout().is_none() {
+            self.update_text_layout(cache, self.height.unwrap_or(40.0));
+        }
     }
 
     fn text_layout(&self) -> &TextEditLayout {

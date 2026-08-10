@@ -106,6 +106,12 @@ impl TextArea {
         );
     }
 
+    pub(super) fn refresh_text_layout_if_stale(&mut self, cache: &mut TextMeasureCache) {
+        if self.current_text_layout().is_none() {
+            self.update_text_layout(cache);
+        }
+    }
+
     pub(super) fn text_layout(&self) -> &TextEditLayout {
         self.text_layout
             .as_ref()

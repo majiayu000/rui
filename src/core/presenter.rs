@@ -291,6 +291,7 @@ where
 
     /// Paints the presented tree into the scene using the stored root bounds.
     pub fn paint(&mut self) {
+        self.root.refresh_text_geometry(&mut self.text_measurer);
         FramePipeline::paint_root(
             &mut self.root,
             &self.taffy,

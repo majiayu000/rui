@@ -305,6 +305,9 @@ pub trait Element: 'static {
     /// Paint the element to the scene
     fn paint(&mut self, cx: &mut PaintContext);
 
+    /// Refresh text geometry after event dispatch and before painting.
+    fn refresh_text_geometry(&mut self, _text_measurer: &mut TextMeasureCache) {}
+
     /// Handle pointer events (mouse/touch)
     fn handle_pointer_event(&mut self, _cx: &mut EventContext, _event: &PointerEvent) -> bool {
         false
@@ -408,6 +411,10 @@ impl AnyElement {
 
     pub fn paint(&mut self, cx: &mut PaintContext) {
         self.inner.paint(cx)
+    }
+
+    pub fn refresh_text_geometry(&mut self, text_measurer: &mut TextMeasureCache) {
+        self.inner.refresh_text_geometry(text_measurer)
     }
 
     pub fn handle_pointer_event(&mut self, cx: &mut EventContext, event: &PointerEvent) -> bool {

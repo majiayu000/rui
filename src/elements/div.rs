@@ -13,6 +13,7 @@ use crate::elements::element::{
     dispatch_action_to_children, style_to_taffy,
 };
 use crate::renderer::Primitive;
+use crate::renderer::text::TextMeasureCache;
 use smallvec::SmallVec;
 use taffy::prelude::*;
 
@@ -518,6 +519,12 @@ impl Element for Div {
             let child_bounds = cx.child_bounds(node).unwrap_or(bounds);
             let mut child_cx = cx.with_bounds(child_bounds);
             child.paint(&mut child_cx);
+        }
+    }
+
+    fn refresh_text_geometry(&mut self, text_measurer: &mut TextMeasureCache) {
+        for child in &mut self.children {
+            child.refresh_text_geometry(text_measurer);
         }
     }
 
