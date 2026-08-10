@@ -18,7 +18,7 @@ use crate::elements::element::Element;
 use crate::platform::mac::accessibility::MacAccessibilityActionRequest;
 use crate::platform::mac::accessibility::MacAccessibilityRequest;
 use crate::platform::mac::app::{OrderedInputEvent, schedule_platform_redraw};
-use crate::platform::window::PlatformWindow;
+use crate::platform::mac::window::MacWindow;
 
 /// Backend-neutral events collected from one poll of the platform window.
 pub(crate) struct NativeFrameEvents {
@@ -30,19 +30,52 @@ pub(crate) struct NativeFrameEvents {
     pub ordered_input_events: Vec<OrderedInputEvent>,
 }
 
+#[derive(Debug, Default)]
+pub(crate) struct NativeImeState {
+    composition_owner: Option<ElementId>,
+}
+
+impl NativeImeState {
+    fn target_for_event(
+        &mut self,
+        event: &TextInputEvent,
+        focused: Option<ElementId>,
+    ) -> Option<ElementId> {
+        match event {
+            TextInputEvent::InsertText(_) => focused,
+            TextInputEvent::BeginComposition(_) => {
+                self.composition_owner = focused;
+                focused
+            }
+            TextInputEvent::UpdateComposition(_) => self.composition_owner,
+            TextInputEvent::CommitComposition(_) | TextInputEvent::CancelComposition => {
+                self.composition_owner.take()
+            }
+        }
+    }
+
+    fn cancel_owner_after_focus_change(&mut self, focused: Option<ElementId>) -> Option<ElementId> {
+        if self.composition_owner.is_some() && self.composition_owner != focused {
+            self.composition_owner.take()
+        } else {
+            None
+        }
+    }
+}
+
 /// Runs the `DispatchEvents` stage for the native runner.
 ///
 /// Returns whether a resize was applied, so the caller can advance the size it
 /// compares against on the next poll.
-pub(crate) fn dispatch_native_events<E, W>(
+pub(crate) fn dispatch_native_events<E>(
     presenter: &mut Presenter<E>,
     context: &mut AppContext,
-    window: &W,
+    window: &MacWindow,
     events: &NativeFrameEvents,
+    ime_state: &mut NativeImeState,
 ) -> bool
 where
     E: Element,
-    W: PlatformWindow,
 {
     if events.viewport_changed {
         presenter.handle_window_event(&Event::WindowResize {
@@ -59,6 +92,7 @@ where
             Event::Blur(FocusEvent { focused: false })
         };
         presenter.handle_window_event(&event);
+        cancel_composition_if_owner_lost(presenter, window, ime_state);
         schedule_platform_redraw(window, context, RedrawSource::PlatformFocus);
     }
 
@@ -70,6 +104,9 @@ where
 
     if let Some(focused) = events.automation_focused_element {
         presenter.set_focused_element(Some(focused));
+        if cancel_composition_if_owner_lost(presenter, window, ime_state) {
+            schedule_platform_redraw(window, context, RedrawSource::PlatformInput);
+        }
     }
 
     for event in &events.ordered_input_events {
@@ -92,9 +129,8 @@ where
                 (handled, redraw_requested, RedrawSource::PlatformInput)
             }
             OrderedInputEvent::Text(event) => {
-                let (handled, redraw_requested) = presenter.with_event_context(|root, event_cx| {
-                    root.handle_text_input_event(event_cx, event)
-                });
+                let (handled, redraw_requested) =
+                    dispatch_text_input_event(presenter, ime_state, event);
                 (handled, redraw_requested, RedrawSource::PlatformInput)
             }
             OrderedInputEvent::Accessibility(request) => {
@@ -102,7 +138,8 @@ where
                 (handled, redraw_requested, RedrawSource::PlatformInput)
             }
         };
-        if handled || redraw_requested {
+        let focus_cancelled = cancel_composition_if_owner_lost(presenter, window, ime_state);
+        if handled || redraw_requested || focus_cancelled {
             schedule_platform_redraw(window, context, redraw_source);
         }
     }
@@ -112,6 +149,57 @@ where
     }
 
     events.viewport_changed
+}
+
+fn dispatch_text_input_event<E>(
+    presenter: &mut Presenter<E>,
+    ime_state: &mut NativeImeState,
+    event: &TextInputEvent,
+) -> (bool, bool)
+where
+    E: Element,
+{
+    let Some(target) = ime_state.target_for_event(event, presenter.focused_element()) else {
+        log::error!("discarded macOS text input event without a focused composition owner");
+        return (false, false);
+    };
+    dispatch_text_input_event_to(presenter, target, event)
+}
+
+fn dispatch_text_input_event_to<E>(
+    presenter: &mut Presenter<E>,
+    target: ElementId,
+    event: &TextInputEvent,
+) -> (bool, bool)
+where
+    E: Element,
+{
+    let focused = presenter.focused_element();
+    *presenter.focused_element_mut() = Some(target);
+    let result = presenter
+        .with_event_context(|root, event_cx| root.handle_text_input_event(event_cx, event));
+    *presenter.focused_element_mut() = focused;
+    result
+}
+
+fn cancel_composition_if_owner_lost<E>(
+    presenter: &mut Presenter<E>,
+    window: &MacWindow,
+    ime_state: &mut NativeImeState,
+) -> bool
+where
+    E: Element,
+{
+    let Some(owner) = ime_state.cancel_owner_after_focus_change(presenter.focused_element()) else {
+        return false;
+    };
+    let (handled, redraw_requested) =
+        dispatch_text_input_event_to(presenter, owner, &TextInputEvent::CancelComposition);
+    window.discard_marked_text();
+    if !handled {
+        log::error!("failed to cancel macOS composition for its previous focused owner");
+    }
+    handled || redraw_requested
 }
 
 fn dispatch_accessibility_action<E>(
@@ -399,6 +487,33 @@ mod tests {
     fn only_key_down_events_are_forwarded_to_elements() {
         assert!(should_forward_key_event_to_tree(true));
         assert!(!should_forward_key_event_to_tree(false));
+    }
+
+    #[test]
+    fn native_ime_owner_is_cancelled_before_events_can_reach_new_focus() {
+        let first = ElementId::from(1);
+        let second = ElementId::from(2);
+        let mut state = NativeImeState::default();
+
+        assert_eq!(
+            state.target_for_event(
+                &TextInputEvent::BeginComposition("draft".to_string()),
+                Some(first),
+            ),
+            Some(first)
+        );
+        assert_eq!(state.cancel_owner_after_focus_change(Some(first)), None);
+        assert_eq!(
+            state.cancel_owner_after_focus_change(Some(second)),
+            Some(first)
+        );
+        assert_eq!(
+            state.target_for_event(
+                &TextInputEvent::UpdateComposition("stale".to_string()),
+                Some(second),
+            ),
+            None
+        );
     }
 
     #[test]

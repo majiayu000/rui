@@ -68,6 +68,12 @@ impl MacImeSession {
         self.selected_range = not_found_range();
     }
 
+    fn discard_marked_text(&mut self) -> bool {
+        let had_marked_text = self.marked_text.take().is_some();
+        self.selected_range = not_found_range();
+        had_marked_text
+    }
+
     fn has_marked_text(&self) -> bool {
         self.marked_text.is_some()
     }
@@ -225,6 +231,13 @@ impl RuiContentView {
     pub(crate) fn drain_ime_events(&self) -> Vec<PlatformImeEvent> {
         self.ivars().ime.borrow_mut().drain_events()
     }
+
+    pub(crate) fn discard_marked_text(&self) {
+        let had_marked_text = self.ivars().ime.borrow_mut().discard_marked_text();
+        if had_marked_text && let Some(input_context) = self.inputContext() {
+            input_context.discardMarkedText();
+        }
+    }
 }
 
 pub(crate) fn append_ime_events_after_native_dispatch(
@@ -370,5 +383,17 @@ mod tests {
                 PlatformImeEvent::CancelComposition,
             ]
         );
+    }
+
+    #[test]
+    fn ime_session_discards_marked_text_without_queuing_an_event() {
+        let mut session = MacImeSession::default();
+        session.set_marked_text("draft", NSRange::new(5, 0));
+        session.drain_events();
+
+        assert!(session.discard_marked_text());
+        assert!(!session.has_marked_text());
+        assert_eq!(session.selected_range(), not_found_range());
+        assert!(session.drain_events().is_empty());
     }
 }

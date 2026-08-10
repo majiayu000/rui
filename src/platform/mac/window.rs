@@ -65,6 +65,10 @@ impl MacWindow {
         &mut self.accessibility_bridge
     }
 
+    pub(crate) fn discard_marked_text(&self) {
+        self.content_view.discard_marked_text();
+    }
+
     pub(crate) fn make_key_and_order_front(&self) {
         unsafe {
             let _: () = msg_send![
