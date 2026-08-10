@@ -721,7 +721,10 @@ impl Element for Input {
             _ => return ActionOutcome::Ignored,
         };
 
-        match self.apply_key_event(&event) {
+        match self
+            .apply_shaped_navigation(&event)
+            .unwrap_or_else(|| self.apply_key_event(&event))
+        {
             Ok(_) => {
                 cx.request_redraw();
                 ActionOutcome::handled("input")
