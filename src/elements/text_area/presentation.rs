@@ -22,18 +22,27 @@ impl TextArea {
             return None;
         }
         let selection = self.state_selection();
-        if !event.modifiers.shift && !selection.is_collapsed() {
-            return None;
-        }
         let layout = self.current_text_layout()?;
-        let target = match event.key {
-            KeyCode::ArrowLeft => layout.visual_offset_left(selection.head()),
-            KeyCode::ArrowRight => layout.visual_offset_right(selection.head()),
-            KeyCode::ArrowUp => layout.visual_offset_up(selection.head()),
-            KeyCode::ArrowDown => layout.visual_offset_down(selection.head()),
-            KeyCode::Home => layout.visual_line_start(selection.head()),
-            KeyCode::End => layout.visual_line_end(selection.head()),
-            _ => return None,
+        let target = if !event.modifiers.shift && !selection.is_collapsed() {
+            match event.key {
+                KeyCode::ArrowLeft => {
+                    layout.visual_selection_edge(selection.normalized_range(), false)
+                }
+                KeyCode::ArrowRight => {
+                    layout.visual_selection_edge(selection.normalized_range(), true)
+                }
+                _ => return None,
+            }
+        } else {
+            match event.key {
+                KeyCode::ArrowLeft => layout.visual_offset_left(selection.head()),
+                KeyCode::ArrowRight => layout.visual_offset_right(selection.head()),
+                KeyCode::ArrowUp => layout.visual_offset_up(selection.head()),
+                KeyCode::ArrowDown => layout.visual_offset_down(selection.head()),
+                KeyCode::Home => layout.visual_line_start(selection.head()),
+                KeyCode::End => layout.visual_line_end(selection.head()),
+                _ => return None,
+            }
         };
         let target = match target {
             Ok(target) => target,

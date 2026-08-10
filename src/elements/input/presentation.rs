@@ -25,17 +25,23 @@ impl Input {
             return None;
         }
         let selection = self.state_selection();
-        if !event.modifiers.shift && !selection.is_collapsed() {
-            return None;
-        }
         let display_head = self.display_offset_for_value_offset(selection.head())?;
         let layout = self.current_text_layout()?;
-        let display_target = match event.key {
-            KeyCode::ArrowLeft => layout.visual_offset_left(display_head),
-            KeyCode::ArrowRight => layout.visual_offset_right(display_head),
-            KeyCode::ArrowUp | KeyCode::Home => layout.visual_line_start(display_head),
-            KeyCode::ArrowDown | KeyCode::End => layout.visual_line_end(display_head),
-            _ => return None,
+        let display_target = if !event.modifiers.shift && !selection.is_collapsed() {
+            let range = self.display_range_for_value_range(selection.normalized_range())?;
+            match event.key {
+                KeyCode::ArrowLeft => layout.visual_selection_edge(range, false),
+                KeyCode::ArrowRight => layout.visual_selection_edge(range, true),
+                _ => return None,
+            }
+        } else {
+            match event.key {
+                KeyCode::ArrowLeft => layout.visual_offset_left(display_head),
+                KeyCode::ArrowRight => layout.visual_offset_right(display_head),
+                KeyCode::ArrowUp | KeyCode::Home => layout.visual_line_start(display_head),
+                KeyCode::ArrowDown | KeyCode::End => layout.visual_line_end(display_head),
+                _ => return None,
+            }
         };
         let display_target = match display_target {
             Ok(target) => target,

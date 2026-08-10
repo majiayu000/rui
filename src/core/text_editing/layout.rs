@@ -327,6 +327,26 @@ impl TextEditLayout {
         self.visual_line_edge(offset, true)
     }
 
+    pub fn visual_selection_edge(
+        &self,
+        range: TextRange,
+        right: bool,
+    ) -> Result<usize, TextEditError> {
+        self.ensure_layout_range(range)?;
+        let start_line = self.line_index_for_offset(range.start());
+        let end_line = self.line_index_for_offset(range.end());
+        if start_line != end_line {
+            return Ok(if right { range.end() } else { range.start() });
+        }
+        let start_x = self.x_for_offset_on_line(start_line, range.start());
+        let end_x = self.x_for_offset_on_line(end_line, range.end());
+        Ok(if (start_x <= end_x) == right {
+            range.end()
+        } else {
+            range.start()
+        })
+    }
+
     pub fn caret_primitive(
         &self,
         offset: usize,

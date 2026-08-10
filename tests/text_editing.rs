@@ -440,6 +440,14 @@ fn text_editing_shape_layout_drives_rtl_navigation_and_hit_testing() {
     );
     assert_eq!(must(layout.visual_line_start(0)), logical_end);
     assert_eq!(must(layout.visual_line_end(0)), 0);
+    assert_eq!(
+        must(layout.visual_selection_edge(range(0, logical_end), false)),
+        logical_end
+    );
+    assert_eq!(
+        must(layout.visual_selection_edge(range(0, logical_end), true)),
+        0
+    );
 
     let first = &plan.clusters()[0];
     let hit = layout.offset_for_point(Point::new(
