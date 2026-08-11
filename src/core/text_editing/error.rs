@@ -35,6 +35,47 @@ impl From<ClipboardError> for TextEditError {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Utf16TextRangeError {
+    location: usize,
+    length: usize,
+}
+
+impl Utf16TextRangeError {
+    pub(crate) fn new(location: usize, length: usize) -> Self {
+        Self { location, length }
+    }
+
+    pub fn location(self) -> usize {
+        self.location
+    }
+
+    pub fn length(self) -> usize {
+        self.length
+    }
+}
+
+impl fmt::Display for Utf16TextRangeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "invalid UTF-16 text range at {} with length {}",
+            self.location, self.length
+        )
+    }
+}
+
+impl std::error::Error for Utf16TextRangeError {}
+
+impl From<Utf16TextRangeError> for TextEditError {
+    fn from(value: Utf16TextRangeError) -> Self {
+        Self::InvalidRange {
+            start: value.location,
+            end: value.location.saturating_add(value.length),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ClipboardError {
     Unavailable { message: String },

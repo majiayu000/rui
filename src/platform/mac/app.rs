@@ -115,6 +115,7 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
         let mut profile_recorder = RendererTelemetryRecorder::enabled_from_env();
         let mut native_dogfood_automation =
             NativeDogfoodAutomation::load_from_environment(options.size);
+        let mut native_ime_state = crate::platform::mac::ime_state::NativeImeState::default();
 
         // Render loop (event-driven)
         loop {
@@ -147,6 +148,10 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
                     MacWindowEvent::Accessibility(request) => {
                         context.mark_redraw_from(RedrawSource::PlatformInput);
                         ordered_input_events.push(OrderedInputEvent::Accessibility(request));
+                    }
+                    MacWindowEvent::Text(command) => {
+                        context.mark_redraw_from(RedrawSource::PlatformInput);
+                        ordered_input_events.push(OrderedInputEvent::Text(command));
                     }
                     MacWindowEvent::Platform(event) => {
                         mark_platform_event_redraw(&event, &mut context);
@@ -205,8 +210,13 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
                 viewport_size,
                 IdlePolicy::SkipWhenIdle,
                 |presenter, context| {
-                    resize_applied =
-                        dispatch_native_events(presenter, context, &window, &frame_events);
+                    resize_applied = dispatch_native_events(
+                        presenter,
+                        context,
+                        &window,
+                        &frame_events,
+                        &mut native_ime_state,
+                    );
                     Ok(())
                 },
                 |presenter, _context| {
@@ -255,6 +265,12 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
             phases.dispatch_ns = outcome.durations.dispatch_ns;
             phases.paint_ns = outcome.durations.paint_ns;
             let frame_committed = outcome.presented;
+
+            if let Err(err) =
+                crate::platform::mac::ime_state::sync_text_input_snapshot(&presenter, &window)
+            {
+                panic!("failed to synchronize native text input state: {err}");
+            }
 
             let accessibility_tree = match presenter.accessibility_tree() {
                 Ok(tree) => tree,
@@ -357,12 +373,14 @@ fn append_input_event(
             event,
         }),
         PlatformInputEvent::Ime(PlatformImeEvent::Commit(text)) => {
-            ordered_input_events.push(OrderedInputEvent::Text(TextInputEvent::CommitComposition(
-                text,
-            )));
+            ordered_input_events.push(OrderedInputEvent::Text(
+                TextInputEvent::CommitComposition(text).into(),
+            ));
         }
         PlatformInputEvent::Ime(event) => {
-            ordered_input_events.push(OrderedInputEvent::Text(event.into_text_input_event()));
+            ordered_input_events.push(OrderedInputEvent::Text(
+                event.into_text_input_event().into(),
+            ));
         }
         PlatformInputEvent::Mouse(event) => {
             let kind = match event.kind {
@@ -387,7 +405,7 @@ pub(crate) enum OrderedInputEvent {
     Pointer(PointerEvent),
     Scroll(ScrollEvent),
     Key { is_down: bool, event: KeyEvent },
-    Text(TextInputEvent),
+    Text(crate::core::text_editing::TextInputCommand),
     Accessibility(MacAccessibilityActionRequest),
 }
 

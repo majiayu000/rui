@@ -9,10 +9,13 @@ use crate::core::action::{ActionId, ActionOutcome};
 use crate::core::event::{Cursor, KeyEvent};
 use crate::core::geometry::Edges;
 use crate::core::style::Style;
-use crate::core::text_editing::{TextEditError, TextEditOutcome, TextInputEvent};
+use crate::core::text_editing::{
+    TextEditError, TextEditOutcome, TextInputCommand, TextInputEvent, TextInputSnapshot,
+};
 use crate::elements::element::{Element, EventContext, LayoutContext, PaintContext, PointerEvent};
 use crate::elements::{Input, InputPaintTokens, InputType};
 use crate::renderer::Primitive;
+use crate::renderer::text::TextMeasureCache;
 use taffy::prelude::NodeId;
 
 pub struct TextField {
@@ -246,6 +249,10 @@ impl Element for TextField {
         }
     }
 
+    fn refresh_text_geometry(&mut self, text_measurer: &mut TextMeasureCache) {
+        self.input.refresh_text_geometry(text_measurer);
+    }
+
     fn accessibility(
         &self,
         cx: &AccessibilityContext,
@@ -322,6 +329,22 @@ impl Element for TextField {
         self.input.handle_text_input_event(cx, event)
     }
 
+    fn handle_text_input_command(
+        &mut self,
+        cx: &mut EventContext,
+        command: &TextInputCommand,
+    ) -> bool {
+        if !self.can_edit() {
+            return false;
+        }
+        self.sync_input_contract();
+        self.input.handle_text_input_command(cx, command)
+    }
+
+    fn text_input_snapshot(&self, focused: ElementId) -> Option<TextInputSnapshot> {
+        self.input.text_input_snapshot(focused)
+    }
+
     fn dispatch_action(&mut self, cx: &mut EventContext, action: &ActionId) -> ActionOutcome {
         if self.state.disabled() {
             return ActionOutcome::Ignored;
@@ -339,10 +362,16 @@ pub fn text_field(label: impl Into<String>) -> TextField {
 mod tests {
     use super::*;
     use crate::advanced_ui::tokens::ThemeDensity;
+    use crate::advanced_ui::{
+        container, dialog, hoverable, popover, scrollable, tab, tab_panel, tabs, toolbar, tooltip,
+    };
     use crate::core::accessibility::AccessibilityTextRange;
     use crate::core::color::Color;
     use crate::core::event::{KeyCode, Modifiers, MouseButton};
     use crate::core::geometry::{Bounds, Point, Size};
+    use crate::core::presenter::Presenter;
+    use crate::core::text_editing::{TextInputCommand, TextRange, Utf16TextRange};
+    use crate::elements::element::AnyElement;
     use crate::renderer::Scene;
     use std::cell::RefCell;
     use std::rc::Rc;
@@ -354,6 +383,114 @@ mod tests {
             position: Point::new(4.0, 4.0),
             button: Some(MouseButton::Left),
         }
+    }
+
+    fn assert_rich_ime_wrapper(root: impl Into<AnyElement>, focused: ElementId) {
+        let viewport = Size::new(320.0, 120.0);
+        let mut root = root.into();
+        let mut taffy = TaffyTree::new();
+        let node = root.layout(&mut LayoutContext::new(&mut taffy, viewport));
+        taffy
+            .compute_layout(
+                node,
+                taffy::Size {
+                    width: AvailableSpace::Definite(viewport.width),
+                    height: AvailableSpace::Definite(viewport.height),
+                },
+            )
+            .unwrap_or_else(|err| panic!("rich IME wrapper layout failed: {err}"));
+        let layout = taffy
+            .layout(node)
+            .unwrap_or_else(|err| panic!("rich IME wrapper bounds lookup failed: {err}"));
+        let bounds = Bounds::from_xywh(
+            layout.location.x,
+            layout.location.y,
+            layout.size.width,
+            layout.size.height,
+        );
+        let mut text_measurer = TextMeasureCache::new();
+        root.refresh_text_geometry(&mut text_measurer);
+        let mut scene = Scene::new();
+        root.paint(&mut PaintContext::new(&mut scene, bounds, &taffy));
+        let mut focus = Some(focused);
+        let mut event_cx = EventContext::new(bounds, &taffy, &mut focus);
+
+        let replacement_range = Utf16TextRange::new(1, 2)
+            .unwrap_or_else(|err| panic!("valid replacement range rejected: {err}"));
+        let handled = root.handle_text_input_command(
+            &mut event_cx,
+            &TextInputCommand::BeginCompositionReplacing {
+                text: "你".to_string(),
+                replacement_range,
+            },
+        );
+        assert!(handled, "wrapper dropped rich composition command");
+
+        let marked_selection = Utf16TextRange::new(0, 1)
+            .unwrap_or_else(|err| panic!("valid marked selection rejected: {err}"));
+        let handled = root.handle_text_input_command(
+            &mut event_cx,
+            &TextInputCommand::SetCompositionSelection(marked_selection),
+        );
+        assert!(handled, "wrapper dropped marked selection command");
+
+        root.refresh_text_geometry(&mut text_measurer);
+        root.paint(&mut PaintContext::new(&mut scene, bounds, &taffy));
+        let snapshot = root
+            .text_input_snapshot(focused)
+            .unwrap_or_else(|| panic!("wrapper dropped focused text snapshot"));
+        assert_eq!(snapshot.text(), "a你bc");
+        assert_eq!(snapshot.composition(), Some(TextRange::ordered(1, 4)));
+        assert_eq!(
+            snapshot.selection().normalized_range(),
+            TextRange::ordered(1, 4)
+        );
+        assert!(
+            snapshot.geometry().is_some(),
+            "wrapper dropped text geometry"
+        );
+    }
+
+    fn rich_ime_field(focused: ElementId) -> TextField {
+        let mut field = TextField::new("Editor").id(focused).value("a😀bc");
+        let taffy = TaffyTree::<ElementId>::new();
+        let mut focus = None;
+        let mut cx =
+            EventContext::new(Bounds::from_xywh(0.0, 0.0, 200.0, 40.0), &taffy, &mut focus);
+        assert!(field.handle_pointer_event(
+            &mut cx,
+            &pointer(crate::elements::element::PointerEventKind::Down),
+        ));
+        field
+    }
+
+    #[test]
+    fn popover_forwards_rich_ime_contract_to_open_content() {
+        let focused = ElementId::new();
+        assert_rich_ime_wrapper(
+            popover("Editor", container(), rich_ime_field(focused)).open(true),
+            focused,
+        );
+    }
+
+    #[test]
+    fn dialog_forwards_rich_ime_contract_to_open_content() {
+        let focused = ElementId::new();
+        assert_rich_ime_wrapper(dialog("Editor", rich_ime_field(focused)), focused);
+    }
+
+    #[test]
+    fn tab_panel_forwards_rich_ime_contract_to_its_content() {
+        let focused = ElementId::new();
+        assert_rich_ime_wrapper(tab_panel("editor", rich_ime_field(focused)), focused);
+    }
+
+    #[test]
+    fn tabs_forwards_rich_ime_contract_to_the_selected_panel() {
+        let focused = ElementId::new();
+        let root = tabs([tab("editor", "Editor")], "editor")
+            .panel(tab_panel("editor", rich_ime_field(focused)));
+        assert_rich_ime_wrapper(root, focused);
     }
 
     #[test]
@@ -370,6 +507,93 @@ mod tests {
         assert!(outcome.changed);
         assert_eq!(field.get_value(), "RUI");
         assert_eq!(&*changes.borrow(), &["RUI".to_string()]);
+    }
+
+    #[test]
+    fn advanced_ui_wrappers_preserve_rich_ime_commands_snapshot_and_geometry() {
+        let focused = ElementId::new();
+        let mut field = TextField::new("Editor").id(focused).value("a😀bc");
+        let focus_taffy = TaffyTree::<ElementId>::new();
+        let mut focus = None;
+        let mut focus_cx = EventContext::new(
+            Bounds::from_xywh(0.0, 0.0, 200.0, 40.0),
+            &focus_taffy,
+            &mut focus,
+        );
+        assert!(field.handle_pointer_event(
+            &mut focus_cx,
+            &pointer(crate::elements::element::PointerEventKind::Down),
+        ));
+        assert_eq!(focus_cx.focused_id(), Some(focused));
+        let root = tooltip(
+            hoverable(toolbar("Editing").child(scrollable(container().child(field)))),
+            "Editing help",
+        );
+        let viewport = Size::new(320.0, 120.0);
+        let mut presenter = Presenter::with_root(viewport, root);
+        presenter.set_focused_element(Some(focused));
+        if let Err(err) = presenter.layout(viewport) {
+            panic!("wrapped text field layout failed: {err}");
+        }
+        presenter.paint();
+
+        let replacement = match Utf16TextRange::new(1, 2) {
+            Ok(range) => range,
+            Err(err) => panic!("valid replacement range rejected: {err}"),
+        };
+        let (handled, _) = presenter.with_event_context(|root, event_cx| {
+            root.handle_text_input_command(
+                event_cx,
+                &TextInputCommand::InsertTextReplacing {
+                    text: "X".to_string(),
+                    replacement_range: replacement,
+                },
+            )
+        });
+        assert!(handled);
+
+        let composition_range = match Utf16TextRange::new(1, 1) {
+            Ok(range) => range,
+            Err(err) => panic!("valid composition range rejected: {err}"),
+        };
+        let (handled, _) = presenter.with_event_context(|root, event_cx| {
+            root.handle_text_input_command(
+                event_cx,
+                &TextInputCommand::BeginCompositionReplacing {
+                    text: "你".to_string(),
+                    replacement_range: composition_range,
+                },
+            )
+        });
+        assert!(handled);
+
+        let marked_selection = match Utf16TextRange::new(0, 1) {
+            Ok(range) => range,
+            Err(err) => panic!("valid marked selection rejected: {err}"),
+        };
+        let (handled, _) = presenter.with_event_context(|root, event_cx| {
+            root.handle_text_input_command(
+                event_cx,
+                &TextInputCommand::SetCompositionSelection(marked_selection),
+            )
+        });
+        assert!(handled);
+
+        presenter.paint();
+        let snapshot = match presenter.root().text_input_snapshot(focused) {
+            Some(snapshot) => snapshot,
+            None => panic!("wrapped text field did not expose its native snapshot"),
+        };
+        assert_eq!(snapshot.text(), "a你bc");
+        assert_eq!(snapshot.composition(), Some(TextRange::ordered(1, 4)));
+        assert_eq!(
+            snapshot.selection().normalized_range(),
+            TextRange::ordered(1, 4)
+        );
+        assert!(
+            snapshot.geometry().is_some(),
+            "wrapped snapshot lost geometry: {snapshot:?}"
+        );
     }
 
     #[test]

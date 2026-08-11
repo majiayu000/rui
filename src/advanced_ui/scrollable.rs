@@ -7,11 +7,12 @@ use crate::core::accessibility::{
 use crate::core::color::Color;
 use crate::core::geometry::Size;
 use crate::core::style::Style;
-use crate::core::text_editing::TextInputEvent;
+use crate::core::text_editing::{TextInputCommand, TextInputEvent, TextInputSnapshot};
 use crate::elements::element::{
     AnyElement, Element, EventContext, LayoutContext, PaintContext, PointerEvent,
 };
 use crate::elements::{ScrollDirection, ScrollView};
+use crate::renderer::text::TextMeasureCache;
 use taffy::prelude::NodeId;
 
 pub struct Scrollable {
@@ -158,6 +159,10 @@ impl Element for Scrollable {
         self.inner.paint(cx);
     }
 
+    fn refresh_text_geometry(&mut self, text_measurer: &mut TextMeasureCache) {
+        self.inner.refresh_text_geometry(text_measurer);
+    }
+
     fn accessibility(
         &self,
         cx: &AccessibilityContext,
@@ -260,6 +265,18 @@ impl Element for Scrollable {
             return false;
         }
         self.inner.handle_text_input_event(cx, event)
+    }
+
+    fn handle_text_input_command(
+        &mut self,
+        cx: &mut EventContext,
+        command: &TextInputCommand,
+    ) -> bool {
+        self.state.can_activate() && self.inner.handle_text_input_command(cx, command)
+    }
+
+    fn text_input_snapshot(&self, focused: ElementId) -> Option<TextInputSnapshot> {
+        self.inner.text_input_snapshot(focused)
     }
 
     fn handle_window_event(&mut self, event: &crate::core::event::Event) -> bool {

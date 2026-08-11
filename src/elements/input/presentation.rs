@@ -1,17 +1,220 @@
 use super::{
-    INPUT_CARET_WIDTH, INPUT_GRAPHEME_WIDTH, INPUT_HORIZONTAL_PADDING,
-    INPUT_MARKED_UNDERLINE_HEIGHT, Input, InputType, PASSWORD_MASK,
+    INPUT_CARET_WIDTH, INPUT_HORIZONTAL_PADDING, INPUT_MARKED_UNDERLINE_HEIGHT, Input, InputType,
+    PASSWORD_MASK,
 };
+use crate::core::ElementId;
 use crate::core::color::{Color, Rgba};
-use crate::core::event::Cursor;
+use crate::core::event::{Cursor, KeyCode, KeyEvent};
 use crate::core::geometry::{Bounds, Edges, Point};
 use crate::core::style::Corners;
-use crate::core::text_editing::{TextEditLayout, TextEditPaintStyle, TextRange};
+use crate::core::text_editing::{
+    TextEditError, TextEditLayout, TextEditOutcome, TextEditPaintStyle, TextInputCommand,
+    TextInputGeometry, TextInputSnapshot, TextRange, TextSelection,
+};
 use crate::elements::element::{EventContext, PaintContext};
 use crate::renderer::Primitive;
+use crate::renderer::text::{TextMeasureCache, TextRequest};
 use unicode_segmentation::UnicodeSegmentation;
 
 impl Input {
+    pub fn apply_text_input_command(
+        &mut self,
+        command: TextInputCommand,
+    ) -> Result<TextEditOutcome, TextEditError> {
+        if !self.can_edit() {
+            return Ok(TextEditOutcome::default());
+        }
+        self.sync_editor_from_public_state_if_needed()?;
+        self.visual_caret = None;
+        let outcome = self.editor.apply_text_input_command(command)?;
+        self.sync_state_from_editor();
+        self.emit_change_if_needed(outcome.changed);
+        Ok(outcome)
+    }
+
+    pub(super) fn handle_text_input_command_impl(
+        &mut self,
+        cx: &mut EventContext,
+        command: &TextInputCommand,
+    ) -> bool {
+        if !cx.is_focused(self.id) && !self.state.focused {
+            return false;
+        }
+        match self.apply_text_input_command(command.clone()) {
+            Ok(_) => {
+                cx.request_redraw();
+                true
+            }
+            Err(err) => {
+                log::error!("input text input command failed: {err}");
+                false
+            }
+        }
+    }
+
+    pub(super) fn apply_shaped_navigation(
+        &mut self,
+        event: &KeyEvent,
+    ) -> Option<Result<TextEditOutcome, TextEditError>> {
+        if event.modifiers.alt || event.modifiers.ctrl || event.modifiers.meta {
+            return None;
+        }
+        let selection = self.state_selection();
+        let display_head = self.display_offset_for_value_offset(selection.head())?;
+        let layout = self.current_text_layout()?;
+        let current = self
+            .visual_caret
+            .filter(|caret| caret.offset() == display_head)
+            .map(Ok)
+            .unwrap_or_else(|| layout.visual_caret_for_offset(display_head));
+        let current = match current {
+            Ok(caret) => caret,
+            Err(err) => return Some(Err(err)),
+        };
+        let visual_target = if !event.modifiers.shift && !selection.is_collapsed() {
+            let range = self.display_range_for_value_range(selection.normalized_range())?;
+            match event.key {
+                KeyCode::ArrowLeft => layout.visual_selection_caret(range, false),
+                KeyCode::ArrowRight => layout.visual_selection_caret(range, true),
+                _ => return None,
+            }
+        } else {
+            match event.key {
+                KeyCode::ArrowLeft => layout.visual_caret_horizontal(current, false),
+                KeyCode::ArrowRight => layout.visual_caret_horizontal(current, true),
+                KeyCode::ArrowUp | KeyCode::Home => {
+                    layout.visual_line_edge_caret(display_head, false)
+                }
+                KeyCode::ArrowDown | KeyCode::End => {
+                    layout.visual_line_edge_caret(display_head, true)
+                }
+                _ => return None,
+            }
+        };
+        let visual_target = match visual_target {
+            Ok(target) => target,
+            Err(err) => return Some(Err(err)),
+        };
+        let display_target = visual_target.offset();
+        let target = self.value_offset_for_display_offset(display_target)?;
+        Some((|| {
+            self.sync_editor_from_public_state_if_needed()?;
+            let selection = if event.modifiers.shift {
+                TextSelection::new(self.editor.selection().anchor(), target)
+            } else {
+                TextSelection::collapsed(target)
+            };
+            self.editor.set_selection(selection)?;
+            self.visual_caret = Some(visual_target);
+            self.sync_state_from_editor();
+            Ok(TextEditOutcome::default())
+        })())
+    }
+
+    pub(super) fn set_cursor_from_shaped_point(
+        &mut self,
+        point: Point,
+        bounds: Bounds,
+    ) -> Result<bool, TextEditError> {
+        let origin = self.text_origin(bounds);
+        let visual_target = match self.current_text_layout() {
+            Some(layout) => {
+                layout.visual_caret_for_point(Point::new(point.x - origin.x, point.y - origin.y))
+            }
+            None => return Ok(false),
+        };
+        let display_target = visual_target.offset();
+        let Some(target) = self.value_offset_for_display_offset(display_target) else {
+            return Ok(false);
+        };
+        self.sync_editor_from_public_state_if_needed()?;
+        self.editor.set_cursor(target)?;
+        self.visual_caret = Some(visual_target);
+        self.sync_state_from_editor();
+        Ok(true)
+    }
+
+    pub(super) fn current_text_layout(&self) -> Option<&TextEditLayout> {
+        let display = self.input_layout_text();
+        self.text_layout
+            .as_ref()
+            .filter(|layout| layout.text() == display)
+    }
+
+    pub(super) fn native_text_input_snapshot(
+        &self,
+        focused: ElementId,
+    ) -> Option<TextInputSnapshot> {
+        (self.id == Some(focused)).then(|| {
+            TextInputSnapshot::new(
+                self.state.value.clone(),
+                self.state_selection(),
+                self.state.composition_range,
+            )
+            .with_caret_bounds(self.caret_bounds)
+            .with_geometry(self.native_text_input_geometry())
+        })
+    }
+
+    pub(super) fn native_text_input_geometry(&self) -> Option<TextInputGeometry> {
+        if self.input_type == InputType::Password {
+            return None;
+        }
+        let layout = self.current_text_layout()?;
+        let display_head = self.display_offset_for_value_offset(self.state_selection().head())?;
+        let caret = match self
+            .visual_caret
+            .filter(|caret| caret.offset() == display_head)
+        {
+            Some(caret) => layout.caret_geometry_for_visual_caret(caret).ok()?,
+            None => layout.caret_for_offset(display_head).ok()?,
+        };
+        let bounds = self.caret_bounds?;
+        Some(
+            TextInputGeometry::new(
+                layout.clone(),
+                Point::new(bounds.x() - caret.position.x, bounds.y() - caret.position.y),
+            )
+            .with_visual_caret(self.visual_caret),
+        )
+    }
+
+    pub(super) fn display_offset_for_value_offset(&self, offset: usize) -> Option<usize> {
+        if offset > self.state.value.len() || !self.state.value.is_char_boundary(offset) {
+            return None;
+        }
+
+        if self.input_type == InputType::Password {
+            Some(self.state.value[..offset].graphemes(true).count() * PASSWORD_MASK.len())
+        } else {
+            Some(offset)
+        }
+    }
+
+    pub(super) fn display_range_for_value_range(&self, range: TextRange) -> Option<TextRange> {
+        let start = self.display_offset_for_value_offset(range.start())?;
+        let end = self.display_offset_for_value_offset(range.end())?;
+        TextRange::new(start, end).ok()
+    }
+
+    fn value_offset_for_display_offset(&self, offset: usize) -> Option<usize> {
+        if self.input_type != InputType::Password {
+            return (offset <= self.state.value.len() && self.state.value.is_char_boundary(offset))
+                .then_some(offset);
+        }
+        let mut display_offset = 0;
+        if offset == 0 {
+            return Some(0);
+        }
+        for (value_offset, grapheme) in self.state.value.grapheme_indices(true) {
+            display_offset += PASSWORD_MASK.len();
+            if offset == display_offset {
+                return Some(value_offset + grapheme.len());
+            }
+        }
+        None
+    }
+
     pub(super) fn sync_focus_from_context(&mut self, cx: &mut EventContext<'_>) -> bool {
         let focused = cx.is_focused(self.id);
         if self.state.focused == focused {
@@ -90,12 +293,37 @@ impl Input {
         }
     }
 
-    fn text_layout_for_bounds(&self, bounds: Bounds) -> TextEditLayout {
-        TextEditLayout::new(
-            self.input_layout_text(),
-            INPUT_GRAPHEME_WIDTH,
-            self.cursor_height(bounds),
-        )
+    pub(super) fn update_text_layout(&mut self, cache: &mut TextMeasureCache, height: f32) {
+        let text = self.input_layout_text();
+        let font_size = self.font_size_for_height(height);
+        let plan = match cache.shape_single_line(TextRequest::new(&text, font_size, 400, None, 1.0))
+        {
+            Ok(plan) => plan,
+            Err(err) => panic!("input text shaping failed: {err:?}"),
+        };
+        self.text_layout = Some(
+            match TextEditLayout::from_shape_plan_with_line_height(
+                text,
+                &plan,
+                self.cursor_height_for_height(height),
+            ) {
+                Ok(layout) => layout,
+                Err(err) => panic!("input text layout failed: {err}"),
+            },
+        );
+    }
+
+    pub(super) fn refresh_text_layout_if_stale(&mut self, cache: &mut TextMeasureCache) {
+        if self.current_text_layout().is_none() {
+            self.update_text_layout(cache, self.height.unwrap_or(40.0));
+        }
+    }
+
+    fn text_layout(&self) -> &TextEditLayout {
+        match self.text_layout.as_ref() {
+            Some(layout) => layout,
+            None => panic!("input text layout was not prepared before paint"),
+        }
     }
 
     fn text_origin(&self, bounds: Bounds) -> Point {
@@ -111,19 +339,27 @@ impl Input {
     }
 
     pub(super) fn font_size(&self, bounds: Bounds) -> f32 {
+        self.font_size_for_height(bounds.height())
+    }
+
+    fn font_size_for_height(&self, height: f32) -> f32 {
         let requested = self
             .paint_tokens
             .map(|tokens| tokens.font_size)
             .unwrap_or(14.0);
-        requested.min((bounds.height() - 4.0).max(1.0))
+        requested.min((height - 4.0).max(1.0))
     }
 
     fn cursor_height(&self, bounds: Bounds) -> f32 {
+        self.cursor_height_for_height(bounds.height())
+    }
+
+    fn cursor_height_for_height(&self, height: f32) -> f32 {
         let requested = self
             .paint_tokens
             .map(|tokens| tokens.font_size * 1.4)
             .unwrap_or(20.0);
-        requested.min((bounds.height() - 4.0).max(1.0))
+        requested.min((height - 4.0).max(1.0))
     }
 
     pub(super) fn paint_selection_and_marked_text(&self, cx: &mut PaintContext, bounds: Bounds) {
@@ -131,7 +367,7 @@ impl Input {
             return;
         }
 
-        let layout = self.text_layout_for_bounds(bounds);
+        let layout = self.text_layout();
         let style = TextEditPaintStyle::new(
             INPUT_CARET_WIDTH,
             self.paint_tokens
@@ -186,9 +422,9 @@ impl Input {
         }
     }
 
-    pub(super) fn paint_cursor(&self, cx: &mut PaintContext, bounds: Bounds) {
+    pub(super) fn paint_cursor(&self, cx: &mut PaintContext, bounds: Bounds) -> Option<Bounds> {
         if !self.state.focused {
-            return;
+            return None;
         }
 
         let Some(cursor) = self.display_offset_for_value_offset(self.normalize_cursor_position())
@@ -197,10 +433,10 @@ impl Input {
                 "input cursor paint failed: cursor {} is not a valid display offset",
                 self.state.cursor_position
             );
-            return;
+            return None;
         };
 
-        let layout = self.text_layout_for_bounds(bounds);
+        let layout = self.text_layout();
         let style = TextEditPaintStyle::new(
             INPUT_CARET_WIDTH,
             self.paint_tokens
@@ -213,9 +449,24 @@ impl Input {
                 .with_alpha(0.22)
                 .to_rgba(),
         );
-        match layout.caret_primitive(cursor, self.text_origin(bounds), style) {
-            Ok(primitive) => cx.paint(primitive),
-            Err(err) => log::error!("input caret paint failed: {err}"),
+        match layout.caret_primitive_for_visual_caret(
+            cursor,
+            self.visual_caret,
+            self.text_origin(bounds),
+            style,
+        ) {
+            Ok(primitive) => {
+                let caret_bounds = match &primitive {
+                    Primitive::Quad { bounds, .. } => Some(*bounds),
+                    _ => None,
+                };
+                cx.paint(primitive);
+                caret_bounds
+            }
+            Err(err) => {
+                log::error!("input caret paint failed: {err}");
+                None
+            }
         }
     }
 }

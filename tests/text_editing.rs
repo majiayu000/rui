@@ -3,7 +3,8 @@ use rui::core::event::{KeyCode, KeyEvent, Modifiers};
 use rui::core::geometry::Point;
 use rui::core::text_editing::{
     ClipboardError, MemoryClipboard, TextEditBuffer, TextEditError, TextEditLayout,
-    TextEditPaintStyle, TextInputEvent, TextRange, TextSelection,
+    TextEditPaintStyle, TextInputCommand, TextInputEvent, TextRange, TextSelection, Utf16TextRange,
+    Utf16TextRangeError,
 };
 use rui::renderer::Primitive;
 use rui::renderer::text::{TextMeasureCache, TextRequest};
@@ -20,6 +21,44 @@ fn must<T>(result: Result<T, TextEditError>) -> T {
         Ok(value) => value,
         Err(err) => panic!("text edit operation failed: {err}"),
     }
+}
+
+fn must_utf16<T>(result: Result<T, Utf16TextRangeError>) -> T {
+    match result {
+        Ok(value) => value,
+        Err(err) => panic!("UTF-16 range construction failed: {err}"),
+    }
+}
+
+#[test]
+fn text_input_event_retains_its_exhaustive_legacy_shape() {
+    fn classify(event: TextInputEvent) -> u8 {
+        match event {
+            TextInputEvent::InsertText(_) => 1,
+            TextInputEvent::BeginComposition(_) => 2,
+            TextInputEvent::UpdateComposition(_) => 3,
+            TextInputEvent::CommitComposition(_) => 4,
+            TextInputEvent::CancelComposition => 5,
+        }
+    }
+
+    assert_eq!(classify(TextInputEvent::CancelComposition), 5);
+}
+
+#[test]
+fn text_edit_error_retains_its_exhaustive_legacy_shape() {
+    fn classify(error: TextEditError) -> u8 {
+        match error {
+            TextEditError::InvalidRange { .. } => 1,
+            TextEditError::InvalidBoundary { .. } => 2,
+            TextEditError::CompositionMissing => 3,
+            TextEditError::CompositionActive => 4,
+            TextEditError::MultilineDisabled => 5,
+            TextEditError::Clipboard(_) => 6,
+        }
+    }
+
+    assert_eq!(classify(TextEditError::CompositionMissing), 3);
 }
 
 fn assert_close(left: f32, right: f32) {
@@ -63,6 +102,83 @@ fn text_editing_commit_without_active_composition_inserts_text() {
     assert_eq!(buffer.text(), "hello 你好");
     assert!(buffer.composition().is_none());
     assert_eq!(buffer.cursor(), "hello 你好".len());
+}
+
+#[test]
+fn text_editing_replacement_ranges_convert_utf16_without_splitting_surrogates() {
+    let mut buffer = TextEditBuffer::with_text("a😀bc");
+    let emoji = must_utf16(Utf16TextRange::new(1, 2));
+
+    must(
+        buffer.apply_text_input_command(TextInputCommand::InsertTextReplacing {
+            text: "X".to_string(),
+            replacement_range: emoji,
+        }),
+    );
+
+    assert_eq!(buffer.text(), "aXbc");
+    assert_eq!(buffer.cursor(), 2);
+
+    let invalid = must_utf16(Utf16TextRange::new(0, 1));
+    let mut surrogate = TextEditBuffer::with_text("😀");
+    let error = surrogate
+        .apply_text_input_command(TextInputCommand::InsertTextReplacing {
+            text: "X".to_string(),
+            replacement_range: invalid,
+        })
+        .expect_err("a range ending inside a surrogate pair must fail");
+    assert_eq!(error, TextEditError::InvalidRange { start: 0, end: 1 });
+    assert_eq!(surrogate.text(), "😀");
+
+    assert!(matches!(
+        Utf16TextRange::new(usize::MAX, 1),
+        Err(error) if error.location() == usize::MAX && error.length() == 1
+    ));
+}
+
+#[test]
+fn text_editing_composition_honors_concrete_utf16_replacement_ranges() {
+    let mut buffer = TextEditBuffer::with_text("a😀bc");
+    must(
+        buffer.apply_text_input_command(TextInputCommand::BeginCompositionReplacing {
+            text: "你".to_string(),
+            replacement_range: must_utf16(Utf16TextRange::new(1, 2)),
+        }),
+    );
+    assert_eq!(buffer.text(), "a你bc");
+
+    must(
+        buffer.apply_text_input_command(TextInputCommand::UpdateCompositionReplacing {
+            text: "好".to_string(),
+            replacement_range: must_utf16(Utf16TextRange::new(1, 1)),
+        }),
+    );
+    assert_eq!(buffer.text(), "a好bc");
+
+    must(buffer.apply_text_input_event(TextInputEvent::CancelComposition));
+    assert_eq!(buffer.text(), "a😀bc");
+}
+
+#[test]
+fn text_editing_applies_marked_selection_relative_to_composition_text() {
+    let mut buffer = TextEditBuffer::with_text("ab");
+    must(buffer.set_cursor(1));
+    must(buffer.apply_text_input_event(TextInputEvent::BeginComposition("a😀z".to_string())));
+
+    must(
+        buffer.apply_text_input_command(TextInputCommand::SetCompositionSelection(must_utf16(
+            Utf16TextRange::new(1, 2),
+        ))),
+    );
+    assert_eq!(buffer.selection(), TextSelection::new(2, 6));
+
+    let error = buffer
+        .apply_text_input_command(TextInputCommand::SetCompositionSelection(must_utf16(
+            Utf16TextRange::new(2, 0),
+        )))
+        .expect_err("selection inside a surrogate pair must fail");
+    assert_eq!(error, TextEditError::InvalidRange { start: 2, end: 2 });
+    assert_eq!(buffer.selection(), TextSelection::new(2, 6));
 }
 
 #[test]
@@ -192,6 +308,27 @@ fn text_editing_layout_reports_caret_and_selection_geometry() {
     assert_eq!(rects[0].bounds.width(), 10.0);
     assert_eq!(rects[1].range, range(3, 5));
     assert_eq!(rects[1].bounds.width(), 20.0);
+}
+
+#[test]
+fn text_editing_strict_character_hit_testing_rejects_points_outside_glyphs() {
+    let geometry = rui::core::text_editing::TextInputGeometry::new(
+        TextEditLayout::new("ab", 10.0, 20.0),
+        Point::new(30.0, 40.0),
+    );
+
+    assert_eq!(
+        geometry.text_offset_for_point(Point::new(31.0, 41.0)),
+        Some(0)
+    );
+    assert_eq!(
+        geometry.text_offset_for_point(Point::new(41.0, 41.0)),
+        Some(1)
+    );
+    assert_eq!(geometry.text_offset_for_point(Point::new(29.0, 41.0)), None);
+    assert_eq!(geometry.text_offset_for_point(Point::new(50.0, 41.0)), None);
+    assert_eq!(geometry.text_offset_for_point(Point::new(31.0, 39.0)), None);
+    assert_eq!(geometry.text_offset_for_point(Point::new(31.0, 60.0)), None);
 }
 
 #[test]
@@ -343,6 +480,121 @@ fn text_editing_selection_uses_visual_cluster_bounds_for_rtl_shape_plans() {
     assert_eq!(full_rects.len(), 1);
     assert_close(full_rects[0].bounds.x(), min_x);
     assert_close(full_rects[0].bounds.width(), max_x - min_x);
+}
+
+#[test]
+fn text_editing_mixed_bidi_selection_uses_disjoint_visual_rects() {
+    let text = "abc שלום";
+    let mut cache = TextMeasureCache::new();
+    let plan = cache
+        .shape_single_line(TextRequest::new(text, 24.0, 400, None, 1.2))
+        .unwrap_or_else(|err| panic!("mixed bidi shaping failed: {err:?}"));
+    let layout = must(TextEditLayout::from_shape_plan(text, &plan));
+    let latin = plan
+        .clusters()
+        .iter()
+        .rev()
+        .find(|cluster| cluster.direction == rui::renderer::text::TextDirection::LeftToRight)
+        .unwrap_or_else(|| panic!("mixed bidi plan had no LTR cluster"));
+    let rtl = plan
+        .clusters()
+        .iter()
+        .find(|cluster| cluster.direction == rui::renderer::text::TextDirection::RightToLeft)
+        .unwrap_or_else(|| panic!("mixed bidi plan had no RTL cluster"));
+
+    let rects = must(layout.selection_rects(range(latin.byte_start, rtl.byte_end)));
+    assert_eq!(rects.len(), 2);
+    assert!(rects[0].bounds.max_x() < rects[1].bounds.x());
+    let selected_width = plan
+        .clusters()
+        .iter()
+        .filter(|cluster| cluster.byte_end > latin.byte_start && cluster.byte_start < rtl.byte_end)
+        .map(|cluster| cluster.advance_width)
+        .sum::<f32>();
+    assert_close(
+        rects.iter().map(|rect| rect.bounds.width()).sum(),
+        selected_width,
+    );
+}
+
+#[test]
+fn text_editing_shape_layout_drives_rtl_navigation_and_hit_testing() {
+    let text = "שלום";
+    let mut cache = TextMeasureCache::new();
+    let plan = cache
+        .shape_single_line(TextRequest::new(text, 24.0, 400, None, 1.2))
+        .unwrap_or_else(|err| panic!("text shaping failed: {err:?}"));
+    let layout = must(TextEditLayout::from_shape_plan(text, &plan));
+
+    let logical_end = text.len();
+    let right = must(layout.visual_offset_right(logical_end));
+    assert_ne!(right, logical_end);
+    assert!(
+        must(layout.caret_for_offset(right)).position.x
+            > must(layout.caret_for_offset(logical_end)).position.x
+    );
+    assert_eq!(must(layout.visual_line_start(0)), logical_end);
+    assert_eq!(must(layout.visual_line_end(0)), 0);
+    assert_eq!(
+        must(layout.visual_selection_edge(range(0, logical_end), false)),
+        logical_end
+    );
+    assert_eq!(
+        must(layout.visual_selection_edge(range(0, logical_end), true)),
+        0
+    );
+
+    let first = &plan.clusters()[0];
+    let hit = layout.offset_for_point(Point::new(
+        first.x_offset + first.advance_width,
+        plan.metrics().size.height / 2.0,
+    ));
+    assert!(hit == first.byte_start || hit == first.byte_end);
+}
+
+#[test]
+fn text_editing_multiline_shape_layout_uses_visual_x_for_vertical_navigation() {
+    let text = "Wi\nשלום";
+    let mut cache = TextMeasureCache::new();
+    let plans = [
+        cache
+            .shape_single_line(TextRequest::new("Wi", 14.0, 400, None, 1.0))
+            .unwrap_or_else(|err| panic!("first line shaping failed: {err:?}")),
+        cache
+            .shape_single_line(TextRequest::new("שלום", 14.0, 400, None, 1.0))
+            .unwrap_or_else(|err| panic!("second line shaping failed: {err:?}")),
+    ];
+    let layout = must(TextEditLayout::from_line_shape_plans(text, &plans, 20.0));
+    let second_line_end = text.len();
+    let target = must(layout.visual_offset_up(second_line_end));
+    let source_x = must(layout.caret_for_offset(second_line_end)).position.x;
+    let target_x = must(layout.caret_for_offset(target)).position.x;
+    let alternatives = [
+        must(layout.caret_for_offset(0)).position.x,
+        must(layout.caret_for_offset(1)).position.x,
+        must(layout.caret_for_offset(2)).position.x,
+    ];
+
+    assert!(
+        alternatives
+            .iter()
+            .all(|x| { (target_x - source_x).abs() <= (*x - source_x).abs() + f32::EPSILON })
+    );
+    assert_eq!(must(layout.visual_offset_down(target)), second_line_end);
+}
+
+#[test]
+fn text_editing_shaped_layout_clamps_negative_line_height() {
+    let mut cache = TextMeasureCache::new();
+    let plan = cache
+        .shape_single_line(TextRequest::new("text", 14.0, 400, None, 1.0))
+        .unwrap_or_else(|err| panic!("text shaping failed: {err:?}"));
+    let layout = must(TextEditLayout::from_shape_plan_with_line_height(
+        "text", &plan, -10.0,
+    ));
+
+    assert_eq!(layout.lines()[0].measured_size().height, 0.0);
+    assert_eq!(must(layout.caret_for_offset(0)).height, 0.0);
 }
 
 #[test]

@@ -3,11 +3,12 @@ use crate::advanced_ui::tokens::{ControlSize, Theme};
 use crate::core::ElementId;
 use crate::core::geometry::{Bounds, Edges};
 use crate::core::style::{Corners, Style};
-use crate::core::text_editing::TextInputEvent;
+use crate::core::text_editing::{TextInputCommand, TextInputEvent, TextInputSnapshot};
 use crate::elements::element::{
     AnyElement, Element, EventContext, LayoutContext, PaintContext, PointerEvent, PointerEventKind,
 };
 use crate::renderer::Primitive;
+use crate::renderer::text::TextMeasureCache;
 use taffy::prelude::NodeId;
 
 pub struct Tooltip {
@@ -111,6 +112,10 @@ impl Element for Tooltip {
         }
     }
 
+    fn refresh_text_geometry(&mut self, text_measurer: &mut TextMeasureCache) {
+        self.child.refresh_text_geometry(text_measurer);
+    }
+
     fn handle_pointer_event(&mut self, cx: &mut EventContext, event: &PointerEvent) -> bool {
         if matches!(event.kind, PointerEventKind::Move) {
             self.state.update_hover(cx.bounds(), event.position, cx);
@@ -156,6 +161,18 @@ impl Element for Tooltip {
 
     fn handle_text_input_event(&mut self, cx: &mut EventContext, event: &TextInputEvent) -> bool {
         self.child.handle_text_input_event(cx, event)
+    }
+
+    fn handle_text_input_command(
+        &mut self,
+        cx: &mut EventContext,
+        command: &TextInputCommand,
+    ) -> bool {
+        self.child.handle_text_input_command(cx, command)
+    }
+
+    fn text_input_snapshot(&self, focused: ElementId) -> Option<TextInputSnapshot> {
+        self.child.text_input_snapshot(focused)
     }
 
     fn handle_window_event(&mut self, event: &crate::core::event::Event) -> bool {

@@ -332,13 +332,17 @@ cargo run --example animation_demo
 
 Most validation is CI-safe and finite: `cargo check`, `cargo test`, `cargo test example_smoke`, `cargo test dogfood`, and `cargo test --test docs_api_drift`.
 
-The native macOS smoke is local-only because it opens a real window and uses native runner automation to type into an input, minimize and reopen the app window, write `RUI_NATIVE_DOGFOOD_PROFILE`, and exit:
+The native macOS smoke is local-only because it opens a real window and uses native runner automation to type into an input, minimize and reopen the app window, write `RUI_NATIVE_DOGFOOD_PROFILE`, capture and validate renderer frame telemetry from `RUI_PROFILE`, and exit:
 
 ```bash
 scripts/native_dogfood_macos.sh
 ```
 
-The script writes `target/rui-native-dogfood-profile.json` by default.
+The command writes the interaction result to
+`target/rui-native-dogfood-profile.json`, renderer JSONL to
+`target/rui-native-dogfood-renderer-profile.jsonl`, and the combined process
+log to `target/rui-native-dogfood.log`. Override the renderer artifact with
+`RUI_NATIVE_DOGFOOD_RENDERER_PROFILE` when another location is needed.
 
 ## Requirements
 

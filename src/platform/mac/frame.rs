@@ -18,7 +18,10 @@ use crate::elements::element::Element;
 use crate::platform::mac::accessibility::MacAccessibilityActionRequest;
 use crate::platform::mac::accessibility::MacAccessibilityRequest;
 use crate::platform::mac::app::{OrderedInputEvent, schedule_platform_redraw};
-use crate::platform::window::PlatformWindow;
+use crate::platform::mac::ime_state::{
+    NativeImeState, cancel_composition_if_owner_lost, dispatch_text_input_event,
+};
+use crate::platform::mac::window::MacWindow;
 
 /// Backend-neutral events collected from one poll of the platform window.
 pub(crate) struct NativeFrameEvents {
@@ -34,16 +37,20 @@ pub(crate) struct NativeFrameEvents {
 ///
 /// Returns whether a resize was applied, so the caller can advance the size it
 /// compares against on the next poll.
-pub(crate) fn dispatch_native_events<E, W>(
+pub(crate) fn dispatch_native_events<E>(
     presenter: &mut Presenter<E>,
     context: &mut AppContext,
-    window: &W,
+    window: &MacWindow,
     events: &NativeFrameEvents,
+    ime_state: &mut NativeImeState,
 ) -> bool
 where
     E: Element,
-    W: PlatformWindow,
 {
+    if cancel_composition_if_owner_lost(presenter, window, ime_state) {
+        schedule_platform_redraw(window, context, RedrawSource::PlatformInput);
+    }
+
     if events.viewport_changed {
         presenter.handle_window_event(&Event::WindowResize {
             width: events.viewport_size.width,
@@ -59,6 +66,7 @@ where
             Event::Blur(FocusEvent { focused: false })
         };
         presenter.handle_window_event(&event);
+        cancel_composition_if_owner_lost(presenter, window, ime_state);
         schedule_platform_redraw(window, context, RedrawSource::PlatformFocus);
     }
 
@@ -70,6 +78,9 @@ where
 
     if let Some(focused) = events.automation_focused_element {
         presenter.set_focused_element(Some(focused));
+        if cancel_composition_if_owner_lost(presenter, window, ime_state) {
+            schedule_platform_redraw(window, context, RedrawSource::PlatformInput);
+        }
     }
 
     for event in &events.ordered_input_events {
@@ -92,9 +103,8 @@ where
                 (handled, redraw_requested, RedrawSource::PlatformInput)
             }
             OrderedInputEvent::Text(event) => {
-                let (handled, redraw_requested) = presenter.with_event_context(|root, event_cx| {
-                    root.handle_text_input_event(event_cx, event)
-                });
+                let (handled, redraw_requested) =
+                    dispatch_text_input_event(presenter, ime_state, event);
                 (handled, redraw_requested, RedrawSource::PlatformInput)
             }
             OrderedInputEvent::Accessibility(request) => {
@@ -102,7 +112,8 @@ where
                 (handled, redraw_requested, RedrawSource::PlatformInput)
             }
         };
-        if handled || redraw_requested {
+        let focus_cancelled = cancel_composition_if_owner_lost(presenter, window, ime_state);
+        if handled || redraw_requested || focus_cancelled {
             schedule_platform_redraw(window, context, redraw_source);
         }
     }
@@ -267,6 +278,7 @@ mod tests {
     use crate::core::action::ActionOutcome;
     use crate::core::geometry::Bounds;
     use crate::core::style::Style;
+    use crate::core::text_editing::TextInputCommand;
     use crate::elements::Input;
     use crate::elements::element::{EventContext, LayoutContext, PaintContext};
     use std::cell::RefCell;
@@ -399,6 +411,36 @@ mod tests {
     fn only_key_down_events_are_forwarded_to_elements() {
         assert!(should_forward_key_event_to_tree(true));
         assert!(!should_forward_key_event_to_tree(false));
+    }
+
+    #[test]
+    fn native_ime_owner_is_cancelled_before_events_can_reach_new_focus() {
+        let first = ElementId::from(1);
+        let second = ElementId::from(2);
+        let mut state = NativeImeState::default();
+
+        assert_eq!(
+            state.target_for_event(
+                &TextInputCommand::BeginComposition("draft".to_string()),
+                Some(first),
+            ),
+            Some(first)
+        );
+        assert_eq!(
+            state.cancel_owner_after_focus_change(Some(first), true),
+            None
+        );
+        assert_eq!(
+            state.cancel_owner_after_focus_change(Some(second), true),
+            Some(first)
+        );
+        assert_eq!(
+            state.target_for_event(
+                &TextInputCommand::UpdateComposition("stale".to_string()),
+                Some(second),
+            ),
+            None
+        );
     }
 
     #[test]

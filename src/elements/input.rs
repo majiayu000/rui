@@ -13,19 +13,18 @@ use crate::core::event::{KeyCode, KeyEvent, Modifiers};
 use crate::core::geometry::{Bounds, Edges};
 use crate::core::style::{Corners, Style};
 use crate::core::text_editing::{
-    Clipboard, TextEditBuffer, TextEditError, TextEditOutcome, TextInputEvent, TextRange,
-    TextSelection,
+    Clipboard, TextEditBuffer, TextEditError, TextEditOutcome, TextInputCommand, TextInputEvent,
+    TextInputSnapshot, TextRange, TextSelection, VisualCaret,
 };
 use crate::elements::element::{
     Element, EventContext, LayoutContext, PaintContext, PointerEvent, PointerEventKind,
     style_to_taffy,
 };
 use crate::renderer::Primitive;
+use crate::renderer::text::TextMeasureCache;
 use taffy::prelude::*;
-use unicode_segmentation::UnicodeSegmentation;
 
 const INPUT_HORIZONTAL_PADDING: f32 = 12.0;
-const INPUT_GRAPHEME_WIDTH: f32 = 7.0;
 const INPUT_CARET_WIDTH: f32 = 1.5;
 const INPUT_MARKED_UNDERLINE_HEIGHT: f32 = 2.0;
 const PASSWORD_MASK: &str = "\u{2022}";
@@ -83,8 +82,10 @@ pub struct Input {
     on_cancel: Option<Box<dyn Fn()>>,
     on_focus: Option<Box<dyn Fn()>>,
     on_blur: Option<Box<dyn Fn()>>,
-    layout_node: Option<NodeId>,
     paint_tokens: Option<InputPaintTokens>,
+    caret_bounds: Option<Bounds>,
+    text_layout: Option<crate::core::text_editing::TextEditLayout>,
+    visual_caret: Option<VisualCaret>,
 }
 
 impl Input {
@@ -109,8 +110,10 @@ impl Input {
             on_cancel: None,
             on_focus: None,
             on_blur: None,
-            layout_node: None,
             paint_tokens: None,
+            caret_bounds: None,
+            text_layout: None,
+            visual_caret: None,
         }
     }
 
@@ -246,14 +249,7 @@ impl Input {
         &mut self,
         event: TextInputEvent,
     ) -> Result<TextEditOutcome, TextEditError> {
-        if !self.can_edit() {
-            return Ok(TextEditOutcome::default());
-        }
-        self.sync_editor_from_public_state_if_needed()?;
-        let outcome = self.editor.apply_text_input_event(event)?;
-        self.sync_state_from_editor();
-        self.emit_change_if_needed(outcome.changed);
-        Ok(outcome)
+        self.apply_text_input_command(event.into())
     }
 
     pub fn apply_key_event(&mut self, event: &KeyEvent) -> Result<TextEditOutcome, TextEditError> {
@@ -261,6 +257,7 @@ impl Input {
             return Ok(TextEditOutcome::default());
         }
         self.sync_editor_from_public_state_if_needed()?;
+        self.visual_caret = None;
         let outcome = if event.key == KeyCode::Escape {
             TextEditOutcome {
                 changed: false,
@@ -304,6 +301,7 @@ impl Input {
             return Ok(TextEditOutcome::default());
         }
         self.sync_editor_from_public_state_if_needed()?;
+        self.visual_caret = None;
         let outcome = self.editor.cut_selection_to(clipboard)?;
         self.sync_state_from_editor();
         self.emit_change_if_needed(outcome.changed);
@@ -318,6 +316,7 @@ impl Input {
             return Ok(TextEditOutcome::default());
         }
         self.sync_editor_from_public_state_if_needed()?;
+        self.visual_caret = None;
         let outcome = self.editor.paste_from(clipboard)?;
         self.sync_state_from_editor();
         self.emit_change_if_needed(outcome.changed);
@@ -360,6 +359,7 @@ impl Input {
         let mut editor = TextEditBuffer::with_text(self.state.value.clone());
         editor.set_selection(self.state_selection())?;
         self.editor = editor;
+        self.visual_caret = None;
         self.sync_state_from_editor();
         Ok(())
     }
@@ -461,24 +461,6 @@ impl Input {
             .char
             .is_some_and(|ch| !ch.is_control() || matches!(ch, '\n' | '\r'))
     }
-
-    fn display_offset_for_value_offset(&self, offset: usize) -> Option<usize> {
-        if offset > self.state.value.len() || !self.state.value.is_char_boundary(offset) {
-            return None;
-        }
-
-        if self.input_type == InputType::Password {
-            Some(self.state.value[..offset].graphemes(true).count() * PASSWORD_MASK.len())
-        } else {
-            Some(offset)
-        }
-    }
-
-    fn display_range_for_value_range(&self, range: TextRange) -> Option<TextRange> {
-        let start = self.display_offset_for_value_offset(range.start())?;
-        let end = self.display_offset_for_value_offset(range.end())?;
-        TextRange::new(start, end).ok()
-    }
 }
 
 impl Default for Input {
@@ -496,7 +478,12 @@ impl Element for Input {
         &self.style
     }
 
+    fn text_input_snapshot(&self, focused: ElementId) -> Option<TextInputSnapshot> {
+        self.native_text_input_snapshot(focused)
+    }
+
     fn layout(&mut self, cx: &mut LayoutContext) -> NodeId {
+        self.update_text_layout(cx.text_measurer(), self.height.unwrap_or(40.0));
         let mut style = style_to_taffy(&self.style);
         style.size.height = Dimension::Length(self.height.unwrap_or(40.0));
         if let Some(w) = self.width {
@@ -515,8 +502,11 @@ impl Element for Input {
             .taffy
             .new_leaf(style)
             .expect("Failed to create input layout node");
-        self.layout_node = Some(node);
         node
+    }
+
+    fn refresh_text_geometry(&mut self, text_measurer: &mut TextMeasureCache) {
+        self.refresh_text_layout_if_stale(text_measurer);
     }
 
     fn paint(&mut self, cx: &mut PaintContext) {
@@ -581,7 +571,7 @@ impl Element for Input {
             });
         }
 
-        self.paint_cursor(cx, bounds);
+        self.caret_bounds = self.paint_cursor(cx, bounds);
         cx.scene.pop_layer();
     }
 
@@ -601,6 +591,16 @@ impl Element for Input {
             }
             PointerEventKind::Down => {
                 if inside {
+                    if matches!(
+                        event.button,
+                        None | Some(crate::core::event::MouseButton::Left)
+                    ) {
+                        match self.set_cursor_from_shaped_point(event.position, cx.bounds()) {
+                            Ok(true) => cx.request_redraw(),
+                            Ok(false) => {}
+                            Err(err) => log::error!("input pointer text positioning failed: {err}"),
+                        }
+                    }
                     if !self.state.focused {
                         self.state.focused = true;
                         if let Some(handler) = &self.on_focus {
@@ -625,20 +625,15 @@ impl Element for Input {
     }
 
     fn handle_text_input_event(&mut self, cx: &mut EventContext, event: &TextInputEvent) -> bool {
-        if !cx.is_focused(self.id) && !self.state.focused {
-            return false;
-        }
+        self.handle_text_input_command_impl(cx, &event.clone().into())
+    }
 
-        match self.apply_text_input_event(event.clone()) {
-            Ok(_) => {
-                cx.request_redraw();
-                true
-            }
-            Err(err) => {
-                log::error!("input text input event failed: {err}");
-                false
-            }
-        }
+    fn handle_text_input_command(
+        &mut self,
+        cx: &mut EventContext,
+        command: &TextInputCommand,
+    ) -> bool {
+        self.handle_text_input_command_impl(cx, command)
     }
 
     fn handle_key_event(
@@ -654,7 +649,10 @@ impl Element for Input {
             return false;
         }
 
-        match self.apply_key_event(event) {
+        let result = self
+            .apply_shaped_navigation(event)
+            .unwrap_or_else(|| self.apply_key_event(event));
+        match result {
             Ok(_) => {
                 cx.request_redraw();
                 true
@@ -686,6 +684,7 @@ impl Element for Input {
         }
 
         if *action == StandardAction::SelectAll {
+            self.visual_caret = None;
             let result = self
                 .sync_editor_from_public_state_if_needed()
                 .and_then(|_| {
@@ -722,7 +721,10 @@ impl Element for Input {
             _ => return ActionOutcome::Ignored,
         };
 
-        match self.apply_key_event(&event) {
+        match self
+            .apply_shaped_navigation(&event)
+            .unwrap_or_else(|| self.apply_key_event(&event))
+        {
             Ok(_) => {
                 cx.request_redraw();
                 ActionOutcome::handled("input")

@@ -184,7 +184,7 @@ flows, explicit telemetry policy, and docs/API drift checks.
 | --- | --- | --- | --- |
 | Finite example smoke | `cargo test example_smoke` | Headless one-frame examples and missing-capture diagnostics. | Blocking for example regressions, not sufficient for production readiness. |
 | Repository dogfood | `cargo test dogfood` | Local repository data, input/filter workflow, panel switching, refresh, accessibility labels, and native dogfood script/profile contract. | Blocking for dogfood contract regressions. |
-| Native macOS dogfood | `scripts/native_dogfood_macos.sh` | Local-only GUI automation: type text, submit, minimize, reopen, profile output, and finite exit. | Manual/local gate before stronger native runtime claims; not CI-safe. |
+| Native macOS dogfood | `scripts/native_dogfood_macos.sh` | Local-only GUI automation: type text, submit, minimize, reopen, finite exit, and validated `RUI_PROFILE` JSONL containing frame interval, event-to-render latency, phase timings, p95/p99, and jank count. | Manual/local gate before stronger native runtime claims; not CI-safe. |
 | Benchmark policy | `cargo test benchmark_config` | Baseline schema, required runtime categories, threshold policy, and noise classification. | Blocking for policy/schema drift; performance enforcement remains advisory while `enforcement_enabled` is false. |
 | Benchmark report | `cargo bench --bench runtime_baselines` | Layout, text, scene build, pointer dispatch, and recording throughput measurements. | Advisory until stable CI hardware and calibration history justify enforcement. |
 | Docs/API drift | `cargo test --test docs_api_drift` | Public API docs and validation command references. | Blocking for docs/API mismatch. |

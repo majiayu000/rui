@@ -5,12 +5,13 @@ use crate::core::action::{ActionId, ActionOutcome};
 use crate::core::color::Color;
 use crate::core::geometry::{Bounds, Edges, Size};
 use crate::core::style::{Corners, Overflow, Style};
-use crate::core::text_editing::TextInputEvent;
+use crate::core::text_editing::{TextInputCommand, TextInputEvent};
 use crate::elements::element::{
     AnyElement, Element, EventContext, LayoutContext, PaintContext, PointerEvent, PointerEventKind,
     style_to_taffy,
 };
 use crate::renderer::Primitive;
+use crate::renderer::text::TextMeasureCache;
 use smallvec::SmallVec;
 use taffy::prelude::*;
 
@@ -494,6 +495,12 @@ impl Element for ScrollView {
         &self.children
     }
 
+    fn refresh_text_geometry(&mut self, text_measurer: &mut TextMeasureCache) {
+        for child in &mut self.children {
+            child.refresh_text_geometry(text_measurer);
+        }
+    }
+
     fn handle_pointer_event(&mut self, cx: &mut EventContext, event: &PointerEvent) -> bool {
         let is_move = matches!(event.kind, PointerEventKind::Move);
         let mut handled = false;
@@ -662,6 +669,48 @@ impl Element for ScrollView {
         }
 
         false
+    }
+
+    fn handle_text_input_command(
+        &mut self,
+        cx: &mut EventContext,
+        command: &TextInputCommand,
+    ) -> bool {
+        let bounds = cx.bounds();
+        if let Some(focused) = cx.focused_id() {
+            for (child, node) in self
+                .children
+                .iter_mut()
+                .zip(self.child_nodes.iter().copied())
+                .rev()
+            {
+                if child.contains_id(focused) {
+                    let child_bounds = scrolled_child_bounds(
+                        cx,
+                        node,
+                        bounds,
+                        self.state.offset_x,
+                        self.state.offset_y,
+                    );
+                    return child
+                        .handle_text_input_command(&mut cx.with_bounds(child_bounds), command);
+                }
+            }
+        }
+        self.children
+            .iter_mut()
+            .zip(self.child_nodes.iter().copied())
+            .rev()
+            .any(|(child, node)| {
+                let child_bounds = scrolled_child_bounds(
+                    cx,
+                    node,
+                    bounds,
+                    self.state.offset_x,
+                    self.state.offset_y,
+                );
+                child.handle_text_input_command(&mut cx.with_bounds(child_bounds), command)
+            })
     }
 
     fn handle_window_event(&mut self, event: &crate::core::event::Event) -> bool {

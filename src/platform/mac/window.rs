@@ -4,11 +4,17 @@ use crate::core::event::{KeyCode, KeyEvent, Modifiers, MouseButton, ScrollEvent}
 use crate::core::geometry::{Point, Size};
 use crate::core::window::WindowOptions;
 use crate::platform::mac::MacAccessibilityBridge;
+use crate::platform::mac::events::{
+    MAC_REDRAW_EVENT_DATA, MacApplicationEvent, MacWindowEvent, append_platform_events,
+    application_event, post_application_event,
+};
+use crate::platform::mac::key_suppression::SuppressedKeyUps;
 use crate::platform::mac::lifecycle::{MacLifecycleDelegate, MacLifecycleEvent};
+use crate::platform::mac::text_input::{RuiContentView, suppress_key_down_for_ime};
 use crate::platform::window::{
-    PlatformImeEvent, PlatformInputEvent, PlatformMouseEvent, PlatformMouseEventKind,
-    PlatformRendererAttachment, PlatformRendererTarget, PlatformWindow, PlatformWindowError,
-    PlatformWindowEvent, PlatformWindowFeatures, PlatformWindowState, validate_window_options,
+    PlatformInputEvent, PlatformMouseEvent, PlatformMouseEventKind, PlatformRendererAttachment,
+    PlatformRendererTarget, PlatformWindow, PlatformWindowError, PlatformWindowEvent,
+    PlatformWindowFeatures, PlatformWindowState, validate_window_options,
 };
 use metal::Device;
 use metal::foreign_types::ForeignType;
@@ -23,13 +29,9 @@ use objc2_app_kit::{
 use objc2_foundation::{NSDate, NSDefaultRunLoopMode, NSPoint, NSRect, NSSize, NSString};
 use objc2_quartz_core::CAMetalLayer;
 
-use crate::platform::mac::events::{
-    MAC_REDRAW_EVENT_DATA, MacApplicationEvent, MacWindowEvent, append_platform_events,
-    application_event, post_application_event,
-};
-
 pub struct MacWindow {
     window: Retained<NSWindow>,
+    pub(super) content_view: Retained<RuiContentView>,
     metal_layer: Retained<CAMetalLayer>,
     accessibility_bridge: MacAccessibilityBridge,
     last_content_size: Size,
@@ -38,12 +40,17 @@ pub struct MacWindow {
     last_visible: bool,
     last_miniaturized: bool,
     created_event_pending: bool,
+    suppressed_key_ups: SuppressedKeyUps,
     lifecycle_delegate: Retained<MacLifecycleDelegate>,
 }
 
 impl MacWindow {
     pub(crate) fn accessibility_bridge_mut(&mut self) -> &mut MacAccessibilityBridge {
         &mut self.accessibility_bridge
+    }
+
+    pub(crate) fn discard_marked_text(&self) {
+        self.content_view.discard_marked_text();
     }
 
     pub(crate) fn make_key_and_order_front(&self) {
@@ -158,7 +165,10 @@ impl MacWindow {
         ) {
             expiration = NSDate::distantPast();
 
-            if event.windowNumber() != window_number {
+            if !event_ends_poll_batch(event.windowNumber(), window_number) {
+                if event.r#type() == NSEventType::KeyUp {
+                    self.suppressed_key_ups.forget_key_up(event.keyCode());
+                }
                 app.sendEvent(&event);
                 let mut lifecycle_events = Vec::new();
                 self.push_delegate_lifecycle_events(&mut lifecycle_events)?;
@@ -173,29 +183,41 @@ impl MacWindow {
                         events.push(MacWindowEvent::Platform(
                             PlatformWindowEvent::RedrawRequested,
                         ));
-                        continue;
+                        break;
                     }
                     Some(MacApplicationEvent::Accessibility) => {
                         if let Some(request) = self.accessibility_bridge.take_action_request() {
                             events.push(MacWindowEvent::Accessibility(request));
                         }
-                        continue;
+                        break;
                     }
                     None => {}
                 }
             }
 
             let mut platform_events = Vec::new();
-            append_platform_events_from_native_event(
-                &event,
-                self.last_content_size,
-                &mut platform_events,
-            );
-            append_platform_events(&mut events, platform_events);
+            let suppress_key_up = event_type == NSEventType::KeyUp
+                && !self.suppressed_key_ups.should_emit_key_up(event.keyCode());
+            if !suppress_key_up {
+                append_platform_events_from_native_event(
+                    &event,
+                    self.last_content_size,
+                    &mut platform_events,
+                );
+            }
             app.sendEvent(&event);
+            let ime_events = self.content_view.drain_ime_events();
+            let consumed_key_down = suppress_key_down_for_ime(&mut platform_events, &ime_events);
+            if event_type == NSEventType::KeyDown {
+                self.suppressed_key_ups
+                    .record_key_down(event.keyCode(), consumed_key_down);
+            }
+            append_platform_events(&mut events, platform_events);
+            events.extend(ime_events.into_iter().map(MacWindowEvent::Text));
             let mut lifecycle_events = Vec::new();
             self.push_delegate_lifecycle_events(&mut lifecycle_events)?;
             append_platform_events(&mut events, lifecycle_events);
+            break;
         }
 
         let mut lifecycle_events = Vec::new();
@@ -231,6 +253,9 @@ impl MacWindow {
         let focused = self.is_focused();
         if focused != self.last_focused {
             self.last_focused = focused;
+            if !focused {
+                self.suppressed_key_ups.clear();
+            }
             events.push(PlatformWindowEvent::FocusChanged(focused));
         }
 
@@ -270,6 +295,9 @@ impl MacWindow {
                 }
                 MacLifecycleEvent::FocusChanged(focused) => {
                     self.last_focused = focused;
+                    if !focused {
+                        self.suppressed_key_ups.clear();
+                    }
                     events.push(PlatformWindowEvent::FocusChanged(focused));
                 }
                 MacLifecycleEvent::Resized => {
@@ -288,6 +316,10 @@ impl MacWindow {
 
         Ok(())
     }
+}
+
+fn event_ends_poll_batch(event_window_number: isize, target_window_number: isize) -> bool {
+    event_window_number == target_window_number
 }
 
 impl PlatformWindow for MacWindow {
@@ -383,15 +415,10 @@ impl PlatformWindow for MacWindow {
             PlatformWindowError::backend("macos", "event polling must run on the main thread")
         })?;
         let app = NSApplication::sharedApplication(mtm);
-        self.poll_events_for_app(&app, false).map(|events| {
-            events
-                .into_iter()
-                .map(|event| match event {
-                    MacWindowEvent::Platform(event) => event,
-                    MacWindowEvent::Accessibility(_) => PlatformWindowEvent::RedrawRequested,
-                })
-                .collect()
-        })
+        self.poll_events_for_app(&app, false)?
+            .into_iter()
+            .map(MacWindowEvent::try_into_platform_event)
+            .collect()
     }
 
     fn renderer_attachment(&self) -> Result<PlatformRendererAttachment, PlatformWindowError> {
@@ -459,25 +486,9 @@ fn append_platform_events_from_native_event(
     }
 
     if event_type == NSEventType::KeyDown {
-        let mut key_event = key_event_from_native_event(event);
-        let committed_text = committed_text_from_native_event(event);
-        let commit_represented_by_key = committed_text
-            .as_deref()
-            .is_some_and(|text| committed_text_matches_key_event(text, &key_event));
-        if committed_text.is_some() && !commit_represented_by_key {
-            key_event.char = None;
-        }
         events.push(PlatformWindowEvent::Input(PlatformInputEvent::KeyDown(
-            key_event,
+            key_event_from_native_event(event),
         )));
-        if let Some(text) = committed_text {
-            if commit_represented_by_key {
-                return;
-            }
-            events.push(PlatformWindowEvent::Input(PlatformInputEvent::Ime(
-                PlatformImeEvent::Commit(text),
-            )));
-        }
     } else if event_type == NSEventType::KeyUp {
         events.push(PlatformWindowEvent::Input(PlatformInputEvent::KeyUp(
             key_event_from_native_event(event),
@@ -583,26 +594,6 @@ fn key_event_from_native_event(event: &NSEvent) -> KeyEvent {
     }
 
     key_event
-}
-
-fn committed_text_from_native_event(event: &NSEvent) -> Option<String> {
-    if event.isARepeat() {
-        return None;
-    }
-
-    let text = event.characters()?.to_string();
-    if text.is_empty() || text.chars().all(char::is_control) {
-        return None;
-    }
-    Some(text)
-}
-
-fn committed_text_matches_key_event(text: &str, event: &KeyEvent) -> bool {
-    let mut chars = text.chars();
-    let Some(first) = chars.next() else {
-        return false;
-    };
-    chars.next().is_none() && event.char == Some(first)
 }
 
 fn clipboard_text_or_error(text: Option<String>) -> Result<String, PlatformWindowError> {
@@ -711,8 +702,9 @@ pub unsafe fn create_window(
     let title = NSString::from_str(&options.title);
     window.setTitle(&title);
 
-    // Get content view
-    let content_view = window.contentView().expect("No content view");
+    let content_frame = NSRect::new(NSPoint::new(0.0, 0.0), frame.size);
+    let content_view = RuiContentView::new(content_frame, mtm);
+    window.setContentView(Some(&content_view));
 
     // Create Metal layer
     let metal_layer = CAMetalLayer::new();
@@ -749,11 +741,14 @@ pub unsafe fn create_window(
     // Center window on screen
     window.center();
 
-    let accessibility_bridge =
-        MacAccessibilityBridge::attached_to(content_view.clone(), window.windowNumber());
+    let accessibility_bridge = MacAccessibilityBridge::attached_to(
+        Retained::into_super(content_view.clone()),
+        window.windowNumber(),
+    );
 
     Ok(MacWindow {
         window,
+        content_view,
         metal_layer,
         accessibility_bridge,
         last_content_size: options.size,
@@ -762,6 +757,7 @@ pub unsafe fn create_window(
         last_visible: false,
         last_miniaturized: false,
         created_event_pending: true,
+        suppressed_key_ups: SuppressedKeyUps::default(),
         lifecycle_delegate,
     })
 }

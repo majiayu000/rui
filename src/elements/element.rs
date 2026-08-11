@@ -9,7 +9,7 @@ use crate::core::action::{ActionId, ActionOutcome};
 use crate::core::event::{Cursor, KeyEvent, MouseButton, ScrollEvent};
 use crate::core::geometry::{Bounds, Point, Size};
 use crate::core::style::{Dimension as StyleDimension, Style};
-use crate::core::text_editing::TextInputEvent;
+use crate::core::text_editing::{TextInputCommand, TextInputEvent, TextInputSnapshot};
 use crate::renderer::text::TextMeasureCache;
 use crate::renderer::{Primitive, Scene};
 use std::cell::{Cell, RefCell};
@@ -305,6 +305,9 @@ pub trait Element: 'static {
     /// Paint the element to the scene
     fn paint(&mut self, cx: &mut PaintContext);
 
+    /// Refresh text geometry after event dispatch and before painting.
+    fn refresh_text_geometry(&mut self, _text_measurer: &mut TextMeasureCache) {}
+
     /// Handle pointer events (mouse/touch)
     fn handle_pointer_event(&mut self, _cx: &mut EventContext, _event: &PointerEvent) -> bool {
         false
@@ -340,6 +343,24 @@ pub trait Element: 'static {
     /// Handle text input and IME composition events.
     fn handle_text_input_event(&mut self, _cx: &mut EventContext, _event: &TextInputEvent) -> bool {
         false
+    }
+
+    #[doc(hidden)]
+    fn handle_text_input_command(
+        &mut self,
+        cx: &mut EventContext,
+        command: &TextInputCommand,
+    ) -> bool {
+        command
+            .clone()
+            .into_legacy_event()
+            .is_some_and(|event| self.handle_text_input_event(cx, &event))
+    }
+
+    fn text_input_snapshot(&self, focused: ElementId) -> Option<TextInputSnapshot> {
+        self.children()
+            .iter()
+            .find_map(|child| child.text_input_snapshot(focused))
     }
 
     /// Handle window events
@@ -404,6 +425,10 @@ impl AnyElement {
         self.inner.paint(cx)
     }
 
+    pub fn refresh_text_geometry(&mut self, text_measurer: &mut TextMeasureCache) {
+        self.inner.refresh_text_geometry(text_measurer)
+    }
+
     pub fn handle_pointer_event(&mut self, cx: &mut EventContext, event: &PointerEvent) -> bool {
         let matches_current = cx
             .hit_target()
@@ -439,6 +464,18 @@ impl AnyElement {
         event: &TextInputEvent,
     ) -> bool {
         self.inner.handle_text_input_event(cx, event)
+    }
+
+    pub fn handle_text_input_command(
+        &mut self,
+        cx: &mut EventContext,
+        command: &TextInputCommand,
+    ) -> bool {
+        self.inner.handle_text_input_command(cx, command)
+    }
+
+    pub fn text_input_snapshot(&self, focused: ElementId) -> Option<TextInputSnapshot> {
+        self.inner.text_input_snapshot(focused)
     }
 
     pub fn handle_window_event(&mut self, event: &crate::core::event::Event) -> bool {

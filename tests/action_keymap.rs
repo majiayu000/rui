@@ -418,6 +418,75 @@ fn action_keymap_runtime_forwards_unbound_modified_arrows_to_inputs() {
 }
 
 #[test]
+fn action_keymap_runtime_preserves_mixed_bidi_caret_affinity() {
+    fn input_node<F, E>(
+        session: &HeadlessSession<F, E>,
+        id: ElementId,
+    ) -> rui::core::accessibility::AccessibilityNode
+    where
+        F: FnMut(&mut AppContext) -> E,
+        E: Element,
+    {
+        session
+            .accessibility_tree()
+            .unwrap_or_else(|err| panic!("input accessibility tree should build: {err}"))
+            .find(id)
+            .cloned()
+            .unwrap_or_else(|| panic!("input node should be present"))
+    }
+
+    let input_id = ElementId::new();
+    let text = "abc שלום";
+    let mut session = mount_or_panic(move |_cx| {
+        input()
+            .id(input_id)
+            .accessibility_label("Mixed direction")
+            .value(text)
+            .w(240.0)
+    });
+    session.request_focus(Some(input_id));
+
+    assert!(session.dispatch_key_event(&KeyEvent::new(KeyCode::Home, Modifiers::none())));
+    let mut carets = vec![
+        input_node(&session, input_id)
+            .a11y_text_caret()
+            .unwrap_or(usize::MAX),
+    ];
+    for _ in 0..text.chars().count() {
+        assert!(
+            session.dispatch_key_event(&KeyEvent::new(KeyCode::ArrowRight, Modifiers::none(),))
+        );
+        carets.push(
+            input_node(&session, input_id)
+                .a11y_text_caret()
+                .unwrap_or(usize::MAX),
+        );
+    }
+    let mut unique = std::collections::HashSet::new();
+    assert!(
+        carets.iter().any(|caret| !unique.insert(*caret)),
+        "carets={carets:?}"
+    );
+
+    assert!(session.dispatch_key_event(&KeyEvent::new(KeyCode::Home, Modifiers::none())));
+    let mut selection_ends = Vec::new();
+    for _ in 0..text.chars().count() {
+        assert!(
+            session.dispatch_key_event(&KeyEvent::new(KeyCode::ArrowRight, Modifiers::shift(),))
+        );
+        let selection = input_node(&session, input_id)
+            .a11y_text_selection()
+            .unwrap_or_else(|| panic!("shift-right should expose a selection"));
+        selection_ends.push(selection.end());
+    }
+    let mut unique = std::collections::HashSet::new();
+    assert!(
+        selection_ends.iter().any(|end| !unique.insert(*end)),
+        "selection_ends={selection_ends:?}"
+    );
+}
+
+#[test]
 fn action_keymap_runtime_preserves_shifted_deletes_for_text_editing() {
     let input_id = ElementId::new();
     let latest = Rc::new(RefCell::new(String::from("abc")));

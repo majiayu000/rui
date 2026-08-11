@@ -1,4 +1,6 @@
-use super::error::TextEditError;
+use super::error::{TextEditError, Utf16TextRangeError};
+use super::layout::TextInputGeometry;
+use crate::core::geometry::Bounds;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TextRange {
@@ -40,6 +42,82 @@ impl TextRange {
     pub(crate) fn ordered(start: usize, end: usize) -> Self {
         Self { start, end }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Utf16TextRange {
+    location: usize,
+    length: usize,
+}
+
+impl Utf16TextRange {
+    pub fn new(location: usize, length: usize) -> Result<Self, Utf16TextRangeError> {
+        location
+            .checked_add(length)
+            .ok_or_else(|| Utf16TextRangeError::new(location, length))?;
+        Ok(Self { location, length })
+    }
+
+    pub fn location(self) -> usize {
+        self.location
+    }
+
+    pub fn length(self) -> usize {
+        self.length
+    }
+
+    pub fn end(self) -> usize {
+        self.location + self.length
+    }
+
+    pub fn to_text_range(self, text: &str) -> Result<TextRange, Utf16TextRangeError> {
+        let end = self
+            .location
+            .checked_add(self.length)
+            .ok_or_else(|| Utf16TextRangeError::new(self.location, self.length))?;
+        let start_byte = utf16_offset_to_byte(text, self.location)
+            .ok_or_else(|| Utf16TextRangeError::new(self.location, self.length))?;
+        let end_byte = utf16_offset_to_byte(text, end)
+            .ok_or_else(|| Utf16TextRangeError::new(self.location, self.length))?;
+        Ok(TextRange::ordered(start_byte, end_byte))
+    }
+
+    pub fn from_text_range(text: &str, range: TextRange) -> Result<Self, TextEditError> {
+        if range.end() > text.len() {
+            return Err(TextEditError::InvalidRange {
+                start: range.start(),
+                end: range.end(),
+            });
+        }
+        if !text.is_char_boundary(range.start()) {
+            return Err(TextEditError::InvalidBoundary {
+                index: range.start(),
+            });
+        }
+        if !text.is_char_boundary(range.end()) {
+            return Err(TextEditError::InvalidBoundary { index: range.end() });
+        }
+        let location = text[..range.start()].encode_utf16().count();
+        let length = text[range.start()..range.end()].encode_utf16().count();
+        Ok(Self { location, length })
+    }
+}
+
+fn utf16_offset_to_byte(text: &str, utf16_offset: usize) -> Option<usize> {
+    if utf16_offset == 0 {
+        return Some(0);
+    }
+    let mut utf16_position = 0;
+    for (byte_index, ch) in text.char_indices() {
+        if utf16_position == utf16_offset {
+            return Some(byte_index);
+        }
+        utf16_position += ch.len_utf16();
+        if utf16_position > utf16_offset {
+            return None;
+        }
+    }
+    (utf16_position == utf16_offset).then_some(text.len())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -89,6 +167,61 @@ pub struct TextComposition {
     original_text: String,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextInputSnapshot {
+    text: String,
+    selection: TextSelection,
+    composition: Option<TextRange>,
+    caret_bounds: Option<Bounds>,
+    geometry: Option<TextInputGeometry>,
+}
+
+impl TextInputSnapshot {
+    pub fn new(
+        text: impl Into<String>,
+        selection: TextSelection,
+        composition: Option<TextRange>,
+    ) -> Self {
+        Self {
+            text: text.into(),
+            selection,
+            composition,
+            caret_bounds: None,
+            geometry: None,
+        }
+    }
+
+    pub fn with_caret_bounds(mut self, caret_bounds: Option<Bounds>) -> Self {
+        self.caret_bounds = caret_bounds;
+        self
+    }
+
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+
+    pub fn selection(&self) -> TextSelection {
+        self.selection
+    }
+
+    pub fn composition(&self) -> Option<TextRange> {
+        self.composition
+    }
+
+    pub fn caret_bounds(&self) -> Option<Bounds> {
+        self.caret_bounds
+    }
+
+    pub fn with_geometry(mut self, geometry: Option<TextInputGeometry>) -> Self {
+        self.geometry = geometry;
+        self
+    }
+
+    pub fn geometry(&self) -> Option<&TextInputGeometry> {
+        self.geometry.as_ref()
+    }
+}
+
 impl TextComposition {
     pub fn replacement_range(&self) -> TextRange {
         self.range
@@ -134,4 +267,65 @@ pub enum TextInputEvent {
     UpdateComposition(String),
     CommitComposition(String),
     CancelComposition,
+}
+
+/// Internal-compatible command channel for platform text input extensions.
+#[doc(hidden)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TextInputCommand {
+    InsertText(String),
+    InsertTextReplacing {
+        text: String,
+        replacement_range: Utf16TextRange,
+    },
+    BeginComposition(String),
+    BeginCompositionReplacing {
+        text: String,
+        replacement_range: Utf16TextRange,
+    },
+    UpdateComposition(String),
+    UpdateCompositionReplacing {
+        text: String,
+        replacement_range: Utf16TextRange,
+    },
+    CommitComposition(String),
+    CommitCompositionReplacing {
+        text: String,
+        replacement_range: Utf16TextRange,
+    },
+    SetCompositionSelection(Utf16TextRange),
+    CancelComposition,
+}
+
+impl TextInputCommand {
+    pub fn into_legacy_event(self) -> Option<TextInputEvent> {
+        match self {
+            Self::InsertText(text) | Self::InsertTextReplacing { text, .. } => {
+                Some(TextInputEvent::InsertText(text))
+            }
+            Self::BeginComposition(text) | Self::BeginCompositionReplacing { text, .. } => {
+                Some(TextInputEvent::BeginComposition(text))
+            }
+            Self::UpdateComposition(text) | Self::UpdateCompositionReplacing { text, .. } => {
+                Some(TextInputEvent::UpdateComposition(text))
+            }
+            Self::CommitComposition(text) | Self::CommitCompositionReplacing { text, .. } => {
+                Some(TextInputEvent::CommitComposition(text))
+            }
+            Self::SetCompositionSelection(_) => None,
+            Self::CancelComposition => Some(TextInputEvent::CancelComposition),
+        }
+    }
+}
+
+impl From<TextInputEvent> for TextInputCommand {
+    fn from(event: TextInputEvent) -> Self {
+        match event {
+            TextInputEvent::InsertText(text) => Self::InsertText(text),
+            TextInputEvent::BeginComposition(text) => Self::BeginComposition(text),
+            TextInputEvent::UpdateComposition(text) => Self::UpdateComposition(text),
+            TextInputEvent::CommitComposition(text) => Self::CommitComposition(text),
+            TextInputEvent::CancelComposition => Self::CancelComposition,
+        }
+    }
 }

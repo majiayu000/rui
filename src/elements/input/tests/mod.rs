@@ -8,7 +8,7 @@ mod state_and_edges;
 mod support {
     pub(super) use super::super::*;
     pub(super) use crate::core::event::{Cursor, KeyCode, KeyEvent, Modifiers};
-    pub(super) use crate::core::geometry::Size;
+    pub(super) use crate::core::geometry::{Point, Size};
     pub(super) use crate::core::text_editing::{
         MemoryClipboard, TextEditError, TextInputEvent, TextRange,
     };
@@ -45,9 +45,19 @@ mod support {
 
     pub(super) fn painted_primitives(mut input: Input) -> Vec<Primitive> {
         let viewport = Size::new(240.0, 56.0);
+        let (taffy, bounds) = layout_input(&mut input, viewport);
+        let mut scene = Scene::new();
+        let mut paint_cx = PaintContext::new(&mut scene, bounds, &taffy);
+        input.paint(&mut paint_cx);
+        scene.primitives().to_vec()
+    }
+
+    pub(super) fn layout_input(
+        input: &mut Input,
+        viewport: Size,
+    ) -> (TaffyTree<ElementId>, Bounds) {
         let mut taffy = TaffyTree::new();
-        let mut layout_cx = LayoutContext::new(&mut taffy, viewport);
-        let node = input.layout(&mut layout_cx);
+        let node = input.layout(&mut LayoutContext::new(&mut taffy, viewport));
         if let Err(err) = taffy.compute_layout(
             node,
             taffy::Size {
@@ -67,9 +77,6 @@ mod support {
             layout.size.width,
             layout.size.height,
         );
-        let mut scene = Scene::new();
-        let mut paint_cx = PaintContext::new(&mut scene, bounds, &taffy);
-        input.paint(&mut paint_cx);
-        scene.primitives().to_vec()
+        (taffy, bounds)
     }
 }

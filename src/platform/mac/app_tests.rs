@@ -1,4 +1,5 @@
 use super::*;
+use crate::core::text_editing::TextInputCommand;
 
 /// Redraw source each `PlatformWindowEvent` variant is classified as, or
 /// `None` when the event must not mark a redraw at all.
@@ -206,7 +207,7 @@ fn ime_commit_events_are_forwarded_as_text_input_events() {
     );
 
     match ordered_input_events.as_slice() {
-        [OrderedInputEvent::Text(TextInputEvent::CommitComposition(text))] => {
+        [OrderedInputEvent::Text(TextInputCommand::CommitComposition(text))] => {
             assert_eq!(text, "你好");
         }
         other => panic!("expected one committed text input event, got {other:?}"),
@@ -246,7 +247,7 @@ fn key_and_text_input_events_preserve_platform_order() {
     assert!(matches!(
         ordered_input_events.as_slice(),
         [
-            OrderedInputEvent::Text(TextInputEvent::CommitComposition(text)),
+            OrderedInputEvent::Text(TextInputCommand::CommitComposition(text)),
             OrderedInputEvent::Pointer(pointer),
             OrderedInputEvent::Scroll(scroll),
             OrderedInputEvent::Key {

@@ -6,6 +6,10 @@ mod advanced_ui_controls;
 #[path = "../examples/native_dogfood.rs"]
 mod native_dogfood_example;
 
+#[allow(dead_code)]
+#[path = "../examples/validate_renderer_profile.rs"]
+mod renderer_profile_validator;
+
 use advanced_ui_controls::{
     DOGFOOD_CLAIM_GATE_ID, DOGFOOD_PANEL_CONTROL_ID, DOGFOOD_REFRESH_BUTTON_ID,
     DogfoodControlsView, DogfoodPanel, LocalDogfoodData, LocalVerificationCheck,
@@ -19,6 +23,9 @@ use rui::core::event::{KeyCode, KeyEvent, Modifiers};
 use rui::core::text_editing::{TextEditBuffer, TextInputEvent};
 use rui::core::{ElementId, Point, Size};
 use rui::testing::{mount, mount_view};
+#[cfg(target_os = "macos")]
+#[path = "support/dogfood_script.rs"]
+mod dogfood_script_tests;
 
 #[test]
 fn dogfood_loads_repository_owned_data() {
@@ -178,23 +185,41 @@ fn dogfood_workflow_routes_actions_and_edits_repository_filter() {
 fn native_dogfood_script_contract_launches_example_and_profile() {
     let script = include_str!("../scripts/native_dogfood_macos.sh");
     let example = include_str!("../examples/native_dogfood.rs");
+    let validator = include_str!("../examples/validate_renderer_profile.rs");
     let mac_runner = include_str!("../src/platform/mac/app.rs");
     let mac_window = include_str!("../src/platform/mac/window.rs");
 
     for required in [
         "cargo build --example native_dogfood",
-        "cargo run --example native_dogfood",
+        "--message-format=json-render-diagnostics",
         "RUI_NATIVE_DOGFOOD_PROFILE",
+        "RUI_NATIVE_DOGFOOD_RENDERER_PROFILE",
+        "RUI_PROFILE=1",
         "RUI_NATIVE_DOGFOOD_INTERACTIVE=1",
         "RUI_NATIVE_DOGFOOD_AUTOMATION=1",
+        "canonical_artifact_path",
+        "native dogfood artifact paths must be distinct",
+        "native dogfood artifact paths must be distinct filesystem entries",
+        "-ef \"$RENDERER_PROFILE_PATH\"",
+        "cargo run --quiet --example validate_renderer_profile",
         "\"status\":\"passed\"",
         "\"script_requires_minimize_reopen\":true",
+        "rui.renderer.profile.v1",
+        "rm -f -- \"$PROFILE_PATH\" \"$RENDERER_PROFILE_PATH\" \"$LOG_PATH\"",
+        "RUI_NATIVE_DOGFOOD_PROFILE=\"$PROFILE_PATH\"",
+        "\"$APP_PATH\" >>\"$LOG_PATH\" 2>&1 &",
+        "\"$LOG_PATH\" >\"$RENDERER_PROFILE_PATH\"",
+        "validate_renderer_profile -- \"$RENDERER_PROFILE_PATH\"",
     ] {
         assert!(
             script.contains(required),
             "native dogfood script should contain `{required}`"
         );
     }
+    assert!(
+        !script.contains("cargo run --example native_dogfood"),
+        "native dogfood should launch the built application directly"
+    );
 
     for required in [
         "RUI_NATIVE_DOGFOOD_PROFILE",
@@ -210,13 +235,27 @@ fn native_dogfood_script_contract_launches_example_and_profile() {
         );
     }
     assert!(
-        !script.contains("RUI_PROFILE"),
-        "native dogfood script should not reuse renderer telemetry RUI_PROFILE"
-    );
-    assert!(
         !example.contains("RUI_PROFILE"),
-        "native dogfood example should not reuse renderer telemetry RUI_PROFILE"
+        "native dogfood example should leave renderer telemetry capture to the driver"
     );
+
+    for required in [
+        "rui.renderer.profile.v1",
+        "frame_interval_ns",
+        "event_to_render_latency_ns",
+        "layout_ns",
+        "dispatch_ns",
+        "paint_ns",
+        "render_ns",
+        "render_p95_ns",
+        "render_p99_ns",
+        "jank_count",
+    ] {
+        assert!(
+            validator.contains(required),
+            "renderer profile validator should contain `{required}`"
+        );
+    }
 
     for required in [
         "NativeDogfoodAutomationPhase::Interact",
@@ -266,6 +305,39 @@ fn native_dogfood_profile_body_is_valid_json_contract() {
     assert_eq!(parsed["interactive"], true);
     assert_eq!(parsed["script_requires_minimize_reopen"], true);
     assert_eq!(parsed["driver"], "scripts/native_dogfood_macos.sh");
+}
+
+#[test]
+fn renderer_profile_validator_requires_well_typed_complete_jsonl() {
+    let valid = concat!(
+        "{\"schema\":\"rui.renderer.profile.v1\",\"frame_interval_ns\":null,",
+        "\"event_to_render_latency_ns\":4,\"layout_ns\":1,\"dispatch_ns\":2,",
+        "\"paint_ns\":3,\"render_ns\":4,\"render_p95_ns\":5,",
+        "\"render_p99_ns\":6,\"jank_count\":0}\n",
+        "{\"schema\":\"rui.renderer.profile.v1\",\"frame_interval_ns\":8,",
+        "\"event_to_render_latency_ns\":null,\"layout_ns\":1,\"dispatch_ns\":2,",
+        "\"paint_ns\":3,\"render_ns\":4,\"render_p95_ns\":5,",
+        "\"render_p99_ns\":6,\"jank_count\":0}\n",
+    );
+    let summary = renderer_profile_validator::validate_renderer_profile(valid.as_bytes())
+        .expect("complete renderer JSONL should validate");
+    assert_eq!(summary.validated_frames(), 2);
+
+    for invalid in [
+        "{\"schema\":\"rui.renderer.profile.v1\",\"render_ns\":1junk}\n",
+        "{\"schema\":\"rui.renderer.profile.v1\",\"frame_interval_ns\":8}\n",
+        concat!(
+            "{\"schema\":\"rui.renderer.profile.v1\",\"frame_interval_ns\":null,",
+            "\"event_to_render_latency_ns\":null,\"layout_ns\":1,\"dispatch_ns\":2,",
+            "\"paint_ns\":3,\"render_ns\":4,\"render_p95_ns\":5,",
+            "\"render_p99_ns\":6,\"jank_count\":0}\n",
+        ),
+    ] {
+        assert!(
+            renderer_profile_validator::validate_renderer_profile(invalid.as_bytes()).is_err(),
+            "invalid renderer JSONL should be rejected: {invalid}"
+        );
+    }
 }
 
 #[test]
