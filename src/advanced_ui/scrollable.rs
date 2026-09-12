@@ -960,6 +960,159 @@ mod tests {
         );
     }
 
+    /// Legacy/custom Element that hit-tests with `cx.bounds().contains` only.
+    struct LegacyBoundsHitProbe {
+        inner: crate::elements::Div,
+        activated: Rc<Cell<bool>>,
+    }
+
+    impl Element for LegacyBoundsHitProbe {
+        fn style(&self) -> &crate::core::style::Style {
+            self.inner.style()
+        }
+
+        fn layout(&mut self, cx: &mut LayoutContext) -> NodeId {
+            self.inner.layout(cx)
+        }
+
+        fn paint(&mut self, cx: &mut PaintContext) {
+            self.inner.paint(cx);
+        }
+
+        fn handle_pointer_event(&mut self, cx: &mut EventContext, event: &PointerEvent) -> bool {
+            // Intentionally ignores contains_pointer / hit_clip.
+            if !cx.bounds().contains(event.position) {
+                return false;
+            }
+            if matches!(event.kind, PointerEventKind::Up) {
+                self.activated.set(true);
+            }
+            true
+        }
+    }
+
+    #[test]
+    fn advanced_ui_scrollable_enforces_hit_clip_for_bounds_contains_elements() {
+        let activated = Rc::new(Cell::new(false));
+        let activated_ref = Rc::clone(&activated);
+        let mut scrollable = Scrollable::new(
+            crate::elements::div()
+                .flex_col()
+                .w(120.0)
+                .h(160.0)
+                .child(crate::elements::div().w(120.0).h(80.0))
+                .child(LegacyBoundsHitProbe {
+                    inner: crate::elements::div().w(120.0).h(80.0),
+                    activated: activated_ref,
+                }),
+        )
+        .w(140.0)
+        .h(80.0)
+        .disabled(true);
+
+        let mut taffy = TaffyTree::<ElementId>::new();
+        let viewport = Size::new(140.0, 80.0);
+        let mut layout_cx = LayoutContext::new(&mut taffy, viewport);
+        let node = scrollable.layout(&mut layout_cx);
+        if let Err(err) = taffy.compute_layout(
+            node,
+            taffy::Size {
+                width: taffy::prelude::AvailableSpace::Definite(viewport.width),
+                height: taffy::prelude::AvailableSpace::Definite(viewport.height),
+            },
+        ) {
+            panic!("layout should compute: {err}");
+        }
+
+        let mut focused = None;
+        let mut event_cx = EventContext::new(
+            Bounds::from_xywh(0.0, 0.0, viewport.width, viewport.height),
+            &taffy,
+            &mut focused,
+        );
+
+        // Second row starts at the viewport max edge (y=80). Edge-only contact
+        // must not activate a legacy bounds().contains Element.
+        let _ = scrollable.handle_pointer_event(
+            &mut event_cx,
+            &PointerEvent {
+                kind: PointerEventKind::Down,
+                position: Point::new(8.0, 80.0),
+                button: Some(MouseButton::Left),
+            },
+        );
+        let _ = scrollable.handle_pointer_event(
+            &mut event_cx,
+            &PointerEvent {
+                kind: PointerEventKind::Up,
+                position: Point::new(8.0, 80.0),
+                button: Some(MouseButton::Left),
+            },
+        );
+        assert!(
+            !activated.get(),
+            "legacy bounds().contains element must not activate on clipped edge-only hit"
+        );
+
+        // Deep clipped-away point within the second row's layout bounds.
+        let _ = scrollable.handle_pointer_event(
+            &mut event_cx,
+            &PointerEvent {
+                kind: PointerEventKind::Down,
+                position: Point::new(8.0, 120.0),
+                button: Some(MouseButton::Left),
+            },
+        );
+        let _ = scrollable.handle_pointer_event(
+            &mut event_cx,
+            &PointerEvent {
+                kind: PointerEventKind::Up,
+                position: Point::new(8.0, 120.0),
+                button: Some(MouseButton::Left),
+            },
+        );
+        assert!(
+            !activated.get(),
+            "legacy bounds().contains element must not activate outside the viewport"
+        );
+    }
+
+    #[test]
+    fn event_context_contains_pointer_rejects_edge_only_hit_clip_intersection() {
+        let taffy = TaffyTree::<ElementId>::new();
+        let mut focused = None;
+        let mut root = EventContext::new(
+            Bounds::from_xywh(0.0, 0.0, 140.0, 80.0),
+            &taffy,
+            &mut focused,
+        );
+        // Child starts exactly at the viewport's max y edge: inclusive contains
+        // on both rects would accept y=80, but the intersection has zero area.
+        {
+            let cx = root.with_bounds_and_hit_clip(
+                Bounds::from_xywh(0.0, 80.0, 120.0, 80.0),
+                Bounds::from_xywh(0.0, 0.0, 140.0, 80.0),
+            );
+            assert!(
+                !cx.contains_pointer(Point::new(8.0, 80.0)),
+                "edge-only bounds∩hit_clip must not count as a pointer hit"
+            );
+            assert!(
+                !cx.contains_pointer(Point::new(8.0, 100.0)),
+                "fully clipped layout area must not count as a pointer hit"
+            );
+        }
+
+        let visible = root.with_bounds_and_hit_clip(
+            Bounds::from_xywh(0.0, 0.0, 120.0, 160.0),
+            Bounds::from_xywh(0.0, 0.0, 140.0, 80.0),
+        );
+        assert!(
+            visible.contains_pointer(Point::new(8.0, 40.0)),
+            "positive-area visible intersection must still accept interior points"
+        );
+    }
+
     #[test]
     fn advanced_ui_scrollable_accessibility_actions_follow_scroll_range() {
         let mut overflowing = Scrollable::new(container().w(100.0).h(300.0)).h(100.0);
