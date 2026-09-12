@@ -288,6 +288,7 @@ pub fn scrollable(child: impl Into<AnyElement>) -> Scrollable {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::advanced_ui::DataList;
     use crate::advanced_ui::container;
     use crate::advanced_ui::text_field::TextField;
     use crate::core::event::{KeyCode, KeyEvent, Modifiers, MouseButton, ScrollEvent};
@@ -296,7 +297,7 @@ mod tests {
     use crate::core::text_editing::TextInputEvent;
     use crate::elements::element::PointerEventKind;
     use crate::renderer::Scene;
-    use std::cell::Cell;
+    use std::cell::{Cell, RefCell};
     use std::rc::Rc;
     use taffy::TaffyTree;
 
@@ -696,6 +697,117 @@ mod tests {
             !clicked.get(),
             "outside pointer-up must not invoke on_click for clipped-away child area"
         );
+    }
+
+    #[test]
+    fn advanced_ui_scrollable_pointer_up_outside_viewport_does_not_select_data_list() {
+        let selected = Rc::new(RefCell::new(None::<String>));
+        let selected_ref = Rc::clone(&selected);
+        // Four 40px rows = 160px tall list inside an 80px viewport.
+        let mut scrollable = Scrollable::new(
+            DataList::new([
+                ("a", "Alpha"),
+                ("b", "Beta"),
+                ("c", "Gamma"),
+                ("d", "Delta"),
+            ])
+            .row_height(40.0)
+            .w(120.0)
+            .on_select(move |value| *selected_ref.borrow_mut() = Some(value.to_string())),
+        )
+        .w(140.0)
+        .h(80.0)
+        .disabled(true);
+
+        let mut taffy = TaffyTree::<ElementId>::new();
+        let viewport = Size::new(140.0, 80.0);
+        let mut layout_cx = LayoutContext::new(&mut taffy, viewport);
+        let node = scrollable.layout(&mut layout_cx);
+        if let Err(err) = taffy.compute_layout(
+            node,
+            taffy::Size {
+                width: taffy::prelude::AvailableSpace::Definite(viewport.width),
+                height: taffy::prelude::AvailableSpace::Definite(viewport.height),
+            },
+        ) {
+            panic!("layout should compute: {err}");
+        }
+
+        let mut focused = None;
+        let mut event_cx = EventContext::new(
+            Bounds::from_xywh(0.0, 0.0, viewport.width, viewport.height),
+            &taffy,
+            &mut focused,
+        );
+
+        // Press begins on the first visible row.
+        assert!(
+            scrollable.handle_pointer_event(
+                &mut event_cx,
+                &PointerEvent {
+                    kind: PointerEventKind::Down,
+                    position: Point::new(8.0, 20.0),
+                    button: Some(MouseButton::Left),
+                },
+            ),
+            "pointer-down inside viewport should press a data list row"
+        );
+
+        // Release outside the clipped viewport but still within the list's
+        // translated layout bounds must not select via index_at(cx.bounds()).
+        let _ = scrollable.handle_pointer_event(
+            &mut event_cx,
+            &PointerEvent {
+                kind: PointerEventKind::Up,
+                position: Point::new(8.0, 150.0),
+                button: Some(MouseButton::Left),
+            },
+        );
+        assert!(
+            selected.borrow().is_none(),
+            "pointer-up outside viewport must not select clipped data list rows"
+        );
+
+        // Outside down/up with no scene target must also stay inert.
+        let _ = scrollable.handle_pointer_event(
+            &mut event_cx,
+            &PointerEvent {
+                kind: PointerEventKind::Down,
+                position: Point::new(8.0, 150.0),
+                button: Some(MouseButton::Left),
+            },
+        );
+        let _ = scrollable.handle_pointer_event(
+            &mut event_cx,
+            &PointerEvent {
+                kind: PointerEventKind::Up,
+                position: Point::new(8.0, 150.0),
+                button: Some(MouseButton::Left),
+            },
+        );
+        assert!(
+            selected.borrow().is_none(),
+            "outside press/release must not select clipped data list rows"
+        );
+
+        // Inside activation still works after the outside attempts.
+        assert!(scrollable.handle_pointer_event(
+            &mut event_cx,
+            &PointerEvent {
+                kind: PointerEventKind::Down,
+                position: Point::new(8.0, 20.0),
+                button: Some(MouseButton::Left),
+            },
+        ));
+        assert!(scrollable.handle_pointer_event(
+            &mut event_cx,
+            &PointerEvent {
+                kind: PointerEventKind::Up,
+                position: Point::new(8.0, 20.0),
+                button: Some(MouseButton::Left),
+            },
+        ));
+        assert_eq!(selected.borrow().as_deref(), Some("a"));
     }
 
     #[test]

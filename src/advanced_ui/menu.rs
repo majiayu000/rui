@@ -382,7 +382,12 @@ impl Element for Menu {
 
     fn handle_pointer_event(&mut self, cx: &mut EventContext, event: &PointerEvent) -> bool {
         let inside = cx.contains_pointer(event.position);
-        let index = self.interactive_index_at(cx.bounds(), event.position);
+        // Gate index hits on hit_clip as well — index_at uses layout bounds only.
+        let index = if inside {
+            self.interactive_index_at(cx.bounds(), event.position)
+        } else {
+            None
+        };
         match event.kind {
             PointerEventKind::Move => {
                 self.indexed_state.update_hover(index, cx, self.state);
