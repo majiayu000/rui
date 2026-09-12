@@ -161,6 +161,40 @@ impl TextEditBuffer {
         })
     }
 
+    pub fn delete_word_backward(&mut self) -> Result<TextEditOutcome, TextEditError> {
+        if !self.selection.is_collapsed() {
+            return self.insert_text("");
+        }
+        let cursor = self.cursor();
+        if cursor == 0 {
+            return Ok(TextEditOutcome::default());
+        }
+        let start = self.word_left_boundary(cursor);
+        self.replace_range_internal(TextRange::ordered(start, cursor), "")?;
+        self.selection = TextSelection::collapsed(start);
+        Ok(TextEditOutcome {
+            changed: start != cursor,
+            submitted: false,
+        })
+    }
+
+    pub fn delete_word_forward(&mut self) -> Result<TextEditOutcome, TextEditError> {
+        if !self.selection.is_collapsed() {
+            return self.insert_text("");
+        }
+        let cursor = self.cursor();
+        if cursor == self.text.len() {
+            return Ok(TextEditOutcome::default());
+        }
+        let end = self.word_right_boundary(cursor);
+        self.replace_range_internal(TextRange::ordered(cursor, end), "")?;
+        self.selection = TextSelection::collapsed(cursor);
+        Ok(TextEditOutcome {
+            changed: end != cursor,
+            submitted: false,
+        })
+    }
+
     pub fn move_left(&mut self, extend: bool) -> Result<(), TextEditError> {
         let target = if !extend && !self.selection.is_collapsed() {
             self.selected_range().start()
@@ -449,8 +483,20 @@ impl TextEditBuffer {
 
     pub fn apply_key_event(&mut self, event: &KeyEvent) -> Result<TextEditOutcome, TextEditError> {
         match event.key {
-            KeyCode::Backspace => self.delete_backward(),
-            KeyCode::Delete => self.delete_forward(),
+            KeyCode::Backspace => {
+                if Self::event_has_word_delete_modifiers(event) {
+                    self.delete_word_backward()
+                } else {
+                    self.delete_backward()
+                }
+            }
+            KeyCode::Delete => {
+                if Self::event_has_word_delete_modifiers(event) {
+                    self.delete_word_forward()
+                } else {
+                    self.delete_forward()
+                }
+            }
             KeyCode::ArrowLeft => {
                 if event.modifiers.alt || event.modifiers.ctrl {
                     self.move_word_left(event.modifiers.shift)?;
@@ -495,6 +541,10 @@ impl TextEditBuffer {
             }
             _ => self.insert_char_from_event(event),
         }
+    }
+
+    fn event_has_word_delete_modifiers(event: &KeyEvent) -> bool {
+        event.modifiers.ctrl || event.modifiers.alt || event.modifiers.meta
     }
 
     pub fn copy_selection_to<C: Clipboard>(
