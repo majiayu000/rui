@@ -104,7 +104,7 @@ where
             }
             OrderedInputEvent::Text(event) => {
                 let (handled, redraw_requested) =
-                    dispatch_text_input_event(presenter, ime_state, event);
+                    dispatch_text_input_event(presenter, window, ime_state, event);
                 (handled, redraw_requested, RedrawSource::PlatformInput)
             }
             OrderedInputEvent::Accessibility(request) => {
