@@ -156,10 +156,6 @@ pub struct EventContext<'a> {
     /// Layout coordinates (`bounds` / `child_bounds`) stay unclipped so nested
     /// origins remain correct under scroll; hit checks also require this clip.
     hit_clip: Option<Bounds>,
-    /// When set, [`Self::bounds`] returns a never-hit rectangle so legacy
-    /// `bounds().contains` checks cannot activate clipped-away content, while
-    /// layout origins used by [`Self::child_bounds`] stay intact.
-    hit_suppressed: bool,
     pub(crate) taffy: &'a TaffyTree<ElementId>,
     pub(crate) focused: &'a mut Option<ElementId>,
     hit_target: Option<ElementId>,
@@ -178,7 +174,6 @@ impl<'a> EventContext<'a> {
         Self {
             bounds,
             hit_clip: None,
-            hit_suppressed: false,
             taffy,
             focused,
             hit_target: None,
@@ -189,13 +184,13 @@ impl<'a> EventContext<'a> {
         }
     }
 
+    /// Layout/paint coordinate space for this element.
+    ///
+    /// Always returns the real geometry so captured Move/Up cleanup can derive
+    /// local coordinates. Pointer clipping is enforced separately via
+    /// [`Self::contains_pointer`] and [`Self::pointer_outside_hit_region`].
     pub fn bounds(&self) -> Bounds {
-        if self.hit_suppressed {
-            // Never-hit sentinel (negative size); edges are not containable.
-            Bounds::from_xywh(0.0, 0.0, -1.0, -1.0)
-        } else {
-            self.bounds
-        }
+        self.bounds
     }
 
     /// Whether `point` is inside this context's visible pointer region.
@@ -210,6 +205,19 @@ impl<'a> EventContext<'a> {
                 None => false,
             },
             None => self.bounds.contains(point),
+        }
+    }
+
+    /// True when a hit clip is present and `point` is outside the positive-area
+    /// visible intersection of layout bounds and that clip.
+    pub fn pointer_outside_hit_region(&self, point: Point) -> bool {
+        match self.hit_clip {
+            Some(clip) => self
+                .bounds
+                .intersection(&clip)
+                .map(|visible| !visible.contains(point))
+                .unwrap_or(true),
+            None => false,
         }
     }
 
@@ -310,8 +318,6 @@ impl<'a> EventContext<'a> {
         EventContext {
             bounds,
             hit_clip: self.hit_clip,
-            // Child AnyElement re-evaluates suppression for its own bounds.
-            hit_suppressed: false,
             taffy: self.taffy,
             focused: self.focused,
             hit_target: self.hit_target,
@@ -335,36 +341,6 @@ impl<'a> EventContext<'a> {
         EventContext {
             bounds,
             hit_clip: Some(hit_clip),
-            hit_suppressed: false,
-            taffy: self.taffy,
-            focused: self.focused,
-            hit_target: self.hit_target,
-            previous_hit_target: self.previous_hit_target,
-            cursor: Rc::clone(&self.cursor),
-            redraw_requested: Rc::clone(&self.redraw_requested),
-            accessibility_announcements: Rc::clone(&self.accessibility_announcements),
-        }
-    }
-
-    /// Prepare pointer dispatch so clipped-away regions cannot activate via
-    /// legacy `cx.bounds().contains` checks.
-    ///
-    /// Layout origins remain unclipped for [`Self::child_bounds`] and
-    /// [`Self::contains_pointer`] still reports outside for blur/cleanup.
-    pub fn for_pointer_dispatch(&mut self, point: Point) -> EventContext<'_> {
-        let hit_suppressed = self.hit_suppressed
-            || match self.hit_clip {
-                Some(clip) => self
-                    .bounds
-                    .intersection(&clip)
-                    .map(|visible| !visible.contains(point))
-                    .unwrap_or(true),
-                None => false,
-            };
-        EventContext {
-            bounds: self.bounds,
-            hit_clip: self.hit_clip,
-            hit_suppressed,
             taffy: self.taffy,
             focused: self.focused,
             hit_target: self.hit_target,
@@ -530,12 +506,24 @@ impl AnyElement {
             return false;
         }
 
-        // Enforce hit_clip at the dispatch boundary so custom/downstream
-        // Elements using `cx.bounds().contains` cannot activate clipped content.
-        let mut dispatch_cx = cx.for_pointer_dispatch(event.position);
-        self.inner
-            .dispatch_pointer_event(&mut dispatch_cx, event)
-            .is_stopped()
+        // Gate clipped-away activation at the dispatch boundary so legacy
+        // `cx.bounds().contains` Elements cannot press invisible content.
+        // Still forward when this subtree is the hit/capture target, the Move
+        // previous-hit target, or contains focus (blur/cleanup), and always
+        // keep `bounds()` as real geometry for local coordinates.
+        let delivers_for_focus = cx
+            .focused_id()
+            .map(|id| self.contains_id(id))
+            .unwrap_or(false);
+        if cx.pointer_outside_hit_region(event.position)
+            && !matches_current
+            && !matches_previous
+            && !delivers_for_focus
+        {
+            return false;
+        }
+
+        self.inner.dispatch_pointer_event(cx, event).is_stopped()
     }
 
     pub fn handle_scroll_event(&mut self, cx: &mut EventContext, event: &ScrollEvent) -> bool {
