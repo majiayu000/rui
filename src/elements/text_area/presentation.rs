@@ -155,36 +155,30 @@ impl TextArea {
     }
 
     pub(super) fn update_text_layout(&mut self, cache: &mut TextMeasureCache) {
-        let plans = self
-            .state
-            .value
-            .split('\n')
-            .map(|line| {
-                cache
-                    .shape_single_line(TextRequest::new(line, 14.0, 400, None, 1.0))
-                    .unwrap_or_else(|err| panic!("text area shaping failed: {err:?}"))
-            })
-            .collect::<Vec<_>>();
-        self.text_layout = Some(
-            TextEditLayout::from_line_shape_plans(
-                self.state.value.clone(),
-                &plans,
-                TEXT_AREA_LINE_HEIGHT,
-            )
-            .unwrap_or_else(|err| panic!("text area layout failed: {err}")),
-        );
+        let mut plans = Vec::new();
+        for line in self.state.value.split('\n') {
+            match cache.shape_single_line(TextRequest::new(line, 14.0, 400, None, 1.0)) {
+                Ok(plan) => plans.push(plan),
+                Err(err) => {
+                    log::error!("text area shaping failed: {err:?}");
+                    return;
+                }
+            }
+        }
+        match TextEditLayout::from_line_shape_plans(
+            self.state.value.clone(),
+            &plans,
+            TEXT_AREA_LINE_HEIGHT,
+        ) {
+            Ok(layout) => self.text_layout = Some(layout),
+            Err(err) => log::error!("text area layout failed: {err}"),
+        }
     }
 
     pub(super) fn refresh_text_layout_if_stale(&mut self, cache: &mut TextMeasureCache) {
         if self.current_text_layout().is_none() {
             self.update_text_layout(cache);
         }
-    }
-
-    pub(super) fn text_layout(&self) -> &TextEditLayout {
-        self.text_layout
-            .as_ref()
-            .unwrap_or_else(|| panic!("text area layout was not prepared before paint"))
     }
 
     pub(super) fn text_origin(&self, bounds: Bounds) -> Point {
@@ -202,7 +196,9 @@ impl TextArea {
         if !self.state.focused {
             return;
         }
-        let layout = self.text_layout();
+        let Some(layout) = self.current_text_layout() else {
+            return;
+        };
         let style = TextEditPaintStyle::new(
             TEXT_AREA_CARET_WIDTH,
             Color::hex(0x6366f1).to_rgba(),
@@ -244,12 +240,15 @@ impl TextArea {
         if !self.state.focused {
             return None;
         }
+        let Some(layout) = self.current_text_layout() else {
+            return None;
+        };
         let style = TextEditPaintStyle::new(
             TEXT_AREA_CARET_WIDTH,
             Color::hex(0x6366f1).to_rgba(),
             Color::hex(0x6366f1).with_alpha(0.22).to_rgba(),
         );
-        match self.text_layout().caret_primitive_for_visual_caret(
+        match layout.caret_primitive_for_visual_caret(
             self.normalize_cursor_position(),
             self.visual_caret,
             self.text_origin(bounds),
