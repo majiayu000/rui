@@ -219,7 +219,7 @@ impl Element for Checkbox {
         let inside = cx.contains_pointer(event.position);
         match event.kind {
             PointerEventKind::Move => {
-                self.state.update_hover(cx.bounds(), event.position, cx);
+                self.state.update_hover(inside, cx);
                 false
             }
             PointerEventKind::Down => self.state.press_inside(inside, cx),

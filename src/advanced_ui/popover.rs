@@ -194,7 +194,9 @@ impl Element for Popover {
             if self.children[index].handle_pointer_event(&mut child_cx, event) {
                 return true;
             }
-            if index == 1 && bounds.contains(event.position) {
+            // Panel containment must honor hit_clip so clipped-away panel
+            // area does not swallow pointer events outside the viewport.
+            if index == 1 && child_cx.contains_pointer(event.position) {
                 return true;
             }
         }
@@ -486,7 +488,11 @@ impl Element for Dialog {
             .content_node
             .and_then(|node| cx.child_bounds(node))
             .unwrap_or(cx.bounds());
-        let inside_content = content_bounds.contains(event.position);
+        // Clip content containment to hit_clip so oversized dialog content
+        // outside a ScrollView viewport cannot consume the event and block blur.
+        let inside_content = cx
+            .with_bounds(content_bounds)
+            .contains_pointer(event.position);
         let inside_modal_region = self.modal && cx.contains_pointer(event.position);
 
         if self.state.can_activate() {
@@ -782,6 +788,32 @@ mod tests {
         );
 
         assert!(dialog.handle_pointer_event(&mut cx, &pointer(PointerEventKind::Down, 4.0, 4.0)));
+    }
+
+    #[test]
+    fn advanced_ui_dialog_content_containment_respects_hit_clip() {
+        let mut dialog = Dialog::new("Confirm", container().w(300.0).h(300.0));
+        let (taffy, _) = layout(&mut dialog);
+        let mut focused = None;
+        let mut root = EventContext::new(
+            Bounds::from_xywh(0.0, 0.0, 320.0, 240.0),
+            &taffy,
+            &mut focused,
+        );
+        // Visible viewport is only the top 100px; content layout still covers y=150.
+        let mut cx = root.with_bounds_and_hit_clip(
+            Bounds::from_xywh(0.0, 0.0, 320.0, 240.0),
+            Bounds::from_xywh(0.0, 0.0, 320.0, 100.0),
+        );
+
+        assert!(
+            !dialog.handle_pointer_event(&mut cx, &pointer(PointerEventKind::Down, 50.0, 150.0)),
+            "pointer in unclipped content but outside hit_clip must not be consumed"
+        );
+        assert!(
+            dialog.handle_pointer_event(&mut cx, &pointer(PointerEventKind::Down, 50.0, 40.0)),
+            "pointer inside hit_clip should still be consumed by modal dialog"
+        );
     }
 
     #[test]
