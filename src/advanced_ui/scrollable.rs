@@ -197,9 +197,7 @@ impl Element for Scrollable {
     }
 
     fn handle_pointer_event(&mut self, cx: &mut EventContext, event: &PointerEvent) -> bool {
-        if !self.state.can_activate() {
-            return false;
-        }
+        // Always forward so nested editors can focus even when scrolling is frozen.
         self.inner.handle_pointer_event(cx, event)
     }
 
@@ -219,9 +217,6 @@ impl Element for Scrollable {
         cx: &mut EventContext,
         event: &crate::core::event::KeyEvent,
     ) -> bool {
-        if !self.state.can_activate() {
-            return false;
-        }
         self.inner.handle_key_event(cx, event)
     }
 
@@ -230,9 +225,6 @@ impl Element for Scrollable {
         cx: &mut EventContext,
         action: &crate::core::action::ActionId,
     ) -> crate::core::action::ActionOutcome {
-        if !self.state.can_activate() {
-            return crate::core::action::ActionOutcome::Ignored;
-        }
         if cx.focused_id() == Some(self.id) {
             let forward = match action {
                 crate::core::action::ActionId::Custom(name)
@@ -248,6 +240,9 @@ impl Element for Scrollable {
                 _ => None,
             };
             if let Some(forward) = forward {
+                if !self.state.can_activate() {
+                    return crate::core::action::ActionOutcome::Ignored;
+                }
                 if self.inner.scroll_accessibility(forward) {
                     cx.request_redraw();
                     return crate::core::action::ActionOutcome::handled(
@@ -257,13 +252,11 @@ impl Element for Scrollable {
                 return crate::core::action::ActionOutcome::Ignored;
             }
         }
+        // Non-scroll actions always reach nested children.
         self.inner.dispatch_action(cx, action)
     }
 
     fn handle_text_input_event(&mut self, cx: &mut EventContext, event: &TextInputEvent) -> bool {
-        if !self.state.can_activate() {
-            return false;
-        }
         self.inner.handle_text_input_event(cx, event)
     }
 
@@ -272,7 +265,7 @@ impl Element for Scrollable {
         cx: &mut EventContext,
         command: &TextInputCommand,
     ) -> bool {
-        self.state.can_activate() && self.inner.handle_text_input_command(cx, command)
+        self.inner.handle_text_input_command(cx, command)
     }
 
     fn text_input_snapshot(&self, focused: ElementId) -> Option<TextInputSnapshot> {
@@ -280,9 +273,6 @@ impl Element for Scrollable {
     }
 
     fn handle_window_event(&mut self, event: &crate::core::event::Event) -> bool {
-        if !self.state.can_activate() {
-            return false;
-        }
         self.inner.handle_window_event(event)
     }
 
@@ -299,9 +289,12 @@ pub fn scrollable(child: impl Into<AnyElement>) -> Scrollable {
 mod tests {
     use super::*;
     use crate::advanced_ui::container;
-    use crate::core::event::{Modifiers, ScrollEvent};
+    use crate::advanced_ui::text_field::TextField;
+    use crate::core::event::{KeyCode, KeyEvent, Modifiers, MouseButton, ScrollEvent};
     use crate::core::geometry::{Bounds, Point};
     use crate::core::presenter::Presenter;
+    use crate::core::text_editing::TextInputEvent;
+    use crate::elements::element::PointerEventKind;
     use crate::renderer::Scene;
     use std::cell::Cell;
     use std::rc::Rc;
@@ -418,6 +411,118 @@ mod tests {
                 },
             ));
             assert!(!did_scroll.get());
+            paint_for_accessibility_state(&mut scrollable, Size::new(100.0, 100.0));
+            assert!(
+                accessibility_node(&scrollable).a11y_actions().is_empty(),
+                "frozen scrollable must not expose scroll accessibility actions"
+            );
+        }
+    }
+
+    #[test]
+    fn advanced_ui_scrollable_forwards_nested_editor_when_scroll_frozen() {
+        let field_id_disabled = ElementId::new();
+        let field_id_read_only = ElementId::new();
+        for (label, mut scrollable, field_id) in [
+            (
+                "disabled",
+                Scrollable::new(TextField::new("Name").id(field_id_disabled).value("").w(120.0))
+                    .w(140.0)
+                    .h(80.0)
+                    .disabled(true),
+                field_id_disabled,
+            ),
+            (
+                "read_only",
+                Scrollable::new(
+                    TextField::new("Name")
+                        .id(field_id_read_only)
+                        .value("")
+                        .w(120.0),
+                )
+                .w(140.0)
+                .h(80.0)
+                .read_only(true),
+                field_id_read_only,
+            ),
+        ] {
+            let mut taffy = TaffyTree::<ElementId>::new();
+            let viewport = Size::new(140.0, 80.0);
+            let mut layout_cx = LayoutContext::new(&mut taffy, viewport);
+            let node = scrollable.layout(&mut layout_cx);
+            if let Err(err) = taffy.compute_layout(
+                node,
+                taffy::Size {
+                    width: taffy::prelude::AvailableSpace::Definite(viewport.width),
+                    height: taffy::prelude::AvailableSpace::Definite(viewport.height),
+                },
+            ) {
+                panic!("{label}: layout should compute: {err}");
+            }
+
+            let mut focused = None;
+            let mut event_cx = EventContext::new(
+                Bounds::from_xywh(0.0, 0.0, viewport.width, viewport.height),
+                &taffy,
+                &mut focused,
+            );
+
+            assert!(
+                scrollable.handle_pointer_event(
+                    &mut event_cx,
+                    &PointerEvent {
+                        kind: PointerEventKind::Down,
+                        position: Point::new(8.0, 8.0),
+                        button: Some(MouseButton::Left),
+                    },
+                ),
+                "{label}: nested TextField should receive pointer focus"
+            );
+            assert_eq!(
+                event_cx.focused_id(),
+                Some(field_id),
+                "{label}: pointer should focus nested editor"
+            );
+
+            assert!(
+                scrollable.handle_text_input_event(
+                    &mut event_cx,
+                    &TextInputEvent::InsertText("xy".into()),
+                ),
+                "{label}: nested TextField should receive text input"
+            );
+            assert!(
+                scrollable.handle_key_event(
+                    &mut event_cx,
+                    &KeyEvent::new(KeyCode::ArrowLeft, Modifiers::none()),
+                ),
+                "{label}: nested TextField should receive key events"
+            );
+            assert!(
+                scrollable.handle_text_input_command(
+                    &mut event_cx,
+                    &TextInputCommand::InsertText("z".into()),
+                ),
+                "{label}: nested TextField should receive text input commands"
+            );
+
+            let snapshot = scrollable
+                .text_input_snapshot(field_id)
+                .unwrap_or_else(|| panic!("{label}: text_input_snapshot should still forward"));
+            assert_eq!(snapshot.text(), "xzy");
+
+            assert!(
+                !scrollable.handle_scroll_event(
+                    &mut event_cx,
+                    &ScrollEvent {
+                        position: Point::new(8.0, 8.0),
+                        delta_x: 0.0,
+                        delta_y: 24.0,
+                        modifiers: Modifiers::default(),
+                    },
+                ),
+                "{label}: scroll events must stay blocked"
+            );
         }
     }
 
