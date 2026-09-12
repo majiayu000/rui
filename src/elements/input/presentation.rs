@@ -299,18 +299,19 @@ impl Input {
         let plan = match cache.shape_single_line(TextRequest::new(&text, font_size, 400, None, 1.0))
         {
             Ok(plan) => plan,
-            Err(err) => panic!("input text shaping failed: {err:?}"),
+            Err(err) => {
+                log::error!("input text shaping failed: {err:?}");
+                return;
+            }
         };
-        self.text_layout = Some(
-            match TextEditLayout::from_shape_plan_with_line_height(
-                text,
-                &plan,
-                self.cursor_height_for_height(height),
-            ) {
-                Ok(layout) => layout,
-                Err(err) => panic!("input text layout failed: {err}"),
-            },
-        );
+        match TextEditLayout::from_shape_plan_with_line_height(
+            text,
+            &plan,
+            self.cursor_height_for_height(height),
+        ) {
+            Ok(layout) => self.text_layout = Some(layout),
+            Err(err) => log::error!("input text layout failed: {err}"),
+        }
     }
 
     pub(super) fn refresh_text_layout_if_stale(&mut self, cache: &mut TextMeasureCache) {
@@ -319,11 +320,8 @@ impl Input {
         }
     }
 
-    fn text_layout(&self) -> &TextEditLayout {
-        match self.text_layout.as_ref() {
-            Some(layout) => layout,
-            None => panic!("input text layout was not prepared before paint"),
-        }
+    fn text_layout(&self) -> Option<&TextEditLayout> {
+        self.text_layout.as_ref()
     }
 
     fn text_origin(&self, bounds: Bounds) -> Point {
@@ -367,7 +365,9 @@ impl Input {
             return;
         }
 
-        let layout = self.text_layout();
+        let Some(layout) = self.text_layout() else {
+            return;
+        };
         let style = TextEditPaintStyle::new(
             INPUT_CARET_WIDTH,
             self.paint_tokens
@@ -436,7 +436,9 @@ impl Input {
             return None;
         };
 
-        let layout = self.text_layout();
+        let Some(layout) = self.text_layout() else {
+            return None;
+        };
         let style = TextEditPaintStyle::new(
             INPUT_CARET_WIDTH,
             self.paint_tokens

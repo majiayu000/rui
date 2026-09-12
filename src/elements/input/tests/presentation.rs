@@ -22,6 +22,45 @@ fn refresh_text_geometry_rebuilds_a_layout_invalidated_by_input() {
     );
 }
 
+#[test]
+fn input_update_text_layout_retains_last_good_on_shaping_failure() {
+    use crate::renderer::text::TextMeasureCache;
+
+    let mut input = Input::new().value("hello");
+    let _ = layout_input(&mut input, Size::new(240.0, 56.0));
+    assert_eq!(
+        input.text_layout.as_ref().map(|layout| layout.text()),
+        Some("hello")
+    );
+
+    input.state.value = "world".to_string();
+    let mut cache = TextMeasureCache::without_font();
+    input.update_text_layout(&mut cache, 40.0);
+
+    assert_eq!(
+        input.text_layout.as_ref().map(|layout| layout.text()),
+        Some("hello"),
+        "shaping failure should retain the last-good layout"
+    );
+    assert!(input.current_text_layout().is_none());
+}
+
+#[test]
+fn input_selection_and_caret_paint_soft_fail_without_text_layout() {
+    let mut inp = Input::new().value("hello");
+    inp.state.focused = true;
+    inp.state.selection_start = Some(1);
+    inp.state.selection_end = Some(4);
+    inp.state.composition_range = Some(range(2, 4));
+    let (taffy, bounds) = layout_input(&mut inp, Size::new(240.0, 56.0));
+    inp.text_layout = None;
+
+    let mut scene = Scene::new();
+    let mut paint_cx = PaintContext::new(&mut scene, bounds, &taffy);
+    inp.paint_selection_and_marked_text(&mut paint_cx, bounds);
+    assert!(inp.paint_cursor(&mut paint_cx, bounds).is_none());
+}
+
 // ==================== display_text Tests ====================
 
 #[test]
