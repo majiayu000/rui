@@ -299,7 +299,7 @@ fn dialogs_publish_as_group_containers_instead_of_nested_windows() {
             .expect("dialog label should be valid");
     let snapshot = bridge.snapshot_tree(&AccessibilityTree::new(vec![node]));
 
-    assert_eq!(snapshot.nodes()[0].native_role(), "AXWindow");
+    assert_eq!(snapshot.nodes()[0].native_role(), "AXGroup");
 }
 
 #[test]
