@@ -177,7 +177,18 @@ where
             .update_text_input_state(None, None, None, None, None);
         return Ok(());
     };
-    let (selected_range, marked_range, caret_range) = text_input_ranges(&snapshot)?;
+    let (selected_range, marked_range, caret_range) = match text_input_ranges(&snapshot) {
+        Ok(ranges) => ranges,
+        Err(err) => {
+            // Invalid selection/composition ranges must not leave AppKit reporting a
+            // previous snapshot (possibly from another input) for later IME callbacks.
+            window
+                .content_view
+                .update_text_input_state(None, None, None, None, None);
+            window.discard_marked_text();
+            return Err(err);
+        }
+    };
     window.content_view.update_text_input_state(
         Some(snapshot.clone()),
         Some(selected_range),

@@ -275,19 +275,28 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
             }
 
             let accessibility_bridge = window.accessibility_bridge_mut();
-            match presenter.accessibility_tree() {
+            let tree_published = match presenter.accessibility_tree() {
                 Ok(accessibility_tree) => {
-                    if let Err(err) = accessibility_bridge.publish_tree(&accessibility_tree) {
-                        log::error!("failed to publish accessibility tree: {err}");
+                    match accessibility_bridge.publish_tree(&accessibility_tree) {
+                        Ok(()) => true,
+                        Err(err) => {
+                            log::error!("failed to publish accessibility tree: {err}");
+                            false
+                        }
                     }
                 }
                 Err(err) => {
                     log::error!("failed to build accessibility tree: {err}");
+                    false
                 }
-            }
-            for announcement in presenter.take_accessibility_announcements() {
-                if let Err(err) = accessibility_bridge.announce(&announcement) {
-                    log::error!("failed to publish accessibility announcement: {err}");
+            };
+            // Keep focus/action announcements queued until a matching tree is published
+            // so VoiceOver is not left on a stale element after a failed frame.
+            if tree_published {
+                for announcement in presenter.take_accessibility_announcements() {
+                    if let Err(err) = accessibility_bridge.announce(&announcement) {
+                        log::error!("failed to publish accessibility announcement: {err}");
+                    }
                 }
             }
 

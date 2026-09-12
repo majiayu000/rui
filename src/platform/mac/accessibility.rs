@@ -493,6 +493,8 @@ impl NativeAccessibilityHost for AppKitAccessibilityHost {
             .last_tree
             .as_ref()
             .is_none_or(|previous| accessibility_layout_changed(previous, tree));
+        // Take the index only for the duration of rebuild. On failure restore it so
+        // subsequent accessibility actions are not discarded against an empty map.
         let existing = std::mem::take(&mut self.elements);
         let mut elements = HashMap::new();
         let mut roots: Vec<Retained<AnyObject>> = Vec::with_capacity(tree.roots().len());
@@ -505,7 +507,7 @@ impl NativeAccessibilityHost for AppKitAccessibilityHost {
         );
         for root in tree.roots() {
             let parent: &AnyObject = &self.content_view;
-            let root = Self::build_node(
+            let root = match Self::build_node(
                 root,
                 parent,
                 parent_bounds,
@@ -514,7 +516,13 @@ impl NativeAccessibilityHost for AppKitAccessibilityHost {
                 &self.action_requests,
                 self.window_number,
                 self.content_view.mtm(),
-            )?;
+            ) {
+                Ok(root) => root,
+                Err(err) => {
+                    self.elements = existing;
+                    return Err(err);
+                }
+            };
             roots.push(unsafe { Retained::cast_unchecked(root) });
         }
         for (id, element) in &existing {
