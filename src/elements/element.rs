@@ -208,15 +208,22 @@ impl<'a> EventContext<'a> {
         }
     }
 
-    /// True when a hit clip is present and `point` is outside the positive-area
-    /// visible intersection of layout bounds and that clip.
+    /// True when a hit clip is present and pointer dispatch should skip this
+    /// subtree for clipped-away activation.
+    ///
+    /// Fully clipped nodes (no positive-area `bounds ∩ hit_clip`) are always
+    /// outside. Otherwise only points outside `hit_clip` are suppressed, so an
+    /// ancestor with smaller layout bounds can still forward to overflow
+    /// descendants that remain visible inside the viewport clip. Per-element
+    /// hit tests continue to use [`Self::contains_pointer`].
     pub fn pointer_outside_hit_region(&self, point: Point) -> bool {
         match self.hit_clip {
-            Some(clip) => self
-                .bounds
-                .intersection(&clip)
-                .map(|visible| !visible.contains(point))
-                .unwrap_or(true),
+            Some(clip) => {
+                if self.bounds.intersection(&clip).is_none() {
+                    return true;
+                }
+                !clip.contains(point)
+            }
             None => false,
         }
     }
@@ -506,11 +513,13 @@ impl AnyElement {
             return false;
         }
 
-        // Gate clipped-away activation at the dispatch boundary so legacy
-        // `cx.bounds().contains` Elements cannot press invisible content.
-        // Still forward when this subtree is the hit/capture target, the Move
-        // previous-hit target, or contains focus (blur/cleanup), and always
-        // keep `bounds()` as real geometry for local coordinates.
+        // Gate clipped-away activation at the dispatch boundary. Fully clipped
+        // subtrees and points outside hit_clip are suppressed so legacy
+        // `cx.bounds().contains` Elements cannot press invisible content, while
+        // points inside the viewport clip still reach overflow descendants of
+        // smaller ancestors. Still forward when this subtree is the hit/capture
+        // target, the Move previous-hit target, or contains focus (blur/cleanup),
+        // and always keep `bounds()` as real geometry for local coordinates.
         let delivers_for_focus = cx
             .focused_id()
             .map(|id| self.contains_id(id))

@@ -1077,6 +1077,100 @@ mod tests {
         );
     }
 
+    /// Parent with small layout bounds that still paints an overflowing child
+    /// inside the viewport (models Div→Button overflow without scene hits).
+    struct OverflowHost {
+        inner: crate::elements::Div,
+        child: AnyElement,
+        overflow_height: f32,
+    }
+
+    impl Element for OverflowHost {
+        fn style(&self) -> &crate::core::style::Style {
+            self.inner.style()
+        }
+
+        fn layout(&mut self, cx: &mut LayoutContext) -> NodeId {
+            self.inner.layout(cx)
+        }
+
+        fn paint(&mut self, cx: &mut PaintContext) {
+            self.inner.paint(cx);
+        }
+
+        fn handle_pointer_event(&mut self, cx: &mut EventContext, event: &PointerEvent) -> bool {
+            let overflow_bounds = Bounds::from_xywh(
+                cx.bounds().x(),
+                cx.bounds().y(),
+                cx.bounds().width(),
+                self.overflow_height,
+            );
+            let mut child_cx = cx.with_bounds(overflow_bounds);
+            self.child.handle_pointer_event(&mut child_cx, event)
+        }
+    }
+
+    #[test]
+    fn advanced_ui_scrollable_forwards_pointer_to_visible_overflow_descendant() {
+        let activated = Rc::new(Cell::new(false));
+        let activated_ref = Rc::clone(&activated);
+        let mut scrollable = Scrollable::new(OverflowHost {
+            inner: crate::elements::div().w(120.0).h(40.0),
+            overflow_height: 80.0,
+            child: AnyElement::new(LegacyBoundsHitProbe {
+                inner: crate::elements::div().w(120.0).h(80.0),
+                activated: activated_ref,
+            }),
+        })
+        .w(140.0)
+        .h(80.0)
+        .disabled(true);
+
+        let mut taffy = TaffyTree::<ElementId>::new();
+        let viewport = Size::new(140.0, 80.0);
+        let mut layout_cx = LayoutContext::new(&mut taffy, viewport);
+        let node = scrollable.layout(&mut layout_cx);
+        if let Err(err) = taffy.compute_layout(
+            node,
+            taffy::Size {
+                width: taffy::prelude::AvailableSpace::Definite(viewport.width),
+                height: taffy::prelude::AvailableSpace::Definite(viewport.height),
+            },
+        ) {
+            panic!("layout should compute: {err}");
+        }
+
+        let mut focused = None;
+        let mut event_cx = EventContext::new(
+            Bounds::from_xywh(0.0, 0.0, viewport.width, viewport.height),
+            &taffy,
+            &mut focused,
+        );
+
+        // Click in the overflow region: outside the host's 40px layout bounds,
+        // but still inside the viewport and the descendant's painted area.
+        let _ = scrollable.handle_pointer_event(
+            &mut event_cx,
+            &PointerEvent {
+                kind: PointerEventKind::Down,
+                position: Point::new(8.0, 60.0),
+                button: Some(MouseButton::Left),
+            },
+        );
+        let _ = scrollable.handle_pointer_event(
+            &mut event_cx,
+            &PointerEvent {
+                kind: PointerEventKind::Up,
+                position: Point::new(8.0, 60.0),
+                button: Some(MouseButton::Left),
+            },
+        );
+        assert!(
+            activated.get(),
+            "visible overflow descendant inside hit_clip must remain clickable"
+        );
+    }
+
     /// Custom element that starts a press inside the viewport and relies on
     /// `cx.bounds()` for local coordinates while clearing pressed state on
     /// outside Move/Up (capture cleanup).
@@ -1272,6 +1366,42 @@ mod tests {
         assert!(
             visible.contains_pointer(Point::new(8.0, 40.0)),
             "positive-area visible intersection must still accept interior points"
+        );
+    }
+
+    #[test]
+    fn event_context_pointer_outside_hit_region_allows_overflow_inside_clip() {
+        let taffy = TaffyTree::<ElementId>::new();
+        let mut focused = None;
+        let mut root = EventContext::new(
+            Bounds::from_xywh(0.0, 0.0, 140.0, 80.0),
+            &taffy,
+            &mut focused,
+        );
+        let small_ancestor = root.with_bounds_and_hit_clip(
+            Bounds::from_xywh(0.0, 0.0, 120.0, 40.0),
+            Bounds::from_xywh(0.0, 0.0, 140.0, 80.0),
+        );
+        assert!(
+            !small_ancestor.pointer_outside_hit_region(Point::new(8.0, 60.0)),
+            "point outside ancestor bounds but inside hit_clip must still dispatch"
+        );
+        assert!(
+            small_ancestor.pointer_outside_hit_region(Point::new(8.0, 100.0)),
+            "point outside hit_clip must remain suppressed"
+        );
+
+        let fully_clipped = root.with_bounds_and_hit_clip(
+            Bounds::from_xywh(0.0, 80.0, 120.0, 80.0),
+            Bounds::from_xywh(0.0, 0.0, 140.0, 80.0),
+        );
+        assert!(
+            fully_clipped.pointer_outside_hit_region(Point::new(8.0, 40.0)),
+            "fully clipped nodes must stay suppressed even for in-clip points"
+        );
+        assert!(
+            fully_clipped.pointer_outside_hit_region(Point::new(8.0, 80.0)),
+            "edge-only clipped nodes must stay suppressed"
         );
     }
 
