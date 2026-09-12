@@ -160,6 +160,37 @@ fn text_editing_composition_honors_concrete_utf16_replacement_ranges() {
 }
 
 #[test]
+fn text_editing_commit_composition_replacing_utf16_preserves_composition_on_mid_grapheme_failure() {
+    let mut buffer = TextEditBuffer::with_text("hello");
+    must(buffer.set_selection(TextSelection::new(0, 5)));
+    must(buffer.apply_text_input_event(TextInputEvent::BeginComposition(
+        "e\u{301}".to_string(),
+    )));
+
+    assert_eq!(buffer.text(), "e\u{301}");
+    assert_eq!(
+        buffer.composition().map(|state| state.text()),
+        Some("e\u{301}")
+    );
+
+    // UTF-16 range covering only the base "e" is a valid char/UTF-16 boundary
+    // but not a grapheme boundary; commit must fail without clearing composition.
+    let mid_grapheme = must_utf16(Utf16TextRange::new(0, 1));
+    let error = buffer
+        .apply_text_input_command(TextInputCommand::CommitCompositionReplacing {
+            text: "x".to_string(),
+            replacement_range: mid_grapheme,
+        })
+        .expect_err("mid-grapheme UTF-16 commit must fail");
+    assert_eq!(error, TextEditError::InvalidBoundary { index: 1 });
+    assert_eq!(buffer.text(), "e\u{301}");
+    assert_eq!(
+        buffer.composition().map(|state| state.text()),
+        Some("e\u{301}")
+    );
+}
+
+#[test]
 fn text_editing_applies_marked_selection_relative_to_composition_text() {
     let mut buffer = TextEditBuffer::with_text("ab");
     must(buffer.set_cursor(1));
