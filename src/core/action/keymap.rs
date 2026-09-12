@@ -91,6 +91,36 @@ impl Keymap {
             Modifiers::none(),
             StandardAction::DeleteForward,
         )?;
+        keymap.bind(
+            KeyCode::Backspace,
+            Modifiers::alt(),
+            StandardAction::DeleteWordBackward,
+        )?;
+        keymap.bind(
+            KeyCode::Delete,
+            Modifiers::alt(),
+            StandardAction::DeleteWordForward,
+        )?;
+        keymap.bind(
+            KeyCode::Backspace,
+            Modifiers::ctrl(),
+            StandardAction::DeleteWordBackward,
+        )?;
+        keymap.bind(
+            KeyCode::Delete,
+            Modifiers::ctrl(),
+            StandardAction::DeleteWordForward,
+        )?;
+        keymap.bind(
+            KeyCode::Backspace,
+            Modifiers::meta(),
+            StandardAction::DeleteWordBackward,
+        )?;
+        keymap.bind(
+            KeyCode::Delete,
+            Modifiers::meta(),
+            StandardAction::DeleteWordForward,
+        )?;
         keymap.bind(KeyCode::Enter, Modifiers::none(), StandardAction::Activate)?;
         keymap.bind(
             KeyCode::Enter,

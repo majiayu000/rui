@@ -715,6 +715,10 @@ impl Element for Input {
             StandardAction::SelectRight => KeyEvent::new(KeyCode::ArrowRight, Modifiers::shift()),
             StandardAction::DeleteBackward => KeyEvent::new(KeyCode::Backspace, Modifiers::none()),
             StandardAction::DeleteForward => KeyEvent::new(KeyCode::Delete, Modifiers::none()),
+            StandardAction::DeleteWordBackward => {
+                KeyEvent::new(KeyCode::Backspace, Modifiers::alt())
+            }
+            StandardAction::DeleteWordForward => KeyEvent::new(KeyCode::Delete, Modifiers::alt()),
             StandardAction::Activate | StandardAction::Submit | StandardAction::InsertNewline => {
                 KeyEvent::new(KeyCode::Enter, Modifiers::none())
             }

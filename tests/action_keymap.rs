@@ -164,6 +164,36 @@ fn keymap_maps_standard_actions_from_key_events() {
             Modifiers::none(),
             StandardAction::DeleteForward,
         ),
+        (
+            KeyCode::Backspace,
+            Modifiers::alt(),
+            StandardAction::DeleteWordBackward,
+        ),
+        (
+            KeyCode::Delete,
+            Modifiers::alt(),
+            StandardAction::DeleteWordForward,
+        ),
+        (
+            KeyCode::Backspace,
+            Modifiers::ctrl(),
+            StandardAction::DeleteWordBackward,
+        ),
+        (
+            KeyCode::Delete,
+            Modifiers::ctrl(),
+            StandardAction::DeleteWordForward,
+        ),
+        (
+            KeyCode::Backspace,
+            Modifiers::meta(),
+            StandardAction::DeleteWordBackward,
+        ),
+        (
+            KeyCode::Delete,
+            Modifiers::meta(),
+            StandardAction::DeleteWordForward,
+        ),
         (KeyCode::Enter, Modifiers::none(), StandardAction::Activate),
         (
             KeyCode::Enter,
@@ -487,22 +517,40 @@ fn action_keymap_runtime_preserves_mixed_bidi_caret_affinity() {
 }
 
 #[test]
-fn action_keymap_runtime_preserves_shifted_deletes_for_text_editing() {
+fn action_keymap_runtime_routes_modified_deletes_as_word_deletes() {
     let input_id = ElementId::new();
-    let latest = Rc::new(RefCell::new(String::from("abc")));
+    let latest = Rc::new(RefCell::new(String::from("alpha beta gamma")));
     let latest_ref = Rc::clone(&latest);
     let mut session = mount_or_panic(move |_cx| {
         let latest_ref = Rc::clone(&latest_ref);
         input()
             .id(input_id)
             .accessibility_label("Search")
-            .value("abc")
+            .value("alpha beta gamma")
             .on_change(move |value| *latest_ref.borrow_mut() = value.to_string())
     });
     session.request_focus(Some(input_id));
 
-    assert!(!session.dispatch_key_event(&KeyEvent::new(KeyCode::Backspace, Modifiers::alt())));
-    assert!(!session.dispatch_key_event(&KeyEvent::new(KeyCode::Delete, Modifiers::meta())));
+    assert!(session.dispatch_key_event(&KeyEvent::new(KeyCode::Backspace, Modifiers::alt())));
+    assert_eq!(latest.borrow().as_str(), "alpha beta ");
+
+    assert!(session.dispatch_key_event(&KeyEvent::new(KeyCode::Backspace, Modifiers::ctrl())));
+    assert_eq!(latest.borrow().as_str(), "alpha ");
+
+    assert!(session.dispatch_key_event(&KeyEvent::new(KeyCode::Home, Modifiers::none())));
+    assert!(session.dispatch_key_event(&KeyEvent::new(KeyCode::Delete, Modifiers::meta())));
+    assert_eq!(latest.borrow().as_str(), " ");
+
+    assert!(session.dispatch_key_event(&KeyEvent::new(KeyCode::A, Modifiers::meta())));
+    assert!(session.dispatch_key_event(
+        &KeyEvent::new(KeyCode::Unknown(0), Modifiers::none()).with_char('a')
+    ));
+    assert!(session.dispatch_key_event(
+        &KeyEvent::new(KeyCode::Unknown(0), Modifiers::none()).with_char('b')
+    ));
+    assert!(session.dispatch_key_event(
+        &KeyEvent::new(KeyCode::Unknown(0), Modifiers::none()).with_char('c')
+    ));
     assert_eq!(latest.borrow().as_str(), "abc");
 
     assert!(session.dispatch_key_event(&KeyEvent::new(KeyCode::Backspace, Modifiers::shift())));
@@ -510,10 +558,6 @@ fn action_keymap_runtime_preserves_shifted_deletes_for_text_editing() {
 
     assert!(session.dispatch_key_event(&KeyEvent::new(KeyCode::Backspace, Modifiers::none())));
     assert_eq!(latest.borrow().as_str(), "a");
-
-    assert!(session.dispatch_key_event(&KeyEvent::new(KeyCode::A, Modifiers::meta())));
-    assert!(session.dispatch_key_event(&KeyEvent::new(KeyCode::Delete, Modifiers::shift())));
-    assert_eq!(latest.borrow().as_str(), "");
 }
 
 #[test]

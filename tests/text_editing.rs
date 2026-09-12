@@ -246,6 +246,35 @@ fn text_editing_selection_and_word_navigation_use_explicit_ranges() {
 }
 
 #[test]
+fn text_editing_modified_delete_keys_remove_whole_words() {
+    let mut buffer = TextEditBuffer::with_text("alpha beta gamma");
+    must(buffer.set_cursor(buffer.text().len()));
+
+    let outcome = must(buffer.apply_key_event(&KeyEvent::new(KeyCode::Backspace, Modifiers::alt())));
+    assert!(outcome.changed);
+    assert_eq!(buffer.text(), "alpha beta ");
+    assert_eq!(buffer.cursor(), "alpha beta ".len());
+
+    let outcome = must(buffer.apply_key_event(&KeyEvent::new(KeyCode::Backspace, Modifiers::ctrl())));
+    assert!(outcome.changed);
+    assert_eq!(buffer.text(), "alpha ");
+    assert_eq!(buffer.cursor(), "alpha ".len());
+
+    must(buffer.set_cursor(0));
+    let outcome = must(buffer.apply_key_event(&KeyEvent::new(KeyCode::Delete, Modifiers::meta())));
+    assert!(outcome.changed);
+    assert_eq!(buffer.text(), " ");
+    assert_eq!(buffer.cursor(), 0);
+
+    let mut buffer = TextEditBuffer::with_text("one two");
+    must(buffer.set_cursor(0));
+    let outcome = must(buffer.apply_key_event(&KeyEvent::new(KeyCode::Delete, Modifiers::alt())));
+    assert!(outcome.changed);
+    assert_eq!(buffer.text(), " two");
+    assert_eq!(buffer.cursor(), 0);
+}
+
+#[test]
 fn text_editing_key_events_handle_submit_and_multiline_enter() {
     let mut single = TextEditBuffer::with_text("query");
     let enter = KeyEvent::new(KeyCode::Enter, Modifiers::none());

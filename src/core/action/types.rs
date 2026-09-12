@@ -21,6 +21,8 @@ impl ActionId {
                     | StandardAction::InsertNewline
                     | StandardAction::DeleteBackward
                     | StandardAction::DeleteForward
+                    | StandardAction::DeleteWordBackward
+                    | StandardAction::DeleteWordForward
             )
         )
     }
@@ -47,6 +49,8 @@ pub enum StandardAction {
     FocusPrevious,
     DeleteBackward,
     DeleteForward,
+    DeleteWordBackward,
+    DeleteWordForward,
     InsertNewline,
     Activate,
     Submit,
