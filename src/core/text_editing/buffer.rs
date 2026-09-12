@@ -341,8 +341,8 @@ impl TextEditBuffer {
     ) -> Result<(), TextEditError> {
         self.ensure_text_allowed(text)?;
         let replacement_range = replacement_range.to_text_range(&self.text)?;
-        self.composition = None;
         self.replace_range_internal(replacement_range, text)?;
+        self.composition = None;
         self.selection = TextSelection::collapsed(replacement_range.start() + text.len());
         Ok(())
     }
