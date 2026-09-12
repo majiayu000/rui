@@ -35,15 +35,17 @@ use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::rc::Rc;
 
+/// Native accessibility action drained from the macOS bridge queue.
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct MacAccessibilityActionRequest {
+pub struct MacAccessibilityActionRequest {
     pub id: ElementId,
     pub request: MacAccessibilityRequest,
     pub bounds: Bounds,
 }
 
+/// Request payload carried by [`MacAccessibilityActionRequest`].
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) enum MacAccessibilityRequest {
+pub enum MacAccessibilityRequest {
     Action {
         action: AccessibilityAction,
         value: Option<String>,

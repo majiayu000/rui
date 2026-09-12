@@ -1,6 +1,11 @@
 use super::*;
+use crate::core::ElementId;
+use crate::core::accessibility::AccessibilityAction;
+use crate::core::geometry::Bounds;
 use crate::core::text_editing::{TextInputCommand, Utf16TextRange};
-use crate::platform::mac::MacPlatformEvent;
+use crate::platform::mac::{
+    MacAccessibilityActionRequest, MacAccessibilityRequest, MacPlatformEvent,
+};
 
 fn append_test_ime_events(
     platform_events: &mut Vec<PlatformWindowEvent>,
@@ -66,6 +71,43 @@ fn public_mac_poll_event_preserves_rich_text_commands() {
     ));
     assert!(
         MacWindowEvent::Text(selection)
+            .try_into_platform_event()
+            .is_err()
+    );
+}
+
+#[test]
+fn public_mac_poll_event_preserves_accessibility_actions() {
+    let request = MacAccessibilityActionRequest {
+        id: ElementId::new(),
+        request: MacAccessibilityRequest::Action {
+            action: AccessibilityAction::Activate,
+            value: None,
+        },
+        bounds: Bounds::from_xywh(10.0, 20.0, 30.0, 40.0),
+    };
+
+    assert!(matches!(
+        MacWindowEvent::Accessibility(request.clone()).into_public_event(),
+        MacPlatformEvent::Accessibility(actual) if actual == request
+    ));
+    assert!(
+        MacWindowEvent::Accessibility(request)
+            .try_into_platform_event()
+            .is_err()
+    );
+
+    let focus = MacAccessibilityActionRequest {
+        id: ElementId::new(),
+        request: MacAccessibilityRequest::Focus(true),
+        bounds: Bounds::from_xywh(50.0, 60.0, 70.0, 80.0),
+    };
+    assert!(matches!(
+        MacWindowEvent::Accessibility(focus.clone()).into_public_event(),
+        MacPlatformEvent::Accessibility(actual) if actual == focus
+    ));
+    assert!(
+        MacWindowEvent::Accessibility(focus)
             .try_into_platform_event()
             .is_err()
     );

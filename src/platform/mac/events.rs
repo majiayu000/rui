@@ -18,14 +18,15 @@ pub(crate) enum MacWindowEvent {
     Accessibility(MacAccessibilityActionRequest),
 }
 
-/// Ordered macOS events with lossless native text-input commands.
+/// Ordered macOS events with lossless native text-input and accessibility payloads.
 ///
-/// Use [`MacWindow::poll_events_with_text_commands`] when replacement ranges
-/// and marked-text selections must be preserved.
+/// Use [`MacWindow::poll_events_with_text_commands`] when replacement ranges,
+/// marked-text selections, or accessibility actions must be preserved.
 #[derive(Debug, Clone)]
 pub enum MacPlatformEvent {
     Platform(PlatformWindowEvent),
     Text(TextInputCommand),
+    Accessibility(MacAccessibilityActionRequest),
 }
 
 impl MacWindowEvent {
@@ -33,9 +34,7 @@ impl MacWindowEvent {
         match self {
             Self::Platform(event) => MacPlatformEvent::Platform(event),
             Self::Text(command) => MacPlatformEvent::Text(command),
-            Self::Accessibility(_) => {
-                MacPlatformEvent::Platform(PlatformWindowEvent::RedrawRequested)
-            }
+            Self::Accessibility(request) => MacPlatformEvent::Accessibility(request),
         }
     }
 
@@ -68,7 +67,10 @@ impl MacWindowEvent {
                 "macos",
                 "native text input command cannot be represented by PlatformImeEvent; use MacWindow::poll_events_with_text_commands",
             )),
-            Self::Accessibility(_) => Ok(PlatformWindowEvent::RedrawRequested),
+            Self::Accessibility(_) => Err(PlatformWindowError::backend(
+                "macos",
+                "native accessibility action cannot be represented by PlatformWindowEvent; use MacWindow::poll_events_with_text_commands",
+            )),
         }
     }
 }
