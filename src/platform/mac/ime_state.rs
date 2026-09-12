@@ -158,10 +158,16 @@ where
     ime_state.cancel_owner_after_focus_change(presenter.focused_element(), owner_exists)
 }
 
+/// Syncs the focused text-input snapshot into AppKit.
+///
+/// Returns `(sync_result, redraw_requested)`. `redraw_requested` is true when an invalid
+/// snapshot forced a post-frame `CancelComposition` that mutated the input; the run loop must
+/// schedule a platform redraw so marked text does not linger until an unrelated event.
 pub(crate) fn sync_text_input_snapshot<E>(
-    presenter: &Presenter<E>,
+    presenter: &mut Presenter<E>,
     window: &MacWindow,
-) -> Result<(), TextEditError>
+    ime_state: &mut NativeImeState,
+) -> (Result<(), TextEditError>, bool)
 where
     E: Element,
 {
@@ -169,24 +175,28 @@ where
         window
             .content_view
             .update_text_input_state(None, None, None, None, None);
-        return Ok(());
+        return (Ok(()), false);
     };
     let Some(snapshot) = presenter.root().text_input_snapshot(focused) else {
         window
             .content_view
             .update_text_input_state(None, None, None, None, None);
-        return Ok(());
+        return (Ok(()), false);
     };
     let (selected_range, marked_range, caret_range) = match text_input_ranges(&snapshot) {
         Ok(ranges) => ranges,
         Err(err) => {
             // Invalid selection/composition ranges must not leave AppKit reporting a
             // previous snapshot (possibly from another input) for later IME callbacks.
+            // Also cancel logical composition ownership so the next setMarkedText can
+            // BeginComposition instead of failing with CompositionActive.
             window
                 .content_view
                 .update_text_input_state(None, None, None, None, None);
             window.discard_marked_text();
-            return Err(err);
+            let redraw_requested =
+                cancel_logical_composition_after_native_discard(presenter, ime_state);
+            return (Err(err), redraw_requested);
         }
     };
     window.content_view.update_text_input_state(
@@ -196,7 +206,30 @@ where
         Some(caret_range),
         snapshot.caret_bounds(),
     );
-    Ok(())
+    (Ok(()), false)
+}
+
+fn cancel_logical_composition_after_native_discard<E>(
+    presenter: &mut Presenter<E>,
+    ime_state: &mut NativeImeState,
+) -> bool
+where
+    E: Element,
+{
+    let Some(owner) = ime_state.composition_owner.take() else {
+        return false;
+    };
+    if !presenter.root().contains_id(owner) {
+        return false;
+    }
+    let (handled, redraw_requested) =
+        dispatch_text_input_event_to(presenter, owner, &TextInputCommand::CancelComposition);
+    if !handled {
+        log::error!("failed to cancel macOS composition after invalid IME snapshot discard");
+    }
+    // CancelComposition may set redraw_requested after Paint/Present; propagate it so the
+    // run loop schedules another frame instead of sleeping on pre-cancellation marked text.
+    handled || redraw_requested
 }
 
 fn text_input_ranges(
@@ -368,5 +401,55 @@ mod tests {
             ),
             Some(owner)
         );
+    }
+
+    #[test]
+    fn invalid_snapshot_discard_cancels_logical_composition_owner() {
+        let owner = ElementId::new();
+        let viewport = Size::new(200.0, 80.0);
+        let mut presenter = Presenter::with_root(viewport, div().child(input().id(owner)));
+        presenter.set_focused_element(Some(owner));
+        let mut ime_state = NativeImeState::default();
+        let begin = TextInputCommand::BeginComposition("marked".to_string());
+
+        let Some(target) = ime_state.target_for_event(&begin, presenter.focused_element()) else {
+            panic!("begin should claim the focused input");
+        };
+        let (begin_handled, _) = dispatch_text_input_event_to(&mut presenter, target, &begin);
+        assert!(begin_handled);
+        assert_eq!(ime_state.composition_owner, Some(owner));
+        assert!(
+            presenter
+                .root()
+                .text_input_snapshot(owner)
+                .and_then(|snapshot| snapshot.composition())
+                .is_some()
+        );
+
+        let redraw_requested =
+            cancel_logical_composition_after_native_discard(&mut presenter, &mut ime_state);
+
+        assert!(
+            redraw_requested,
+            "CancelComposition after invalid snapshot must request a redraw"
+        );
+        assert_eq!(ime_state.composition_owner, None);
+        assert!(
+            presenter
+                .root()
+                .text_input_snapshot(owner)
+                .and_then(|snapshot| snapshot.composition())
+                .is_none()
+        );
+        let resume = TextInputCommand::BeginComposition("resume".to_string());
+        let Some(resume_target) =
+            ime_state.target_for_event(&resume, presenter.focused_element())
+        else {
+            panic!("resume begin should claim the focused input");
+        };
+        let (rebegin_handled, _) =
+            dispatch_text_input_event_to(&mut presenter, resume_target, &resume);
+        assert!(rebegin_handled);
+        assert_eq!(ime_state.composition_owner, Some(owner));
     }
 }

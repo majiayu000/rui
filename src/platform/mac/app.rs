@@ -268,10 +268,19 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
             phases.paint_ns = outcome.durations.paint_ns;
             let frame_committed = outcome.presented;
 
-            if let Err(err) =
-                crate::platform::mac::ime_state::sync_text_input_snapshot(&presenter, &window)
-            {
+            let (ime_sync_result, ime_redraw_requested) =
+                crate::platform::mac::ime_state::sync_text_input_snapshot(
+                    &mut presenter,
+                    &window,
+                    &mut native_ime_state,
+                );
+            if let Err(err) = ime_sync_result {
                 log::error!("failed to synchronize native text input state: {err}");
+            }
+            // Invalid-snapshot cancel can mutate the input after Paint/Present; schedule a
+            // platform redraw so cleared marked text is painted before the run loop sleeps.
+            if ime_redraw_requested {
+                schedule_platform_redraw(&window, &mut context, RedrawSource::PlatformInput);
             }
 
             let accessibility_bridge = window.accessibility_bridge_mut();
