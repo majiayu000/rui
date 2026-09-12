@@ -271,16 +271,19 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
             if let Err(err) =
                 crate::platform::mac::ime_state::sync_text_input_snapshot(&presenter, &window)
             {
-                panic!("failed to synchronize native text input state: {err}");
+                log::error!("failed to synchronize native text input state: {err}");
             }
 
-            let accessibility_tree = match presenter.accessibility_tree() {
-                Ok(tree) => tree,
-                Err(err) => panic!("failed to build accessibility tree: {err}"),
-            };
             let accessibility_bridge = window.accessibility_bridge_mut();
-            if let Err(err) = accessibility_bridge.publish_tree(&accessibility_tree) {
-                panic!("failed to publish accessibility tree: {err}");
+            match presenter.accessibility_tree() {
+                Ok(accessibility_tree) => {
+                    if let Err(err) = accessibility_bridge.publish_tree(&accessibility_tree) {
+                        log::error!("failed to publish accessibility tree: {err}");
+                    }
+                }
+                Err(err) => {
+                    log::error!("failed to build accessibility tree: {err}");
+                }
             }
             for announcement in presenter.take_accessibility_announcements() {
                 if let Err(err) = accessibility_bridge.announce(&announcement) {
