@@ -302,9 +302,10 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
                     None
                 }
             };
-            // Keep announcements queued until a matching tree is published, then drop
-            // FocusChanged entries that no longer match the published focus so VoiceOver
-            // is not steered to a stale unfocused element after recovery.
+            // FocusChanged is tree-dependent and stays queued until a matching tree
+            // publishes. ActionFeedback posts on the content view and is announced
+            // immediately so retained-tree controls still confirm activation during
+            // recovery instead of buffering a burst for the next successful publish.
             if let Some(published_tree) = tree_published.as_ref() {
                 let focused = presenter.focused_element();
                 for announcement in filter_retained_accessibility_announcements(
@@ -316,6 +317,24 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
                         log::error!("failed to publish accessibility announcement: {err}");
                     }
                 }
+            } else {
+                let pending = presenter.take_accessibility_announcements();
+                let mut retained_focus = Vec::new();
+                for announcement in pending {
+                    match announcement.kind() {
+                        AccessibilityAnnouncementKind::ActionFeedback => {
+                            if let Err(err) = accessibility_bridge.announce(&announcement) {
+                                log::error!(
+                                    "failed to publish accessibility announcement: {err}"
+                                );
+                            }
+                        }
+                        AccessibilityAnnouncementKind::FocusChanged => {
+                            retained_focus.push(announcement);
+                        }
+                    }
+                }
+                presenter.retain_accessibility_announcements(retained_focus);
             }
 
             if frame_committed && let Some(recorder) = profile_recorder.as_mut() {
@@ -346,9 +365,11 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
 
 /// Drop obsolete focus announcements retained across failed publish frames.
 ///
-/// Action feedback is kept. FocusChanged entries are coalesced to the latest
-/// announcement that still matches the published tree's focused node (and the
-/// presenter's current focus); clearing focus discards all pending FocusChanged.
+/// Action feedback is kept in place. Matching FocusChanged entries are coalesced
+/// to the latest one that still matches the published tree's focused node (and
+/// the presenter's current focus), emitted at that latest entry's original index
+/// so focus stays ahead of later ActionFeedback instead of being appended after
+/// every action. Clearing focus discards all pending FocusChanged.
 pub(crate) fn filter_retained_accessibility_announcements(
     announcements: Vec<AccessibilityAnnouncement>,
     published_tree: &AccessibilityTree,
@@ -360,20 +381,22 @@ pub(crate) fn filter_retained_accessibility_announcements(
             .is_some_and(|node| node.a11y_focused())
     });
 
+    let latest_matching_focus_idx = announcements.iter().enumerate().rev().find_map(|(idx, a)| {
+        (a.kind() == AccessibilityAnnouncementKind::FocusChanged
+            && Some(a.node_id()) == published_focus)
+            .then_some(idx)
+    });
+
     let mut filtered = Vec::with_capacity(announcements.len());
-    let mut latest_focus: Option<AccessibilityAnnouncement> = None;
-    for announcement in announcements {
+    for (idx, announcement) in announcements.into_iter().enumerate() {
         match announcement.kind() {
             AccessibilityAnnouncementKind::FocusChanged => {
-                if Some(announcement.node_id()) == published_focus {
-                    latest_focus = Some(announcement);
+                if Some(idx) == latest_matching_focus_idx {
+                    filtered.push(announcement);
                 }
             }
             AccessibilityAnnouncementKind::ActionFeedback => filtered.push(announcement),
         }
-    }
-    if let Some(announcement) = latest_focus {
-        filtered.push(announcement);
     }
     filtered
 }

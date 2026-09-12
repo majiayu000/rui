@@ -368,8 +368,9 @@ impl MacAccessibilityBridge {
 
     /// Tree last accepted by a successful [`publish_tree`](Self::publish_tree).
     ///
-    /// Used to validate VoiceOver actions against the retained native tree when
-    /// the current presenter tree fails to build.
+    /// Used to validate VoiceOver actions against the tree the native host actually
+    /// exposes, including when the current presenter tree builds but fails to publish
+    /// or fails to rebuild entirely.
     pub fn last_published_tree(&self) -> Option<&AccessibilityTree> {
         self.last_published_tree.as_ref()
     }

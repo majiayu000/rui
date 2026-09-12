@@ -217,16 +217,21 @@ fn current_accessibility_node<E>(
 where
     E: Element,
 {
+    // VoiceOver actions originate from the native host's published tree. Prefer that
+    // retained tree whenever present so we never validate against a rebuild that
+    // succeeded in accessibility_tree() but then failed publish_tree (or any other
+    // unpublished current tree whose node actions/membership may disagree).
+    if let Some(tree) = retained_tree {
+        return tree.find(id).cloned();
+    }
+
     match presenter.accessibility_tree() {
         Ok(tree) => tree.find(id).cloned(),
         Err(err) => {
-            // Current tree failed (e.g. an unrelated node lacks a required label), but the
-            // native host still exposes the last successfully published tree. Validate the
-            // VoiceOver request against that retained tree so actions remain usable.
             log::error!(
                 "failed to rebuild macOS accessibility tree for request validation: {err}"
             );
-            retained_tree.and_then(|tree| tree.find(id).cloned())
+            None
         }
     }
 }
@@ -738,6 +743,38 @@ mod tests {
             (true, true)
         );
         assert_eq!(presenter.focused_element(), Some(id));
+        assert_eq!(
+            observed.borrow().as_slice(),
+            [ObservedAccessibilityEvent::Action(ActionId::Standard(
+                StandardAction::Activate,
+            ))]
+        );
+    }
+
+    #[test]
+    fn native_accessibility_prefers_retained_tree_when_current_tree_also_builds() {
+        let (mut presenter, id, observed) = accessibility_presenter();
+        let retained = presenter
+            .accessibility_tree()
+            .expect("initial accessibility tree should build");
+        // Current rebuild succeeds but drops Activate (simulating an unpublished
+        // tree after publish_tree rejected a sibling). VoiceOver still offers
+        // Activate from the retained native element.
+        presenter.root_mut().actions = vec![AccessibilityAction::SetValue];
+        assert!(
+            presenter.accessibility_tree().is_ok(),
+            "current tree should still build"
+        );
+
+        assert_eq!(
+            dispatch_accessibility_action(
+                &mut presenter,
+                &accessibility_request(id, AccessibilityAction::Activate, None),
+                Some(&retained),
+            ),
+            (true, true),
+            "requests must validate against the published retained tree, not the unpublished rebuild"
+        );
         assert_eq!(
             observed.borrow().as_slice(),
             [ObservedAccessibilityEvent::Action(ActionId::Standard(

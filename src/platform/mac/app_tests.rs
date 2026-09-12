@@ -313,6 +313,44 @@ fn retained_focus_announcements_drop_stale_targets_before_replay() {
 }
 
 #[test]
+fn retained_focus_announcements_preserve_order_before_action_feedback() {
+    let id = ElementId::from(3);
+    let published = AccessibilityTree::new(vec![
+        AccessibilityNode::label_required(id, AccessibilityRole::Button, "Button")
+            .expect("label")
+            .with_focused(true),
+    ]);
+    let announcements = vec![
+        AccessibilityAnnouncement::new(id, AccessibilityAnnouncementKind::FocusChanged, "focused"),
+        AccessibilityAnnouncement::new(
+            id,
+            AccessibilityAnnouncementKind::ActionFeedback,
+            "activated",
+        ),
+    ];
+
+    let filtered =
+        filter_retained_accessibility_announcements(announcements, &published, Some(id));
+
+    assert_eq!(
+        filtered,
+        [
+            AccessibilityAnnouncement::new(
+                id,
+                AccessibilityAnnouncementKind::FocusChanged,
+                "focused",
+            ),
+            AccessibilityAnnouncement::new(
+                id,
+                AccessibilityAnnouncementKind::ActionFeedback,
+                "activated",
+            ),
+        ],
+        "surviving FocusChanged must keep its original position ahead of ActionFeedback"
+    );
+}
+
+#[test]
 fn retained_focus_announcements_are_dropped_when_focus_clears() {
     let id = ElementId::from(7);
     let published = AccessibilityTree::new(vec![
