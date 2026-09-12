@@ -151,6 +151,11 @@ impl EventResult {
 
 pub struct EventContext<'a> {
     pub(crate) bounds: Bounds,
+    /// Optional absolute-space clip for pointer hit-testing.
+    ///
+    /// Layout coordinates (`bounds` / `child_bounds`) stay unclipped so nested
+    /// origins remain correct under scroll; hit checks also require this clip.
+    hit_clip: Option<Bounds>,
     pub(crate) taffy: &'a TaffyTree<ElementId>,
     pub(crate) focused: &'a mut Option<ElementId>,
     hit_target: Option<ElementId>,
@@ -168,6 +173,7 @@ impl<'a> EventContext<'a> {
     ) -> Self {
         Self {
             bounds,
+            hit_clip: None,
             taffy,
             focused,
             hit_target: None,
@@ -180,6 +186,17 @@ impl<'a> EventContext<'a> {
 
     pub fn bounds(&self) -> Bounds {
         self.bounds
+    }
+
+    /// Whether `point` is inside this context's layout bounds and any hit clip.
+    pub fn contains_pointer(&self, point: Point) -> bool {
+        if !self.bounds.contains(point) {
+            return false;
+        }
+        match self.hit_clip {
+            Some(clip) => clip.contains(point),
+            None => true,
+        }
     }
 
     pub fn focused_id(&self) -> Option<ElementId> {
@@ -278,6 +295,30 @@ impl<'a> EventContext<'a> {
     pub fn with_bounds(&mut self, bounds: Bounds) -> EventContext<'_> {
         EventContext {
             bounds,
+            hit_clip: self.hit_clip,
+            taffy: self.taffy,
+            focused: self.focused,
+            hit_target: self.hit_target,
+            previous_hit_target: self.previous_hit_target,
+            cursor: Rc::clone(&self.cursor),
+            redraw_requested: Rc::clone(&self.redraw_requested),
+            accessibility_announcements: Rc::clone(&self.accessibility_announcements),
+        }
+    }
+
+    /// Keep `bounds` as the layout/coordinate origin and intersect `clip` into
+    /// the pointer hit-test region. An empty clip intersection yields a
+    /// never-hit region (not `Bounds::ZERO` at the origin).
+    pub fn with_bounds_and_hit_clip(&mut self, bounds: Bounds, clip: Bounds) -> EventContext<'_> {
+        let hit_clip = match self.hit_clip {
+            Some(existing) => existing
+                .intersection(&clip)
+                .unwrap_or_else(|| Bounds::from_xywh(0.0, 0.0, -1.0, -1.0)),
+            None => clip,
+        };
+        EventContext {
+            bounds,
+            hit_clip: Some(hit_clip),
             taffy: self.taffy,
             focused: self.focused,
             hit_target: self.hit_target,

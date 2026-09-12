@@ -381,7 +381,7 @@ impl Element for Menu {
     }
 
     fn handle_pointer_event(&mut self, cx: &mut EventContext, event: &PointerEvent) -> bool {
-        let inside = cx.bounds().contains(event.position);
+        let inside = cx.contains_pointer(event.position);
         let index = self.interactive_index_at(cx.bounds(), event.position);
         match event.kind {
             PointerEventKind::Move => {

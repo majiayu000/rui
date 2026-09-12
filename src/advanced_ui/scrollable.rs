@@ -699,6 +699,156 @@ mod tests {
     }
 
     #[test]
+    fn advanced_ui_scrollable_preserves_nested_hit_origin_after_scroll() {
+        let field_id = ElementId::new();
+        let mut scrollable = Scrollable::new(
+            crate::elements::div()
+                .flex_col()
+                .w(120.0)
+                .h(200.0)
+                .child(crate::elements::div().w(120.0).h(100.0))
+                .child(
+                    crate::elements::Input::new()
+                        .id(field_id)
+                        .value("nested")
+                        .w(120.0)
+                        .h(40.0),
+                ),
+        )
+        .w(140.0)
+        .h(80.0);
+
+        let viewport = Size::new(140.0, 80.0);
+        paint_for_accessibility_state(&mut scrollable, viewport);
+
+        let mut taffy = TaffyTree::<ElementId>::new();
+        let mut layout_cx = LayoutContext::new(&mut taffy, viewport);
+        let node = scrollable.layout(&mut layout_cx);
+        if let Err(err) = taffy.compute_layout(
+            node,
+            taffy::Size {
+                width: taffy::prelude::AvailableSpace::Definite(viewport.width),
+                height: taffy::prelude::AvailableSpace::Definite(viewport.height),
+            },
+        ) {
+            panic!("layout should compute: {err}");
+        }
+
+        let mut focused = None;
+        let mut event_cx = EventContext::new(
+            Bounds::from_xywh(0.0, 0.0, viewport.width, viewport.height),
+            &taffy,
+            &mut focused,
+        );
+
+        // Scroll so the tall container origin moves above the viewport while the
+        // nested input remains visibly painted around y=50.
+        assert!(scrollable.handle_scroll_event(
+            &mut event_cx,
+            &ScrollEvent {
+                position: Point::new(8.0, 8.0),
+                delta_x: 0.0,
+                delta_y: 50.0,
+                modifiers: Modifiers::default(),
+            },
+        ));
+
+        assert!(
+            scrollable.handle_pointer_event(
+                &mut event_cx,
+                &PointerEvent {
+                    kind: PointerEventKind::Down,
+                    position: Point::new(8.0, 50.0),
+                    button: Some(MouseButton::Left),
+                },
+            ),
+            "nested input at painted scrolled position must remain hittable"
+        );
+        assert_eq!(
+            event_cx.focused_id(),
+            Some(field_id),
+            "scrolled nested origin must not shift hit-testing to the viewport origin"
+        );
+    }
+
+    #[test]
+    fn advanced_ui_scrollable_fully_clipped_child_does_not_hit_at_origin() {
+        let clicked = Rc::new(Cell::new(false));
+        let clicked_ref = Rc::clone(&clicked);
+        let mut scrollable = Scrollable::new(
+            crate::elements::div()
+                .flex_col()
+                .w(120.0)
+                .h(200.0)
+                .child(
+                    crate::elements::div()
+                        .w(120.0)
+                        .h(40.0)
+                        .on_click(move || clicked_ref.set(true)),
+                )
+                .child(crate::elements::div().w(120.0).h(160.0)),
+        )
+        .w(140.0)
+        .h(80.0);
+
+        let viewport = Size::new(140.0, 80.0);
+        paint_for_accessibility_state(&mut scrollable, viewport);
+
+        let mut taffy = TaffyTree::<ElementId>::new();
+        let mut layout_cx = LayoutContext::new(&mut taffy, viewport);
+        let node = scrollable.layout(&mut layout_cx);
+        if let Err(err) = taffy.compute_layout(
+            node,
+            taffy::Size {
+                width: taffy::prelude::AvailableSpace::Definite(viewport.width),
+                height: taffy::prelude::AvailableSpace::Definite(viewport.height),
+            },
+        ) {
+            panic!("layout should compute: {err}");
+        }
+
+        let mut focused = None;
+        let mut event_cx = EventContext::new(
+            Bounds::from_xywh(0.0, 0.0, viewport.width, viewport.height),
+            &taffy,
+            &mut focused,
+        );
+
+        assert!(scrollable.handle_scroll_event(
+            &mut event_cx,
+            &ScrollEvent {
+                position: Point::new(8.0, 8.0),
+                delta_x: 0.0,
+                delta_y: 80.0,
+                modifiers: Modifiers::default(),
+            },
+        ));
+
+        // Top clickable child is fully above the viewport. An empty-intersection
+        // Bounds::ZERO fallback would wrongly treat (0,0) as inside.
+        let _ = scrollable.handle_pointer_event(
+            &mut event_cx,
+            &PointerEvent {
+                kind: PointerEventKind::Down,
+                position: Point::new(0.0, 0.0),
+                button: Some(MouseButton::Left),
+            },
+        );
+        let _ = scrollable.handle_pointer_event(
+            &mut event_cx,
+            &PointerEvent {
+                kind: PointerEventKind::Up,
+                position: Point::new(0.0, 0.0),
+                button: Some(MouseButton::Left),
+            },
+        );
+        assert!(
+            !clicked.get(),
+            "fully clipped child must not activate from a Bounds::ZERO origin hit"
+        );
+    }
+
+    #[test]
     fn advanced_ui_scrollable_accessibility_actions_follow_scroll_range() {
         let mut overflowing = Scrollable::new(container().w(100.0).h(300.0)).h(100.0);
         let before_paint = match overflowing.accessibility(&AccessibilityContext::default()) {

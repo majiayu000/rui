@@ -487,7 +487,7 @@ impl Element for Dialog {
             .and_then(|node| cx.child_bounds(node))
             .unwrap_or(cx.bounds());
         let inside_content = content_bounds.contains(event.position);
-        let inside_modal_region = self.modal && cx.bounds().contains(event.position);
+        let inside_modal_region = self.modal && cx.contains_pointer(event.position);
 
         if self.state.can_activate() {
             let mut content_cx = cx.with_bounds(content_bounds);
