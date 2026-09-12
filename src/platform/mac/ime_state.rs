@@ -68,7 +68,20 @@ where
         log::error!("discarded macOS text input event for a removed element");
         return (false, false);
     }
-    dispatch_text_input_event_to(presenter, target, event)
+    let (handled, redraw_requested) = dispatch_text_input_event_to(presenter, target, event);
+    // Begin claims ownership before dispatch; drop it if the target rejected the command so
+    // later update/selection/commit events are not routed to a buffer with no composition.
+    if !handled
+        && matches!(
+            event,
+            TextInputCommand::BeginComposition(_)
+                | TextInputCommand::BeginCompositionReplacing { .. }
+        )
+        && ime_state.composition_owner == Some(target)
+    {
+        ime_state.composition_owner = None;
+    }
+    (handled, redraw_requested)
 }
 
 fn dispatch_text_input_event_to<E>(
@@ -220,6 +233,61 @@ mod tests {
                 None
             ),
             None
+        );
+    }
+
+    #[test]
+    fn failed_begin_composition_clears_composition_owner() {
+        let focused = ElementId::new();
+        let viewport = Size::new(200.0, 80.0);
+        // A focused Div rejects text-input commands, so begin returns handled=false.
+        let mut presenter = Presenter::with_root(viewport, div().id(focused));
+        presenter.set_focused_element(Some(focused));
+        let mut ime_state = NativeImeState::default();
+
+        let (handled, redraw_requested) = dispatch_text_input_event(
+            &mut presenter,
+            &mut ime_state,
+            &TextInputCommand::BeginComposition("draft".to_string()),
+        );
+        assert!(!handled);
+        assert!(!redraw_requested);
+        assert_eq!(
+            ime_state.target_for_event(
+                &TextInputCommand::UpdateComposition("stale".to_string()),
+                Some(focused),
+            ),
+            None
+        );
+        assert_eq!(
+            ime_state.target_for_event(
+                &TextInputCommand::CommitComposition("stale".to_string()),
+                Some(focused),
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn successful_begin_composition_keeps_composition_owner() {
+        let owner = ElementId::new();
+        let viewport = Size::new(200.0, 80.0);
+        let mut presenter = Presenter::with_root(viewport, input().id(owner));
+        presenter.set_focused_element(Some(owner));
+        let mut ime_state = NativeImeState::default();
+
+        let (handled, _) = dispatch_text_input_event(
+            &mut presenter,
+            &mut ime_state,
+            &TextInputCommand::BeginComposition("draft".to_string()),
+        );
+        assert!(handled);
+        assert_eq!(
+            ime_state.target_for_event(
+                &TextInputCommand::UpdateComposition("draft2".to_string()),
+                Some(owner),
+            ),
+            Some(owner)
         );
     }
 }
