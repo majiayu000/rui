@@ -9,7 +9,7 @@ use crate::core::accessibility::{
 };
 use crate::core::action::{ActionId, ActionOutcome, StandardAction};
 use crate::core::color::Color;
-use crate::core::event::{Cursor, KeyCode, KeyEvent};
+use crate::core::event::{Cursor, KeyCode, KeyEvent, Modifiers};
 use crate::core::geometry::{Bounds, Edges};
 use crate::core::style::{Corners, Style};
 use crate::core::text_editing::{
@@ -609,25 +609,45 @@ impl Element for TextArea {
             return ActionOutcome::Ignored;
         };
 
-        if *action != StandardAction::SelectAll {
-            return ActionOutcome::Ignored;
+        if *action == StandardAction::SelectAll {
+            self.visual_caret = None;
+            let result = self
+                .sync_editor_from_public_state_if_needed()
+                .and_then(|_| {
+                    let end = self.editor.text().len();
+                    self.editor.set_selection(TextSelection::new(0, end))
+                });
+            return match result {
+                Ok(()) => {
+                    self.sync_state_from_editor();
+                    cx.request_redraw();
+                    ActionOutcome::handled("text_area")
+                }
+                Err(err) => {
+                    log::error!("text area select all action failed: {err}");
+                    ActionOutcome::Ignored
+                }
+            };
         }
 
-        self.visual_caret = None;
-        let result = self
-            .sync_editor_from_public_state_if_needed()
-            .and_then(|_| {
-                let end = self.editor.text().len();
-                self.editor.set_selection(TextSelection::new(0, end))
-            });
-        match result {
-            Ok(()) => {
-                self.sync_state_from_editor();
+        let event = match action {
+            StandardAction::DeleteWordBackward => {
+                KeyEvent::new(KeyCode::Backspace, Modifiers::alt())
+            }
+            StandardAction::DeleteWordForward => KeyEvent::new(KeyCode::Delete, Modifiers::alt()),
+            _ => return ActionOutcome::Ignored,
+        };
+
+        match self
+            .apply_shaped_navigation(&event)
+            .unwrap_or_else(|| self.apply_key_event(&event))
+        {
+            Ok(_) => {
                 cx.request_redraw();
                 ActionOutcome::handled("text_area")
             }
             Err(err) => {
-                log::error!("text area select all action failed: {err}");
+                log::error!("text area action failed: {err}");
                 ActionOutcome::Ignored
             }
         }

@@ -168,6 +168,41 @@ fn text_area_select_all_action_and_accessibility_follow_editability() {
 }
 
 #[test]
+fn text_area_handles_delete_word_actions() {
+    let id = rui::core::ElementId::new();
+    let mut area = TextArea::new()
+        .id(id)
+        .accessibility_label("Message")
+        .value("alpha beta gamma");
+    let taffy = TaffyTree::new();
+    let mut focused = Some(id);
+    let mut cx = EventContext::new(
+        Bounds::from_xywh(0.0, 0.0, 240.0, 120.0),
+        &taffy,
+        &mut focused,
+    );
+
+    assert!(
+        area.handle_action(&mut cx, &ActionId::from(StandardAction::DeleteWordBackward))
+            .is_handled()
+    );
+    assert_eq!(area.value_text(), "alpha beta ");
+
+    assert!(
+        area.handle_action(&mut cx, &ActionId::from(StandardAction::DeleteWordBackward))
+            .is_handled()
+    );
+    assert_eq!(area.value_text(), "alpha ");
+
+    must(area.apply_key_event(&key_event(KeyCode::Home)));
+    assert!(
+        area.handle_action(&mut cx, &ActionId::from(StandardAction::DeleteWordForward))
+            .is_handled()
+    );
+    assert_eq!(area.value_text(), " ");
+}
+
+#[test]
 fn text_area_paint_clips_multiline_content_to_bounds() {
     let mut area = TextArea::new()
         .accessibility_label("Message")
