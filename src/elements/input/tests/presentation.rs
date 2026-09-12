@@ -46,6 +46,47 @@ fn input_update_text_layout_retains_last_good_on_shaping_failure() {
 }
 
 #[test]
+fn input_current_text_layout_rejects_stale_shape_after_height_reshape_failure() {
+    use crate::renderer::text::TextMeasureCache;
+
+    let mut input = Input::new().value("hello").h(40.0);
+    input.state.focused = true;
+    input.state.selection_start = Some(0);
+    input.state.selection_end = Some(5);
+    let (taffy, bounds) = layout_input(&mut input, Size::new(240.0, 40.0));
+    assert!(input.current_text_layout().is_some());
+
+    // Height 10 clamps font/line metrics below the retained layout shape.
+    input.height = Some(10.0);
+    let mut cache = TextMeasureCache::without_font();
+    input.update_text_layout(&mut cache, 10.0);
+
+    assert_eq!(
+        input.text_layout.as_ref().map(|layout| layout.text()),
+        Some("hello"),
+        "shaping failure should retain the last-good layout"
+    );
+    assert!(
+        input.current_text_layout().is_none(),
+        "retained layout must not stay current after height/font metrics change"
+    );
+
+    let mut scene = Scene::new();
+    {
+        let mut paint_cx = PaintContext::new(&mut scene, bounds, &taffy);
+        input.paint_selection_and_marked_text(&mut paint_cx, bounds);
+        assert!(
+            input.paint_cursor(&mut paint_cx, bounds).is_none(),
+            "caret paint must not use a layout with stale height/font metrics"
+        );
+    }
+    assert!(
+        scene.primitives().is_empty(),
+        "selection paint must not use a layout with stale height/font metrics"
+    );
+}
+
+#[test]
 fn input_selection_and_caret_paint_soft_fail_without_text_layout() {
     let mut inp = Input::new().value("hello");
     inp.state.focused = true;

@@ -85,6 +85,10 @@ pub struct Input {
     paint_tokens: Option<InputPaintTokens>,
     caret_bounds: Option<Bounds>,
     text_layout: Option<crate::core::text_editing::TextEditLayout>,
+    /// Font size and line height used to build `text_layout`.
+    /// Retained across soft-fail reshape so `current_text_layout` can reject
+    /// last-good layouts whose metrics no longer match the live Input.
+    text_layout_shape: Option<(f32, f32)>,
     visual_caret: Option<VisualCaret>,
 }
 
@@ -113,6 +117,7 @@ impl Input {
             paint_tokens: None,
             caret_bounds: None,
             text_layout: None,
+            text_layout_shape: None,
             visual_caret: None,
         }
     }

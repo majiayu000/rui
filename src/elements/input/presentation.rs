@@ -136,9 +136,10 @@ impl Input {
 
     pub(super) fn current_text_layout(&self) -> Option<&TextEditLayout> {
         let display = self.input_layout_text();
-        self.text_layout
-            .as_ref()
-            .filter(|layout| layout.text() == display)
+        let (font_size, line_height) = self.layout_shape_for_height(self.height.unwrap_or(40.0));
+        self.text_layout.as_ref().filter(|layout| {
+            layout.text() == display && self.text_layout_shape == Some((font_size, line_height))
+        })
     }
 
     pub(super) fn native_text_input_snapshot(
@@ -295,7 +296,7 @@ impl Input {
 
     pub(super) fn update_text_layout(&mut self, cache: &mut TextMeasureCache, height: f32) {
         let text = self.input_layout_text();
-        let font_size = self.font_size_for_height(height);
+        let (font_size, line_height) = self.layout_shape_for_height(height);
         let plan = match cache.shape_single_line(TextRequest::new(&text, font_size, 400, None, 1.0))
         {
             Ok(plan) => plan,
@@ -304,14 +305,20 @@ impl Input {
                 return;
             }
         };
-        match TextEditLayout::from_shape_plan_with_line_height(
-            text,
-            &plan,
-            self.cursor_height_for_height(height),
-        ) {
-            Ok(layout) => self.text_layout = Some(layout),
+        match TextEditLayout::from_shape_plan_with_line_height(text, &plan, line_height) {
+            Ok(layout) => {
+                self.text_layout = Some(layout);
+                self.text_layout_shape = Some((font_size, line_height));
+            }
             Err(err) => log::error!("input text layout failed: {err}"),
         }
+    }
+
+    fn layout_shape_for_height(&self, height: f32) -> (f32, f32) {
+        (
+            self.font_size_for_height(height),
+            self.cursor_height_for_height(height),
+        )
     }
 
     pub(super) fn refresh_text_layout_if_stale(&mut self, cache: &mut TextMeasureCache) {
