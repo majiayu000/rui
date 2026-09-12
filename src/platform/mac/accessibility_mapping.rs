@@ -344,7 +344,7 @@ fn native_role_name(role: AccessibilityRole) -> &'static str {
         AccessibilityRole::DataTableRow => "AXRow",
         AccessibilityRole::DataTree => "AXOutline",
         AccessibilityRole::DataTreeItem => "AXRow",
-        AccessibilityRole::Dialog => "AXWindow",
+        AccessibilityRole::Dialog => "AXGroup",
         AccessibilityRole::Menu => "AXMenu",
         AccessibilityRole::MenuItem => "AXMenuItem",
         AccessibilityRole::Popover => "AXGroup",
