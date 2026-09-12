@@ -61,6 +61,36 @@ fn input_selection_and_caret_paint_soft_fail_without_text_layout() {
     assert!(inp.paint_cursor(&mut paint_cx, bounds).is_none());
 }
 
+#[test]
+fn input_selection_and_caret_paint_skip_stale_last_good_layout() {
+    let mut inp = Input::new().value("WW");
+    inp.state.focused = true;
+    inp.state.selection_start = Some(0);
+    inp.state.selection_end = Some(2);
+    let (taffy, bounds) = layout_input(&mut inp, Size::new(240.0, 56.0));
+    assert!(inp.current_text_layout().is_some());
+
+    // Simulate value change under shaping failure: retain last-good layout for "WW"
+    // while the live value is "ii" (same byte length, different glyph widths).
+    inp.state.value = "ii".to_string();
+    assert!(inp.text_layout.as_ref().is_some());
+    assert!(inp.current_text_layout().is_none());
+
+    let mut scene = Scene::new();
+    {
+        let mut paint_cx = PaintContext::new(&mut scene, bounds, &taffy);
+        inp.paint_selection_and_marked_text(&mut paint_cx, bounds);
+        assert!(
+            inp.paint_cursor(&mut paint_cx, bounds).is_none(),
+            "caret paint must not use a stale last-good layout"
+        );
+    }
+    assert!(
+        scene.primitives().is_empty(),
+        "selection paint must not use a stale last-good layout"
+    );
+}
+
 // ==================== display_text Tests ====================
 
 #[test]

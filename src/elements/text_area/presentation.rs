@@ -181,10 +181,6 @@ impl TextArea {
         }
     }
 
-    pub(super) fn text_layout(&self) -> Option<&TextEditLayout> {
-        self.text_layout.as_ref()
-    }
-
     pub(super) fn text_origin(&self, bounds: Bounds) -> Point {
         Point::new(
             bounds.x() + TEXT_AREA_HORIZONTAL_PADDING,
@@ -200,7 +196,7 @@ impl TextArea {
         if !self.state.focused {
             return;
         }
-        let Some(layout) = self.text_layout() else {
+        let Some(layout) = self.current_text_layout() else {
             return;
         };
         let style = TextEditPaintStyle::new(
@@ -244,7 +240,7 @@ impl TextArea {
         if !self.state.focused {
             return None;
         }
-        let Some(layout) = self.text_layout() else {
+        let Some(layout) = self.current_text_layout() else {
             return None;
         };
         let style = TextEditPaintStyle::new(

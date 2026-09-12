@@ -320,10 +320,6 @@ impl Input {
         }
     }
 
-    fn text_layout(&self) -> Option<&TextEditLayout> {
-        self.text_layout.as_ref()
-    }
-
     fn text_origin(&self, bounds: Bounds) -> Point {
         let cursor_height = self.cursor_height(bounds);
         Point::new(
@@ -365,7 +361,7 @@ impl Input {
             return;
         }
 
-        let Some(layout) = self.text_layout() else {
+        let Some(layout) = self.current_text_layout() else {
             return;
         };
         let style = TextEditPaintStyle::new(
@@ -436,7 +432,7 @@ impl Input {
             return None;
         };
 
-        let Some(layout) = self.text_layout() else {
+        let Some(layout) = self.current_text_layout() else {
             return None;
         };
         let style = TextEditPaintStyle::new(
