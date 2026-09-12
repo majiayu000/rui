@@ -1,4 +1,8 @@
 use super::*;
+use crate::core::accessibility::{
+    AccessibilityAnnouncement, AccessibilityAnnouncementKind, AccessibilityNode,
+    AccessibilityRole, AccessibilityTree,
+};
 use crate::core::text_editing::TextInputCommand;
 
 /// Redraw source each `PlatformWindowEvent` variant is classified as, or
@@ -259,4 +263,108 @@ fn key_and_text_input_events_preserve_platform_order() {
             && scroll.delta_y == 4.0
             && event.key == KeyCode::Enter
     ));
+}
+
+#[test]
+fn retained_focus_announcements_drop_stale_targets_before_replay() {
+    let stale = ElementId::from(1);
+    let current = ElementId::from(2);
+    let published = AccessibilityTree::new(vec![
+        AccessibilityNode::label_required(current, AccessibilityRole::Button, "Current")
+            .expect("label")
+            .with_focused(true),
+    ]);
+    let announcements = vec![
+        AccessibilityAnnouncement::new(
+            stale,
+            AccessibilityAnnouncementKind::FocusChanged,
+            "stale",
+        ),
+        AccessibilityAnnouncement::new(
+            current,
+            AccessibilityAnnouncementKind::ActionFeedback,
+            "activated",
+        ),
+        AccessibilityAnnouncement::new(
+            current,
+            AccessibilityAnnouncementKind::FocusChanged,
+            "current",
+        ),
+    ];
+
+    let filtered =
+        filter_retained_accessibility_announcements(announcements, &published, Some(current));
+
+    assert_eq!(
+        filtered,
+        [
+            AccessibilityAnnouncement::new(
+                current,
+                AccessibilityAnnouncementKind::ActionFeedback,
+                "activated",
+            ),
+            AccessibilityAnnouncement::new(
+                current,
+                AccessibilityAnnouncementKind::FocusChanged,
+                "current",
+            ),
+        ]
+    );
+}
+
+#[test]
+fn retained_focus_announcements_preserve_order_before_action_feedback() {
+    let id = ElementId::from(3);
+    let published = AccessibilityTree::new(vec![
+        AccessibilityNode::label_required(id, AccessibilityRole::Button, "Button")
+            .expect("label")
+            .with_focused(true),
+    ]);
+    let announcements = vec![
+        AccessibilityAnnouncement::new(id, AccessibilityAnnouncementKind::FocusChanged, "focused"),
+        AccessibilityAnnouncement::new(
+            id,
+            AccessibilityAnnouncementKind::ActionFeedback,
+            "activated",
+        ),
+    ];
+
+    let filtered =
+        filter_retained_accessibility_announcements(announcements, &published, Some(id));
+
+    assert_eq!(
+        filtered,
+        [
+            AccessibilityAnnouncement::new(
+                id,
+                AccessibilityAnnouncementKind::FocusChanged,
+                "focused",
+            ),
+            AccessibilityAnnouncement::new(
+                id,
+                AccessibilityAnnouncementKind::ActionFeedback,
+                "activated",
+            ),
+        ],
+        "surviving FocusChanged must keep its original position ahead of ActionFeedback"
+    );
+}
+
+#[test]
+fn retained_focus_announcements_are_dropped_when_focus_clears() {
+    let id = ElementId::from(7);
+    let published = AccessibilityTree::new(vec![
+        AccessibilityNode::label_required(id, AccessibilityRole::Button, "Button")
+            .expect("label")
+            .with_focused(false),
+    ]);
+    let announcements = vec![AccessibilityAnnouncement::new(
+        id,
+        AccessibilityAnnouncementKind::FocusChanged,
+        "stale",
+    )];
+
+    assert!(
+        filter_retained_accessibility_announcements(announcements, &published, None).is_empty()
+    );
 }

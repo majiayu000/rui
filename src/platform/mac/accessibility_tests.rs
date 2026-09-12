@@ -98,6 +98,10 @@ fn accessibility_bridge_attached_host_receives_tree_focus_and_announcement() {
     bridge
         .publish_tree(&tree)
         .expect("attached publish should succeed");
+    assert_eq!(
+        bridge.last_published_tree().map(|published| published.roots().len()),
+        Some(1)
+    );
     bridge
         .announce(&announcement)
         .expect("attached announcement should succeed");
@@ -268,6 +272,34 @@ fn accessibility_bridge_rejects_invalid_text_ranges() {
         Err(AccessibilityError::BridgeFailure { .. })
     ));
     assert_eq!(state.borrow().published_roots, 0);
+}
+
+#[test]
+fn accessibility_bridge_rejects_invalid_progress_values_before_publish() {
+    let (mut bridge, state) = attached_bridge();
+    let valid = AccessibilityNode::label_required(
+        ElementId::new(),
+        AccessibilityRole::Button,
+        "Save",
+    )
+    .expect("button metadata should be valid");
+    let invalid_progress = AccessibilityNode::label_required(
+        ElementId::new(),
+        AccessibilityRole::ProgressIndicator,
+        "Load",
+    )
+    .expect("progress label should be valid")
+    .with_value("not-a-percent");
+
+    assert!(matches!(
+        bridge.publish_tree(&AccessibilityTree::new(vec![valid, invalid_progress])),
+        Err(AccessibilityError::BridgeFailure { .. })
+    ));
+    assert_eq!(
+        state.borrow().published_roots,
+        0,
+        "invalid progress must fail closed before mutating/publishing any native nodes"
+    );
 }
 
 #[test]

@@ -6,7 +6,7 @@
 //! `FrameStage::ORDER`, not here.
 
 use crate::core::ElementId;
-use crate::core::accessibility::{AccessibilityAction, AccessibilityNode};
+use crate::core::accessibility::{AccessibilityAction, AccessibilityNode, AccessibilityTree};
 use crate::core::action::route_key_event;
 use crate::core::action::{ActionId, StandardAction};
 use crate::core::app::{AppContext, RedrawSource};
@@ -108,7 +108,9 @@ where
                 (handled, redraw_requested, RedrawSource::PlatformInput)
             }
             OrderedInputEvent::Accessibility(request) => {
-                let (handled, redraw_requested) = dispatch_accessibility_action(presenter, request);
+                let retained_tree = window.accessibility_bridge().last_published_tree();
+                let (handled, redraw_requested) =
+                    dispatch_accessibility_action(presenter, request, retained_tree);
                 (handled, redraw_requested, RedrawSource::PlatformInput)
             }
         };
@@ -128,11 +130,12 @@ where
 fn dispatch_accessibility_action<E>(
     presenter: &mut Presenter<E>,
     request: &MacAccessibilityActionRequest,
+    retained_tree: Option<&AccessibilityTree>,
 ) -> (bool, bool)
 where
     E: Element,
 {
-    let Some(node) = current_accessibility_node(presenter, request.id) else {
+    let Some(node) = current_accessibility_node(presenter, request.id, retained_tree) else {
         if presenter.focused_element() == Some(request.id) {
             presenter.set_focused_element(None);
             sync_accessibility_focus(presenter);
@@ -209,29 +212,28 @@ where
 fn current_accessibility_node<E>(
     presenter: &Presenter<E>,
     id: ElementId,
+    retained_tree: Option<&AccessibilityTree>,
 ) -> Option<AccessibilityNode>
 where
     E: Element,
 {
-    let tree = match presenter.accessibility_tree() {
-        Ok(tree) => tree,
-        Err(err) => {
-            log::error!("failed to validate macOS accessibility request: {err}");
-            return None;
-        }
-    };
-    find_accessibility_node(tree.roots(), id).cloned()
-}
+    // VoiceOver actions originate from the native host's published tree. Prefer that
+    // retained tree whenever present so we never validate against a rebuild that
+    // succeeded in accessibility_tree() but then failed publish_tree (or any other
+    // unpublished current tree whose node actions/membership may disagree).
+    if let Some(tree) = retained_tree {
+        return tree.find(id).cloned();
+    }
 
-fn find_accessibility_node(
-    nodes: &[AccessibilityNode],
-    id: ElementId,
-) -> Option<&AccessibilityNode> {
-    nodes.iter().find_map(|node| {
-        (node.a11y_id() == id)
-            .then_some(node)
-            .or_else(|| find_accessibility_node(node.a11y_children(), id))
-    })
+    match presenter.accessibility_tree() {
+        Ok(tree) => tree.find(id).cloned(),
+        Err(err) => {
+            log::error!(
+                "failed to rebuild macOS accessibility tree for request validation: {err}"
+            );
+            None
+        }
+    }
 }
 
 fn sync_accessibility_focus<E>(presenter: &mut Presenter<E>) -> bool
@@ -296,6 +298,7 @@ mod tests {
         style: Style,
         observed: Rc<RefCell<Vec<ObservedAccessibilityEvent>>>,
         actions: Vec<AccessibilityAction>,
+        fail_tree: bool,
     }
 
     impl Element for AccessibilityActionProbe {
@@ -351,6 +354,11 @@ mod tests {
             cx: &AccessibilityContext,
         ) -> Result<Option<AccessibilityNode>, crate::core::accessibility::AccessibilityError>
         {
+            if self.fail_tree {
+                return Err(crate::core::accessibility::AccessibilityError::MissingLabel {
+                    role: AccessibilityRole::TextInput,
+                });
+            }
             Ok(Some(
                 AccessibilityNode::label_required(self.id, AccessibilityRole::TextInput, "Probe")?
                     .with_focused(cx.a11y_has_focus(self.id))
@@ -376,6 +384,7 @@ mod tests {
                 AccessibilityAction::ScrollForward,
                 AccessibilityAction::ScrollBackward,
             ],
+            fail_tree: false,
         };
         (
             Presenter::with_root(Size::new(100.0, 80.0), probe),
@@ -449,7 +458,7 @@ mod tests {
         let request = accessibility_request(id, AccessibilityAction::Activate, None);
 
         assert_eq!(
-            dispatch_accessibility_action(&mut presenter, &request),
+            dispatch_accessibility_action(&mut presenter, &request, None),
             (true, true)
         );
         assert_eq!(presenter.focused_element(), Some(id));
@@ -471,14 +480,14 @@ mod tests {
         };
 
         assert_eq!(
-            dispatch_accessibility_action(&mut presenter, &request),
+            dispatch_accessibility_action(&mut presenter, &request, None),
             (true, false)
         );
         assert_eq!(presenter.focused_element(), Some(id));
 
         request.request = MacAccessibilityRequest::Focus(false);
         assert_eq!(
-            dispatch_accessibility_action(&mut presenter, &request),
+            dispatch_accessibility_action(&mut presenter, &request, None),
             (true, false)
         );
         assert_eq!(presenter.focused_element(), None);
@@ -504,12 +513,12 @@ mod tests {
         };
 
         assert_eq!(
-            dispatch_accessibility_action(&mut presenter, &request),
+            dispatch_accessibility_action(&mut presenter, &request, None),
             (true, true)
         );
         request.request = MacAccessibilityRequest::Focus(false);
         assert_eq!(
-            dispatch_accessibility_action(&mut presenter, &request),
+            dispatch_accessibility_action(&mut presenter, &request, None),
             (true, true)
         );
         assert_eq!((*focused.borrow(), *blurred.borrow()), (1, 1));
@@ -524,6 +533,7 @@ mod tests {
             dispatch_accessibility_action(
                 &mut presenter,
                 &accessibility_request(id, AccessibilityAction::SetValue, Some("stale")),
+                None,
             ),
             (false, false)
         );
@@ -531,6 +541,7 @@ mod tests {
             dispatch_accessibility_action(
                 &mut presenter,
                 &accessibility_request(ElementId::new(), AccessibilityAction::Activate, None,),
+                None,
             ),
             (false, false)
         );
@@ -544,7 +555,7 @@ mod tests {
         let request = accessibility_request(id, AccessibilityAction::SetValue, Some("renamed"));
 
         assert_eq!(
-            dispatch_accessibility_action(&mut presenter, &request),
+            dispatch_accessibility_action(&mut presenter, &request, None),
             (true, true)
         );
         assert_eq!(
@@ -574,6 +585,7 @@ mod tests {
             dispatch_accessibility_action(
                 &mut presenter,
                 &accessibility_request(id, AccessibilityAction::SetValue, Some("renamed")),
+                None,
             ),
             (true, true)
         );
@@ -586,7 +598,7 @@ mod tests {
         let request = accessibility_request(id, AccessibilityAction::ScrollForward, None);
 
         assert_eq!(
-            dispatch_accessibility_action(&mut presenter, &request),
+            dispatch_accessibility_action(&mut presenter, &request, None),
             (true, true)
         );
         assert_eq!(
@@ -614,6 +626,7 @@ mod tests {
             dispatch_accessibility_action(
                 &mut list,
                 &accessibility_request(target, AccessibilityAction::Activate, None),
+                None,
             )
             .0
         );
@@ -632,6 +645,7 @@ mod tests {
             dispatch_accessibility_action(
                 &mut tree,
                 &accessibility_request(target, AccessibilityAction::Activate, None),
+                None,
             )
             .0
         );
@@ -643,6 +657,7 @@ mod tests {
             dispatch_accessibility_action(
                 &mut menu,
                 &accessibility_request(target, AccessibilityAction::Activate, None),
+                None,
             )
             .0
         );
@@ -658,6 +673,7 @@ mod tests {
             dispatch_accessibility_action(
                 &mut tabs,
                 &accessibility_request(target, AccessibilityAction::Activate, None),
+                None,
             )
             .0
         );
@@ -673,6 +689,7 @@ mod tests {
             dispatch_accessibility_action(
                 &mut segments,
                 &accessibility_request(target, AccessibilityAction::Activate, None),
+                None,
             )
             .0
         );
@@ -687,9 +704,82 @@ mod tests {
             dispatch_accessibility_action(
                 &mut row,
                 &accessibility_request(row_id, AccessibilityAction::Activate, None),
+                None,
             )
             .0
         );
         assert!(row.root().interaction_state().selected());
+    }
+
+    #[test]
+    fn native_accessibility_routes_actions_against_retained_tree_when_rebuild_fails() {
+        let (mut presenter, id, observed) = accessibility_presenter();
+        let retained = presenter
+            .accessibility_tree()
+            .expect("initial accessibility tree should build");
+        presenter.root_mut().fail_tree = true;
+        assert!(
+            presenter.accessibility_tree().is_err(),
+            "probe should fail current-tree rebuild"
+        );
+
+        assert_eq!(
+            dispatch_accessibility_action(
+                &mut presenter,
+                &accessibility_request(id, AccessibilityAction::Activate, None),
+                None,
+            ),
+            (false, false),
+            "without a retained tree the action must still be discarded"
+        );
+        assert!(observed.borrow().is_empty());
+
+        assert_eq!(
+            dispatch_accessibility_action(
+                &mut presenter,
+                &accessibility_request(id, AccessibilityAction::Activate, None),
+                Some(&retained),
+            ),
+            (true, true)
+        );
+        assert_eq!(presenter.focused_element(), Some(id));
+        assert_eq!(
+            observed.borrow().as_slice(),
+            [ObservedAccessibilityEvent::Action(ActionId::Standard(
+                StandardAction::Activate,
+            ))]
+        );
+    }
+
+    #[test]
+    fn native_accessibility_prefers_retained_tree_when_current_tree_also_builds() {
+        let (mut presenter, id, observed) = accessibility_presenter();
+        let retained = presenter
+            .accessibility_tree()
+            .expect("initial accessibility tree should build");
+        // Current rebuild succeeds but drops Activate (simulating an unpublished
+        // tree after publish_tree rejected a sibling). VoiceOver still offers
+        // Activate from the retained native element.
+        presenter.root_mut().actions = vec![AccessibilityAction::SetValue];
+        assert!(
+            presenter.accessibility_tree().is_ok(),
+            "current tree should still build"
+        );
+
+        assert_eq!(
+            dispatch_accessibility_action(
+                &mut presenter,
+                &accessibility_request(id, AccessibilityAction::Activate, None),
+                Some(&retained),
+            ),
+            (true, true),
+            "requests must validate against the published retained tree, not the unpublished rebuild"
+        );
+        assert_eq!(
+            observed.borrow().as_slice(),
+            [ObservedAccessibilityEvent::Action(ActionId::Standard(
+                StandardAction::Activate,
+            ))]
+        );
     }
 }

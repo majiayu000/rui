@@ -129,6 +129,21 @@ impl<E> Presenter<E> {
         std::mem::take(&mut self.pending_accessibility_announcements)
     }
 
+    /// Re-queue announcements that must wait for a successful accessibility-tree publish.
+    ///
+    /// Used when ActionFeedback is drained immediately during tree-recovery frames while
+    /// FocusChanged entries stay pending until a matching tree is published.
+    pub fn retain_accessibility_announcements(
+        &mut self,
+        announcements: impl IntoIterator<Item = AccessibilityAnnouncement>,
+    ) {
+        if !self.accessibility_announcements_enabled {
+            return;
+        }
+        self.pending_accessibility_announcements
+            .extend(announcements);
+    }
+
     pub fn set_accessibility_announcements_enabled(&mut self, enabled: bool) {
         self.accessibility_announcements_enabled = enabled;
         if !enabled {

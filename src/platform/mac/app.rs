@@ -1,7 +1,10 @@
 //! macOS application runner
 
 use crate::core::ElementId;
-use crate::core::accessibility::AccessibilityBridge;
+use crate::core::accessibility::{
+    AccessibilityAnnouncement, AccessibilityAnnouncementKind, AccessibilityBridge,
+    AccessibilityTree,
+};
 use crate::core::app::{AppContext, RedrawSource};
 use crate::core::event::{KeyCode, KeyEvent, Modifiers, MouseButton, ScrollEvent};
 use crate::core::frame_pipeline::{
@@ -268,24 +271,70 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
             phases.paint_ns = outcome.durations.paint_ns;
             let frame_committed = outcome.presented;
 
-            if let Err(err) =
-                crate::platform::mac::ime_state::sync_text_input_snapshot(&presenter, &window)
-            {
-                panic!("failed to synchronize native text input state: {err}");
+            let (ime_sync_result, ime_redraw_requested) =
+                crate::platform::mac::ime_state::sync_text_input_snapshot(
+                    &mut presenter,
+                    &window,
+                    &mut native_ime_state,
+                );
+            if let Err(err) = ime_sync_result {
+                log::error!("failed to synchronize native text input state: {err}");
+            }
+            // Invalid-snapshot cancel can mutate the input after Paint/Present; schedule a
+            // platform redraw so cleared marked text is painted before the run loop sleeps.
+            if ime_redraw_requested {
+                schedule_platform_redraw(&window, &mut context, RedrawSource::PlatformInput);
             }
 
-            let accessibility_tree = match presenter.accessibility_tree() {
-                Ok(tree) => tree,
-                Err(err) => panic!("failed to build accessibility tree: {err}"),
-            };
             let accessibility_bridge = window.accessibility_bridge_mut();
-            if let Err(err) = accessibility_bridge.publish_tree(&accessibility_tree) {
-                panic!("failed to publish accessibility tree: {err}");
-            }
-            for announcement in presenter.take_accessibility_announcements() {
-                if let Err(err) = accessibility_bridge.announce(&announcement) {
-                    log::error!("failed to publish accessibility announcement: {err}");
+            let tree_published = match presenter.accessibility_tree() {
+                Ok(accessibility_tree) => {
+                    match accessibility_bridge.publish_tree(&accessibility_tree) {
+                        Ok(()) => Some(accessibility_tree),
+                        Err(err) => {
+                            log::error!("failed to publish accessibility tree: {err}");
+                            None
+                        }
+                    }
                 }
+                Err(err) => {
+                    log::error!("failed to build accessibility tree: {err}");
+                    None
+                }
+            };
+            // FocusChanged is tree-dependent and stays queued until a matching tree
+            // publishes. ActionFeedback posts on the content view and is announced
+            // immediately so retained-tree controls still confirm activation during
+            // recovery instead of buffering a burst for the next successful publish.
+            if let Some(published_tree) = tree_published.as_ref() {
+                let focused = presenter.focused_element();
+                for announcement in filter_retained_accessibility_announcements(
+                    presenter.take_accessibility_announcements(),
+                    published_tree,
+                    focused,
+                ) {
+                    if let Err(err) = accessibility_bridge.announce(&announcement) {
+                        log::error!("failed to publish accessibility announcement: {err}");
+                    }
+                }
+            } else {
+                let pending = presenter.take_accessibility_announcements();
+                let mut retained_focus = Vec::new();
+                for announcement in pending {
+                    match announcement.kind() {
+                        AccessibilityAnnouncementKind::ActionFeedback => {
+                            if let Err(err) = accessibility_bridge.announce(&announcement) {
+                                log::error!(
+                                    "failed to publish accessibility announcement: {err}"
+                                );
+                            }
+                        }
+                        AccessibilityAnnouncementKind::FocusChanged => {
+                            retained_focus.push(announcement);
+                        }
+                    }
+                }
+                presenter.retain_accessibility_announcements(retained_focus);
             }
 
             if frame_committed && let Some(recorder) = profile_recorder.as_mut() {
@@ -312,6 +361,44 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
             }
         }
     }
+}
+
+/// Drop obsolete focus announcements retained across failed publish frames.
+///
+/// Action feedback is kept in place. Matching FocusChanged entries are coalesced
+/// to the latest one that still matches the published tree's focused node (and
+/// the presenter's current focus), emitted at that latest entry's original index
+/// so focus stays ahead of later ActionFeedback instead of being appended after
+/// every action. Clearing focus discards all pending FocusChanged.
+pub(crate) fn filter_retained_accessibility_announcements(
+    announcements: Vec<AccessibilityAnnouncement>,
+    published_tree: &AccessibilityTree,
+    focused: Option<ElementId>,
+) -> Vec<AccessibilityAnnouncement> {
+    let published_focus = focused.filter(|id| {
+        published_tree
+            .find(*id)
+            .is_some_and(|node| node.a11y_focused())
+    });
+
+    let latest_matching_focus_idx = announcements.iter().enumerate().rev().find_map(|(idx, a)| {
+        (a.kind() == AccessibilityAnnouncementKind::FocusChanged
+            && Some(a.node_id()) == published_focus)
+            .then_some(idx)
+    });
+
+    let mut filtered = Vec::with_capacity(announcements.len());
+    for (idx, announcement) in announcements.into_iter().enumerate() {
+        match announcement.kind() {
+            AccessibilityAnnouncementKind::FocusChanged => {
+                if Some(idx) == latest_matching_focus_idx {
+                    filtered.push(announcement);
+                }
+            }
+            AccessibilityAnnouncementKind::ActionFeedback => filtered.push(announcement),
+        }
+    }
+    filtered
 }
 
 /// Propagates a platform-reported size change to the single viewport-size owner.
