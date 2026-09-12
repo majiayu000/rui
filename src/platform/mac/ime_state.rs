@@ -53,6 +53,7 @@ impl NativeImeState {
 
 pub(crate) fn dispatch_text_input_event<E>(
     presenter: &mut Presenter<E>,
+    window: &MacWindow,
     ime_state: &mut NativeImeState,
     event: &TextInputCommand,
 ) -> (bool, bool)
@@ -69,19 +70,37 @@ where
         return (false, false);
     }
     let (handled, redraw_requested) = dispatch_text_input_event_to(presenter, target, event);
-    // Begin claims ownership before dispatch; drop it if the target rejected the command so
-    // later update/selection/commit events are not routed to a buffer with no composition.
-    if !handled
-        && matches!(
+    // Begin claims ownership before dispatch. If the target rejected the command, clear the
+    // logical owner *and* discard AppKit marked text: set_marked_text already armed the native
+    // session, so later callbacks arrive as UpdateComposition. Leaving marked text while
+    // clearing the owner makes cancel_composition_if_owner_lost unable to discard it, and
+    // updates are dropped until AppKit independently ends the composition.
+    if clear_owner_after_rejected_begin(ime_state, handled, event, target) {
+        window.discard_marked_text();
+    }
+    (handled, redraw_requested)
+}
+
+/// Clears `composition_owner` after a rejected begin. Returns true when the caller must also
+/// discard native marked text so AppKit leaves update-composition mode.
+pub(crate) fn clear_owner_after_rejected_begin(
+    ime_state: &mut NativeImeState,
+    handled: bool,
+    event: &TextInputCommand,
+    target: ElementId,
+) -> bool {
+    if handled
+        || !matches!(
             event,
             TextInputCommand::BeginComposition(_)
                 | TextInputCommand::BeginCompositionReplacing { .. }
         )
-        && ime_state.composition_owner == Some(target)
+        || ime_state.composition_owner != Some(target)
     {
-        ime_state.composition_owner = None;
+        return false;
     }
-    (handled, redraw_requested)
+    ime_state.composition_owner = None;
+    true
 }
 
 fn dispatch_text_input_event_to<E>(
@@ -237,21 +256,26 @@ mod tests {
     }
 
     #[test]
-    fn failed_begin_composition_clears_composition_owner() {
+    fn failed_begin_composition_clears_owner_and_requires_marked_text_discard() {
         let focused = ElementId::new();
         let viewport = Size::new(200.0, 80.0);
         // A focused Div rejects text-input commands, so begin returns handled=false.
         let mut presenter = Presenter::with_root(viewport, div().id(focused));
         presenter.set_focused_element(Some(focused));
         let mut ime_state = NativeImeState::default();
+        let begin = TextInputCommand::BeginComposition("draft".to_string());
 
-        let (handled, redraw_requested) = dispatch_text_input_event(
-            &mut presenter,
-            &mut ime_state,
-            &TextInputCommand::BeginComposition("draft".to_string()),
-        );
+        let Some(target) = ime_state.target_for_event(&begin, presenter.focused_element()) else {
+            panic!("begin should claim the focused element");
+        };
+        let (handled, redraw_requested) =
+            dispatch_text_input_event_to(&mut presenter, target, &begin);
         assert!(!handled);
         assert!(!redraw_requested);
+        assert!(
+            clear_owner_after_rejected_begin(&mut ime_state, handled, &begin, target),
+            "rejected begin must clear the owner and signal native marked-text discard"
+        );
         assert_eq!(
             ime_state.target_for_event(
                 &TextInputCommand::UpdateComposition("stale".to_string()),
@@ -266,22 +290,66 @@ mod tests {
             ),
             None
         );
+        // Without an owner, focus-loss cancel cannot reach discard_marked_text; the failed-begin
+        // path must have already requested that discard (asserted true above).
+        assert_eq!(
+            take_lost_composition_owner(&mut presenter, &mut ime_state),
+            None
+        );
     }
 
     #[test]
-    fn successful_begin_composition_keeps_composition_owner() {
+    fn failed_begin_composition_replacing_also_requires_marked_text_discard() {
+        let focused = ElementId::new();
+        let viewport = Size::new(200.0, 80.0);
+        let mut presenter = Presenter::with_root(viewport, div().id(focused));
+        presenter.set_focused_element(Some(focused));
+        let mut ime_state = NativeImeState::default();
+        let begin = TextInputCommand::BeginCompositionReplacing {
+            text: "draft".to_string(),
+            replacement_range: Utf16TextRange::new(0, 0).expect("valid range"),
+        };
+
+        let Some(target) = ime_state.target_for_event(&begin, presenter.focused_element()) else {
+            panic!("begin-replacing should claim the focused element");
+        };
+        let (handled, _) = dispatch_text_input_event_to(&mut presenter, target, &begin);
+        assert!(!handled);
+        assert!(clear_owner_after_rejected_begin(
+            &mut ime_state,
+            handled,
+            &begin,
+            target
+        ));
+        assert_eq!(
+            ime_state.target_for_event(
+                &TextInputCommand::UpdateComposition("stale".to_string()),
+                Some(focused),
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn successful_begin_composition_keeps_composition_owner_without_discard() {
         let owner = ElementId::new();
         let viewport = Size::new(200.0, 80.0);
         let mut presenter = Presenter::with_root(viewport, input().id(owner));
         presenter.set_focused_element(Some(owner));
         let mut ime_state = NativeImeState::default();
+        let begin = TextInputCommand::BeginComposition("draft".to_string());
 
-        let (handled, _) = dispatch_text_input_event(
-            &mut presenter,
-            &mut ime_state,
-            &TextInputCommand::BeginComposition("draft".to_string()),
-        );
+        let Some(target) = ime_state.target_for_event(&begin, presenter.focused_element()) else {
+            panic!("begin should claim the focused input");
+        };
+        let (handled, _) = dispatch_text_input_event_to(&mut presenter, target, &begin);
         assert!(handled);
+        assert!(!clear_owner_after_rejected_begin(
+            &mut ime_state,
+            handled,
+            &begin,
+            target
+        ));
         assert_eq!(
             ime_state.target_for_event(
                 &TextInputCommand::UpdateComposition("draft2".to_string()),
