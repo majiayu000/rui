@@ -110,7 +110,13 @@ impl MacWindow {
         self.lifecycle_delegate.install_as_app_delegate(app);
     }
 
-    pub(crate) fn next_drawable(&self) -> Option<&metal::MetalDrawableRef> {
+    /// Acquire the next CAMetalLayer drawable as an owned retain.
+    ///
+    /// `nextDrawable` returns an autoreleased AppKit object. Returning a bare
+    /// `&MetalDrawableRef` is UB if the pool drains (or another drawable replaces
+    /// the cache) before render+present finishes. Retain into `MetalDrawable` for
+    /// the full frame lifetime; drop releases the retain after present.
+    pub(crate) fn next_drawable(&self) -> Option<metal::MetalDrawable> {
         let layer_ptr =
             objc2::rc::Retained::as_ptr(&self.metal_layer) as *mut objc2::runtime::AnyObject;
         let drawable: *mut objc2::runtime::AnyObject =
@@ -120,7 +126,9 @@ impl MacWindow {
             return None;
         }
 
-        Some(unsafe { &*drawable.cast::<metal::MetalDrawableRef>() })
+        // +1 retain so ownership outlives the autorelease pool for this frame.
+        let retained: *mut objc2::runtime::AnyObject = unsafe { msg_send![drawable, retain] };
+        Some(unsafe { metal::MetalDrawable::from_ptr(retained.cast()) })
     }
 
     fn scale_factor(&self) -> f32 {

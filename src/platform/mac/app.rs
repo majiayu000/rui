@@ -232,8 +232,10 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
                     });
                     let presentation = match metal_drawable {
                         Some(metal_drawable) => {
+                            // Hold the owned retain across render+present; MetalRenderer
+                            // still takes &MetalDrawableRef via Deref.
                             renderer
-                                .render(presenter.scene(), metal_drawable, viewport_size)
+                                .render(presenter.scene(), &metal_drawable, viewport_size)
                                 .map_err(|err| {
                                     FramePipelineError::stage(
                                         crate::core::frame_pipeline::FrameStage::Present,
