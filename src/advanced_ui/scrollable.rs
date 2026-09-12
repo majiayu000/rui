@@ -527,6 +527,87 @@ mod tests {
     }
 
     #[test]
+    fn advanced_ui_scrollable_ignores_pointer_down_outside_viewport_when_frozen() {
+        let field_id = ElementId::new();
+        let mut scrollable = Scrollable::new(
+            crate::elements::Input::new()
+                .id(field_id)
+                .value("tall")
+                .w(120.0)
+                .h(240.0),
+        )
+        .w(140.0)
+        .h(80.0)
+        .disabled(true);
+
+        let mut taffy = TaffyTree::<ElementId>::new();
+        let viewport = Size::new(140.0, 80.0);
+        let mut layout_cx = LayoutContext::new(&mut taffy, viewport);
+        let node = scrollable.layout(&mut layout_cx);
+        if let Err(err) = taffy.compute_layout(
+            node,
+            taffy::Size {
+                width: taffy::prelude::AvailableSpace::Definite(viewport.width),
+                height: taffy::prelude::AvailableSpace::Definite(viewport.height),
+            },
+        ) {
+            panic!("layout should compute: {err}");
+        }
+
+        let mut focused = None;
+        let mut event_cx = EventContext::new(
+            Bounds::from_xywh(0.0, 0.0, viewport.width, viewport.height),
+            &taffy,
+            &mut focused,
+        );
+
+        // Outside the clipped viewport, but still within the oversized editor's
+        // translated layout bounds (y=150 > viewport height 80).
+        assert!(
+            !scrollable.handle_pointer_event(
+                &mut event_cx,
+                &PointerEvent {
+                    kind: PointerEventKind::Down,
+                    position: Point::new(8.0, 150.0),
+                    button: Some(MouseButton::Left),
+                },
+            ),
+            "pointer-down outside viewport must not focus clipped-away nested editor"
+        );
+        assert_eq!(
+            event_cx.focused_id(),
+            None,
+            "oversized nested editor must not steal focus from outside viewport"
+        );
+
+        // Moves outside the viewport are still delivered so hover can clear.
+        assert!(
+            !scrollable.handle_pointer_event(
+                &mut event_cx,
+                &PointerEvent {
+                    kind: PointerEventKind::Move,
+                    position: Point::new(8.0, 150.0),
+                    button: None,
+                },
+            ),
+            "move outside viewport should still be forwarded (and return false if unhandled)"
+        );
+
+        assert!(
+            scrollable.handle_pointer_event(
+                &mut event_cx,
+                &PointerEvent {
+                    kind: PointerEventKind::Down,
+                    position: Point::new(8.0, 8.0),
+                    button: Some(MouseButton::Left),
+                },
+            ),
+            "pointer-down inside viewport should still focus nested editor when frozen"
+        );
+        assert_eq!(event_cx.focused_id(), Some(field_id));
+    }
+
+    #[test]
     fn advanced_ui_scrollable_accessibility_actions_follow_scroll_range() {
         let mut overflowing = Scrollable::new(container().w(100.0).h(300.0)).h(100.0);
         let before_paint = match overflowing.accessibility(&AccessibilityContext::default()) {

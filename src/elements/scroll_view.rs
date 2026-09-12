@@ -506,6 +506,13 @@ impl Element for ScrollView {
         let mut handled = false;
         let bounds = cx.bounds();
 
+        // Clip pointer-down activation to the visible viewport so oversized
+        // scrolled children cannot take focus from clicks outside the clip.
+        // Still forward move/up so children can clear hover/pressed on exit.
+        if matches!(event.kind, PointerEventKind::Down) && !bounds.contains(event.position) {
+            return false;
+        }
+
         for (child, node) in self
             .children
             .iter_mut()
