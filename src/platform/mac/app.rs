@@ -1,7 +1,10 @@
 //! macOS application runner
 
 use crate::core::ElementId;
-use crate::core::accessibility::AccessibilityBridge;
+use crate::core::accessibility::{
+    AccessibilityAnnouncement, AccessibilityAnnouncementKind, AccessibilityBridge,
+    AccessibilityTree,
+};
 use crate::core::app::{AppContext, RedrawSource};
 use crate::core::event::{KeyCode, KeyEvent, Modifiers, MouseButton, ScrollEvent};
 use crate::core::frame_pipeline::{
@@ -287,22 +290,28 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
             let tree_published = match presenter.accessibility_tree() {
                 Ok(accessibility_tree) => {
                     match accessibility_bridge.publish_tree(&accessibility_tree) {
-                        Ok(()) => true,
+                        Ok(()) => Some(accessibility_tree),
                         Err(err) => {
                             log::error!("failed to publish accessibility tree: {err}");
-                            false
+                            None
                         }
                     }
                 }
                 Err(err) => {
                     log::error!("failed to build accessibility tree: {err}");
-                    false
+                    None
                 }
             };
-            // Keep focus/action announcements queued until a matching tree is published
-            // so VoiceOver is not left on a stale element after a failed frame.
-            if tree_published {
-                for announcement in presenter.take_accessibility_announcements() {
+            // Keep announcements queued until a matching tree is published, then drop
+            // FocusChanged entries that no longer match the published focus so VoiceOver
+            // is not steered to a stale unfocused element after recovery.
+            if let Some(published_tree) = tree_published.as_ref() {
+                let focused = presenter.focused_element();
+                for announcement in filter_retained_accessibility_announcements(
+                    presenter.take_accessibility_announcements(),
+                    published_tree,
+                    focused,
+                ) {
                     if let Err(err) = accessibility_bridge.announce(&announcement) {
                         log::error!("failed to publish accessibility announcement: {err}");
                     }
@@ -333,6 +342,40 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
             }
         }
     }
+}
+
+/// Drop obsolete focus announcements retained across failed publish frames.
+///
+/// Action feedback is kept. FocusChanged entries are coalesced to the latest
+/// announcement that still matches the published tree's focused node (and the
+/// presenter's current focus); clearing focus discards all pending FocusChanged.
+pub(crate) fn filter_retained_accessibility_announcements(
+    announcements: Vec<AccessibilityAnnouncement>,
+    published_tree: &AccessibilityTree,
+    focused: Option<ElementId>,
+) -> Vec<AccessibilityAnnouncement> {
+    let published_focus = focused.filter(|id| {
+        published_tree
+            .find(*id)
+            .is_some_and(|node| node.a11y_focused())
+    });
+
+    let mut filtered = Vec::with_capacity(announcements.len());
+    let mut latest_focus: Option<AccessibilityAnnouncement> = None;
+    for announcement in announcements {
+        match announcement.kind() {
+            AccessibilityAnnouncementKind::FocusChanged => {
+                if Some(announcement.node_id()) == published_focus {
+                    latest_focus = Some(announcement);
+                }
+            }
+            AccessibilityAnnouncementKind::ActionFeedback => filtered.push(announcement),
+        }
+    }
+    if let Some(announcement) = latest_focus {
+        filtered.push(announcement);
+    }
+    filtered
 }
 
 /// Propagates a platform-reported size change to the single viewport-size owner.

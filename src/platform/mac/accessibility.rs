@@ -320,6 +320,9 @@ impl MacAccessibilityAnnouncementSnapshot {
 
 pub struct MacAccessibilityBridge {
     native_host: Option<Box<dyn NativeAccessibilityHost>>,
+    /// Last tree successfully published to the native host. Retained across
+    /// failed rebuild frames so VoiceOver actions can still be validated.
+    last_published_tree: Option<AccessibilityTree>,
 }
 
 impl fmt::Debug for MacAccessibilityBridge {
@@ -327,6 +330,10 @@ impl fmt::Debug for MacAccessibilityBridge {
         formatter
             .debug_struct("MacAccessibilityBridge")
             .field("native_attached", &self.native_attached())
+            .field(
+                "last_published_tree",
+                &self.last_published_tree.as_ref().map(|tree| tree.roots().len()),
+            )
             .finish()
     }
 }
@@ -339,7 +346,10 @@ impl Default for MacAccessibilityBridge {
 
 impl MacAccessibilityBridge {
     pub fn new() -> Self {
-        Self { native_host: None }
+        Self {
+            native_host: None,
+            last_published_tree: None,
+        }
     }
 
     pub(crate) fn attached_to(content_view: Retained<NSView>, window_number: isize) -> Self {
@@ -348,11 +358,20 @@ impl MacAccessibilityBridge {
                 content_view,
                 window_number,
             ))),
+            last_published_tree: None,
         }
     }
 
     pub fn native_attached(&self) -> bool {
         self.native_host.is_some()
+    }
+
+    /// Tree last accepted by a successful [`publish_tree`](Self::publish_tree).
+    ///
+    /// Used to validate VoiceOver actions against the retained native tree when
+    /// the current presenter tree fails to build.
+    pub fn last_published_tree(&self) -> Option<&AccessibilityTree> {
+        self.last_published_tree.as_ref()
     }
 
     pub(crate) fn take_action_request(&mut self) -> Option<MacAccessibilityActionRequest> {
@@ -389,6 +408,7 @@ impl MacAccessibilityBridge {
     fn with_host(host: impl NativeAccessibilityHost + 'static) -> Self {
         Self {
             native_host: Some(Box::new(host)),
+            last_published_tree: None,
         }
     }
 }
@@ -617,7 +637,11 @@ impl AccessibilityBridge for MacAccessibilityBridge {
     fn publish_tree(&mut self, tree: &AccessibilityTree) -> Result<(), AccessibilityError> {
         validate_tree(tree)?;
         match self.native_host.as_mut() {
-            Some(host) => host.publish_tree(tree),
+            Some(host) => {
+                host.publish_tree(tree)?;
+                self.last_published_tree = Some(tree.clone());
+                Ok(())
+            }
             None => Err(Self::missing_native_bridge()),
         }
     }

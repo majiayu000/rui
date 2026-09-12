@@ -98,6 +98,10 @@ fn accessibility_bridge_attached_host_receives_tree_focus_and_announcement() {
     bridge
         .publish_tree(&tree)
         .expect("attached publish should succeed");
+    assert_eq!(
+        bridge.last_published_tree().map(|published| published.roots().len()),
+        Some(1)
+    );
     bridge
         .announce(&announcement)
         .expect("attached announcement should succeed");

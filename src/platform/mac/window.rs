@@ -45,6 +45,10 @@ pub struct MacWindow {
 }
 
 impl MacWindow {
+    pub(crate) fn accessibility_bridge(&self) -> &MacAccessibilityBridge {
+        &self.accessibility_bridge
+    }
+
     pub(crate) fn accessibility_bridge_mut(&mut self) -> &mut MacAccessibilityBridge {
         &mut self.accessibility_bridge
     }
