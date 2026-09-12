@@ -529,12 +529,15 @@ mod tests {
     #[test]
     fn advanced_ui_scrollable_ignores_pointer_down_outside_viewport_when_frozen() {
         let field_id = ElementId::new();
+        let blur_count = Rc::new(Cell::new(0));
+        let blur_count_ref = Rc::clone(&blur_count);
         let mut scrollable = Scrollable::new(
             crate::elements::Input::new()
                 .id(field_id)
                 .value("tall")
                 .w(120.0)
-                .h(240.0),
+                .h(240.0)
+                .on_blur(move || blur_count_ref.set(blur_count_ref.get() + 1)),
         )
         .w(140.0)
         .h(80.0)
@@ -605,6 +608,94 @@ mod tests {
             "pointer-down inside viewport should still focus nested editor when frozen"
         );
         assert_eq!(event_cx.focused_id(), Some(field_id));
+
+        // Outside Down must still reach the focused editor so it can blur,
+        // even though activation stays clipped to the viewport.
+        assert!(
+            !scrollable.handle_pointer_event(
+                &mut event_cx,
+                &PointerEvent {
+                    kind: PointerEventKind::Down,
+                    position: Point::new(8.0, 150.0),
+                    button: Some(MouseButton::Left),
+                },
+            ),
+            "outside pointer-down should not re-activate after focus"
+        );
+        assert_eq!(
+            event_cx.focused_id(),
+            None,
+            "outside pointer-down must clear nested editor focus for blur delivery"
+        );
+        assert_eq!(
+            blur_count.get(),
+            1,
+            "outside pointer-down must invoke on_blur when nested editor was focused"
+        );
+    }
+
+    #[test]
+    fn advanced_ui_scrollable_pointer_up_outside_viewport_does_not_activate_child() {
+        let clicked = Rc::new(Cell::new(false));
+        let clicked_ref = Rc::clone(&clicked);
+        let mut scrollable = Scrollable::new(
+            crate::elements::div()
+                .w(120.0)
+                .h(240.0)
+                .on_click(move || clicked_ref.set(true)),
+        )
+        .w(140.0)
+        .h(80.0)
+        .disabled(true);
+
+        let mut taffy = TaffyTree::<ElementId>::new();
+        let viewport = Size::new(140.0, 80.0);
+        let mut layout_cx = LayoutContext::new(&mut taffy, viewport);
+        let node = scrollable.layout(&mut layout_cx);
+        if let Err(err) = taffy.compute_layout(
+            node,
+            taffy::Size {
+                width: taffy::prelude::AvailableSpace::Definite(viewport.width),
+                height: taffy::prelude::AvailableSpace::Definite(viewport.height),
+            },
+        ) {
+            panic!("layout should compute: {err}");
+        }
+
+        let mut focused = None;
+        let mut event_cx = EventContext::new(
+            Bounds::from_xywh(0.0, 0.0, viewport.width, viewport.height),
+            &taffy,
+            &mut focused,
+        );
+
+        // Press begins inside the visible viewport.
+        let _ = scrollable.handle_pointer_event(
+            &mut event_cx,
+            &PointerEvent {
+                kind: PointerEventKind::Down,
+                position: Point::new(8.0, 8.0),
+                button: Some(MouseButton::Left),
+            },
+        );
+
+        // Release outside the clipped viewport but still within the child's
+        // translated layout bounds must not fire on_click.
+        assert!(
+            !scrollable.handle_pointer_event(
+                &mut event_cx,
+                &PointerEvent {
+                    kind: PointerEventKind::Up,
+                    position: Point::new(8.0, 150.0),
+                    button: Some(MouseButton::Left),
+                },
+            ),
+            "pointer-up outside viewport must not activate oversized child"
+        );
+        assert!(
+            !clicked.get(),
+            "outside pointer-up must not invoke on_click for clipped-away child area"
+        );
     }
 
     #[test]

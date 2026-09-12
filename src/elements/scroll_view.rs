@@ -506,13 +506,10 @@ impl Element for ScrollView {
         let mut handled = false;
         let bounds = cx.bounds();
 
-        // Clip pointer-down activation to the visible viewport so oversized
-        // scrolled children cannot take focus from clicks outside the clip.
-        // Still forward move/up so children can clear hover/pressed on exit.
-        if matches!(event.kind, PointerEventKind::Down) && !bounds.contains(event.position) {
-            return false;
-        }
-
+        // Clip child hit-testing to the visible viewport so oversized scrolled
+        // children cannot activate from outside the clip. Still forward every
+        // pointer kind (including outside Down/Up) so focused editors can blur
+        // and pressed children can clear state without treating the event as inside.
         for (child, node) in self
             .children
             .iter_mut()
@@ -526,7 +523,10 @@ impl Element for ScrollView {
                 child_bounds.width(),
                 child_bounds.height(),
             );
-            let mut child_cx = cx.with_bounds(scrolled_bounds);
+            let hit_bounds = scrolled_bounds
+                .intersection(&bounds)
+                .unwrap_or(Bounds::ZERO);
+            let mut child_cx = cx.with_bounds(hit_bounds);
             let child_handled = child.handle_pointer_event(&mut child_cx, event);
             if !is_move && child_handled {
                 handled = true;
