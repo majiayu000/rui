@@ -489,6 +489,11 @@ impl AppKitAccessibilityHost {
 
 impl NativeAccessibilityHost for AppKitAccessibilityHost {
     fn publish_tree(&mut self, tree: &AccessibilityTree) -> Result<(), AccessibilityError> {
+        // Validate the entire tree before mutating any reused native elements. Restoring
+        // `self.elements` on failure preserves map membership, but cannot roll back
+        // AppKit properties already written on earlier nodes during a partial rebuild.
+        validate_tree(tree)?;
+
         let layout_changed = self
             .last_tree
             .as_ref()

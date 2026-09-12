@@ -53,6 +53,16 @@ fn publish_text_semantics(
     Ok(())
 }
 
+fn parse_progress_accessibility_value(source: &str) -> Result<f64, AccessibilityError> {
+    source
+        .strip_suffix('%')
+        .and_then(|value| value.parse::<f64>().ok())
+        .map(|value| value / 100.0)
+        .ok_or_else(|| AccessibilityError::BridgeFailure {
+            message: format!("invalid macOS progress accessibility value: {source}"),
+        })
+}
+
 fn publish_native_value(
     element: &RuiAccessibilityElement,
     node: &AccessibilityNode,
@@ -67,14 +77,7 @@ fn publish_native_value(
             element.set_native_value(Some(&value));
         }
         AccessibilityRole::ProgressIndicator => {
-            let source = node.a11y_value().unwrap_or_default();
-            let value = source
-                .strip_suffix('%')
-                .and_then(|value| value.parse::<f64>().ok())
-                .map(|value| value / 100.0)
-                .ok_or_else(|| AccessibilityError::BridgeFailure {
-                    message: format!("invalid macOS progress accessibility value: {source}"),
-                })?;
+            let value = parse_progress_accessibility_value(node.a11y_value().unwrap_or_default())?;
             let value = NSNumber::new_f64(value);
             element.set_native_value(Some(&value));
         }
@@ -242,6 +245,11 @@ fn validate_node(node: &AccessibilityNode) -> Result<(), AccessibilityError> {
             .is_none_or(|value| role != AccessibilityRole::TextInput && value.trim().is_empty())
     {
         return Err(AccessibilityError::MissingValue { role });
+    }
+    // Validate every fallible native publish value before AppKit elements are mutated.
+    // Restoring the element index alone cannot roll back partially written native properties.
+    if role == AccessibilityRole::ProgressIndicator {
+        parse_progress_accessibility_value(node.a11y_value().unwrap_or_default())?;
     }
     if role == AccessibilityRole::TextInput {
         let value = node.a11y_value().unwrap_or_default();
