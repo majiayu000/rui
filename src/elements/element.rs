@@ -415,7 +415,11 @@ impl<'a> EventContext<'a> {
     }
 
     /// Dispatch context that always reports outside for hit testing while
-    /// keeping [`Self::layout_bounds`] stable (focus blur through an overlay).
+    /// keeping [`Self::layout_bounds`] stable.
+    ///
+    /// Used for focus blur through an overlay and for Move/Up cleanup when an
+    /// unrelated scene hit filter would otherwise drop the event (including
+    /// in-viewport releases over a registered sibling).
     pub fn for_blur_dispatch(&mut self) -> EventContext<'_> {
         self.pointer_dispatch_context(true, true)
     }
@@ -594,10 +598,13 @@ impl AnyElement {
         // Outside the viewport clip: never start new presses, but still forward
         // Move/Up (and focused Downs for blur) so unregistered pressed/hovered
         // controls can clear state even when Presenter filters to an unrelated
-        // scene hit_target. Do **not** treat every Move/Up as cleanup — that
-        // would let background Div::on_click / hover run under a registered
-        // overlay. Focus delivery is Down-only blur: never treat focused
-        // Move/Up/Down as activatable hits through an overlay.
+        // scene hit_target. In-viewport Move/Up filtered to an unrelated
+        // registered target also need suppressed cleanup — otherwise a press on
+        // an unregistered control sticks when released over a sibling hit
+        // region. Always deliver those cleanups with forced outside
+        // containment so background Div::on_click / hover cannot activate under
+        // a registered overlay. Focus delivery is Down-only blur: never treat
+        // focused Move/Up/Down as activatable hits through an overlay.
         let delivers_for_focus = cx
             .focused_id()
             .map(|id| self.contains_id(id))
@@ -605,8 +612,14 @@ impl AnyElement {
         let outside_hit_region = cx.pointer_outside_hit_region(event.position);
         let focus_blur_delivery =
             delivers_for_focus && matches!(event.kind, PointerEventKind::Down);
+        let filtered_pointer_cleanup =
+            matches!(event.kind, PointerEventKind::Move | PointerEventKind::Up)
+                && cx.has_hit_filter()
+                && !matches_current
+                && !matches_previous;
         let is_cleanup = (matches!(event.kind, PointerEventKind::Move | PointerEventKind::Up)
             && outside_hit_region)
+            || filtered_pointer_cleanup
             || focus_blur_delivery;
 
         if cx.has_hit_filter() && !matches_current && !matches_previous && !is_cleanup {
@@ -617,14 +630,16 @@ impl AnyElement {
             return false;
         }
 
-        // When a Down reaches a focused control only because an unrelated
-        // overlay owns the scene hit filter, force outside containment so the
-        // control blurs instead of activating through the overlay.
-        let force_blur_outside = focus_blur_delivery
-            && cx.has_hit_filter()
-            && !matches_current
-            && !matches_previous;
-        let mut dispatch_cx = if force_blur_outside {
+        // Force outside containment for overlay focus blur and for filtered
+        // Move/Up cleanup so in-viewport releases over an unrelated registered
+        // hit clear pressed/hover without activating. Do not suppress normal
+        // focused Downs that are not hit-filter bypasses.
+        let force_outside = filtered_pointer_cleanup
+            || (focus_blur_delivery
+                && cx.has_hit_filter()
+                && !matches_current
+                && !matches_previous);
+        let mut dispatch_cx = if force_outside {
             cx.for_blur_dispatch()
         } else {
             cx.for_pointer_dispatch(event.position)
