@@ -1,7 +1,7 @@
 use crate::advanced_ui::tokens::ControlState;
 use crate::core::color::Color;
 use crate::core::event::Cursor;
-use crate::core::geometry::Bounds;
+use crate::core::geometry::{Bounds, Point};
 use crate::elements::element::EventContext;
 
 pub const INVALID_BORDER_COLOR: Color = Color::Rgba(crate::core::color::Rgba::new(
@@ -115,9 +115,17 @@ impl InteractionState {
         self.pressed = false;
     }
 
+    /// Update hover using layout bounds containment.
+    ///
+    /// Prefer [`Self::update_hover_inside`] with `cx.contains_pointer(...)` when
+    /// ScrollView `hit_clip` must be honored.
+    pub fn update_hover(&mut self, bounds: Bounds, position: Point, cx: &EventContext) -> bool {
+        self.update_hover_inside(bounds.contains(position), cx)
+    }
+
     /// Update hover from a precomputed hit test (`cx.contains_pointer` so
     /// ScrollView `hit_clip` is honored, not raw layout bounds).
-    pub fn update_hover(&mut self, inside: bool, cx: &EventContext) -> bool {
+    pub fn update_hover_inside(&mut self, inside: bool, cx: &EventContext) -> bool {
         if !self.can_activate() {
             let changed = self.hovered || self.pressed;
             self.clear_transient();
@@ -323,12 +331,12 @@ mod tests {
         let mut focused = None;
         let cx = event_context(&taffy, &mut focused);
 
-        assert!(state.update_hover(true, &cx));
+        assert!(state.update_hover_inside(true, &cx));
         assert!(state.hovered());
         assert!(cx.redraw_requested());
         assert_eq!(cx.cursor(), Some(Cursor::Pointer));
 
-        assert!(!state.update_hover(false, &cx));
+        assert!(!state.update_hover_inside(false, &cx));
         assert!(!state.hovered());
     }
 

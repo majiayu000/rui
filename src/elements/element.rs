@@ -214,10 +214,16 @@ impl<'a> EventContext<'a> {
 
     /// Whether `point` is inside this context's visible pointer region.
     ///
-    /// When a hit clip is present, requires a positive-area intersection of
-    /// layout bounds and clip before accepting the point, so edge-only
-    /// contacts (inclusive on both rectangles, zero-area overlap) are rejected.
+    /// When hit testing is suppressed (clipped cleanup / focus blur through an
+    /// unrelated overlay), returns false so modern `contains_pointer` callers
+    /// match legacy `bounds().contains` suppression. When a hit clip is
+    /// present, requires a positive-area intersection of layout bounds and
+    /// clip before accepting the point, so edge-only contacts (inclusive on
+    /// both rectangles, zero-area overlap) are rejected.
     pub fn contains_pointer(&self, point: Point) -> bool {
+        if self.hit_suppressed {
+            return false;
+        }
         match self.hit_clip {
             Some(clip) => match self.bounds.intersection(&clip) {
                 Some(visible) => visible.contains(point),
@@ -386,6 +392,16 @@ impl<'a> EventContext<'a> {
                     .unwrap_or(true),
                 None => false,
             };
+        self.pointer_dispatch_context(hit_suppressed)
+    }
+
+    /// Dispatch context that always reports outside for hit testing while
+    /// keeping [`Self::layout_bounds`] stable (focus blur through an overlay).
+    pub fn for_blur_dispatch(&mut self) -> EventContext<'_> {
+        self.pointer_dispatch_context(true)
+    }
+
+    fn pointer_dispatch_context(&mut self, hit_suppressed: bool) -> EventContext<'_> {
         EventContext {
             bounds: self.bounds,
             hit_clip: self.hit_clip,
@@ -556,17 +572,18 @@ impl AnyElement {
         // controls can clear state even when Presenter filters to an unrelated
         // scene hit_target. Do **not** treat every Move/Up as cleanup — that
         // would let background Div::on_click / hover run under a registered
-        // overlay. Capture/focus must not bypass clip for activatable hits —
-        // for_pointer_dispatch suppresses legacy bounds().contains while
-        // layout_bounds() stays real.
+        // overlay. Focus delivery is Down-only blur: never treat focused
+        // Move/Up/Down as activatable hits through an overlay.
         let delivers_for_focus = cx
             .focused_id()
             .map(|id| self.contains_id(id))
             .unwrap_or(false);
         let outside_hit_region = cx.pointer_outside_hit_region(event.position);
+        let focus_blur_delivery =
+            delivers_for_focus && matches!(event.kind, PointerEventKind::Down);
         let is_cleanup = (matches!(event.kind, PointerEventKind::Move | PointerEventKind::Up)
             && outside_hit_region)
-            || delivers_for_focus;
+            || focus_blur_delivery;
 
         if cx.has_hit_filter() && !matches_current && !matches_previous && !is_cleanup {
             return false;
@@ -576,7 +593,18 @@ impl AnyElement {
             return false;
         }
 
-        let mut dispatch_cx = cx.for_pointer_dispatch(event.position);
+        // When a Down reaches a focused control only because an unrelated
+        // overlay owns the scene hit filter, force outside containment so the
+        // control blurs instead of activating through the overlay.
+        let force_blur_outside = focus_blur_delivery
+            && cx.has_hit_filter()
+            && !matches_current
+            && !matches_previous;
+        let mut dispatch_cx = if force_blur_outside {
+            cx.for_blur_dispatch()
+        } else {
+            cx.for_pointer_dispatch(event.position)
+        };
         self.inner
             .dispatch_pointer_event(&mut dispatch_cx, event)
             .is_stopped()

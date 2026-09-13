@@ -1731,6 +1731,100 @@ mod tests {
         );
     }
 
+    #[test]
+    fn any_element_focus_blur_under_overlay_does_not_activate() {
+        // Focused background Input behind a registered overlay must receive
+        // Down for blur, but with suppressed hit containment so caret/activation
+        // cannot run through the overlay.
+        let field_id = ElementId::new();
+        let blur_count = Rc::new(Cell::new(0));
+        let blur_count_ref = Rc::clone(&blur_count);
+        let overlay_hit = ElementId::new();
+
+        let mut field = AnyElement::new(
+            crate::elements::Input::new()
+                .id(field_id)
+                .value("focused")
+                .w(200.0)
+                .h(40.0)
+                .on_blur(move || blur_count_ref.set(blur_count_ref.get() + 1)),
+        );
+
+        let mut taffy = TaffyTree::<ElementId>::new();
+        let viewport = Size::new(200.0, 200.0);
+        let mut layout_cx = LayoutContext::new(&mut taffy, viewport);
+        let node = field.layout(&mut layout_cx);
+        if let Err(err) = taffy.compute_layout(
+            node,
+            taffy::Size {
+                width: taffy::prelude::AvailableSpace::Definite(viewport.width),
+                height: taffy::prelude::AvailableSpace::Definite(viewport.height),
+            },
+        ) {
+            panic!("layout should compute: {err}");
+        }
+
+        let mut focused = Some(field_id);
+        let mut event_cx = EventContext::new(
+            Bounds::from_xywh(0.0, 0.0, viewport.width, viewport.height),
+            &taffy,
+            &mut focused,
+        );
+
+        // Focus the input via a normal Down first so its internal focused flag
+        // matches the EventContext focus id.
+        event_cx.set_hit_target(None);
+        event_cx.set_previous_hit_target(None);
+        assert!(field.handle_pointer_event(
+            &mut event_cx,
+            &PointerEvent {
+                kind: PointerEventKind::Down,
+                position: Point::new(20.0, 20.0),
+                button: Some(MouseButton::Left),
+            },
+        ));
+        assert_eq!(event_cx.focused_id(), Some(field_id));
+
+        // Overlay owns the scene hit; Down must blur without re-activating.
+        event_cx.set_hit_target(Some(overlay_hit));
+        event_cx.set_previous_hit_target(None);
+        let handled = field.handle_pointer_event(
+            &mut event_cx,
+            &PointerEvent {
+                kind: PointerEventKind::Down,
+                position: Point::new(20.0, 20.0),
+                button: Some(MouseButton::Left),
+            },
+        );
+        assert!(
+            !handled,
+            "overlay Down delivered for blur must not treat the hit as inside"
+        );
+        assert_eq!(
+            event_cx.focused_id(),
+            None,
+            "focused Input must blur when Down is filtered to an overlay"
+        );
+        assert_eq!(
+            blur_count.get(),
+            1,
+            "focused Input must invoke on_blur under overlay hit filter"
+        );
+
+        // Move/Up under overlay must still be filtered (no activation path).
+        assert!(
+            !field.handle_pointer_event(
+                &mut event_cx,
+                &PointerEvent {
+                    kind: PointerEventKind::Move,
+                    position: Point::new(20.0, 20.0),
+                    button: None,
+                },
+            ),
+            "Move must not bypass overlay hit filter merely because Input was focused"
+        );
+    }
+
     /// Custom element that starts a press inside the viewport and relies on
     /// `cx.layout_bounds()` for local coordinates while clearing pressed state on
     /// outside Move/Up (capture cleanup).

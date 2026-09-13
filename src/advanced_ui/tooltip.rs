@@ -119,7 +119,7 @@ impl Element for Tooltip {
     fn handle_pointer_event(&mut self, cx: &mut EventContext, event: &PointerEvent) -> bool {
         if matches!(event.kind, PointerEventKind::Move) {
             self.state
-                .update_hover(cx.contains_pointer(event.position), cx);
+                .update_hover_inside(cx.contains_pointer(event.position), cx);
         }
 
         if !self.state.can_activate() {

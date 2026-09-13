@@ -206,7 +206,7 @@ impl Element for Button {
         let inside = cx.contains_pointer(event.position);
         match event.kind {
             PointerEventKind::Move => {
-                self.state.update_hover(inside, cx);
+                self.state.update_hover_inside(inside, cx);
                 false
             }
             PointerEventKind::Down => self.state.press_inside(inside, cx),
