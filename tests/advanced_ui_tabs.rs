@@ -6,7 +6,10 @@ use rui::core::accessibility::AccessibilityRole;
 use rui::core::event::{KeyCode, KeyEvent, Modifiers, MouseButton, ScrollEvent};
 use rui::core::geometry::{Bounds, Point, Size};
 use rui::elements::Element;
-use rui::elements::element::{EventContext, PointerEvent, PointerEventKind};
+use rui::elements::element::{
+    AnyElement, EventContext, LayoutContext, PointerEvent, PointerEventKind,
+};
+use rui::elements::Input;
 use rui::renderer::Primitive;
 use rui::testing::mount;
 use std::cell::{Cell, RefCell};
@@ -254,4 +257,91 @@ fn advanced_ui_tab_list_disabled_and_read_only_do_not_change_selection() {
         assert!(!list.handle_pointer_event(&mut cx, &pointer(PointerEventKind::Down, 160.0)));
         assert_eq!(list.selected_value(), "overview");
     }
+}
+
+#[test]
+fn advanced_ui_tabs_overlay_blur_does_not_press_tab_list() {
+    // Focused editor inside the selected panel: overlay Down over the tab strip
+    // must blur without TabsRoot::with_bounds clearing forced hit suppression so
+    // TabList treats the hit as inside, requests focus, or keeps a pressed tab.
+    let field_id = ElementId::new();
+    let overlay_hit = ElementId::new();
+    let blur_count = Rc::new(Cell::new(0));
+    let blur_count_ref = Rc::clone(&blur_count);
+
+    let mut tabs = AnyElement::new(
+        Tabs::new([("overview", "Overview"), ("logs", "Logs")], "overview")
+            .w(220.0)
+            .h(120.0)
+            .panel(TabPanel::new(
+                "overview",
+                Input::new()
+                    .id(field_id)
+                    .value("focused")
+                    .w(200.0)
+                    .h(40.0)
+                    .on_blur(move || blur_count_ref.set(blur_count_ref.get() + 1)),
+            ))
+            .panel(TabPanel::new("logs", text("Logs"))),
+    );
+
+    let mut taffy = TaffyTree::<ElementId>::new();
+    let viewport = Size::new(220.0, 120.0);
+    let mut layout_cx = LayoutContext::new(&mut taffy, viewport);
+    let node = tabs.layout(&mut layout_cx);
+    if let Err(err) = taffy.compute_layout(
+        node,
+        taffy::Size {
+            width: taffy::prelude::AvailableSpace::Definite(viewport.width),
+            height: taffy::prelude::AvailableSpace::Definite(viewport.height),
+        },
+    ) {
+        panic!("layout should compute: {err}");
+    }
+
+    let mut focused = Some(field_id);
+    let mut event_cx = EventContext::new(
+        Bounds::from_xywh(0.0, 0.0, viewport.width, viewport.height),
+        &taffy,
+        &mut focused,
+    );
+
+    // Establish Input focus via a normal Down inside the panel.
+    event_cx.set_hit_target(None);
+    event_cx.set_previous_hit_target(None);
+    assert!(tabs.handle_pointer_event(
+        &mut event_cx,
+        &PointerEvent {
+            kind: PointerEventKind::Down,
+            position: Point::new(20.0, 60.0),
+            button: Some(MouseButton::Left),
+        },
+    ));
+    assert_eq!(event_cx.focused_id(), Some(field_id));
+
+    // Overlay owns the scene hit while the pointer is over the tab strip.
+    event_cx.set_hit_target(Some(overlay_hit));
+    event_cx.set_previous_hit_target(None);
+    let handled = tabs.handle_pointer_event(
+        &mut event_cx,
+        &PointerEvent {
+            kind: PointerEventKind::Down,
+            position: Point::new(160.0, 10.0),
+            button: Some(MouseButton::Left),
+        },
+    );
+    assert!(
+        !handled,
+        "overlay Down over tabs must not be treated as an inside tab press"
+    );
+    assert_eq!(
+        event_cx.focused_id(),
+        None,
+        "focused panel Input must blur under overlay hit filter"
+    );
+    assert_eq!(
+        blur_count.get(),
+        1,
+        "focused panel Input must invoke on_blur under overlay hit filter"
+    );
 }
