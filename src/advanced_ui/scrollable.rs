@@ -1658,6 +1658,79 @@ mod tests {
         );
     }
 
+    #[test]
+    fn any_element_preserves_hit_filter_under_overlay_without_hit_clip() {
+        // Registered overlay hit_target must keep filtering unrelated background
+        // controls: Move/Up cleanup bypass applies only outside a hit clip, not
+        // for every Move/Up under an overlay.
+        let clicked = Rc::new(Cell::new(false));
+        let clicked_ref = Rc::clone(&clicked);
+        let hovered = Rc::new(Cell::new(false));
+        let hovered_ref = Rc::clone(&hovered);
+        let overlay_hit = ElementId::new();
+
+        let mut background = AnyElement::new(
+            crate::elements::div()
+                .w(200.0)
+                .h(200.0)
+                .on_click(move || clicked_ref.set(true))
+                .on_hover(move |inside| hovered_ref.set(inside)),
+        );
+
+        let mut taffy = TaffyTree::<ElementId>::new();
+        let viewport = Size::new(200.0, 200.0);
+        let mut layout_cx = LayoutContext::new(&mut taffy, viewport);
+        let node = background.layout(&mut layout_cx);
+        if let Err(err) = taffy.compute_layout(
+            node,
+            taffy::Size {
+                width: taffy::prelude::AvailableSpace::Definite(viewport.width),
+                height: taffy::prelude::AvailableSpace::Definite(viewport.height),
+            },
+        ) {
+            panic!("layout should compute: {err}");
+        }
+
+        let mut focused = None;
+        let mut event_cx = EventContext::new(
+            Bounds::from_xywh(0.0, 0.0, viewport.width, viewport.height),
+            &taffy,
+            &mut focused,
+        );
+        event_cx.set_hit_target(Some(overlay_hit));
+        event_cx.set_previous_hit_target(None);
+
+        let handled_move = background.handle_pointer_event(
+            &mut event_cx,
+            &PointerEvent {
+                kind: PointerEventKind::Move,
+                position: Point::new(40.0, 20.0),
+                button: None,
+            },
+        );
+        let handled_up = background.handle_pointer_event(
+            &mut event_cx,
+            &PointerEvent {
+                kind: PointerEventKind::Up,
+                position: Point::new(40.0, 20.0),
+                button: Some(MouseButton::Left),
+            },
+        );
+
+        assert!(
+            !handled_move && !handled_up,
+            "unrelated background must not handle overlay-filtered pointer events"
+        );
+        assert!(
+            !clicked.get(),
+            "Div::on_click must not fire under a registered overlay hit_target"
+        );
+        assert!(
+            !hovered.get(),
+            "background hover must not update under a registered overlay hit_target"
+        );
+    }
+
     /// Custom element that starts a press inside the viewport and relies on
     /// `cx.layout_bounds()` for local coordinates while clearing pressed state on
     /// outside Move/Up (capture cleanup).

@@ -551,24 +551,28 @@ impl AnyElement {
             .map(|target| self.contains_id(target))
             .unwrap_or(false);
 
-        // Move/Up (and focused Downs for blur) must reach unregistered
-        // pressed/focused controls even when Presenter filters to an unrelated
-        // scene hit_target. Outside the viewport clip: never start new presses;
-        // still forward cleanup. Capture/focus must not bypass clip for
-        // activatable hits — for_pointer_dispatch suppresses legacy
-        // bounds().contains while layout_bounds() stays real.
+        // Outside the viewport clip: never start new presses, but still forward
+        // Move/Up (and focused Downs for blur) so unregistered pressed/hovered
+        // controls can clear state even when Presenter filters to an unrelated
+        // scene hit_target. Do **not** treat every Move/Up as cleanup — that
+        // would let background Div::on_click / hover run under a registered
+        // overlay. Capture/focus must not bypass clip for activatable hits —
+        // for_pointer_dispatch suppresses legacy bounds().contains while
+        // layout_bounds() stays real.
         let delivers_for_focus = cx
             .focused_id()
             .map(|id| self.contains_id(id))
             .unwrap_or(false);
-        let is_cleanup = matches!(event.kind, PointerEventKind::Move | PointerEventKind::Up)
+        let outside_hit_region = cx.pointer_outside_hit_region(event.position);
+        let is_cleanup = (matches!(event.kind, PointerEventKind::Move | PointerEventKind::Up)
+            && outside_hit_region)
             || delivers_for_focus;
 
         if cx.has_hit_filter() && !matches_current && !matches_previous && !is_cleanup {
             return false;
         }
 
-        if cx.pointer_outside_hit_region(event.position) && !is_cleanup {
+        if outside_hit_region && !is_cleanup {
             return false;
         }
 
