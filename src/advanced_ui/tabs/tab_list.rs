@@ -302,7 +302,13 @@ impl Element for TabList {
     }
 
     fn handle_pointer_event(&mut self, cx: &mut EventContext, event: &PointerEvent) -> bool {
-        let index = self.enabled_index_at(cx.bounds(), event.position);
+        // Honor EventContext hit_clip so clipped ScrollView children cannot
+        // activate from press/release outside the visible viewport.
+        let index = if cx.contains_pointer(event.position) {
+            self.enabled_index_at(cx.bounds(), event.position)
+        } else {
+            None
+        };
         match event.kind {
             PointerEventKind::Move => {
                 self.indexed_state.update_hover(index, cx, self.state);

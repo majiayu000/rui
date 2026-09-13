@@ -391,7 +391,7 @@ impl Element for Button {
             return false;
         }
 
-        let inside = cx.bounds().contains(event.position);
+        let inside = cx.contains_pointer(event.position);
         match event.kind {
             PointerEventKind::Move => {
                 self.state.hovered = inside;

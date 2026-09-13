@@ -297,7 +297,7 @@ impl Element for TextField {
             return false;
         }
 
-        let inside = cx.bounds().contains(event.position);
+        let inside = cx.contains_pointer(event.position);
         if matches!(event.kind, crate::elements::element::PointerEventKind::Move) {
             if self.state.hovered() != inside {
                 self.state.set_hovered(inside);

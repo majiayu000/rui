@@ -203,10 +203,10 @@ impl Element for Button {
     }
 
     fn handle_pointer_event(&mut self, cx: &mut EventContext, event: &PointerEvent) -> bool {
-        let inside = cx.bounds().contains(event.position);
+        let inside = cx.contains_pointer(event.position);
         match event.kind {
             PointerEventKind::Move => {
-                self.state.update_hover(cx.bounds(), event.position, cx);
+                self.state.update_hover_inside(inside, cx);
                 false
             }
             PointerEventKind::Down => self.state.press_inside(inside, cx),
@@ -375,5 +375,36 @@ mod tests {
             taffy.layout(node).map(|layout| layout.size.height),
             Ok(44.0)
         );
+    }
+
+    #[test]
+    fn advanced_ui_button_hover_respects_hit_clip() {
+        let mut button = Button::new("Save");
+        let taffy = TaffyTree::<ElementId>::new();
+        let mut focused = None;
+        let mut root = EventContext::new(
+            Bounds::from_xywh(0.0, 0.0, 200.0, 200.0),
+            &taffy,
+            &mut focused,
+        );
+        // Layout bounds cover the full button, but hit_clip is only the top half.
+        let mut cx = root.with_bounds_and_hit_clip(
+            Bounds::from_xywh(0.0, 0.0, 80.0, 40.0),
+            Bounds::from_xywh(0.0, 0.0, 80.0, 20.0),
+        );
+
+        let _ = button.handle_pointer_event(&mut cx, &event(PointerEventKind::Move, 10.0, 30.0));
+        assert!(
+            !button.interaction_state().hovered(),
+            "move over clipped-away layout area must not set hover"
+        );
+        assert_eq!(cx.cursor(), None);
+
+        let _ = button.handle_pointer_event(&mut cx, &event(PointerEventKind::Move, 10.0, 10.0));
+        assert!(
+            button.interaction_state().hovered(),
+            "move inside hit_clip should set hover"
+        );
+        assert_eq!(cx.cursor(), Some(crate::core::event::Cursor::Pointer));
     }
 }

@@ -547,7 +547,7 @@ impl Element for Div {
             }
         }
 
-        let inside = cx.bounds().contains(event.position);
+        let inside = cx.contains_pointer(event.position);
 
         if is_move && inside != self.hovered {
             self.hovered = inside;

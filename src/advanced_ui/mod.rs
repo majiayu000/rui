@@ -686,7 +686,7 @@ impl Element for Hoverable {
     }
 
     fn handle_pointer_event(&mut self, cx: &mut EventContext, event: &PointerEvent) -> bool {
-        let inside = cx.bounds().contains(event.position);
+        let inside = cx.contains_pointer(event.position);
 
         if matches!(event.kind, crate::elements::element::PointerEventKind::Move) {
             if inside {

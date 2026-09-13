@@ -216,10 +216,10 @@ impl Element for Checkbox {
     }
 
     fn handle_pointer_event(&mut self, cx: &mut EventContext, event: &PointerEvent) -> bool {
-        let inside = cx.bounds().contains(event.position);
+        let inside = cx.contains_pointer(event.position);
         match event.kind {
             PointerEventKind::Move => {
-                self.state.update_hover(cx.bounds(), event.position, cx);
+                self.state.update_hover_inside(inside, cx);
                 false
             }
             PointerEventKind::Down => self.state.press_inside(inside, cx),

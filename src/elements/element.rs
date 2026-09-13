@@ -151,6 +151,33 @@ impl EventResult {
 
 pub struct EventContext<'a> {
     pub(crate) bounds: Bounds,
+    /// Optional absolute-space clip for pointer hit-testing.
+    ///
+    /// Layout coordinates (`bounds` / `child_bounds`) stay unclipped so nested
+    /// origins remain correct under scroll; hit checks also require this clip.
+    hit_clip: Option<Bounds>,
+    /// When set, [`Self::bounds`] returns a never-hit sentinel so legacy
+    /// `bounds().contains` checks cannot activate clipped-away content.
+    /// Real geometry remains available via [`Self::layout_bounds`].
+    ///
+    /// Clip-derived suppression is re-evaluated against each child bounds in
+    /// [`Self::with_bounds`] / [`Self::with_bounds_and_hit_clip`] (and again by
+    /// child [`Self::for_pointer_dispatch`]) using [`Self::hit_test_point`].
+    /// See [`Self::force_hit_suppressed`] for blur suppression that must also
+    /// survive concrete `with_bounds` paths.
+    hit_suppressed: bool,
+    /// Forced outside-hit for focus blur through an unrelated overlay.
+    ///
+    /// Unlike clip-derived [`Self::hit_suppressed`], this must propagate through
+    /// [`Self::with_bounds`] / [`Self::with_bounds_and_hit_clip`] so concrete
+    /// children (e.g. `TabsRoot` → `TabList`) keep treating the event as outside.
+    force_hit_suppressed: bool,
+    /// Pointer position from the active [`Self::for_pointer_dispatch`] call.
+    ///
+    /// Concrete composites that call [`Self::with_bounds`] without re-entering
+    /// `AnyElement` recompute clip-derived [`Self::hit_suppressed`] against this
+    /// point so legacy `bounds().contains` cannot activate outside the clip.
+    hit_test_point: Option<Point>,
     pub(crate) taffy: &'a TaffyTree<ElementId>,
     pub(crate) focused: &'a mut Option<ElementId>,
     hit_target: Option<ElementId>,
@@ -168,6 +195,10 @@ impl<'a> EventContext<'a> {
     ) -> Self {
         Self {
             bounds,
+            hit_clip: None,
+            hit_suppressed: false,
+            force_hit_suppressed: false,
+            hit_test_point: None,
             taffy,
             focused,
             hit_target: None,
@@ -178,8 +209,77 @@ impl<'a> EventContext<'a> {
         }
     }
 
+    fn hits_suppressed(&self) -> bool {
+        self.force_hit_suppressed || self.hit_suppressed
+    }
+
+    /// Whether `bounds` should suppress legacy `bounds().contains` for the
+    /// active pointer against `hit_clip`.
+    fn clip_hit_suppressed_for(bounds: Bounds, hit_clip: Option<Bounds>, point: Option<Point>) -> bool {
+        match (hit_clip, point) {
+            (Some(clip), Some(point)) => bounds
+                .intersection(&clip)
+                .map(|visible| !visible.contains(point))
+                .unwrap_or(true),
+            _ => false,
+        }
+    }
+
+    /// Hit-test / legacy containment geometry for this element.
+    ///
+    /// When pointer dispatch suppresses clipped-away hits, this returns a
+    /// never-hit sentinel so `bounds().contains` cannot activate invisible
+    /// content. Use [`Self::layout_bounds`] for stable local coordinates.
     pub fn bounds(&self) -> Bounds {
+        if self.hits_suppressed() {
+            // Never-hit sentinel (negative size); edges are not containable.
+            Bounds::from_xywh(0.0, 0.0, -1.0, -1.0)
+        } else {
+            self.bounds
+        }
+    }
+
+    /// Stable layout/coordinate geometry for this element.
+    ///
+    /// Always returns the real bounds so captured Move/Up cleanup and overflow
+    /// forwarding can derive local coordinates even when [`Self::bounds`] is
+    /// suppressed for legacy hit-testing.
+    pub fn layout_bounds(&self) -> Bounds {
         self.bounds
+    }
+
+    /// Whether `point` is inside this context's visible pointer region.
+    ///
+    /// When hit testing is suppressed (clipped cleanup / focus blur through an
+    /// unrelated overlay), returns false so modern `contains_pointer` callers
+    /// match legacy `bounds().contains` suppression. When a hit clip is
+    /// present, requires a positive-area intersection of layout bounds and
+    /// clip before accepting the point, so edge-only contacts (inclusive on
+    /// both rectangles, zero-area overlap) are rejected.
+    pub fn contains_pointer(&self, point: Point) -> bool {
+        if self.hits_suppressed() {
+            return false;
+        }
+        match self.hit_clip {
+            Some(clip) => match self.bounds.intersection(&clip) {
+                Some(visible) => visible.contains(point),
+                None => false,
+            },
+            None => self.bounds.contains(point),
+        }
+    }
+
+    /// True when a hit clip is present and `point` lies outside that clip.
+    ///
+    /// This does **not** treat a fully clipped ancestor as proof that all
+    /// descendants are invisible: overflow children may still paint inside the
+    /// viewport. Per-element activation continues to use
+    /// [`Self::contains_pointer`] / [`Self::for_pointer_dispatch`].
+    pub fn pointer_outside_hit_region(&self, point: Point) -> bool {
+        match self.hit_clip {
+            Some(clip) => !clip.contains(point),
+            None => false,
+        }
     }
 
     pub fn focused_id(&self) -> Option<ElementId> {
@@ -278,6 +378,90 @@ impl<'a> EventContext<'a> {
     pub fn with_bounds(&mut self, bounds: Bounds) -> EventContext<'_> {
         EventContext {
             bounds,
+            hit_clip: self.hit_clip,
+            // Recompute clip-derived suppression for the child's bounds so
+            // concrete TabsRoot/ScrollView-style with_bounds paths suppress
+            // legacy bounds().contains without needing AnyElement.
+            hit_suppressed: Self::clip_hit_suppressed_for(
+                bounds,
+                self.hit_clip,
+                self.hit_test_point,
+            ),
+            // Forced blur suppression must survive concrete with_bounds paths
+            // (TabsRoot → TabList) that never re-enter AnyElement.
+            force_hit_suppressed: self.force_hit_suppressed,
+            hit_test_point: self.hit_test_point,
+            taffy: self.taffy,
+            focused: self.focused,
+            hit_target: self.hit_target,
+            previous_hit_target: self.previous_hit_target,
+            cursor: Rc::clone(&self.cursor),
+            redraw_requested: Rc::clone(&self.redraw_requested),
+            accessibility_announcements: Rc::clone(&self.accessibility_announcements),
+        }
+    }
+
+    /// Keep `bounds` as the layout/coordinate origin and intersect `clip` into
+    /// the pointer hit-test region. An empty clip intersection yields a
+    /// never-hit region (not `Bounds::ZERO` at the origin).
+    pub fn with_bounds_and_hit_clip(&mut self, bounds: Bounds, clip: Bounds) -> EventContext<'_> {
+        let hit_clip = match self.hit_clip {
+            Some(existing) => existing
+                .intersection(&clip)
+                .unwrap_or_else(|| Bounds::from_xywh(0.0, 0.0, -1.0, -1.0)),
+            None => clip,
+        };
+        EventContext {
+            bounds,
+            hit_clip: Some(hit_clip),
+            hit_suppressed: Self::clip_hit_suppressed_for(
+                bounds,
+                Some(hit_clip),
+                self.hit_test_point,
+            ),
+            force_hit_suppressed: self.force_hit_suppressed,
+            hit_test_point: self.hit_test_point,
+            taffy: self.taffy,
+            focused: self.focused,
+            hit_target: self.hit_target,
+            previous_hit_target: self.previous_hit_target,
+            cursor: Rc::clone(&self.cursor),
+            redraw_requested: Rc::clone(&self.redraw_requested),
+            accessibility_announcements: Rc::clone(&self.accessibility_announcements),
+        }
+    }
+
+    /// Build a dispatch context that suppresses legacy `bounds().contains` hits
+    /// outside the positive-area visible intersection while keeping
+    /// [`Self::layout_bounds`] stable for local coordinates.
+    pub fn for_pointer_dispatch(&mut self, point: Point) -> EventContext<'_> {
+        let hit_suppressed =
+            Self::clip_hit_suppressed_for(self.bounds, self.hit_clip, Some(point));
+        self.pointer_dispatch_context(hit_suppressed, self.force_hit_suppressed, Some(point))
+    }
+
+    /// Dispatch context that always reports outside for hit testing while
+    /// keeping [`Self::layout_bounds`] stable.
+    ///
+    /// Used for focus blur through an overlay and for Move/Up cleanup when an
+    /// unrelated scene hit filter would otherwise drop the event (including
+    /// in-viewport releases over a registered sibling).
+    pub fn for_blur_dispatch(&mut self) -> EventContext<'_> {
+        self.pointer_dispatch_context(true, true, self.hit_test_point)
+    }
+
+    fn pointer_dispatch_context(
+        &mut self,
+        hit_suppressed: bool,
+        force_hit_suppressed: bool,
+        hit_test_point: Option<Point>,
+    ) -> EventContext<'_> {
+        EventContext {
+            bounds: self.bounds,
+            hit_clip: self.hit_clip,
+            hit_suppressed,
+            force_hit_suppressed,
+            hit_test_point,
             taffy: self.taffy,
             focused: self.focused,
             hit_target: self.hit_target,
@@ -439,11 +623,58 @@ impl AnyElement {
             .map(|target| self.contains_id(target))
             .unwrap_or(false);
 
-        if cx.has_hit_filter() && !matches_current && !matches_previous {
+        // Outside the viewport clip: never start new presses, but still forward
+        // Move/Up (and focused Downs for blur) so unregistered pressed/hovered
+        // controls can clear state even when Presenter filters to an unrelated
+        // scene hit_target. In-viewport Move/Up filtered to an unrelated
+        // registered target also need suppressed cleanup — otherwise a press on
+        // an unregistered control sticks when released over a sibling hit
+        // region. Always deliver those cleanups with forced outside
+        // containment so background Div::on_click / hover cannot activate under
+        // a registered overlay. Focus delivery is Down-only blur: never treat
+        // focused Move/Up/Down as activatable hits through an overlay.
+        let delivers_for_focus = cx
+            .focused_id()
+            .map(|id| self.contains_id(id))
+            .unwrap_or(false);
+        let outside_hit_region = cx.pointer_outside_hit_region(event.position);
+        let focus_blur_delivery =
+            delivers_for_focus && matches!(event.kind, PointerEventKind::Down);
+        let filtered_pointer_cleanup =
+            matches!(event.kind, PointerEventKind::Move | PointerEventKind::Up)
+                && cx.has_hit_filter()
+                && !matches_current
+                && !matches_previous;
+        let is_cleanup = (matches!(event.kind, PointerEventKind::Move | PointerEventKind::Up)
+            && outside_hit_region)
+            || filtered_pointer_cleanup
+            || focus_blur_delivery;
+
+        if cx.has_hit_filter() && !matches_current && !matches_previous && !is_cleanup {
             return false;
         }
 
-        self.inner.dispatch_pointer_event(cx, event).is_stopped()
+        if outside_hit_region && !is_cleanup {
+            return false;
+        }
+
+        // Force outside containment for overlay focus blur and for filtered
+        // Move/Up cleanup so in-viewport releases over an unrelated registered
+        // hit clear pressed/hover without activating. Do not suppress normal
+        // focused Downs that are not hit-filter bypasses.
+        let force_outside = filtered_pointer_cleanup
+            || (focus_blur_delivery
+                && cx.has_hit_filter()
+                && !matches_current
+                && !matches_previous);
+        let mut dispatch_cx = if force_outside {
+            cx.for_blur_dispatch()
+        } else {
+            cx.for_pointer_dispatch(event.position)
+        };
+        self.inner
+            .dispatch_pointer_event(&mut dispatch_cx, event)
+            .is_stopped()
     }
 
     pub fn handle_scroll_event(&mut self, cx: &mut EventContext, event: &ScrollEvent) -> bool {
