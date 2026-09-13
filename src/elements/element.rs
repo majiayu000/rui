@@ -551,25 +551,25 @@ impl AnyElement {
             .map(|target| self.contains_id(target))
             .unwrap_or(false);
 
-        if cx.has_hit_filter() && !matches_current && !matches_previous {
-            return false;
-        }
-
-        // Outside the viewport clip: never start new presses. Still forward
-        // Move/Up (and focused Downs for blur) so pressed/hover/focus cleanup
-        // can run for both captured and unregistered controls. Capture/focus
-        // must not bypass clip for activatable hits — for_pointer_dispatch
-        // suppresses legacy bounds().contains while layout_bounds() stays real.
+        // Move/Up (and focused Downs for blur) must reach unregistered
+        // pressed/focused controls even when Presenter filters to an unrelated
+        // scene hit_target. Outside the viewport clip: never start new presses;
+        // still forward cleanup. Capture/focus must not bypass clip for
+        // activatable hits — for_pointer_dispatch suppresses legacy
+        // bounds().contains while layout_bounds() stays real.
         let delivers_for_focus = cx
             .focused_id()
             .map(|id| self.contains_id(id))
             .unwrap_or(false);
-        if cx.pointer_outside_hit_region(event.position) {
-            let is_cleanup = matches!(event.kind, PointerEventKind::Move | PointerEventKind::Up)
-                || delivers_for_focus;
-            if !is_cleanup {
-                return false;
-            }
+        let is_cleanup = matches!(event.kind, PointerEventKind::Move | PointerEventKind::Up)
+            || delivers_for_focus;
+
+        if cx.has_hit_filter() && !matches_current && !matches_previous && !is_cleanup {
+            return false;
+        }
+
+        if cx.pointer_outside_hit_region(event.position) && !is_cleanup {
+            return false;
         }
 
         let mut dispatch_cx = cx.for_pointer_dispatch(event.position);

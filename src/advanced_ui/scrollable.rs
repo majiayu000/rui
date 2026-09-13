@@ -1530,6 +1530,134 @@ mod tests {
         );
     }
 
+    #[test]
+    fn advanced_ui_scrollable_unregistered_button_clears_pressed_on_unrelated_hit_target_up() {
+        let pressed = Rc::new(Cell::new(false));
+        let clicked = Rc::new(Cell::new(false));
+        let pressed_ref = Rc::clone(&pressed);
+        let clicked_ref = Rc::clone(&clicked);
+        let unrelated_hit = ElementId::new();
+
+        struct UnregisteredPressProbe {
+            inner: crate::elements::Div,
+            pressed: Rc<Cell<bool>>,
+            clicked: Rc<Cell<bool>>,
+        }
+
+        impl Element for UnregisteredPressProbe {
+            fn style(&self) -> &crate::core::style::Style {
+                self.inner.style()
+            }
+
+            fn layout(&mut self, cx: &mut LayoutContext) -> NodeId {
+                self.inner.layout(cx)
+            }
+
+            fn paint(&mut self, cx: &mut PaintContext) {
+                self.inner.paint(cx);
+            }
+
+            fn handle_pointer_event(&mut self, cx: &mut EventContext, event: &PointerEvent) -> bool {
+                let inside = cx.contains_pointer(event.position);
+                match event.kind {
+                    PointerEventKind::Down => {
+                        if inside {
+                            self.pressed.set(true);
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                    PointerEventKind::Up => {
+                        let was_pressed = self.pressed.get();
+                        self.pressed.set(false);
+                        if inside && was_pressed {
+                            self.clicked.set(true);
+                            true
+                        } else {
+                            was_pressed
+                        }
+                    }
+                    PointerEventKind::Move => {
+                        if self.pressed.get() && !inside {
+                            self.pressed.set(false);
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                }
+            }
+        }
+
+        let mut scrollable = Scrollable::new(
+            crate::elements::div()
+                .flex_col()
+                .w(120.0)
+                .h(160.0)
+                .child(UnregisteredPressProbe {
+                    inner: crate::elements::div().w(120.0).h(160.0),
+                    pressed: pressed_ref,
+                    clicked: clicked_ref,
+                }),
+        )
+        .w(140.0)
+        .h(80.0)
+        .disabled(true);
+
+        let mut taffy = TaffyTree::<ElementId>::new();
+        let viewport = Size::new(140.0, 80.0);
+        let mut layout_cx = LayoutContext::new(&mut taffy, viewport);
+        let node = scrollable.layout(&mut layout_cx);
+        if let Err(err) = taffy.compute_layout(
+            node,
+            taffy::Size {
+                width: taffy::prelude::AvailableSpace::Definite(viewport.width),
+                height: taffy::prelude::AvailableSpace::Definite(viewport.height),
+            },
+        ) {
+            panic!("layout should compute: {err}");
+        }
+
+        let mut focused = None;
+        let mut event_cx = EventContext::new(
+            Bounds::from_xywh(0.0, 0.0, viewport.width, viewport.height),
+            &taffy,
+            &mut focused,
+        );
+        // No hit filter on Down: unregistered press.
+        assert!(scrollable.handle_pointer_event(
+            &mut event_cx,
+            &PointerEvent {
+                kind: PointerEventKind::Down,
+                position: Point::new(20.0, 40.0),
+                button: Some(MouseButton::Left),
+            },
+        ));
+        assert!(pressed.get(), "unregistered press inside viewport should stick");
+
+        // Up lands outside the viewport on an unrelated registered scene target.
+        // Presenter supplies that hit_target with no previous_hit_target for Up.
+        event_cx.set_hit_target(Some(unrelated_hit));
+        event_cx.set_previous_hit_target(None);
+        let _ = scrollable.handle_pointer_event(
+            &mut event_cx,
+            &PointerEvent {
+                kind: PointerEventKind::Up,
+                position: Point::new(20.0, 120.0),
+                button: Some(MouseButton::Left),
+            },
+        );
+        assert!(
+            !pressed.get(),
+            "cleanup Up must reach unregistered controls despite unrelated hit_target"
+        );
+        assert!(
+            !clicked.get(),
+            "outside Up must not fire click for unregistered controls"
+        );
+    }
+
     /// Custom element that starts a press inside the viewport and relies on
     /// `cx.layout_bounds()` for local coordinates while clearing pressed state on
     /// outside Move/Up (capture cleanup).
