@@ -504,7 +504,10 @@ impl Element for ScrollView {
     fn handle_pointer_event(&mut self, cx: &mut EventContext, event: &PointerEvent) -> bool {
         let is_move = matches!(event.kind, PointerEventKind::Move);
         let mut handled = false;
-        let bounds = cx.bounds();
+        // Use layout geometry for the viewport clip so clipped cleanup still
+        // intersects against the real viewport when legacy hit bounds are
+        // suppressed to the never-hit sentinel.
+        let bounds = cx.layout_bounds();
 
         // Keep scrolled_bounds as the layout/coordinate origin so nested
         // child_bounds stay correct after scroll. Clip pointer hit-testing to

@@ -1282,6 +1282,109 @@ mod tests {
         );
     }
 
+    #[test]
+    fn advanced_ui_scrollable_with_bounds_recomputes_clip_for_concrete_legacy_child() {
+        // TabsRoot/ScrollView-style composites dispatch via with_bounds to a
+        // concrete child (not AnyElement). Outside Up cleanup must recompute
+        // clip-derived hit_suppressed so legacy bounds().contains cannot
+        // activate when the release is outside the viewport.
+        let activated = Rc::new(Cell::new(false));
+        let activated_ref = Rc::clone(&activated);
+
+        struct ConcreteOverflowHost {
+            inner: crate::elements::Div,
+            child: LegacyBoundsHitProbe,
+            overflow_height: f32,
+        }
+
+        impl Element for ConcreteOverflowHost {
+            fn style(&self) -> &crate::core::style::Style {
+                self.inner.style()
+            }
+
+            fn layout(&mut self, cx: &mut LayoutContext) -> NodeId {
+                self.inner.layout(cx)
+            }
+
+            fn paint(&mut self, cx: &mut PaintContext) {
+                self.inner.paint(cx);
+            }
+
+            fn handle_pointer_event(
+                &mut self,
+                cx: &mut EventContext,
+                event: &PointerEvent,
+            ) -> bool {
+                let layout = cx.layout_bounds();
+                let overflow_bounds = Bounds::from_xywh(
+                    layout.x(),
+                    layout.y(),
+                    layout.width(),
+                    self.overflow_height,
+                );
+                let mut child_cx = cx.with_bounds(overflow_bounds);
+                self.child.handle_pointer_event(&mut child_cx, event)
+            }
+        }
+
+        let mut scrollable = Scrollable::new(ConcreteOverflowHost {
+            inner: crate::elements::div().w(120.0).h(40.0),
+            overflow_height: 200.0,
+            child: LegacyBoundsHitProbe {
+                inner: crate::elements::div().w(120.0).h(200.0),
+                activated: activated_ref,
+            },
+        })
+        .w(140.0)
+        .h(80.0)
+        .disabled(true);
+
+        let mut taffy = TaffyTree::<ElementId>::new();
+        let viewport = Size::new(140.0, 80.0);
+        let mut layout_cx = LayoutContext::new(&mut taffy, viewport);
+        let node = scrollable.layout(&mut layout_cx);
+        if let Err(err) = taffy.compute_layout(
+            node,
+            taffy::Size {
+                width: taffy::prelude::AvailableSpace::Definite(viewport.width),
+                height: taffy::prelude::AvailableSpace::Definite(viewport.height),
+            },
+        ) {
+            panic!("layout should compute: {err}");
+        }
+
+        let mut focused = None;
+        let mut event_cx = EventContext::new(
+            Bounds::from_xywh(0.0, 0.0, viewport.width, viewport.height),
+            &taffy,
+            &mut focused,
+        );
+
+        // Press inside the visible overflow region.
+        let _ = scrollable.handle_pointer_event(
+            &mut event_cx,
+            &PointerEvent {
+                kind: PointerEventKind::Down,
+                position: Point::new(8.0, 60.0),
+                button: Some(MouseButton::Left),
+            },
+        );
+        // Release outside the viewport but still inside the oversized child
+        // layout bounds forwarded via concrete with_bounds.
+        let _ = scrollable.handle_pointer_event(
+            &mut event_cx,
+            &PointerEvent {
+                kind: PointerEventKind::Up,
+                position: Point::new(8.0, 150.0),
+                button: Some(MouseButton::Left),
+            },
+        );
+        assert!(
+            !activated.get(),
+            "concrete with_bounds child must not activate on outside-viewport Up"
+        );
+    }
+
     /// Captured legacy probe that activates on Up via bounds().contains only.
     struct CapturedLegacyBoundsProbe {
         id: ElementId,

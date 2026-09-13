@@ -160,9 +160,11 @@ pub struct EventContext<'a> {
     /// `bounds().contains` checks cannot activate clipped-away content.
     /// Real geometry remains available via [`Self::layout_bounds`].
     ///
-    /// Clip-derived suppression is re-evaluated per child bounds via
-    /// [`Self::for_pointer_dispatch`]; see [`Self::force_hit_suppressed`] for
-    /// blur suppression that must survive [`Self::with_bounds`].
+    /// Clip-derived suppression is re-evaluated against each child bounds in
+    /// [`Self::with_bounds`] / [`Self::with_bounds_and_hit_clip`] (and again by
+    /// child [`Self::for_pointer_dispatch`]) using [`Self::hit_test_point`].
+    /// See [`Self::force_hit_suppressed`] for blur suppression that must also
+    /// survive concrete `with_bounds` paths.
     hit_suppressed: bool,
     /// Forced outside-hit for focus blur through an unrelated overlay.
     ///
@@ -170,6 +172,12 @@ pub struct EventContext<'a> {
     /// [`Self::with_bounds`] / [`Self::with_bounds_and_hit_clip`] so concrete
     /// children (e.g. `TabsRoot` → `TabList`) keep treating the event as outside.
     force_hit_suppressed: bool,
+    /// Pointer position from the active [`Self::for_pointer_dispatch`] call.
+    ///
+    /// Concrete composites that call [`Self::with_bounds`] without re-entering
+    /// `AnyElement` recompute clip-derived [`Self::hit_suppressed`] against this
+    /// point so legacy `bounds().contains` cannot activate outside the clip.
+    hit_test_point: Option<Point>,
     pub(crate) taffy: &'a TaffyTree<ElementId>,
     pub(crate) focused: &'a mut Option<ElementId>,
     hit_target: Option<ElementId>,
@@ -190,6 +198,7 @@ impl<'a> EventContext<'a> {
             hit_clip: None,
             hit_suppressed: false,
             force_hit_suppressed: false,
+            hit_test_point: None,
             taffy,
             focused,
             hit_target: None,
@@ -202,6 +211,18 @@ impl<'a> EventContext<'a> {
 
     fn hits_suppressed(&self) -> bool {
         self.force_hit_suppressed || self.hit_suppressed
+    }
+
+    /// Whether `bounds` should suppress legacy `bounds().contains` for the
+    /// active pointer against `hit_clip`.
+    fn clip_hit_suppressed_for(bounds: Bounds, hit_clip: Option<Bounds>, point: Option<Point>) -> bool {
+        match (hit_clip, point) {
+            (Some(clip), Some(point)) => bounds
+                .intersection(&clip)
+                .map(|visible| !visible.contains(point))
+                .unwrap_or(true),
+            _ => false,
+        }
     }
 
     /// Hit-test / legacy containment geometry for this element.
@@ -358,12 +379,18 @@ impl<'a> EventContext<'a> {
         EventContext {
             bounds,
             hit_clip: self.hit_clip,
-            // Clip-derived suppression is re-evaluated by child AnyElement via
-            // for_pointer_dispatch against the child's own bounds.
-            hit_suppressed: false,
+            // Recompute clip-derived suppression for the child's bounds so
+            // concrete TabsRoot/ScrollView-style with_bounds paths suppress
+            // legacy bounds().contains without needing AnyElement.
+            hit_suppressed: Self::clip_hit_suppressed_for(
+                bounds,
+                self.hit_clip,
+                self.hit_test_point,
+            ),
             // Forced blur suppression must survive concrete with_bounds paths
             // (TabsRoot → TabList) that never re-enter AnyElement.
             force_hit_suppressed: self.force_hit_suppressed,
+            hit_test_point: self.hit_test_point,
             taffy: self.taffy,
             focused: self.focused,
             hit_target: self.hit_target,
@@ -387,8 +414,13 @@ impl<'a> EventContext<'a> {
         EventContext {
             bounds,
             hit_clip: Some(hit_clip),
-            hit_suppressed: false,
+            hit_suppressed: Self::clip_hit_suppressed_for(
+                bounds,
+                Some(hit_clip),
+                self.hit_test_point,
+            ),
             force_hit_suppressed: self.force_hit_suppressed,
+            hit_test_point: self.hit_test_point,
             taffy: self.taffy,
             focused: self.focused,
             hit_target: self.hit_target,
@@ -403,15 +435,9 @@ impl<'a> EventContext<'a> {
     /// outside the positive-area visible intersection while keeping
     /// [`Self::layout_bounds`] stable for local coordinates.
     pub fn for_pointer_dispatch(&mut self, point: Point) -> EventContext<'_> {
-        let hit_suppressed = match self.hit_clip {
-            Some(clip) => self
-                .bounds
-                .intersection(&clip)
-                .map(|visible| !visible.contains(point))
-                .unwrap_or(true),
-            None => false,
-        };
-        self.pointer_dispatch_context(hit_suppressed, self.force_hit_suppressed)
+        let hit_suppressed =
+            Self::clip_hit_suppressed_for(self.bounds, self.hit_clip, Some(point));
+        self.pointer_dispatch_context(hit_suppressed, self.force_hit_suppressed, Some(point))
     }
 
     /// Dispatch context that always reports outside for hit testing while
@@ -421,19 +447,21 @@ impl<'a> EventContext<'a> {
     /// unrelated scene hit filter would otherwise drop the event (including
     /// in-viewport releases over a registered sibling).
     pub fn for_blur_dispatch(&mut self) -> EventContext<'_> {
-        self.pointer_dispatch_context(true, true)
+        self.pointer_dispatch_context(true, true, self.hit_test_point)
     }
 
     fn pointer_dispatch_context(
         &mut self,
         hit_suppressed: bool,
         force_hit_suppressed: bool,
+        hit_test_point: Option<Point>,
     ) -> EventContext<'_> {
         EventContext {
             bounds: self.bounds,
             hit_clip: self.hit_clip,
             hit_suppressed,
             force_hit_suppressed,
+            hit_test_point,
             taffy: self.taffy,
             focused: self.focused,
             hit_target: self.hit_target,
