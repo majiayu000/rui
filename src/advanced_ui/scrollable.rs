@@ -1099,10 +1099,11 @@ mod tests {
         }
 
         fn handle_pointer_event(&mut self, cx: &mut EventContext, event: &PointerEvent) -> bool {
+            let layout = cx.layout_bounds();
             let overflow_bounds = Bounds::from_xywh(
-                cx.bounds().x(),
-                cx.bounds().y(),
-                cx.bounds().width(),
+                layout.x(),
+                layout.y(),
+                layout.width(),
                 self.overflow_height,
             );
             let mut child_cx = cx.with_bounds(overflow_bounds);
@@ -1171,8 +1172,366 @@ mod tests {
         );
     }
 
+    #[test]
+    fn advanced_ui_scrollable_forwards_through_fully_clipped_overflow_host() {
+        let activated = Rc::new(Cell::new(false));
+        let activated_ref = Rc::clone(&activated);
+
+        /// Host whose layout is fully below the viewport, but forwards to a
+        /// child that overflows upward back into the visible clip.
+        struct UpwardOverflowHost {
+            inner: crate::elements::Div,
+            child: AnyElement,
+            child_y_offset: f32,
+            child_height: f32,
+        }
+
+        impl Element for UpwardOverflowHost {
+            fn style(&self) -> &crate::core::style::Style {
+                self.inner.style()
+            }
+
+            fn layout(&mut self, cx: &mut LayoutContext) -> NodeId {
+                self.inner.layout(cx)
+            }
+
+            fn paint(&mut self, cx: &mut PaintContext) {
+                self.inner.paint(cx);
+            }
+
+            fn handle_pointer_event(
+                &mut self,
+                cx: &mut EventContext,
+                event: &PointerEvent,
+            ) -> bool {
+                let layout = cx.layout_bounds();
+                let overflow_bounds = Bounds::from_xywh(
+                    layout.x(),
+                    layout.y() + self.child_y_offset,
+                    layout.width(),
+                    self.child_height,
+                );
+                let mut child_cx = cx.with_bounds(overflow_bounds);
+                self.child.handle_pointer_event(&mut child_cx, event)
+            }
+        }
+
+        // Spacer pushes the host to y=80 (fully clipped); child overflows up.
+        let mut scrollable = Scrollable::new(
+            crate::elements::div()
+                .flex_col()
+                .w(120.0)
+                .h(200.0)
+                .child(crate::elements::div().w(120.0).h(80.0))
+                .child(UpwardOverflowHost {
+                    inner: crate::elements::div().w(120.0).h(40.0),
+                    child_y_offset: -40.0,
+                    child_height: 80.0,
+                    child: AnyElement::new(LegacyBoundsHitProbe {
+                        inner: crate::elements::div().w(120.0).h(80.0),
+                        activated: activated_ref,
+                    }),
+                }),
+        )
+        .w(140.0)
+        .h(80.0)
+        .disabled(true);
+
+        let mut taffy = TaffyTree::<ElementId>::new();
+        let viewport = Size::new(140.0, 80.0);
+        let mut layout_cx = LayoutContext::new(&mut taffy, viewport);
+        let node = scrollable.layout(&mut layout_cx);
+        if let Err(err) = taffy.compute_layout(
+            node,
+            taffy::Size {
+                width: taffy::prelude::AvailableSpace::Definite(viewport.width),
+                height: taffy::prelude::AvailableSpace::Definite(viewport.height),
+            },
+        ) {
+            panic!("layout should compute: {err}");
+        }
+
+        let mut focused = None;
+        let mut event_cx = EventContext::new(
+            Bounds::from_xywh(0.0, 0.0, viewport.width, viewport.height),
+            &taffy,
+            &mut focused,
+        );
+
+        // Click inside the viewport over the upward-overflow paint of a fully
+        // clipped host (host layout starts at y=80).
+        let _ = scrollable.handle_pointer_event(
+            &mut event_cx,
+            &PointerEvent {
+                kind: PointerEventKind::Down,
+                position: Point::new(8.0, 50.0),
+                button: Some(MouseButton::Left),
+            },
+        );
+        let _ = scrollable.handle_pointer_event(
+            &mut event_cx,
+            &PointerEvent {
+                kind: PointerEventKind::Up,
+                position: Point::new(8.0, 50.0),
+                button: Some(MouseButton::Left),
+            },
+        );
+        assert!(
+            activated.get(),
+            "fully clipped overflow host must still forward in-clip descendant hits"
+        );
+    }
+
+    /// Captured legacy probe that activates on Up via bounds().contains only.
+    struct CapturedLegacyBoundsProbe {
+        id: ElementId,
+        inner: crate::elements::Div,
+        activated: Rc<Cell<bool>>,
+        pressed: Rc<Cell<bool>>,
+    }
+
+    impl Element for CapturedLegacyBoundsProbe {
+        fn id(&self) -> Option<ElementId> {
+            Some(self.id)
+        }
+
+        fn style(&self) -> &crate::core::style::Style {
+            self.inner.style()
+        }
+
+        fn layout(&mut self, cx: &mut LayoutContext) -> NodeId {
+            self.inner.layout(cx)
+        }
+
+        fn paint(&mut self, cx: &mut PaintContext) {
+            self.inner.paint(cx);
+        }
+
+        fn handle_pointer_event(&mut self, cx: &mut EventContext, event: &PointerEvent) -> bool {
+            // Intentionally ignores contains_pointer / hit_clip.
+            if !cx.bounds().contains(event.position) {
+                if matches!(event.kind, PointerEventKind::Move | PointerEventKind::Up)
+                    && self.pressed.get()
+                {
+                    self.pressed.set(false);
+                    return true;
+                }
+                return false;
+            }
+            match event.kind {
+                PointerEventKind::Down => {
+                    self.pressed.set(true);
+                    true
+                }
+                PointerEventKind::Up => {
+                    if self.pressed.get() {
+                        self.pressed.set(false);
+                        self.activated.set(true);
+                    }
+                    true
+                }
+                PointerEventKind::Move => true,
+            }
+        }
+    }
+
+    #[test]
+    fn advanced_ui_scrollable_captured_legacy_outside_release_is_not_activatable() {
+        let id = ElementId::new();
+        let activated = Rc::new(Cell::new(false));
+        let pressed = Rc::new(Cell::new(false));
+        let mut scrollable = Scrollable::new(
+            crate::elements::div()
+                .flex_col()
+                .w(120.0)
+                .h(160.0)
+                .child(CapturedLegacyBoundsProbe {
+                    id,
+                    inner: crate::elements::div().w(120.0).h(160.0),
+                    activated: Rc::clone(&activated),
+                    pressed: Rc::clone(&pressed),
+                }),
+        )
+        .w(140.0)
+        .h(80.0)
+        .disabled(true);
+
+        let mut taffy = TaffyTree::<ElementId>::new();
+        let viewport = Size::new(140.0, 80.0);
+        let mut layout_cx = LayoutContext::new(&mut taffy, viewport);
+        let node = scrollable.layout(&mut layout_cx);
+        if let Err(err) = taffy.compute_layout(
+            node,
+            taffy::Size {
+                width: taffy::prelude::AvailableSpace::Definite(viewport.width),
+                height: taffy::prelude::AvailableSpace::Definite(viewport.height),
+            },
+        ) {
+            panic!("layout should compute: {err}");
+        }
+
+        let mut focused = None;
+        let mut event_cx = EventContext::new(
+            Bounds::from_xywh(0.0, 0.0, viewport.width, viewport.height),
+            &taffy,
+            &mut focused,
+        );
+        event_cx.set_hit_target(Some(id));
+
+        assert!(scrollable.handle_pointer_event(
+            &mut event_cx,
+            &PointerEvent {
+                kind: PointerEventKind::Down,
+                position: Point::new(20.0, 40.0),
+                button: Some(MouseButton::Left),
+            },
+        ));
+        assert!(pressed.get(), "press inside the visible region should stick");
+
+        let _ = scrollable.handle_pointer_event(
+            &mut event_cx,
+            &PointerEvent {
+                kind: PointerEventKind::Up,
+                position: Point::new(20.0, 120.0),
+                button: Some(MouseButton::Left),
+            },
+        );
+        assert!(
+            !activated.get(),
+            "captured legacy bounds().contains must not activate outside the viewport clip"
+        );
+        assert!(
+            !pressed.get(),
+            "outside Up cleanup must still clear pressed state"
+        );
+    }
+
+    #[test]
+    fn advanced_ui_scrollable_unregistered_button_clears_pressed_outside_viewport() {
+        let pressed = Rc::new(Cell::new(false));
+        let clicked = Rc::new(Cell::new(false));
+        let pressed_ref = Rc::clone(&pressed);
+        let clicked_ref = Rc::clone(&clicked);
+
+        struct UnregisteredPressProbe {
+            inner: crate::elements::Div,
+            pressed: Rc<Cell<bool>>,
+            clicked: Rc<Cell<bool>>,
+        }
+
+        impl Element for UnregisteredPressProbe {
+            fn style(&self) -> &crate::core::style::Style {
+                self.inner.style()
+            }
+
+            fn layout(&mut self, cx: &mut LayoutContext) -> NodeId {
+                self.inner.layout(cx)
+            }
+
+            fn paint(&mut self, cx: &mut PaintContext) {
+                self.inner.paint(cx);
+            }
+
+            fn handle_pointer_event(&mut self, cx: &mut EventContext, event: &PointerEvent) -> bool {
+                let inside = cx.contains_pointer(event.position);
+                match event.kind {
+                    PointerEventKind::Down => {
+                        if inside {
+                            self.pressed.set(true);
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                    PointerEventKind::Up => {
+                        let was_pressed = self.pressed.get();
+                        self.pressed.set(false);
+                        if inside && was_pressed {
+                            self.clicked.set(true);
+                            true
+                        } else {
+                            was_pressed
+                        }
+                    }
+                    PointerEventKind::Move => {
+                        if self.pressed.get() && !inside {
+                            self.pressed.set(false);
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                }
+            }
+        }
+
+        let mut scrollable = Scrollable::new(
+            crate::elements::div()
+                .flex_col()
+                .w(120.0)
+                .h(160.0)
+                .child(UnregisteredPressProbe {
+                    inner: crate::elements::div().w(120.0).h(160.0),
+                    pressed: pressed_ref,
+                    clicked: clicked_ref,
+                }),
+        )
+        .w(140.0)
+        .h(80.0)
+        .disabled(true);
+
+        let mut taffy = TaffyTree::<ElementId>::new();
+        let viewport = Size::new(140.0, 80.0);
+        let mut layout_cx = LayoutContext::new(&mut taffy, viewport);
+        let node = scrollable.layout(&mut layout_cx);
+        if let Err(err) = taffy.compute_layout(
+            node,
+            taffy::Size {
+                width: taffy::prelude::AvailableSpace::Definite(viewport.width),
+                height: taffy::prelude::AvailableSpace::Definite(viewport.height),
+            },
+        ) {
+            panic!("layout should compute: {err}");
+        }
+
+        let mut focused = None;
+        let mut event_cx = EventContext::new(
+            Bounds::from_xywh(0.0, 0.0, viewport.width, viewport.height),
+            &taffy,
+            &mut focused,
+        );
+        // No hit_target / previous_hit_target: unregistered control.
+
+        assert!(scrollable.handle_pointer_event(
+            &mut event_cx,
+            &PointerEvent {
+                kind: PointerEventKind::Down,
+                position: Point::new(20.0, 40.0),
+                button: Some(MouseButton::Left),
+            },
+        ));
+        assert!(pressed.get(), "unregistered press inside viewport should stick");
+
+        let _ = scrollable.handle_pointer_event(
+            &mut event_cx,
+            &PointerEvent {
+                kind: PointerEventKind::Up,
+                position: Point::new(20.0, 120.0),
+                button: Some(MouseButton::Left),
+            },
+        );
+        assert!(
+            !pressed.get(),
+            "outside Up must reach unregistered controls to clear pressed"
+        );
+        assert!(
+            !clicked.get(),
+            "outside Up must not fire click for unregistered controls"
+        );
+    }
+
     /// Custom element that starts a press inside the viewport and relies on
-    /// `cx.bounds()` for local coordinates while clearing pressed state on
+    /// `cx.layout_bounds()` for local coordinates while clearing pressed state on
     /// outside Move/Up (capture cleanup).
     struct CapturedBoundsCleanupProbe {
         id: ElementId,
@@ -1200,13 +1559,13 @@ mod tests {
         }
 
         fn handle_pointer_event(&mut self, cx: &mut EventContext, event: &PointerEvent) -> bool {
-            let bounds = cx.bounds();
+            let bounds = cx.layout_bounds();
             self.observed_bounds.borrow_mut().push(bounds);
             self.local_deltas.borrow_mut().push(Point::new(
                 event.position.x - bounds.x(),
                 event.position.y - bounds.y(),
             ));
-            // Containment uses the separate hit-test; bounds stay layout space.
+            // Containment uses the separate hit-test; layout_bounds stay layout space.
             let inside = cx.contains_pointer(event.position);
             match event.kind {
                 PointerEventKind::Down => {
@@ -1311,14 +1670,14 @@ mod tests {
         for bounds in bounds_log.iter() {
             assert!(
                 bounds.width() > 0.0 && bounds.height() > 0.0,
-                "hit_suppressed must not replace bounds with a never-hit sentinel during cleanup: {bounds:?}"
+                "layout_bounds must stay positive during clipped cleanup: {bounds:?}"
             );
         }
         let down_bounds = bounds_log[0];
         let move_bounds = bounds_log[1];
         assert_eq!(
             down_bounds, move_bounds,
-            "bounds() must stay stable between inside Down and outside Move"
+            "layout_bounds() must stay stable between inside Down and outside Move"
         );
 
         let deltas = local_deltas.borrow();
@@ -1396,12 +1755,16 @@ mod tests {
             Bounds::from_xywh(0.0, 0.0, 140.0, 80.0),
         );
         assert!(
-            fully_clipped.pointer_outside_hit_region(Point::new(8.0, 40.0)),
-            "fully clipped nodes must stay suppressed even for in-clip points"
+            !fully_clipped.pointer_outside_hit_region(Point::new(8.0, 40.0)),
+            "fully clipped ancestors must still forward points inside the viewport clip"
         );
         assert!(
-            fully_clipped.pointer_outside_hit_region(Point::new(8.0, 80.0)),
-            "edge-only clipped nodes must stay suppressed"
+            !fully_clipped.pointer_outside_hit_region(Point::new(8.0, 80.0)),
+            "edge points inside the inclusive clip must still reach overflow hosts"
+        );
+        assert!(
+            fully_clipped.pointer_outside_hit_region(Point::new(8.0, 100.0)),
+            "points outside the viewport clip must remain suppressed"
         );
     }
 
