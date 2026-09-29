@@ -393,7 +393,7 @@ mod tests {
         )
     }
 
-    fn accessibility_request(
+    pub(in crate::platform::mac::frame) fn accessibility_request(
         id: ElementId,
         action: AccessibilityAction,
         value: Option<&str>,
@@ -783,3 +783,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod dialog_set_value_tests;

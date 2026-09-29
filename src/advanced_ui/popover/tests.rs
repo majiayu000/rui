@@ -2,7 +2,8 @@ use super::*;
 use crate::advanced_ui::text_field::TextField;
 use crate::advanced_ui::tokens::ThemeDensity;
 use crate::advanced_ui::{button, container, text};
-use crate::core::action::{ActionId, ActionOutcome, StandardAction};
+use crate::core::action::{ActionId, ActionOutcome, StandardAction, route_key_event};
+use crate::core::app::AppContext;
 use crate::core::event::{Modifiers, MouseButton};
 use crate::core::geometry::{Point, Size};
 use crate::elements::element::PointerEventKind;
@@ -302,7 +303,7 @@ fn assert_inactive_overlay_keeps_nested_editor<E: Element>(
     );
 }
 
-fn assert_enabled_overlay_keeps_current_routing<E: Element>(
+fn assert_enabled_overlay_forwards_child_actions<E: Element>(
     label: &str,
     overlay: &mut E,
     field_id: ElementId,
@@ -324,17 +325,38 @@ fn assert_enabled_overlay_keeps_current_routing<E: Element>(
     );
     assert_eq!(cx.focused_id(), Some(field_id), "{label}: focus");
 
+    let before = overlay
+        .text_input_snapshot(field_id)
+        .expect("snapshot")
+        .text()
+        .to_string();
+    assert!(
+        !before.is_empty(),
+        "{label}: field text should be selectable"
+    );
     let select_all = ActionId::from(StandardAction::SelectAll);
+    assert!(
+        overlay.dispatch_action(&mut cx, &select_all).is_handled(),
+        "{label}: select all should reach the focused editor"
+    );
+    let snapshot = overlay.text_input_snapshot(field_id).expect("snapshot");
     assert_eq!(
-        overlay.dispatch_action(&mut cx, &select_all),
-        ActionOutcome::Ignored,
-        "{label}: dispatch_action stays ignored while the overlay can activate"
+        snapshot.text(),
+        before,
+        "{label}: select all must not change the field text"
+    );
+    let selection = snapshot.selection().normalized_range();
+    assert_eq!(selection.start(), 0, "{label}: select all start");
+    assert_eq!(
+        selection.end(),
+        before.len(),
+        "{label}: select all covers the field text"
     );
     let cancel = ActionId::from(StandardAction::Cancel);
     assert_eq!(
         overlay.dispatch_action(&mut cx, &cancel),
         ActionOutcome::Ignored,
-        "{label}: cancel stays ignored while the overlay can activate"
+        "{label}: cancel stays ignored so escape dismisses in handle_key_event"
     );
     assert!(
         overlay.handle_key_event(&mut cx, &KeyEvent::new(KeyCode::Escape, Modifiers::none())),
@@ -371,15 +393,83 @@ fn advanced_ui_dialog_inactive_forwards_nested_editor() {
     let field_id = ElementId::new();
     let mut dialog = Dialog::new(
         "Edit",
-        TextField::new("Name").id(field_id).value("").w(160.0),
+        TextField::new("Name").id(field_id).value("keep").w(160.0),
     );
-    assert_enabled_overlay_keeps_current_routing(
+    assert_enabled_overlay_forwards_child_actions(
         "enabled dialog",
         &mut dialog,
         field_id,
         0,
         Dialog::is_open,
     );
+}
+
+#[test]
+fn advanced_ui_dialog_enabled_routes_child_actions() {
+    let field_id = ElementId::new();
+    let button_id = ElementId::new();
+    let clicks = Rc::new(Cell::new(0u32));
+    let clicks_ref = Rc::clone(&clicks);
+    let mut dialog = Dialog::new(
+        "Edit",
+        container()
+            .child(TextField::new("Name").id(field_id).value("keep").w(160.0))
+            .child(button("Save").id(button_id).on_click(move || {
+                clicks_ref.set(clicks_ref.get() + 1);
+            })),
+    );
+    let (taffy, _) = layout(&mut dialog);
+    let mut focused = None;
+    let mut cx = EventContext::new(
+        Bounds::from_xywh(0.0, 0.0, 320.0, 240.0),
+        &taffy,
+        &mut focused,
+    );
+    let mut app = AppContext::new();
+
+    cx.request_focus(Some(field_id));
+    assert!(
+        route_key_event(
+            &mut dialog,
+            &mut app,
+            &mut cx,
+            &KeyEvent::new(KeyCode::A, Modifiers::meta()).with_char('a'),
+        ),
+        "meta+a should select the focused field"
+    );
+    let snapshot = dialog
+        .text_input_snapshot(field_id)
+        .expect("field snapshot");
+    assert_eq!(snapshot.text(), "keep");
+    let selection = snapshot.selection().normalized_range();
+    assert_eq!(selection.start(), 0);
+    assert_eq!(selection.end(), "keep".len());
+    assert!(dialog.is_open());
+
+    cx.request_focus(Some(button_id));
+    assert!(
+        route_key_event(
+            &mut dialog,
+            &mut app,
+            &mut cx,
+            &KeyEvent::new(KeyCode::Enter, Modifiers::none()),
+        ),
+        "enter should activate the focused button"
+    );
+    assert_eq!(clicks.get(), 1);
+    assert!(dialog.is_open());
+
+    assert!(
+        route_key_event(
+            &mut dialog,
+            &mut app,
+            &mut cx,
+            &KeyEvent::new(KeyCode::Escape, Modifiers::none()),
+        ),
+        "escape should dismiss the dialog"
+    );
+    assert!(!dialog.is_open());
+    assert_eq!(clicks.get(), 1);
 }
 
 #[test]
@@ -404,10 +494,10 @@ fn advanced_ui_popover_inactive_forwards_nested_editor() {
     let mut popover = Popover::new(
         "Edit",
         button("Open"),
-        TextField::new("Name").id(field_id).value("").w(160.0),
+        TextField::new("Name").id(field_id).value("keep").w(160.0),
     )
     .open(true);
-    assert_enabled_overlay_keeps_current_routing(
+    assert_enabled_overlay_forwards_child_actions(
         "enabled popover",
         &mut popover,
         field_id,
