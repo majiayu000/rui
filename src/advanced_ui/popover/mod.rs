@@ -239,8 +239,7 @@ impl Element for Popover {
     }
 
     fn dispatch_action(&mut self, cx: &mut EventContext, action: &ActionId) -> ActionOutcome {
-        if self.state.can_activate() || matches!(action, ActionId::Standard(StandardAction::Cancel))
-        {
+        if matches!(action, ActionId::Standard(StandardAction::Cancel)) {
             return ActionOutcome::Ignored;
         }
         let visible = self.visible_child_count();
@@ -539,10 +538,7 @@ impl Element for Dialog {
     }
 
     fn dispatch_action(&mut self, cx: &mut EventContext, action: &ActionId) -> ActionOutcome {
-        if !self.open
-            || self.state.can_activate()
-            || matches!(action, ActionId::Standard(StandardAction::Cancel))
-        {
+        if !self.open || matches!(action, ActionId::Standard(StandardAction::Cancel)) {
             return ActionOutcome::Ignored;
         }
         dispatch_action_to_children(&mut self.content, cx, action)
