@@ -4,6 +4,7 @@ use crate::core::ElementId;
 use crate::core::accessibility::{
     AccessibilityContext, AccessibilityError, AccessibilityNode, AccessibilityRole,
 };
+use crate::core::action::{ActionId, ActionOutcome, StandardAction};
 use crate::core::color::Color;
 use crate::core::event::{KeyCode, KeyEvent, ScrollEvent};
 use crate::core::geometry::{Bounds, Edges};
@@ -12,7 +13,8 @@ use crate::core::style::{
 };
 use crate::core::text_editing::{TextInputCommand, TextInputEvent, TextInputSnapshot};
 use crate::elements::element::{
-    AnyElement, Element, EventContext, LayoutContext, PaintContext, PointerEvent, style_to_taffy,
+    AnyElement, Element, EventContext, LayoutContext, PaintContext, PointerEvent,
+    dispatch_action_to_children, style_to_taffy,
 };
 use crate::renderer::Primitive;
 use crate::renderer::text::TextMeasureCache;
@@ -181,10 +183,6 @@ impl Element for Popover {
     }
 
     fn handle_pointer_event(&mut self, cx: &mut EventContext, event: &PointerEvent) -> bool {
-        if !self.state.can_activate() {
-            return false;
-        }
-
         for index in (0..self.visible_child_count()).rev() {
             let node = self.child_nodes.get(index).copied();
             let bounds = node
@@ -226,26 +224,30 @@ impl Element for Popover {
             return true;
         }
 
-        if !self.state.can_activate() {
-            return self
-                .open
-                .then_some(())
-                .and(cx.focused_id())
-                .is_some_and(|focused| self.contains_id(focused));
-        }
-
         for index in (0..self.visible_child_count()).rev() {
             if self.children[index].handle_key_event(cx, event) {
                 return true;
             }
         }
-        false
+
+        !self.state.can_activate()
+            && self
+                .open
+                .then_some(())
+                .and(cx.focused_id())
+                .is_some_and(|focused| self.contains_id(focused))
+    }
+
+    fn dispatch_action(&mut self, cx: &mut EventContext, action: &ActionId) -> ActionOutcome {
+        if self.state.can_activate() || matches!(action, ActionId::Standard(StandardAction::Cancel))
+        {
+            return ActionOutcome::Ignored;
+        }
+        let visible = self.visible_child_count();
+        dispatch_action_to_children(&mut self.children[..visible], cx, action)
     }
 
     fn handle_text_input_event(&mut self, cx: &mut EventContext, event: &TextInputEvent) -> bool {
-        if !self.state.can_activate() {
-            return false;
-        }
         self.children
             .iter_mut()
             .take(usize::from(self.open) + 1)
@@ -258,9 +260,6 @@ impl Element for Popover {
         cx: &mut EventContext,
         command: &TextInputCommand,
     ) -> bool {
-        if !self.state.can_activate() {
-            return false;
-        }
         let visible = self.visible_child_count();
         if let Some(focused) = cx.focused_id()
             && let Some(child) = self.children[..visible]
@@ -495,11 +494,9 @@ impl Element for Dialog {
             .contains_pointer(event.position);
         let inside_modal_region = self.modal && cx.contains_pointer(event.position);
 
-        if self.state.can_activate() {
-            let mut content_cx = cx.with_bounds(content_bounds);
-            if self.content[0].handle_pointer_event(&mut content_cx, event) {
-                return true;
-            }
+        let mut content_cx = cx.with_bounds(content_bounds);
+        if self.content[0].handle_pointer_event(&mut content_cx, event) {
+            return true;
         }
 
         inside_content || inside_modal_region
@@ -527,22 +524,32 @@ impl Element for Dialog {
             return true;
         }
 
-        if !self.state.can_activate() {
-            return self.modal
-                || cx
-                    .focused_id()
-                    .is_some_and(|focused| self.content[0].contains_id(focused));
-        }
-
         if self.content[0].handle_key_event(cx, event) {
             return true;
         }
 
+        if self.state.can_activate() {
+            return self.modal;
+        }
+
         self.modal
+            || cx
+                .focused_id()
+                .is_some_and(|focused| self.content[0].contains_id(focused))
+    }
+
+    fn dispatch_action(&mut self, cx: &mut EventContext, action: &ActionId) -> ActionOutcome {
+        if !self.open
+            || self.state.can_activate()
+            || matches!(action, ActionId::Standard(StandardAction::Cancel))
+        {
+            return ActionOutcome::Ignored;
+        }
+        dispatch_action_to_children(&mut self.content, cx, action)
     }
 
     fn handle_text_input_event(&mut self, cx: &mut EventContext, event: &TextInputEvent) -> bool {
-        self.open && self.state.can_activate() && self.content[0].handle_text_input_event(cx, event)
+        self.open && self.content[0].handle_text_input_event(cx, event)
     }
 
     fn handle_text_input_command(
@@ -550,9 +557,7 @@ impl Element for Dialog {
         cx: &mut EventContext,
         command: &TextInputCommand,
     ) -> bool {
-        self.open
-            && self.state.can_activate()
-            && self.content[0].handle_text_input_command(cx, command)
+        self.open && self.content[0].handle_text_input_command(cx, command)
     }
 
     fn text_input_snapshot(&self, focused: ElementId) -> Option<TextInputSnapshot> {
@@ -621,210 +626,4 @@ pub fn dialog(label: impl Into<String>, content: impl Into<AnyElement>) -> Dialo
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::advanced_ui::tokens::ThemeDensity;
-    use crate::advanced_ui::{button, container, text};
-    use crate::core::event::{Modifiers, MouseButton};
-    use crate::core::geometry::{Point, Size};
-    use crate::elements::element::PointerEventKind;
-    use std::cell::Cell;
-    use std::rc::Rc;
-    use taffy::TaffyTree;
-
-    fn pointer(kind: PointerEventKind, x: f32, y: f32) -> PointerEvent {
-        PointerEvent {
-            kind,
-            position: Point::new(x, y),
-            button: Some(MouseButton::Left),
-        }
-    }
-
-    fn layout(element: &mut impl Element) -> (TaffyTree<ElementId>, NodeId) {
-        let mut taffy = TaffyTree::<ElementId>::new();
-        let mut layout_cx = LayoutContext::new(&mut taffy, Size::new(320.0, 240.0));
-        let node = element.layout(&mut layout_cx);
-        taffy
-            .compute_layout(
-                node,
-                taffy::Size {
-                    width: AvailableSpace::Definite(320.0),
-                    height: AvailableSpace::Definite(240.0),
-                },
-            )
-            .expect("overlay layout should compute");
-        (taffy, node)
-    }
-
-    #[test]
-    fn advanced_ui_popover_hides_content_when_closed() {
-        let popover = Popover::new("Inspector", button("Open"), text("Details"));
-        let nodes = popover
-            .accessibility_nodes(&AccessibilityContext::default())
-            .expect("closed popover accessibility should build");
-
-        assert!(!popover.is_open());
-        assert_eq!(popover.children().len(), 1);
-        assert_eq!(nodes.len(), 1);
-        assert_eq!(nodes[0].a11y_role(), AccessibilityRole::Button);
-    }
-
-    #[test]
-    fn advanced_ui_popover_exposes_content_when_open() {
-        let id = ElementId::from(800);
-        let popover = Popover::new("Inspector", button("Open"), text("Details"))
-            .id(id)
-            .open(true);
-        let nodes = popover
-            .accessibility_nodes(&AccessibilityContext::new(Some(id)))
-            .expect("open popover accessibility should build");
-
-        assert_eq!(popover.children().len(), 2);
-        assert_eq!(nodes.len(), 1);
-        assert_eq!(nodes[0].a11y_role(), AccessibilityRole::Popover);
-        assert_eq!(nodes[0].a11y_label(), Some("Inspector"));
-        assert!(nodes[0].a11y_focused());
-        assert_eq!(nodes[0].a11y_children().len(), 2);
-    }
-
-    #[test]
-    fn advanced_ui_popover_theme_density_changes_layout_gap() {
-        let theme = Theme::light().with_density(ThemeDensity { scale: 1.5 });
-        let popover = Popover::new("Inspector", button("Open"), text("Details")).theme(theme);
-
-        assert_eq!(popover.style().gap, 9.0);
-    }
-
-    #[test]
-    fn advanced_ui_popover_escape_dismisses_and_announces() {
-        let dismissed = Rc::new(Cell::new(false));
-        let dismissed_ref = Rc::clone(&dismissed);
-        let mut popover = Popover::new("Inspector", button("Open"), text("Details"))
-            .open(true)
-            .on_dismiss(move || dismissed_ref.set(true));
-        let (taffy, _) = layout(&mut popover);
-        let mut focused = None;
-        let mut cx = EventContext::new(
-            Bounds::from_xywh(0.0, 0.0, 320.0, 240.0),
-            &taffy,
-            &mut focused,
-        );
-
-        assert!(
-            popover.handle_key_event(&mut cx, &KeyEvent::new(KeyCode::Escape, Modifiers::none()))
-        );
-        assert!(!popover.is_open());
-        assert!(dismissed.get());
-        assert_eq!(
-            cx.take_accessibility_announcements()[0].message(),
-            "Inspector dismissed"
-        );
-    }
-
-    #[test]
-    fn advanced_ui_dialog_exposes_modal_accessibility_tree() {
-        let id = ElementId::from(801);
-        let dialog = Dialog::new(
-            "Confirm delete",
-            container().w(180.0).h(90.0).child(text("Delete item?")),
-        )
-        .id(id);
-        let nodes = dialog
-            .accessibility_nodes(&AccessibilityContext::new(Some(id)))
-            .expect("dialog accessibility should build");
-
-        assert!(dialog.is_modal());
-        assert_eq!(nodes.len(), 1);
-        assert_eq!(nodes[0].a11y_role(), AccessibilityRole::Dialog);
-        assert_eq!(nodes[0].a11y_label(), Some("Confirm delete"));
-        assert!(nodes[0].a11y_focused());
-        assert_eq!(nodes[0].a11y_children().len(), 1);
-    }
-
-    #[test]
-    fn advanced_ui_dialog_escape_dismisses_when_enabled() {
-        let mut dialog = Dialog::new("Confirm", container().w(120.0).h(80.0));
-        let (taffy, _) = layout(&mut dialog);
-        let mut focused = None;
-        let mut cx = EventContext::new(
-            Bounds::from_xywh(0.0, 0.0, 320.0, 240.0),
-            &taffy,
-            &mut focused,
-        );
-
-        assert!(
-            dialog.handle_key_event(&mut cx, &KeyEvent::new(KeyCode::Escape, Modifiers::none()))
-        );
-        assert!(!dialog.is_open());
-        assert!(cx.redraw_requested());
-    }
-
-    #[test]
-    fn advanced_ui_dialog_read_only_does_not_dismiss() {
-        let mut dialog = Dialog::new("Confirm", container().w(120.0).h(80.0)).read_only(true);
-        let (taffy, _) = layout(&mut dialog);
-        let mut focused = None;
-        let mut cx = EventContext::new(
-            Bounds::from_xywh(0.0, 0.0, 320.0, 240.0),
-            &taffy,
-            &mut focused,
-        );
-
-        assert!(
-            dialog.handle_key_event(&mut cx, &KeyEvent::new(KeyCode::Escape, Modifiers::none()),)
-        );
-        assert!(dialog.is_open());
-    }
-
-    #[test]
-    fn advanced_ui_dialog_modal_consumes_inside_pointer_events() {
-        let mut dialog = Dialog::new("Confirm", container().w(120.0).h(80.0));
-        let (taffy, _) = layout(&mut dialog);
-        let mut focused = None;
-        let mut cx = EventContext::new(
-            Bounds::from_xywh(0.0, 0.0, 320.0, 240.0),
-            &taffy,
-            &mut focused,
-        );
-
-        assert!(dialog.handle_pointer_event(&mut cx, &pointer(PointerEventKind::Down, 4.0, 4.0)));
-    }
-
-    #[test]
-    fn advanced_ui_dialog_content_containment_respects_hit_clip() {
-        let mut dialog = Dialog::new("Confirm", container().w(300.0).h(300.0));
-        let (taffy, _) = layout(&mut dialog);
-        let mut focused = None;
-        let mut root = EventContext::new(
-            Bounds::from_xywh(0.0, 0.0, 320.0, 240.0),
-            &taffy,
-            &mut focused,
-        );
-        // Visible viewport is only the top 100px; content layout still covers y=150.
-        let mut cx = root.with_bounds_and_hit_clip(
-            Bounds::from_xywh(0.0, 0.0, 320.0, 240.0),
-            Bounds::from_xywh(0.0, 0.0, 320.0, 100.0),
-        );
-
-        assert!(
-            !dialog.handle_pointer_event(&mut cx, &pointer(PointerEventKind::Down, 50.0, 150.0)),
-            "pointer in unclipped content but outside hit_clip must not be consumed"
-        );
-        assert!(
-            dialog.handle_pointer_event(&mut cx, &pointer(PointerEventKind::Down, 50.0, 40.0)),
-            "pointer inside hit_clip should still be consumed by modal dialog"
-        );
-    }
-
-    #[test]
-    #[should_panic(expected = "popover accessibility label must not be empty")]
-    fn advanced_ui_popover_rejects_empty_label() {
-        drop(Popover::new(" ", button("Open"), text("Details")));
-    }
-
-    #[test]
-    #[should_panic(expected = "dialog accessibility label must not be empty")]
-    fn advanced_ui_dialog_rejects_empty_label() {
-        drop(Dialog::new(" ", text("Details")));
-    }
-}
+mod tests;
