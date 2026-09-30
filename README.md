@@ -1,16 +1,18 @@
 # RUI
 
-**A GPU-accelerated UI framework for Rust**
+**An early-stage GPU-accelerated Rust UI framework for macOS**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Test Coverage](https://img.shields.io/badge/coverage-66.23%25-green.svg)]()
-[![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)]()
+[![Test Coverage](https://img.shields.io/badge/coverage-66.23%25-green.svg)](#test-coverage)
+[![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](#requirements)
 
-RUI is a high-performance UI framework inspired by [GPUI](https://github.com/zed-industries/zed) and [Warp](https://www.warp.dev/). It renders directly to the GPU using Metal (macOS) for smooth 120fps rendering.
+RUI helps you build native macOS interfaces in Rust with declarative components, flexbox layout, and Metal GPU rendering. Its design is inspired by [GPUI](https://github.com/zed-industries/zed) and [Warp](https://www.warp.dev/).
+
+[Install and quick start](#quick-start) · [API reference](docs/API.md) · [Examples guide](docs/EXAMPLES.md) · [Status and limitations](#status-and-limitations)
 
 ## Features
 
-- **GPU-Accelerated Rendering** - Metal-based rendering on macOS for buttery smooth 120fps
+- **GPU-Accelerated Rendering** - Metal-based rendering on macOS
 - **Declarative API** - Build UIs with a clean, chainable builder pattern
 - **Flexbox Layout** - Powered by [Taffy](https://github.com/DioxusLabs/taffy) for familiar CSS-like layouts
 - **React-like Hooks** - `use_mouse`, `use_paste`, `use_window_focus` and more
