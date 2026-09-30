@@ -86,7 +86,7 @@ impl Default for MacImeSession {
 impl MacImeSession {
     fn insert_text(&mut self, text: &str, replacement_range: NSRange) -> Result<(), TextEditError> {
         let replacement_range = appkit_replacement_range(replacement_range)?;
-        let had_marked_text = self.marked_text.take().is_some();
+        let had_marked_text = self.marked_text.is_some();
         let insertion_start = replacement_range
             .map(Utf16TextRange::location)
             .or_else(|| {
@@ -123,6 +123,7 @@ impl MacImeSession {
             None => not_found_range(),
         };
         self.events.push_back(event);
+        self.marked_text = None;
         self.marked_range = not_found_range();
         self.selected_range = selected_range;
         self.caret_range = selected_range;
@@ -232,11 +233,18 @@ impl MacImeSession {
         let selected_range = ns_range(selected_range);
         let marked_range = ns_range(marked_range);
         let caret_range = ns_range(caret_range);
-        let changed = self.selected_range != selected_range
+        let marked_text = snapshot.as_ref().and_then(|snapshot| {
+            snapshot
+                .composition()
+                .map(|range| snapshot.text()[range.start()..range.end()].to_string())
+        });
+        let changed = self.marked_text != marked_text
+            || self.selected_range != selected_range
             || self.marked_range != marked_range
             || self.caret_range != caret_range
             || self.caret_bounds != caret_bounds
             || self.snapshot != snapshot;
+        self.marked_text = marked_text;
         self.selected_range = selected_range;
         self.marked_range = marked_range;
         self.caret_range = caret_range;
