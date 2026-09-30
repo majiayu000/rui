@@ -191,6 +191,52 @@ fn text_editing_commit_composition_replacing_utf16_preserves_composition_on_mid_
 }
 
 #[test]
+fn text_editing_insert_text_replacing_utf16_preserves_composition_on_failure() {
+    for (text, location, length, expected_error) in [
+        ("x", 0, 1, TextEditError::InvalidBoundary { index: 1 }),
+        ("x", 1, 1, TextEditError::InvalidBoundary { index: 1 }),
+        ("x", 0, 3, TextEditError::InvalidRange { start: 0, end: 3 }),
+        ("\n", 0, 1, TextEditError::MultilineDisabled),
+    ] {
+        let mut buffer = TextEditBuffer::with_text("hello");
+        must(buffer.set_selection(TextSelection::new(0, 5)));
+        must(buffer.begin_composition("e\u{301}"));
+        must(buffer.set_composition_selection_utf16(must_utf16(Utf16TextRange::new(0, 1))));
+        let before = buffer.clone();
+
+        let error = buffer
+            .apply_text_input_command(TextInputCommand::InsertTextReplacing {
+                text: text.to_string(),
+                replacement_range: must_utf16(Utf16TextRange::new(location, length)),
+            })
+            .expect_err("invalid replacement must fail without committing marked text");
+
+        assert_eq!(error, expected_error);
+        assert_eq!(buffer, before);
+        must(buffer.update_composition("updated"));
+        assert_eq!(buffer.text(), "updated");
+        must(buffer.cancel_composition());
+        assert_eq!(buffer.text(), "hello");
+        assert!(buffer.composition().is_none());
+    }
+}
+
+#[test]
+fn text_editing_insert_text_replacing_utf16_commits_after_successful_replacement() {
+    let mut buffer = TextEditBuffer::with_text("hello");
+    must(buffer.begin_composition("e\u{301}"));
+
+    let outcome =
+        must(buffer.insert_text_replacing_utf16("x", must_utf16(Utf16TextRange::new(0, 5))));
+
+    assert!(outcome.changed);
+    assert!(!outcome.submitted);
+    assert_eq!(buffer.text(), "xe\u{301}");
+    assert_eq!(buffer.selection(), TextSelection::collapsed(1));
+    assert!(buffer.composition().is_none());
+}
+
+#[test]
 fn text_editing_applies_marked_selection_relative_to_composition_text() {
     let mut buffer = TextEditBuffer::with_text("ab");
     must(buffer.set_cursor(1));

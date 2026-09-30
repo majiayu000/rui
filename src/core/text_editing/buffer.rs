@@ -116,10 +116,8 @@ impl TextEditBuffer {
     ) -> Result<TextEditOutcome, TextEditError> {
         self.ensure_text_allowed(text)?;
         let range = replacement_range.to_text_range(&self.text)?;
-        if self.composition.is_some() {
-            self.commit_current_composition()?;
-        }
         self.replace_range_internal(range, text)?;
+        self.composition = None;
         self.selection = TextSelection::collapsed(range.start() + text.len());
         Ok(TextEditOutcome {
             changed: !text.is_empty() || !range.is_empty(),
