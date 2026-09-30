@@ -425,6 +425,7 @@ fn ime_session_failed_commit_restores_marked_text_from_editor() {
         );
         assert_eq!(presenter.root().text_input_snapshot(owner), before);
         sync_session_snapshot(&mut session, &presenter, owner);
+        session.restore_marked_text_from_snapshot();
         assert!(
             session.has_marked_text(),
             "rejection must retain native composition mode"
@@ -554,4 +555,58 @@ fn ime_session_invalid_commit_does_not_end_marked_text_before_dispatch() {
     assert_eq!(session.selected_range(), selected);
     assert_eq!(session.marked_range(), marked);
     assert!(session.drain_events().is_empty());
+}
+
+#[test]
+fn ime_session_snapshot_does_not_create_marked_text_without_owner() {
+    use crate::core::presenter::Presenter;
+    use crate::core::{ElementId, Size};
+    use crate::elements::input;
+    use crate::platform::mac::ime_state::NativeImeState;
+
+    let owner = ElementId::new();
+    let mut presenter =
+        Presenter::with_root(Size::new(200.0, 80.0), input().id(owner).value("hello"));
+    presenter.set_focused_element(Some(owner));
+    presenter
+        .root_mut()
+        .apply_text_input_command(TextInputCommand::BeginComposition("draft".into()))
+        .expect("public editor API begins composition independently of native ownership");
+    let mut session = MacImeSession::default();
+    let mut ime_state = NativeImeState::default();
+    sync_session_snapshot(&mut session, &presenter, owner);
+    assert!(
+        !session.has_marked_text(),
+        "snapshot alone must not arm native composition"
+    );
+    session
+        .insert_text("x", not_found_range())
+        .expect("native insert");
+    let events = session.drain_events();
+    assert_eq!(events, vec![TextInputCommand::InsertText("x".into())]);
+    assert!(
+        crate::platform::mac::ime_state::dispatch_text_input_event_for_owner(
+            &mut presenter,
+            &mut ime_state,
+            &events[0],
+        )
+        .0,
+        "ordinary insert must reach the focused editor"
+    );
+}
+
+#[test]
+fn ime_session_snapshot_clear_preserves_marked_text_until_native_discard() {
+    let mut session = MacImeSession::default();
+    session
+        .set_marked_text("draft", NSRange::new(5, 0), NSRange::new(0, 0))
+        .expect("begin");
+    session.drain_events();
+    session.update_text_input_state(None, None, None, None, None);
+    assert!(
+        session.discard_marked_text(),
+        "invalid snapshot cleanup must still request AppKit discard"
+    );
+    assert!(!session.has_marked_text());
+    assert_eq!(session.marked_range(), not_found_range());
 }

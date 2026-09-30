@@ -79,6 +79,8 @@ where
         redraw_requested |= sync_redraw;
         if let Err(err) = sync_result {
             log::error!("failed to restore macOS composition after a rejected command: {err}");
+        } else if ime_state.composition_owner.is_some() {
+            window.content_view.restore_marked_text_from_snapshot();
         }
     }
     (handled, redraw_requested)
