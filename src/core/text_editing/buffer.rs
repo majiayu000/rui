@@ -85,12 +85,25 @@ impl TextEditBuffer {
 
     pub fn set_cursor(&mut self, index: usize) -> Result<(), TextEditError> {
         self.ensure_offset_boundary(index)?;
+        if let Some(composition) = &self.composition {
+            let range = composition.replacement_range();
+            if index < range.start() || index > range.end() {
+                return Err(TextEditError::CompositionActive);
+            }
+        }
         self.selection = TextSelection::collapsed(index);
         Ok(())
     }
 
     pub fn set_selection(&mut self, selection: TextSelection) -> Result<(), TextEditError> {
-        self.ensure_valid_range(selection.normalized_range())?;
+        let selected_range = selection.normalized_range();
+        self.ensure_valid_range(selected_range)?;
+        if let Some(composition) = &self.composition {
+            let range = composition.replacement_range();
+            if selected_range.start() < range.start() || selected_range.end() > range.end() {
+                return Err(TextEditError::CompositionActive);
+            }
+        }
         self.selection = selection;
         Ok(())
     }
@@ -128,6 +141,9 @@ impl TextEditBuffer {
     }
 
     pub fn delete_backward(&mut self) -> Result<TextEditOutcome, TextEditError> {
+        if self.composition.is_some() {
+            return Err(TextEditError::CompositionActive);
+        }
         if !self.selection.is_collapsed() {
             return self.insert_text("");
         }
@@ -145,6 +161,9 @@ impl TextEditBuffer {
     }
 
     pub fn delete_forward(&mut self) -> Result<TextEditOutcome, TextEditError> {
+        if self.composition.is_some() {
+            return Err(TextEditError::CompositionActive);
+        }
         if !self.selection.is_collapsed() {
             return self.insert_text("");
         }
@@ -162,6 +181,9 @@ impl TextEditBuffer {
     }
 
     pub fn delete_word_backward(&mut self) -> Result<TextEditOutcome, TextEditError> {
+        if self.composition.is_some() {
+            return Err(TextEditError::CompositionActive);
+        }
         if !self.selection.is_collapsed() {
             return self.insert_text("");
         }
@@ -179,6 +201,9 @@ impl TextEditBuffer {
     }
 
     pub fn delete_word_forward(&mut self) -> Result<TextEditOutcome, TextEditError> {
+        if self.composition.is_some() {
+            return Err(TextEditError::CompositionActive);
+        }
         if !self.selection.is_collapsed() {
             return self.insert_text("");
         }
@@ -410,9 +435,10 @@ impl TextEditBuffer {
     pub fn cancel_composition(&mut self) -> Result<(), TextEditError> {
         let composition = self
             .composition
-            .take()
+            .clone()
             .ok_or(TextEditError::CompositionMissing)?;
         self.replace_range_internal(composition.replacement_range(), composition.original_text())?;
+        self.composition = None;
         let cursor =
             composition.original_replacement_range().start() + composition.original_text().len();
         self.selection = TextSelection::collapsed(cursor);
@@ -592,13 +618,12 @@ impl TextEditBuffer {
     }
 
     fn move_to(&mut self, index: usize, extend: bool) -> Result<(), TextEditError> {
-        self.ensure_offset_boundary(index)?;
-        self.selection = if extend {
+        let selection = if extend {
             TextSelection::new(self.selection.anchor(), index)
         } else {
             TextSelection::collapsed(index)
         };
-        Ok(())
+        self.set_selection(selection)
     }
 
     fn replace_range_internal(
