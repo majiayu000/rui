@@ -31,14 +31,25 @@ RUI is an early-stage, pre-1.0 framework. APIs, component behavior, and renderer
 
 ## Quick Start
 
-Add RUI to your `Cargo.toml`:
+### Build your own macOS app
+
+Start with a Rust binary project:
+
+```bash
+cargo new rui-hello
+cd rui-hello
+```
+
+Add this repository as a Git dependency in `Cargo.toml`:
 
 ```toml
 [dependencies]
 rui = { git = "https://github.com/majiayu000/rui" }
 ```
 
-Create your first app:
+This is `majiayu000/rui`. The [separate `audulus/rui` project](https://github.com/audulus/rui) also uses the name `rui`; installing `rui` from crates.io does not select this repository. Use the Git URL above for the API shown here.
+
+Replace `src/main.rs` with:
 
 ```rust
 use rui::prelude::*;
@@ -62,11 +73,29 @@ fn main() {
 }
 ```
 
-Run the example:
+Run your application from the `rui-hello` directory:
 
 ```bash
+cargo run
+```
+
+### Try the repository examples
+
+The example targets belong to the RUI repository, so clone it first:
+
+```bash
+git clone https://github.com/majiayu000/rui.git
+cd rui
 cargo run --example hello_world
 ```
+
+Continue with the [examples guide](docs/EXAMPLES.md) for component demos and the [API reference](docs/API.md) for builders.
+
+### First-run questions
+
+- **`no example target named hello_world`?** Run the example command inside the cloned RUI repository. In your own project, use `cargo run` for `src/main.rs`.
+- **Can this run on Linux, Windows, or in a headless job?** The supported renderer uses macOS Metal and a native window. Use a local macOS desktop session for visual evaluation; other backends are still roadmap work.
+- **Does a successful compile prove the UI works?** It checks types and dependencies. Inspect the actual window and interactions separately; [status and limitations](#status-and-limitations) explains the current scope.
 
 ## Examples
 
