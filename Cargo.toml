@@ -3,8 +3,13 @@ name = "rui"
 version = "0.2.5"
 edition = "2024"
 rust-version = "1.85"
-description = "A GPU-accelerated UI framework for Rust"
+description = "A Rust UI framework for native macOS apps with Metal rendering and declarative components"
 license = "MIT"
+repository = "https://github.com/majiayu000/rui"
+homepage = "https://github.com/majiayu000/rui/blob/main/docs/API.md"
+readme = "README.md"
+keywords = ["gui", "macos", "metal", "declarative", "ui"]
+categories = ["gui"]
 
 [features]
 default = ["metal"]
