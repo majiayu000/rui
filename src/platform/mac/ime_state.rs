@@ -404,6 +404,72 @@ mod tests {
     }
 
     #[test]
+    fn failed_insert_replacing_preserves_owner_and_marked_text_for_recovery() {
+        let owner = ElementId::new();
+        let mut presenter =
+            Presenter::with_root(Size::new(200.0, 80.0), input().id(owner).value("hello"));
+        presenter.set_focused_element(Some(owner));
+        let mut ime_state = NativeImeState::default();
+        let begin = TextInputCommand::BeginComposition("e\u{301}".to_string());
+        let target = ime_state
+            .target_for_event(&begin, presenter.focused_element())
+            .expect("begin should claim the focused input");
+        assert!(dispatch_text_input_event_to(&mut presenter, target, &begin).0);
+        let before = presenter.root().text_input_snapshot(owner);
+        assert_eq!(
+            before.as_ref().expect("input snapshot").text(),
+            "helloe\u{301}"
+        );
+        assert!(
+            before
+                .as_ref()
+                .expect("input snapshot")
+                .composition()
+                .is_some()
+        );
+
+        let insert = TextInputCommand::InsertTextReplacing {
+            text: "x".to_string(),
+            replacement_range: Utf16TextRange::new(5, 1).expect("valid UTF-16 range"),
+        };
+        let target = ime_state
+            .target_for_event(&insert, presenter.focused_element())
+            .expect("insert should target the focused input");
+        assert_eq!(
+            dispatch_text_input_event_to(&mut presenter, target, &insert),
+            (false, false)
+        );
+        assert_eq!(ime_state.composition_owner, Some(owner));
+        assert_eq!(presenter.root().text_input_snapshot(owner), before);
+
+        let update = TextInputCommand::UpdateComposition("updated".to_string());
+        let target = ime_state
+            .target_for_event(&update, presenter.focused_element())
+            .expect("update should retain its composition owner");
+        assert!(dispatch_text_input_event_to(&mut presenter, target, &update).0);
+        assert_eq!(
+            presenter
+                .root()
+                .text_input_snapshot(owner)
+                .expect("input snapshot")
+                .text(),
+            "helloupdated"
+        );
+        let cancel = TextInputCommand::CancelComposition;
+        let target = ime_state
+            .target_for_event(&cancel, presenter.focused_element())
+            .expect("cancel should reach the composition owner");
+        assert!(dispatch_text_input_event_to(&mut presenter, target, &cancel).0);
+        assert_eq!(ime_state.composition_owner, None);
+        let restored = presenter
+            .root()
+            .text_input_snapshot(owner)
+            .expect("input snapshot");
+        assert_eq!(restored.text(), "hello");
+        assert!(restored.composition().is_none());
+    }
+
+    #[test]
     fn invalid_snapshot_discard_cancels_logical_composition_owner() {
         let owner = ElementId::new();
         let viewport = Size::new(200.0, 80.0);
