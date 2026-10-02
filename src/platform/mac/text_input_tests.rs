@@ -301,3 +301,312 @@ fn ime_session_answers_document_substring_range_and_point_queries() {
         assert_eq!(session.character_index_for_point(point), None);
     }
 }
+
+fn dispatch_session_events(
+    session: &mut MacImeSession,
+    presenter: &mut crate::core::presenter::Presenter<crate::elements::Input>,
+    ime_state: &mut crate::platform::mac::ime_state::NativeImeState,
+) -> Vec<(bool, bool, bool)> {
+    session
+        .drain_events()
+        .iter()
+        .map(|event| {
+            crate::platform::mac::ime_state::dispatch_text_input_event_for_owner(
+                presenter, ime_state, event,
+            )
+        })
+        .collect()
+}
+
+fn sync_session_snapshot(
+    session: &mut MacImeSession,
+    presenter: &crate::core::presenter::Presenter<crate::elements::Input>,
+    owner: crate::core::ElementId,
+) {
+    use crate::elements::element::Element;
+    let snapshot = presenter
+        .root()
+        .text_input_snapshot(owner)
+        .expect("input snapshot");
+    let selection = snapshot.selection();
+    let selected = Utf16TextRange::from_text_range(snapshot.text(), selection.normalized_range())
+        .expect("valid selection");
+    let marked = snapshot.composition().map(|range| {
+        Utf16TextRange::from_text_range(snapshot.text(), range).expect("valid composition")
+    });
+    let caret = Utf16TextRange::from_text_range(
+        snapshot.text(),
+        crate::core::text_editing::TextRange::collapsed(selection.head()),
+    )
+    .expect("valid caret");
+    let bounds = snapshot.caret_bounds();
+    session.update_text_input_state(Some(snapshot), Some(selected), marked, Some(caret), bounds);
+}
+
+#[test]
+fn ime_session_failed_commit_retains_owner_for_update() {
+    use crate::core::presenter::Presenter;
+    use crate::core::{ElementId, Size};
+    use crate::elements::{element::Element, input};
+    use crate::platform::mac::ime_state::NativeImeState;
+
+    let owner = ElementId::new();
+    let mut presenter =
+        Presenter::with_root(Size::new(200.0, 80.0), input().id(owner).value("hello"));
+    presenter.set_focused_element(Some(owner));
+    let mut ime_state = NativeImeState::default();
+    let mut session = MacImeSession::default();
+    sync_session_snapshot(&mut session, &presenter, owner);
+    session
+        .set_marked_text("draft", NSRange::new(5, 0), not_found_range())
+        .expect("begin");
+    assert!(
+        dispatch_session_events(&mut session, &mut presenter, &mut ime_state)
+            .iter()
+            .all(|result| result.0)
+    );
+    sync_session_snapshot(&mut session, &presenter, owner);
+    let before = presenter.root().text_input_snapshot(owner);
+    session
+        .insert_text("rejected", NSRange::new(100, 1))
+        .expect("queue stale replacement");
+    assert_eq!(
+        dispatch_session_events(&mut session, &mut presenter, &mut ime_state),
+        vec![(false, false, false)]
+    );
+    assert_eq!(presenter.root().text_input_snapshot(owner), before);
+    assert_eq!(
+        ime_state.target_for_event(
+            &TextInputCommand::UpdateComposition("updated".into()),
+            Some(owner)
+        ),
+        Some(owner)
+    );
+}
+
+#[test]
+fn ime_session_failed_commit_restores_marked_text_from_editor() {
+    use crate::core::presenter::Presenter;
+    use crate::core::{ElementId, Size};
+    use crate::elements::{element::Element, input};
+    use crate::platform::mac::ime_state::NativeImeState;
+
+    for (marked_text, committed_text, replacement) in [
+        ("draft", "rejected", NSRange::new(100, 1)),
+        ("😀draft", "rejected", NSRange::new(6, 1)),
+        ("e\u{301}", "rejected", NSRange::new(5, 1)),
+        ("draft", "\n", not_found_range()),
+    ] {
+        let owner = ElementId::new();
+        let mut presenter =
+            Presenter::with_root(Size::new(200.0, 80.0), input().id(owner).value("hello"));
+        presenter.set_focused_element(Some(owner));
+        let mut ime_state = NativeImeState::default();
+        let mut session = MacImeSession::default();
+        sync_session_snapshot(&mut session, &presenter, owner);
+        session
+            .set_marked_text(marked_text, NSRange::new(0, 0), not_found_range())
+            .expect("begin");
+        assert!(
+            dispatch_session_events(&mut session, &mut presenter, &mut ime_state)
+                .iter()
+                .all(|result| result.0)
+        );
+        sync_session_snapshot(&mut session, &presenter, owner);
+        let before = presenter.root().text_input_snapshot(owner);
+        let selected = session.selected_range();
+        let marked = session.marked_range();
+        session
+            .insert_text(committed_text, replacement)
+            .expect("queue replacement");
+        assert_eq!(
+            dispatch_session_events(&mut session, &mut presenter, &mut ime_state),
+            vec![(false, false, false)]
+        );
+        assert_eq!(presenter.root().text_input_snapshot(owner), before);
+        sync_session_snapshot(&mut session, &presenter, owner);
+        session.restore_marked_text_from_snapshot();
+        assert!(
+            session.has_marked_text(),
+            "rejection must retain native composition mode"
+        );
+        assert_eq!(session.selected_range(), selected);
+        assert_eq!(session.marked_range(), marked);
+        session
+            .set_marked_text("updated", NSRange::new(7, 0), not_found_range())
+            .expect("next callback");
+        let events = session.drain_events();
+        assert_eq!(
+            events,
+            vec![
+                TextInputCommand::UpdateComposition("updated".into()),
+                selection_event(7, 0)
+            ]
+        );
+        for event in events {
+            assert!(
+                crate::platform::mac::ime_state::dispatch_text_input_event_for_owner(
+                    &mut presenter,
+                    &mut ime_state,
+                    &event,
+                )
+                .0
+            );
+        }
+        sync_session_snapshot(&mut session, &presenter, owner);
+        assert_eq!(
+            presenter
+                .root()
+                .text_input_snapshot(owner)
+                .expect("snapshot")
+                .text(),
+            "helloupdated"
+        );
+        session.cancel_composition();
+        assert_eq!(
+            dispatch_session_events(&mut session, &mut presenter, &mut ime_state),
+            vec![(true, true, false)]
+        );
+        sync_session_snapshot(&mut session, &presenter, owner);
+        assert!(!session.has_marked_text());
+        assert_eq!(session.marked_range(), not_found_range());
+        let restored = presenter
+            .root()
+            .text_input_snapshot(owner)
+            .expect("snapshot");
+        assert_eq!(restored.text(), "hello");
+        assert!(restored.composition().is_none());
+        assert_eq!(
+            ime_state.target_for_event(
+                &TextInputCommand::UpdateComposition("stale".into()),
+                Some(owner)
+            ),
+            None
+        );
+    }
+}
+
+#[test]
+fn ime_session_successful_commit_finishes_both_session_layers() {
+    use crate::core::presenter::Presenter;
+    use crate::core::{ElementId, Size};
+    use crate::elements::{element::Element, input};
+    use crate::platform::mac::ime_state::NativeImeState;
+
+    for replacement in [not_found_range(), NSRange::new(5, 5)] {
+        let owner = ElementId::new();
+        let mut presenter =
+            Presenter::with_root(Size::new(200.0, 80.0), input().id(owner).value("hello"));
+        presenter.set_focused_element(Some(owner));
+        let mut ime_state = NativeImeState::default();
+        let mut session = MacImeSession::default();
+        sync_session_snapshot(&mut session, &presenter, owner);
+        session
+            .set_marked_text("draft", NSRange::new(5, 0), not_found_range())
+            .expect("begin");
+        assert!(
+            dispatch_session_events(&mut session, &mut presenter, &mut ime_state)
+                .iter()
+                .all(|result| result.0)
+        );
+        sync_session_snapshot(&mut session, &presenter, owner);
+        session
+            .insert_text("done", replacement)
+            .expect("queue commit");
+        assert_eq!(
+            dispatch_session_events(&mut session, &mut presenter, &mut ime_state),
+            vec![(true, true, false)]
+        );
+        sync_session_snapshot(&mut session, &presenter, owner);
+        assert!(!session.has_marked_text());
+        assert_eq!(session.marked_range(), not_found_range());
+        assert_eq!(session.selected_range(), NSRange::new(9, 0));
+        let committed = presenter
+            .root()
+            .text_input_snapshot(owner)
+            .expect("snapshot");
+        assert_eq!(committed.text(), "hellodone");
+        assert!(committed.composition().is_none());
+        assert_eq!(
+            ime_state.target_for_event(
+                &TextInputCommand::UpdateComposition("stale".into()),
+                Some(owner)
+            ),
+            None
+        );
+    }
+}
+
+#[test]
+fn ime_session_invalid_commit_does_not_end_marked_text_before_dispatch() {
+    let mut session = MacImeSession::default();
+    session
+        .set_marked_text("draft", NSRange::new(5, 0), NSRange::new(0, 0))
+        .expect("begin");
+    session.drain_events();
+    let selected = session.selected_range();
+    let marked = session.marked_range();
+    assert!(
+        session
+            .insert_text("x", NSRange::new(usize::MAX, 0))
+            .is_err()
+    );
+    assert!(session.has_marked_text());
+    assert_eq!(session.selected_range(), selected);
+    assert_eq!(session.marked_range(), marked);
+    assert!(session.drain_events().is_empty());
+}
+
+#[test]
+fn ime_session_snapshot_does_not_create_marked_text_without_owner() {
+    use crate::core::presenter::Presenter;
+    use crate::core::{ElementId, Size};
+    use crate::elements::input;
+    use crate::platform::mac::ime_state::NativeImeState;
+
+    let owner = ElementId::new();
+    let mut presenter =
+        Presenter::with_root(Size::new(200.0, 80.0), input().id(owner).value("hello"));
+    presenter.set_focused_element(Some(owner));
+    presenter
+        .root_mut()
+        .apply_text_input_command(TextInputCommand::BeginComposition("draft".into()))
+        .expect("public editor API begins composition independently of native ownership");
+    let mut session = MacImeSession::default();
+    let mut ime_state = NativeImeState::default();
+    sync_session_snapshot(&mut session, &presenter, owner);
+    assert!(
+        !session.has_marked_text(),
+        "snapshot alone must not arm native composition"
+    );
+    session
+        .insert_text("x", not_found_range())
+        .expect("native insert");
+    let events = session.drain_events();
+    assert_eq!(events, vec![TextInputCommand::InsertText("x".into())]);
+    assert!(
+        crate::platform::mac::ime_state::dispatch_text_input_event_for_owner(
+            &mut presenter,
+            &mut ime_state,
+            &events[0],
+        )
+        .0,
+        "ordinary insert must reach the focused editor"
+    );
+}
+
+#[test]
+fn ime_session_snapshot_clear_preserves_marked_text_until_native_discard() {
+    let mut session = MacImeSession::default();
+    session
+        .set_marked_text("draft", NSRange::new(5, 0), NSRange::new(0, 0))
+        .expect("begin");
+    session.drain_events();
+    session.update_text_input_state(None, None, None, None, None);
+    assert!(
+        session.discard_marked_text(),
+        "invalid snapshot cleanup must still request AppKit discard"
+    );
+    assert!(!session.has_marked_text());
+    assert_eq!(session.marked_range(), not_found_range());
+}

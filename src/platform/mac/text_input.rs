@@ -86,7 +86,7 @@ impl Default for MacImeSession {
 impl MacImeSession {
     fn insert_text(&mut self, text: &str, replacement_range: NSRange) -> Result<(), TextEditError> {
         let replacement_range = appkit_replacement_range(replacement_range)?;
-        let had_marked_text = self.marked_text.take().is_some();
+        let had_marked_text = self.marked_text.is_some();
         let insertion_start = replacement_range
             .map(Utf16TextRange::location)
             .or_else(|| {
@@ -123,6 +123,7 @@ impl MacImeSession {
             None => not_found_range(),
         };
         self.events.push_back(event);
+        self.marked_text = None;
         self.marked_range = not_found_range();
         self.selected_range = selected_range;
         self.caret_range = selected_range;
@@ -243,6 +244,16 @@ impl MacImeSession {
         self.caret_bounds = caret_bounds;
         self.snapshot = snapshot;
         changed
+    }
+
+    fn restore_marked_text_from_snapshot(&mut self) {
+        // Only rejected terminal commands restore native composition, after snapshot
+        // ranges have been validated and the logical owner has been restored.
+        self.marked_text = self.snapshot.as_ref().and_then(|snapshot| {
+            snapshot
+                .composition()
+                .map(|range| snapshot.text()[range.start()..range.end()].to_string())
+        });
     }
 
     fn attributed_substring(&self, range: NSRange) -> Option<(NSRange, String)> {
@@ -484,6 +495,13 @@ impl RuiContentView {
 
     pub(crate) fn drain_ime_events(&self) -> Vec<TextInputCommand> {
         self.ivars().ime.borrow_mut().drain_events()
+    }
+
+    pub(crate) fn restore_marked_text_from_snapshot(&self) {
+        self.ivars()
+            .ime
+            .borrow_mut()
+            .restore_marked_text_from_snapshot();
     }
 
     pub(crate) fn discard_marked_text(&self) {

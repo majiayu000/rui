@@ -60,25 +60,86 @@ pub(crate) fn dispatch_text_input_event<E>(
 where
     E: Element,
 {
+    let (handled, mut redraw_requested, discard_marked_text) =
+        dispatch_text_input_event_for_owner(presenter, ime_state, event);
+    if discard_marked_text {
+        window.discard_marked_text();
+    }
+    if !handled
+        && matches!(
+            event,
+            TextInputCommand::CommitComposition(_)
+                | TextInputCommand::CommitCompositionReplacing { .. }
+                | TextInputCommand::CancelComposition
+        )
+    {
+        // AppKit callbacks optimistically end marked text. Restore the accepted editor
+        // state before another callback, even when the rejected event requested no frame.
+        let (sync_result, sync_redraw) = sync_text_input_snapshot(presenter, window, ime_state);
+        redraw_requested |= sync_redraw;
+        if let Err(err) = sync_result {
+            log::error!("failed to restore macOS composition after a rejected command: {err}");
+        } else if ime_state.composition_owner.is_some() {
+            window.content_view.restore_marked_text_from_snapshot();
+        }
+    }
+    (handled, redraw_requested)
+}
+
+/// Dispatches to the logical owner, returning `(handled, redraw_requested, discard_marked_text)`.
+/// Native session synchronization stays in the window wrapper.
+pub(crate) fn dispatch_text_input_event_for_owner<E>(
+    presenter: &mut Presenter<E>,
+    ime_state: &mut NativeImeState,
+    event: &TextInputCommand,
+) -> (bool, bool, bool)
+where
+    E: Element,
+{
     let Some(target) = ime_state.target_for_event(event, presenter.focused_element()) else {
         log::error!("discarded macOS text input event without a focused composition owner");
-        return (false, false);
+        return (false, false, false);
     };
     if !presenter.root().contains_id(target) {
         ime_state.cancel_owner_after_focus_change(presenter.focused_element(), false);
         log::error!("discarded macOS text input event for a removed element");
-        return (false, false);
+        return (false, false, false);
     }
-    let (handled, redraw_requested) = dispatch_text_input_event_to(presenter, target, event);
+    let (handled, mut redraw_requested) = dispatch_text_input_event_to(presenter, target, event);
+    if !handled
+        && matches!(
+            event,
+            TextInputCommand::CommitComposition(_)
+                | TextInputCommand::CommitCompositionReplacing { .. }
+                | TextInputCommand::CancelComposition
+        )
+    {
+        // target_for_event took the owner for this terminal command. Rejection must
+        // leave later updates and focus-loss cancellation routed to the same editor.
+        ime_state.composition_owner = Some(target);
+    }
     // Begin claims ownership before dispatch. If the target rejected the command, clear the
     // logical owner *and* discard AppKit marked text: set_marked_text already armed the native
     // session, so later callbacks arrive as UpdateComposition. Leaving marked text while
     // clearing the owner makes cancel_composition_if_owner_lost unable to discard it, and
     // updates are dropped until AppKit independently ends the composition.
-    if clear_owner_after_rejected_begin(ime_state, handled, event, target) {
-        window.discard_marked_text();
+    let discard_marked_text = clear_owner_after_rejected_begin(ime_state, handled, event, target);
+    if discard_marked_text
+        && presenter
+            .root()
+            .text_input_snapshot(target)
+            .is_some_and(|snapshot| snapshot.composition().is_some())
+    {
+        // A begin queued after a rejected commit can encounter the old composition.
+        // Cancel that editor state as well as discarding the native marked text.
+        let (cancelled, cancel_redraw) =
+            dispatch_text_input_event_to(presenter, target, &TextInputCommand::CancelComposition);
+        redraw_requested |= cancelled || cancel_redraw;
+        if !cancelled {
+            log::error!("failed to cancel macOS composition after a rejected begin");
+        }
     }
-    (handled, redraw_requested)
+    (handled, redraw_requested, discard_marked_text)
 }
 
 /// Clears `composition_owner` after a rejected begin. Returns true when the caller must also
@@ -467,6 +528,104 @@ mod tests {
             .expect("input snapshot");
         assert_eq!(restored.text(), "hello");
         assert!(restored.composition().is_none());
+    }
+
+    #[test]
+    fn rejected_commit_keeps_focus_loss_cancellation_reachable() {
+        let owner = ElementId::new();
+        let mut presenter =
+            Presenter::with_root(Size::new(200.0, 80.0), input().id(owner).value("hello"));
+        presenter.set_focused_element(Some(owner));
+        let mut ime_state = NativeImeState::default();
+        assert!(
+            dispatch_text_input_event_for_owner(
+                &mut presenter,
+                &mut ime_state,
+                &TextInputCommand::BeginComposition("draft".into())
+            )
+            .0
+        );
+        assert_eq!(
+            dispatch_text_input_event_for_owner(
+                &mut presenter,
+                &mut ime_state,
+                &TextInputCommand::CommitCompositionReplacing {
+                    text: "rejected".into(),
+                    replacement_range: Utf16TextRange::new(100, 1).expect("range"),
+                }
+            ),
+            (false, false, false)
+        );
+        presenter.set_focused_element(None);
+        let lost_owner = take_lost_composition_owner(&mut presenter, &mut ime_state)
+            .expect("focus loss must still find the composition owner");
+        assert_eq!(lost_owner, owner);
+        assert!(
+            dispatch_text_input_event_to(
+                &mut presenter,
+                lost_owner,
+                &TextInputCommand::CancelComposition
+            )
+            .0
+        );
+        assert_eq!(ime_state.composition_owner, None);
+        let restored = presenter
+            .root()
+            .text_input_snapshot(owner)
+            .expect("snapshot");
+        assert_eq!(restored.text(), "hello");
+        assert!(restored.composition().is_none());
+    }
+
+    #[test]
+    fn rejected_begin_cancels_the_still_active_editor_composition() {
+        let owner = ElementId::new();
+        let mut presenter =
+            Presenter::with_root(Size::new(200.0, 80.0), input().id(owner).value("hello"));
+        presenter.set_focused_element(Some(owner));
+        let mut ime_state = NativeImeState::default();
+        assert!(
+            dispatch_text_input_event_for_owner(
+                &mut presenter,
+                &mut ime_state,
+                &TextInputCommand::BeginComposition("draft".into())
+            )
+            .0
+        );
+        assert_eq!(
+            dispatch_text_input_event_for_owner(
+                &mut presenter,
+                &mut ime_state,
+                &TextInputCommand::CommitCompositionReplacing {
+                    text: "rejected".into(),
+                    replacement_range: Utf16TextRange::new(100, 1).expect("range"),
+                }
+            ),
+            (false, false, false)
+        );
+        assert_eq!(
+            dispatch_text_input_event_for_owner(
+                &mut presenter,
+                &mut ime_state,
+                &TextInputCommand::BeginComposition("next".into())
+            ),
+            (false, true, true)
+        );
+        assert_eq!(ime_state.composition_owner, None);
+        let restored = presenter
+            .root()
+            .text_input_snapshot(owner)
+            .expect("snapshot");
+        assert_eq!(restored.text(), "hello");
+        assert!(restored.composition().is_none());
+        assert!(
+            dispatch_text_input_event_for_owner(
+                &mut presenter,
+                &mut ime_state,
+                &TextInputCommand::BeginComposition("resume".into())
+            )
+            .0
+        );
     }
 
     #[test]
