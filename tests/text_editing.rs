@@ -735,3 +735,292 @@ fn text_editing_invalid_offsets_and_multiline_policy_return_errors() {
     };
     assert_eq!(error, TextEditError::MultilineDisabled);
 }
+
+#[test]
+fn text_editing_composition_rejects_deletes_without_losing_cancel() {
+    let mut trace = TextEditBuffer::with_text("hi");
+    must(trace.begin_composition("XY"));
+    assert_eq!(
+        trace.delete_backward(),
+        Err(TextEditError::CompositionActive)
+    );
+    must(trace.cancel_composition());
+    assert_eq!(trace.text(), "hi");
+    assert!(trace.composition().is_none());
+
+    for delete in [
+        TextEditBuffer::delete_backward,
+        TextEditBuffer::delete_forward,
+        TextEditBuffer::delete_word_backward,
+        TextEditBuffer::delete_word_forward,
+    ] {
+        for marked in ["XY", "e\u{301}🧑‍💻"] {
+            for selected in [false, true] {
+                let mut buffer = TextEditBuffer::with_text("hi");
+                must(buffer.begin_composition(marked));
+                let length = if selected {
+                    marked.encode_utf16().count()
+                } else {
+                    0
+                };
+                must(
+                    buffer.set_composition_selection_utf16(must_utf16(Utf16TextRange::new(
+                        if selected { 0 } else { 1 },
+                        length,
+                    ))),
+                );
+                let before = buffer.clone();
+
+                assert_eq!(delete(&mut buffer), Err(TextEditError::CompositionActive));
+                assert_eq!(buffer, before);
+                must(buffer.update_composition("你好"));
+                let mut committed = buffer.clone();
+                must(committed.commit_composition("您好"));
+                assert_eq!(committed.text(), "hi您好");
+                assert!(committed.composition().is_none());
+                must(buffer.cancel_composition());
+                assert_eq!(buffer.text(), "hi");
+                assert!(buffer.composition().is_none());
+            }
+        }
+    }
+}
+
+#[test]
+fn text_editing_composition_rejects_delete_keys_with_modifiers() {
+    for key in [KeyCode::Backspace, KeyCode::Delete] {
+        for modifiers in [
+            Modifiers::none(),
+            Modifiers::alt(),
+            Modifiers::ctrl(),
+            Modifiers::meta(),
+        ] {
+            let mut buffer = TextEditBuffer::with_text("hi");
+            must(buffer.begin_composition("XY"));
+            must(buffer.set_composition_selection_utf16(must_utf16(Utf16TextRange::new(1, 0))));
+            let before = buffer.clone();
+
+            assert_eq!(
+                buffer.apply_key_event(&KeyEvent::new(key, modifiers)),
+                Err(TextEditError::CompositionActive)
+            );
+            assert_eq!(buffer, before);
+            must(buffer.cancel_composition());
+            assert_eq!(buffer.text(), "hi");
+        }
+    }
+}
+
+#[test]
+fn text_editing_composition_navigation_stays_in_marked_range() {
+    for (key, position) in [
+        (KeyCode::ArrowLeft, 0),
+        (KeyCode::ArrowRight, 2),
+        (KeyCode::ArrowUp, 0),
+        (KeyCode::ArrowDown, 2),
+        (KeyCode::Home, 0),
+        (KeyCode::End, 2),
+    ] {
+        for modifiers in [
+            Modifiers::none(),
+            Modifiers::shift(),
+            Modifiers::alt(),
+            Modifiers::ctrl(),
+        ] {
+            let mut buffer = TextEditBuffer::multiline_with_text("ab\nhi\ncd");
+            must(buffer.set_cursor(4));
+            must(buffer.begin_composition("XY"));
+            must(
+                buffer
+                    .set_composition_selection_utf16(must_utf16(Utf16TextRange::new(position, 0))),
+            );
+            let before = buffer.clone();
+
+            assert_eq!(
+                buffer.apply_key_event(&KeyEvent::new(key, modifiers)),
+                Err(TextEditError::CompositionActive)
+            );
+            assert_eq!(buffer, before);
+            must(buffer.update_composition("Z"));
+            must(buffer.cancel_composition());
+            assert_eq!(buffer.text(), "ab\nhi\ncd");
+        }
+    }
+
+    let mut buffer = TextEditBuffer::with_text("hi");
+    must(buffer.begin_composition("XY"));
+    must(buffer.move_left(false));
+    assert_eq!(buffer.cursor(), 3);
+    must(buffer.move_left(true));
+    assert_eq!(buffer.selection(), TextSelection::new(3, 2));
+    assert_eq!(
+        buffer.move_left(true),
+        Err(TextEditError::CompositionActive)
+    );
+    must(buffer.cancel_composition());
+    assert_eq!(buffer.text(), "hi");
+}
+
+#[test]
+fn text_editing_composition_rejects_selection_outside_marked_range() {
+    let mut buffer = TextEditBuffer::with_text("hi tail");
+    must(buffer.set_cursor(2));
+    must(buffer.begin_composition("XY"));
+    let before = buffer.clone();
+
+    assert_eq!(buffer.set_cursor(0), Err(TextEditError::CompositionActive));
+    assert_eq!(
+        buffer.set_selection(TextSelection::new(0, 4)),
+        Err(TextEditError::CompositionActive)
+    );
+    assert_eq!(buffer, before);
+    must(buffer.set_selection(TextSelection::new(2, 3)));
+    must(buffer.cancel_composition());
+    assert_eq!(buffer.text(), "hi tail");
+}
+
+#[test]
+fn text_editing_failed_cancel_retains_composition_for_recovery() {
+    let mut buffer = TextEditBuffer::with_text("e");
+    must(buffer.begin_composition("\u{301}"));
+    let before = buffer.clone();
+    assert_eq!(
+        buffer.cancel_composition(),
+        Err(TextEditError::InvalidBoundary { index: 1 })
+    );
+    assert_eq!(buffer, before);
+
+    let mut buffer = TextEditBuffer::multiline_with_text("original\ntext");
+    must(buffer.set_selection(TextSelection::new(0, buffer.text().len())));
+    must(buffer.begin_composition("XY"));
+    let mut buffer = buffer.allow_multiline(false);
+    let before = buffer.clone();
+    assert_eq!(
+        buffer.cancel_composition(),
+        Err(TextEditError::MultilineDisabled)
+    );
+    assert_eq!(buffer, before);
+    let mut buffer = buffer.allow_multiline(true);
+    must(buffer.cancel_composition());
+    assert_eq!(buffer.text(), "original\ntext");
+    assert!(buffer.composition().is_none());
+}
+
+#[test]
+fn text_editing_composition_survives_keys_dispatched_to_shaped_editors() {
+    use rui::core::action::{ActionId, StandardAction};
+    use rui::core::presenter::Presenter;
+    use rui::core::{ElementId, Size};
+    use rui::elements::{Element, TextArea, input};
+
+    fn exercise<E: Element>(root: E, owner: ElementId, key: KeyCode, modifiers: Modifiers) {
+        let viewport = Size::new(240.0, 120.0);
+        let mut presenter = Presenter::with_root(viewport, root);
+        presenter.set_focused_element(Some(owner));
+        presenter.with_event_context(|root, cx| {
+            root.handle_pointer_event(
+                cx,
+                &rui::elements::element::PointerEvent {
+                    kind: rui::elements::element::PointerEventKind::Move,
+                    position: Point::ZERO,
+                    button: None,
+                },
+            )
+        });
+        let begin = TextInputCommand::BeginCompositionReplacing {
+            text: "XY".to_string(),
+            replacement_range: must_utf16(Utf16TextRange::new(2, 0)),
+        };
+        assert!(
+            presenter
+                .with_event_context(|root, cx| root.handle_text_input_command(cx, &begin))
+                .0
+        );
+        let selection = TextInputCommand::SetCompositionSelection(must_utf16(Utf16TextRange::new(
+            if matches!(key, KeyCode::ArrowLeft | KeyCode::Home) {
+                0
+            } else if key == KeyCode::End {
+                2
+            } else {
+                1
+            },
+            0,
+        )));
+        assert!(
+            presenter
+                .with_event_context(|root, cx| root.handle_text_input_command(cx, &selection))
+                .0
+        );
+        presenter
+            .layout(viewport)
+            .expect("shaped editor layout should succeed");
+        presenter.paint();
+        let before = presenter
+            .root()
+            .text_input_snapshot(owner)
+            .expect("editor snapshot");
+        assert!(before.geometry().is_some());
+        let event = KeyEvent::new(key, modifiers);
+        if matches!(key, KeyCode::Backspace | KeyCode::Delete) && (modifiers.alt || modifiers.ctrl)
+        {
+            let action = ActionId::Standard(if key == KeyCode::Backspace {
+                StandardAction::DeleteWordBackward
+            } else {
+                StandardAction::DeleteWordForward
+            });
+            assert_eq!(
+                presenter
+                    .with_event_context(|root, cx| root.handle_action(cx, &action))
+                    .0,
+                rui::core::action::ActionOutcome::Ignored
+            );
+        }
+        assert!(
+            !presenter
+                .with_event_context(|root, cx| root.handle_key_event(cx, &event))
+                .0
+        );
+        assert_eq!(presenter.root().text_input_snapshot(owner), Some(before));
+
+        assert!(
+            presenter
+                .with_event_context(|root, cx| root.handle_text_input_command(
+                    cx,
+                    &TextInputCommand::UpdateComposition("Z".to_string())
+                ))
+                .0
+        );
+        assert!(
+            presenter
+                .with_event_context(|root, cx| root
+                    .handle_text_input_command(cx, &TextInputCommand::CancelComposition))
+                .0
+        );
+        let restored = presenter
+            .root()
+            .text_input_snapshot(owner)
+            .expect("restored editor snapshot");
+        assert_eq!(restored.text(), "hi tail");
+        assert!(restored.composition().is_none());
+    }
+
+    for (key, modifiers) in [
+        (KeyCode::Backspace, Modifiers::none()),
+        (KeyCode::Delete, Modifiers::none()),
+        (KeyCode::Backspace, Modifiers::alt()),
+        (KeyCode::Delete, Modifiers::ctrl()),
+        (KeyCode::Home, Modifiers::none()),
+        (KeyCode::End, Modifiers::shift()),
+        (KeyCode::ArrowLeft, Modifiers::alt()),
+    ] {
+        let owner = ElementId::new();
+        exercise(input().id(owner).value("hi tail"), owner, key, modifiers);
+        let owner = ElementId::new();
+        exercise(
+            TextArea::new().id(owner).value("hi tail"),
+            owner,
+            key,
+            modifiers,
+        );
+    }
+}
