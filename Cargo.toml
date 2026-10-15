@@ -2,7 +2,7 @@
 name = "rui"
 version = "0.2.5"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 description = "A Rust UI framework for native macOS apps with Metal rendering and declarative components"
 license = "MIT"
 repository = "https://github.com/majiayu000/rui"

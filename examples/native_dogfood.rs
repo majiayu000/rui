@@ -1,5 +1,6 @@
 //! Finite native macOS dogfood example for local GUI smoke testing.
 
+use rui::advanced_ui::Dialog;
 use rui::prelude::*;
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
@@ -83,7 +84,7 @@ impl NativeDogfoodView {
 }
 
 impl View for NativeDogfoodView {
-    type Element = Div;
+    type Element = Dialog;
 
     fn render(&mut self, cx: &mut ViewContext<Self>) -> Self::Element {
         if !self.config.interactive && !self.profile_written.get() {
@@ -111,7 +112,7 @@ impl View for NativeDogfoodView {
         let submit_text = Rc::clone(&self.submitted_text);
         let submit_notifier = cx.notifier();
 
-        div()
+        Dialog::new("Native dogfood editor", div()
             .w(520.0)
             .h(260.0)
             .bg(Color::hex(0xf8fafc))
@@ -135,7 +136,7 @@ impl View for NativeDogfoodView {
                 input()
                     .id(NATIVE_DOGFOOD_INPUT_ID)
                     .w(420.0)
-                    .placeholder(DEFAULT_DOGFOOD_TEXT)
+                    .placeholder(self.config.expected_text.clone())
                     .accessibility_label("Native dogfood input")
                     .value(typed_text.clone())
                     .on_change(move |value| {
@@ -159,7 +160,8 @@ impl View for NativeDogfoodView {
                 text("Profile output is written to RUI_NATIVE_DOGFOOD_PROFILE after submit.")
                     .size(12.0)
                     .color(Color::hex(0x6b7280)),
-            )
+            ))
+            .id(ElementId(29_002))
     }
 }
 
@@ -201,4 +203,51 @@ fn json_escape(value: &str) -> String {
         }
     }
     escaped
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn native_dogfood_nested_input_is_visible_and_submits() {
+        let view = NativeDogfoodView::new(NativeDogfoodConfig {
+            expected_text: String::from("a"),
+            profile_path: None,
+            interactive: true,
+        });
+        let submitted = Rc::clone(&view.submitted_text);
+        let mut session = rui::testing::mount_view(Size::new(520.0, 260.0), view)
+            .expect("native dogfood should mount");
+        let region = session
+            .scene()
+            .layers()
+            .iter()
+            .flat_map(|layer| layer.hit_regions())
+            .find(|region| region.id == NATIVE_DOGFOOD_INPUT_ID);
+        assert!(
+            region.is_some(),
+            "input must be visible: {:?}",
+            session.primitive_snapshot()
+        );
+        let point = region.expect("input region").visible_bounds.center();
+        session.pointer_down(point);
+        session.pointer_up(point);
+        assert_eq!(session.focused_element(), Some(NATIVE_DOGFOOD_INPUT_ID));
+        session.dispatch_key_event(
+            &rui::core::event::KeyEvent::new(
+                rui::core::event::KeyCode::A,
+                rui::core::event::Modifiers::none(),
+            )
+            .with_char('a'),
+        );
+        session.dispatch_key_event(
+            &rui::core::event::KeyEvent::new(
+                rui::core::event::KeyCode::Enter,
+                rui::core::event::Modifiers::none(),
+            )
+            .with_char('\n'),
+        );
+        assert_eq!(submitted.borrow().as_deref(), Some("a"));
+    }
 }

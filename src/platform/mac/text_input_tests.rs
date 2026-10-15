@@ -610,3 +610,61 @@ fn ime_session_snapshot_clear_preserves_marked_text_until_native_discard() {
     assert!(!session.has_marked_text());
     assert_eq!(session.marked_range(), not_found_range());
 }
+
+#[test]
+fn native_dialog_ime_commits_chinese_and_cancels_next_composition() {
+    use crate::advanced_ui::Dialog;
+    use crate::core::presenter::Presenter;
+    use crate::core::{ElementId, Size};
+    use crate::elements::{Element, input};
+    use crate::platform::mac::ime_state::{NativeImeState, dispatch_text_input_event_for_owner};
+    use objc2_foundation::{NSNotFound, NSRange};
+
+    let field_id = ElementId::new();
+    let dialog = Dialog::new("Edit", input().id(field_id).accessibility_label("Name"));
+    let mut presenter = Presenter::with_root(Size::new(320.0, 240.0), dialog);
+    presenter.set_focused_element(Some(field_id));
+    let mut session = MacImeSession::default();
+    let mut ime_state = NativeImeState::default();
+    let replacement = NSRange::new(NSNotFound as usize, 0);
+
+    session
+        .set_marked_text("nihao", NSRange::new(5, 0), replacement)
+        .expect("start composition");
+    session
+        .set_marked_text("你好", NSRange::new(2, 0), replacement)
+        .expect("update composition");
+    session.insert_text("你好", replacement).expect("commit");
+    for command in session.drain_events() {
+        assert!(dispatch_text_input_event_for_owner(&mut presenter, &mut ime_state, &command).0);
+    }
+    let snapshot = presenter
+        .root()
+        .text_input_snapshot(field_id)
+        .expect("input");
+    assert_eq!(snapshot.text(), "你好");
+    assert!(snapshot.composition().is_none());
+
+    session
+        .set_marked_text("shijie", NSRange::new(6, 0), replacement)
+        .expect("start another composition");
+    session.cancel_composition();
+    for command in session.drain_events() {
+        assert!(dispatch_text_input_event_for_owner(&mut presenter, &mut ime_state, &command).0);
+    }
+    let snapshot = presenter
+        .root()
+        .text_input_snapshot(field_id)
+        .expect("input");
+    assert_eq!(
+        snapshot.text(),
+        "你好",
+        "cancel must preserve committed text"
+    );
+    assert!(snapshot.composition().is_none());
+    let tree = presenter.accessibility_tree().expect("dialog AX tree");
+    assert_eq!(
+        tree.find(field_id).expect("input AX node").a11y_value(),
+        Some("你好")
+    );
+}

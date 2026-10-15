@@ -517,7 +517,7 @@ impl Element for Input {
     fn paint(&mut self, cx: &mut PaintContext) {
         let bounds = cx.bounds();
         if let Some(id) = self.id {
-            cx.register_accessibility_region(id, bounds);
+            cx.register_hit_region(id, bounds);
         }
         let (bg, text_color, border_color) = self.colors();
         cx.paint(Primitive::Quad {
