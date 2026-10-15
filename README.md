@@ -3,8 +3,7 @@
 **An early-stage GPU-accelerated Rust UI framework for macOS**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Test Coverage](https://img.shields.io/badge/coverage-66.23%25-green.svg)](#test-coverage)
-[![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](#requirements)
+[![Rust](https://img.shields.io/badge/rust-1.88%2B-orange.svg)](#requirements)
 
 RUI helps you build native macOS interfaces in Rust with declarative components, flexbox layout, and Metal GPU rendering. Its design is inspired by [GPUI](https://github.com/zed-industries/zed) and [Warp](https://www.warp.dev/).
 
@@ -44,10 +43,10 @@ Add this repository as a Git dependency in `Cargo.toml`:
 
 ```toml
 [dependencies]
-rui = { git = "https://github.com/majiayu000/rui" }
+rui = { git = "https://github.com/majiayu000/rui", rev = "99d08da9f092e8af098a3dd261262e40d7b611e6" }
 ```
 
-This is `majiayu000/rui`. The [separate `audulus/rui` project](https://github.com/audulus/rui) also uses the name `rui`; installing `rui` from crates.io does not select this repository. Use the Git URL above for the API shown here.
+This pins the source baseline containing the unreleased native IME and font-cache changes; it is not a new release. This is `majiayu000/rui`. The [separate `audulus/rui` project](https://github.com/audulus/rui) also uses the name `rui`; installing `rui` from crates.io does not select this repository. Use the Git URL above for the API shown here.
 
 Replace `src/main.rs` with:
 
@@ -133,42 +132,15 @@ fn main() {
 
 ### Counter with Buttons
 
-```rust
-use rui::prelude::*;
+Run the stateful [counter example](examples/counter.rs):
 
-fn main() {
-    App::new().run(|cx| {
-        div()
-            .w(400.0)
-            .h(300.0)
-            .bg(Color::hex(0x2d3436))
-            .flex_col()
-            .items_center()
-            .justify_center()
-            .gap(24.0)
-            .child(
-                text("Counter")
-                    .size(32.0)
-                    .bold()
-                    .color(Color::WHITE)
-            )
-            .child(
-                div()
-                    .flex_row()
-                    .gap(16.0)
-                    .child(counter_button("-").bg(Color::hex(0xd63031)))
-                    .child(counter_button("+").bg(Color::hex(0x00b894)))
-            )
-    });
-}
-
-fn counter_button(label: &str) -> Button {
-    button(label)
-        .w(60.0)
-        .h(60.0)
-        .rounded(30.0)
-}
+```bash
+cargo run --example counter
 ```
+
+It displays the current count and attaches `on_click` handlers to both buttons.
+Each handler updates the shared count and calls `cx.notifier().notify()` to
+rebuild the view. Use that complete example when adding state to your app.
 
 ### Feature Cards
 
@@ -336,9 +308,10 @@ Color::hsla(180.0, 0.5, 0.5, 0.8)
 
 ## Release Status
 
-- Current repository version: `0.2.5`.
-- GitHub release tags are published for recent changes, but crates.io publishing is blocked until the `rui` package name ownership or package naming is resolved.
-- Install from Git and pin a commit or release tag for reproducible builds.
+- The manifest still says `0.2.5`; that number alone does not identify the current source snapshot.
+- The `v0.2.5` tag predates the native IME and font-cache changes listed under Unreleased. Use the pinned Git revision above for those APIs, not the old tag.
+- Local changes on top of that revision are review candidates until committed and published; this README does not announce a new release.
+- The crates.io package named `rui` belongs to the separate `audulus/rui` project. Install this project from its Git URL and pin the intended commit.
 - Release history and unreleased launch-readiness changes are tracked in [CHANGELOG.md](CHANGELOG.md).
 
 ## Running Examples
@@ -363,7 +336,7 @@ cargo run --example animation_demo
 
 Most validation is CI-safe and finite: `cargo check`, `cargo test`, `cargo test example_smoke`, `cargo test dogfood`, and `cargo test --test docs_api_drift`.
 
-The native macOS smoke is local-only because it opens a real window and uses native runner automation to type into an input, minimize and reopen the app window, write `RUI_NATIVE_DOGFOOD_PROFILE`, capture and validate renderer frame telemetry from `RUI_PROFILE`, and exit:
+The native macOS smoke is local-only because it opens a real window and injects framework key events into an input nested inside a dialog, requests and confirms AppKit minimize/restore states, writes `RUI_NATIVE_DOGFOOD_PROFILE`, captures and validates renderer frame telemetry from `RUI_PROFILE`, and exits:
 
 ```bash
 scripts/native_dogfood_macos.sh
@@ -374,10 +347,33 @@ The command writes the interaction result to
 `target/rui-native-dogfood-renderer-profile.jsonl`, and the combined process
 log to `target/rui-native-dogfood.log`. Override the renderer artifact with
 `RUI_NATIVE_DOGFOOD_RENDERER_PROFILE` when another location is needed.
+The process log records `native dogfood: AppKit minimized=true` and
+`native dogfood: AppKit restored=true` only after observing those native states.
+
+This is a repository-owned acceptance example, not evidence of an external
+application using RUI. The automated ASCII smoke does not exercise a Chinese
+input method's candidate window or VoiceOver. For manual acceptance, launch:
+
+```bash
+RUI_NATIVE_DOGFOOD_INTERACTIVE=1 \
+RUI_NATIVE_DOGFOOD_TEXT='你好世界' \
+RUI_NATIVE_DOGFOOD_PROFILE=target/rui-native-manual.json \
+cargo run --example native_dogfood
+```
+
+Using your configured Chinese input method, compose and cancel once, then commit
+`你好世界`. With VoiceOver enabled by the tester, check the input label, focus,
+value and editing; minimize/restore the window and press Return to finish.
+Record the OS, input method, revision and observed results separately: the JSON
+only records the final submitted text and does not certify these manual steps.
+The same example nests the input inside a dialog, so its automated run covers
+nested input routing in a native window. Automated dialog/popover and AX action
+tests provide further protocol coverage; VoiceOver navigation and activation
+still require the tester's observations.
 
 ## Requirements
 
-- Rust 1.85 or later, for Rust 2024 edition support
+- Rust 1.88 or later (checked with the committed Cargo.lock)
 - macOS 10.15+ (Catalina or later)
 - Metal-compatible GPU
 
@@ -409,19 +405,6 @@ cargo fmt
 # Lint
 cargo clippy
 ```
-
-## Test Coverage
-
-Current coverage: **66.23%** (1208 tests)
-
-| Module | Coverage |
-|--------|----------|
-| core/color | 100% |
-| core/entity | 100% |
-| core/geometry | 100% |
-| core/style | 100% |
-| core/animation | 95% |
-| elements/* | 60-80% |
 
 ## License
 

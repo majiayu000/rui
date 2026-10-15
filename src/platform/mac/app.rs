@@ -116,8 +116,7 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
         context.set_viewport_size(viewport_size);
         let mut last_viewport_size = viewport_size;
         let mut profile_recorder = RendererTelemetryRecorder::enabled_from_env();
-        let mut native_dogfood_automation =
-            NativeDogfoodAutomation::load_from_environment(options.size);
+        let mut native_dogfood_automation = NativeDogfoodAutomation::load_from_environment();
         let mut native_ime_state = crate::platform::mac::ime_state::NativeImeState::default();
 
         // Render loop (event-driven)
@@ -138,7 +137,7 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
             let mut automation_focused_element = None;
             if let Some(automation) = &mut native_dogfood_automation {
                 automation_focused_element =
-                    automation.append_events(&window, &mut platform_events);
+                    automation.append_events(&window, presenter.scene(), &mut platform_events);
             }
             let event_observed_at = if platform_events.is_empty() {
                 None
@@ -511,11 +510,10 @@ enum NativeDogfoodAutomationPhase {
 struct NativeDogfoodAutomation {
     phase: NativeDogfoodAutomationPhase,
     text: String,
-    click_point: Point,
 }
 
 impl NativeDogfoodAutomation {
-    fn load_from_environment(viewport_size: crate::core::Size) -> Option<Self> {
+    fn load_from_environment() -> Option<Self> {
         if std::env::var_os("RUI_NATIVE_DOGFOOD_AUTOMATION").is_none() {
             return None;
         }
@@ -525,15 +523,25 @@ impl NativeDogfoodAutomation {
         Some(Self {
             phase: NativeDogfoodAutomationPhase::Warmup,
             text,
-            click_point: Point::new(90.0, (viewport_size.height * 0.48).round()),
         })
     }
 
     fn append_events(
         &mut self,
         window: &crate::platform::mac::window::MacWindow,
+        scene: &crate::renderer::Scene,
         events: &mut Vec<MacWindowEvent>,
     ) -> Option<ElementId> {
+        let click_point = || {
+            scene
+                .layers()
+                .iter()
+                .flat_map(|layer| layer.hit_regions())
+                .find(|region| region.id == NATIVE_DOGFOOD_INPUT_ID)
+                .expect("native dogfood input must have a visible hit region")
+                .visible_bounds
+                .center()
+        };
         let focused_element = match self.phase {
             NativeDogfoodAutomationPhase::Warmup => {
                 self.phase = NativeDogfoodAutomationPhase::Interact;
@@ -541,7 +549,7 @@ impl NativeDogfoodAutomation {
                 None
             }
             NativeDogfoodAutomationPhase::Interact => {
-                append_pointer_click(events, self.click_point);
+                append_pointer_click(events, click_point());
                 append_text_keys(events, &self.text);
                 self.phase = NativeDogfoodAutomationPhase::Minimize;
                 request_automation_redraw(window);
@@ -554,13 +562,25 @@ impl NativeDogfoodAutomation {
                 None
             }
             NativeDogfoodAutomationPhase::Reopen => {
+                // AppKit can animate minimization asynchronously. Do not count a
+                // request as a completed transition; the script owns the timeout.
+                if !window.is_miniaturized() {
+                    request_automation_redraw(window);
+                    return None;
+                }
+                eprintln!("native dogfood: AppKit minimized=true");
                 window.set_minimized(false);
                 self.phase = NativeDogfoodAutomationPhase::Submit;
                 request_automation_redraw(window);
                 None
             }
             NativeDogfoodAutomationPhase::Submit => {
-                append_pointer_click(events, self.click_point);
+                if window.is_miniaturized() || !window.is_visible() {
+                    request_automation_redraw(window);
+                    return None;
+                }
+                eprintln!("native dogfood: AppKit restored=true");
+                append_pointer_click(events, click_point());
                 append_key_pair(
                     events,
                     KeyEvent::new(KeyCode::Enter, Modifiers::none()).with_char('\n'),
