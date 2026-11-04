@@ -407,3 +407,60 @@ fragment float4 path_fragment(VertexOut in [[stage_in]]) {
     return in.color;
 }
 "#;
+
+/// Metal shader for text: instanced glyph sprites sampled from an A8 atlas page.
+pub const GLYPH_SHADER: &str = r#"
+#include <metal_stdlib>
+using namespace metal;
+
+struct GlyphInstance {
+    float4 bounds;    // x, y, width, height in logical pixels
+    float4 uv;        // x, y, width, height in normalized atlas coordinates
+    float4 color;
+};
+
+struct Uniforms {
+    float2 viewport_size;
+};
+
+struct VertexOut {
+    float4 position [[position]];
+    float2 uv;
+    float4 color;
+};
+
+float4 to_clip_space(float2 position, float2 viewport_size) {
+    float2 ndc = (position / viewport_size) * 2.0 - 1.0;
+    ndc.y = -ndc.y;
+    return float4(ndc, 0.0, 1.0);
+}
+
+vertex VertexOut glyph_vertex(
+    uint vertex_id [[vertex_id]],
+    uint instance_id [[instance_id]],
+    constant GlyphInstance* instances [[buffer(0)]],
+    constant Uniforms& uniforms [[buffer(1)]]
+) {
+    float2 positions[6] = {
+        float2(0, 0), float2(1, 0), float2(0, 1),
+        float2(1, 0), float2(1, 1), float2(0, 1)
+    };
+
+    GlyphInstance instance = instances[instance_id];
+    float2 unit_pos = positions[vertex_id];
+
+    VertexOut out;
+    out.position = to_clip_space(instance.bounds.xy + unit_pos * instance.bounds.zw,
+                                 uniforms.viewport_size);
+    out.uv = instance.uv.xy + unit_pos * instance.uv.zw;
+    out.color = instance.color;
+    return out;
+}
+
+fragment float4 glyph_fragment(VertexOut in [[stage_in]],
+                               texture2d<float> atlas [[texture(0)]],
+                               sampler samp [[sampler(0)]]) {
+    float coverage = atlas.sample(samp, in.uv).r;
+    return float4(in.color.rgb, in.color.a * coverage);
+}
+"#;

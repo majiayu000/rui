@@ -2,11 +2,12 @@
 
 use super::batch::{bind_vertex_slice, bind_vertex_value};
 use super::capture::{create_capture_texture, read_texture_rgba, texture_extent};
+use super::glyph::{GlyphPages, GpuGlyph};
 use super::image_primitive::{GpuImage, calculate_fit_bounds};
 use super::path::build_path_mesh;
 use crate::core::geometry::{Bounds, Size};
 use crate::renderer::primitives::{GpuQuad, GpuShadow, Primitive};
-use crate::renderer::text::{TextRasterCache, TextRequest};
+use crate::renderer::text::{SUBPIXEL_VARIANTS, TextGlyphCache, TextRequest};
 use crate::renderer::{
     Renderer, RendererDeviceDiagnostics, RendererDiagnostics, RendererError, RendererImageCache,
     RendererPrimitiveSupport, RendererResourceCache, RendererResourceError, RendererResourceKind,
@@ -31,11 +32,13 @@ pub struct MetalRenderer {
     shadow_pipeline: RenderPipelineState,
     image_pipeline: RenderPipelineState,
     path_pipeline: RenderPipelineState,
+    glyph_pipeline: RenderPipelineState,
     sampler: SamplerState,
     textures: HashMap<u32, Texture>,
     texture_resources: RendererResourceCache<u32>,
     image_cache: RendererImageCache,
-    text_cache: TextRasterCache,
+    text_cache: TextGlyphCache,
+    glyph_pages: GlyphPages,
     offscreen_target: Option<Texture>,
 }
 
@@ -66,6 +69,12 @@ impl MetalRenderer {
             .new_library_with_source(super::shaders::PATH_SHADER, &CompileOptions::new())
             .map_err(|err| {
                 RendererError::render_failed(format!("failed to compile path shader: {err}"))
+            })?;
+
+        let glyph_library = device
+            .new_library_with_source(super::shaders::GLYPH_SHADER, &CompileOptions::new())
+            .map_err(|err| {
+                RendererError::render_failed(format!("failed to compile glyph shader: {err}"))
             })?;
 
         // Create quad pipeline
@@ -182,6 +191,37 @@ impl MetalRenderer {
                 RendererError::render_failed(format!("failed to create path pipeline: {err}"))
             })?;
 
+        let glyph_vertex = glyph_library
+            .get_function("glyph_vertex", None)
+            .map_err(|err| {
+                RendererError::render_failed(format!("missing glyph vertex shader: {err}"))
+            })?;
+        let glyph_fragment = glyph_library
+            .get_function("glyph_fragment", None)
+            .map_err(|err| {
+                RendererError::render_failed(format!("missing glyph fragment shader: {err}"))
+            })?;
+
+        let glyph_pipeline_desc = RenderPipelineDescriptor::new();
+        glyph_pipeline_desc.set_vertex_function(Some(&glyph_vertex));
+        glyph_pipeline_desc.set_fragment_function(Some(&glyph_fragment));
+        let glyph_color = glyph_pipeline_desc
+            .color_attachments()
+            .object_at(0)
+            .unwrap();
+        glyph_color.set_pixel_format(MTLPixelFormat::BGRA8Unorm);
+        glyph_color.set_blending_enabled(true);
+        glyph_color.set_source_rgb_blend_factor(MTLBlendFactor::SourceAlpha);
+        glyph_color.set_destination_rgb_blend_factor(MTLBlendFactor::OneMinusSourceAlpha);
+        glyph_color.set_source_alpha_blend_factor(MTLBlendFactor::One);
+        glyph_color.set_destination_alpha_blend_factor(MTLBlendFactor::OneMinusSourceAlpha);
+
+        let glyph_pipeline = device
+            .new_render_pipeline_state(&glyph_pipeline_desc)
+            .map_err(|err| {
+                RendererError::render_failed(format!("failed to create glyph pipeline: {err}"))
+            })?;
+
         // Sampler for images/text
         let sampler_desc = SamplerDescriptor::new();
         sampler_desc.set_min_filter(MTLSamplerMinMagFilter::Linear);
@@ -197,6 +237,7 @@ impl MetalRenderer {
             shadow_pipeline,
             image_pipeline,
             path_pipeline,
+            glyph_pipeline,
             sampler,
             textures: HashMap::new(),
             texture_resources: RendererResourceCache::new(
@@ -209,10 +250,11 @@ impl MetalRenderer {
                 limits.image_max_bytes,
             ),
             offscreen_target: None,
-            text_cache: TextRasterCache::with_limits(
+            text_cache: TextGlyphCache::with_limits(
                 limits.glyph_max_entries,
                 limits.glyph_max_bytes,
             ),
+            glyph_pages: GlyphPages::default(),
         })
     }
 
@@ -230,8 +272,19 @@ impl MetalRenderer {
         scene: &Scene,
         viewport_size: Size,
     ) -> Result<Vec<u8>, RendererError> {
-        let width = texture_extent(viewport_size.width, "width")?;
-        let height = texture_extent(viewport_size.height, "height")?;
+        self.capture_frame_pixels_at_scale(scene, viewport_size, 1.0)
+    }
+
+    /// Render and read back a frame at `scale_factor` device pixels per logical
+    /// pixel. The pixels are `viewport_size * scale_factor` RGBA rows.
+    pub fn capture_frame_pixels_at_scale(
+        &mut self,
+        scene: &Scene,
+        viewport_size: Size,
+        scale_factor: f32,
+    ) -> Result<Vec<u8>, RendererError> {
+        let width = texture_extent(viewport_size.width * scale_factor, "width")?;
+        let height = texture_extent(viewport_size.height * scale_factor, "height")?;
         let texture = create_capture_texture(&self.device, width, height);
 
         self.render_to_texture(scene, &texture, viewport_size, None, true)?;
@@ -313,9 +366,12 @@ impl MetalRenderer {
         let mut clip_stack: Vec<Bounds> = Vec::new();
         self.set_scissor_rect(encoder, None, scale_factor, drawable_size);
 
-        // Adjacent quads share one instanced draw. Anything else in the scene ends the
-        // run first, so paint order and clipping stay as the scene has them.
+        // Adjacent quads share one instanced draw, and so do adjacent glyphs on one
+        // atlas page. Anything else in the scene ends the run first, so paint order
+        // and clipping stay as the scene has them.
         let mut pending_quads: Vec<GpuQuad> = Vec::new();
+        let mut pending_glyphs: Vec<GpuGlyph> = Vec::new();
+        let mut glyph_page = 0;
 
         let viewport = Bounds::from_xywh(0.0, 0.0, viewport_size.width, viewport_size.height);
 
@@ -333,6 +389,9 @@ impl MetalRenderer {
                     | Primitive::RadialGradient { .. }
             ) {
                 self.flush_quads(encoder, &mut pending_quads, &uniforms);
+            }
+            if !matches!(primitive, Primitive::Text { .. }) {
+                self.flush_glyphs(encoder, &mut pending_glyphs, glyph_page, &uniforms)?;
             }
             match primitive {
                 Primitive::Shadow {
@@ -439,6 +498,9 @@ impl MetalRenderer {
                         font_family.as_deref(),
                         *line_height,
                         *align,
+                        scale_factor,
+                        &mut pending_glyphs,
+                        &mut glyph_page,
                         &uniforms,
                     )?;
                 }
@@ -478,6 +540,7 @@ impl MetalRenderer {
         }
 
         self.flush_quads(encoder, &mut pending_quads, &uniforms);
+        self.flush_glyphs(encoder, &mut pending_glyphs, glyph_page, &uniforms)?;
         encoder.end_encoding();
         if let Some(drawable) = present_drawable {
             command_buffer.present_drawable(drawable);
@@ -508,6 +571,30 @@ impl MetalRenderer {
         bind_vertex_value(encoder, 1, uniforms);
         encoder.draw_primitives_instanced(MTLPrimitiveType::Triangle, 0, 6, quads.len() as u64);
         quads.clear();
+    }
+
+    fn flush_glyphs(
+        &mut self,
+        encoder: &RenderCommandEncoderRef,
+        glyphs: &mut Vec<GpuGlyph>,
+        page: usize,
+        uniforms: &Uniforms,
+    ) -> Result<(), RendererError> {
+        if glyphs.is_empty() {
+            return Ok(());
+        }
+        self.glyph_pages.sync(&self.device, &mut self.text_cache);
+        let texture = self.glyph_pages.page(page).ok_or_else(|| {
+            RendererResourceError::missing(RendererResourceKind::Glyph, page as u32)
+        })?;
+        encoder.set_render_pipeline_state(&self.glyph_pipeline);
+        bind_vertex_slice(&self.device, encoder, 0, glyphs);
+        bind_vertex_value(encoder, 1, uniforms);
+        encoder.set_fragment_texture(0, Some(texture));
+        encoder.set_fragment_sampler_state(0, Some(&self.sampler));
+        encoder.draw_primitives_instanced(MTLPrimitiveType::Triangle, 0, 6, glyphs.len() as u64);
+        glyphs.clear();
+        Ok(())
     }
 
     fn draw_shadow(
@@ -617,60 +704,87 @@ impl MetalRenderer {
         font_family: Option<&str>,
         line_height: f32,
         align: crate::elements::text::TextAlign,
+        scale_factor: f32,
+        glyphs: &mut Vec<GpuGlyph>,
+        glyph_page: &mut usize,
         uniforms: &Uniforms,
     ) -> Result<(), RendererError> {
-        let entry = match self.text_cache.resolve(TextRequest::new(
+        let text_error =
+            |err| RendererError::render_failed(format!("text rendering failed: {:?}", err));
+        let shaped = match self.text_cache.shape(TextRequest::new(
             content,
             font_size,
             font_weight,
             font_family,
             line_height,
         )) {
-            Ok(Some(entry)) => entry,
+            Ok(Some(shaped)) => shaped,
             Ok(None) => return Ok(()),
-            Err(err) => {
-                return Err(RendererError::render_failed(format!(
-                    "text rendering failed: {:?}",
-                    err
-                )));
-            }
+            Err(err) => return Err(text_error(err)),
         };
 
-        let texture = self.ensure_texture(
-            entry.id,
-            Size::new(
-                entry.metrics.ink_bounds.width(),
-                entry.metrics.ink_bounds.height(),
-            ),
-            &entry.pixels,
-        )?;
-
+        let ink = shaped.metrics.ink_bounds;
         let mut x = bounds.x();
-        let mut y = bounds.y();
-        let text_width = entry.metrics.ink_bounds.width();
-        let text_height = entry.metrics.ink_bounds.height();
-
         match align {
             crate::elements::text::TextAlign::Left => {}
             crate::elements::text::TextAlign::Center => {
-                x += (bounds.width() - text_width) * 0.5;
+                x += (bounds.width() - ink.width()) * 0.5;
             }
             crate::elements::text::TextAlign::Right => {
-                x += bounds.width() - text_width;
+                x += bounds.width() - ink.width();
             }
         }
+        let y = bounds.y() + (bounds.height() - ink.height()) * 0.5;
 
-        y += (bounds.height() - text_height) * 0.5;
+        // Glyph positions are relative to the ink box, which is placed at (x, y).
+        let origin_x = x - ink.x();
+        let origin_y = y - ink.y();
+        let device_font_size = font_size * scale_factor;
+        let variants = f32::from(SUBPIXEL_VARIANTS);
+        let color = color.to_array();
 
-        let text_bounds = Bounds::from_xywh(x, y, text_width, text_height);
-        let color_array = color.to_array();
-        let instance = GpuImage::new(
-            text_bounds,
-            crate::core::style::Corners::ZERO,
-            color_array,
-            1.0,
-        );
-        self.draw_image(encoder, &texture, &instance, uniforms);
+        for glyph in &shaped.glyphs {
+            let pen_x = ((origin_x + glyph.x) * scale_factor * variants).round() / variants;
+            let pen_y = ((origin_y + glyph.baseline_y) * scale_factor).round();
+            let whole_x = pen_x.floor();
+            let subpixel = ((pen_x - whole_x) * variants).round() as u8;
+            let Some(atlas_glyph) = self
+                .text_cache
+                .glyph(glyph, device_font_size, subpixel)
+                .map_err(text_error)?
+            else {
+                continue;
+            };
+
+            let slot = atlas_glyph.slot;
+            if slot.page != *glyph_page {
+                self.flush_glyphs(encoder, glyphs, *glyph_page, uniforms)?;
+                *glyph_page = slot.page;
+            }
+            let (page_width, page_height) = self
+                .text_cache
+                .atlas()
+                .page_extent(slot.page)
+                .ok_or_else(|| {
+                    RendererResourceError::missing(RendererResourceKind::Glyph, slot.page as u32)
+                })?;
+            let rect = slot.rect;
+            glyphs.push(GpuGlyph {
+                bounds: [
+                    (whole_x + atlas_glyph.left as f32) / scale_factor,
+                    (pen_y + atlas_glyph.top as f32) / scale_factor,
+                    rect.width as f32 / scale_factor,
+                    rect.height as f32 / scale_factor,
+                ],
+                uv: [
+                    rect.x as f32 / page_width as f32,
+                    rect.y as f32 / page_height as f32,
+                    rect.width as f32 / page_width as f32,
+                    rect.height as f32 / page_height as f32,
+                ],
+                color,
+            });
+        }
         Ok(())
     }
 
