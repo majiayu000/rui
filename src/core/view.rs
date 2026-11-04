@@ -59,6 +59,11 @@ impl<'a, T: 'static> ViewContext<'a, T> {
         self.view
     }
 
+    /// A `Send` handle that other threads use to update the application.
+    pub fn app_handle(&self) -> crate::core::app_handle::AppHandle {
+        self.app.app_handle()
+    }
+
     /// Access the application context
     pub fn app(&self) -> &AppContext {
         self.app

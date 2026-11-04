@@ -68,7 +68,8 @@ impl Default for EntityStore {
 #[derive(Debug)]
 pub struct Entity<T> {
     pub(crate) id: EntityId,
-    _marker: std::marker::PhantomData<T>,
+    // A handle is only an id, so it can cross threads whatever `T` is.
+    _marker: std::marker::PhantomData<fn() -> T>,
 }
 
 impl<T> Entity<T> {
