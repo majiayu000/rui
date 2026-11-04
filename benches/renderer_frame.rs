@@ -10,7 +10,8 @@
 //! For each: draw calls and instances of one frame, the median instructions and
 //! milliseconds of encoding and submitting it (`render_offscreen`, which does not
 //! wait for the GPU), and a checksum of its pixels. A renderer change that keeps the
-//! checksums drew the same frames.
+//! checksums drew the same frames. Instructions are the whole process's, driver
+//! threads included, so the queue is drained between samples, outside the count.
 use rui::core::color::Rgba;
 use rui::core::frame_pipeline::FramePipeline;
 use rui::core::geometry::{Bounds, Edges};
@@ -170,6 +171,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ("cards", cards_scene()),
     ];
     let mut renderer = MetalRenderer::new()?;
+    // Rendering a capture waits for it, and so for every frame queued before it.
+    let empty = Scene::new();
+    let drain = |renderer: &mut MetalRenderer| {
+        renderer
+            .capture_frame_pixels(&empty, Size::new(1.0, 1.0))
+            .map(|_| ())
+    };
 
     println!("{{");
     for (position, (name, scene)) in scenes.iter().enumerate() {
@@ -180,6 +188,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         let (mut ms, mut counts) = (Vec::new(), Vec::new());
         for _ in 0..SAMPLES {
+            drain(&mut renderer)?;
             let (i0, t0) = (instructions(), Instant::now());
             renderer.render_offscreen(scene, viewport, SCALE_FACTOR)?;
             ms.push(t0.elapsed().as_secs_f64() * 1e3);
