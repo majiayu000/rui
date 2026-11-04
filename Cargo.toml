@@ -110,6 +110,11 @@ path = "benches/stress_frame.rs"
 harness = false
 
 [[bench]]
+name = "renderer_frame"
+path = "benches/renderer_frame.rs"
+harness = false
+
+[[bench]]
 name = "hit_test"
 path = "benches/hit_test.rs"
 harness = false

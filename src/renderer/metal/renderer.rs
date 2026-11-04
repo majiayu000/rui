@@ -28,6 +28,15 @@ struct Uniforms {
     viewport_size: [f32; 2],
 }
 
+/// What the last rendered frame asked of the GPU.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct MetalFrameStats {
+    /// Draw calls encoded.
+    pub draw_calls: u32,
+    /// Instances those draws drew; a path counts once.
+    pub instances: u32,
+}
+
 /// Metal-based renderer
 pub struct MetalRenderer {
     device: Device,
@@ -44,6 +53,7 @@ pub struct MetalRenderer {
     text_cache: TextGlyphCache,
     glyph_pages: GlyphPages,
     offscreen_target: Option<Texture>,
+    frame_stats: MetalFrameStats,
 }
 
 impl MetalRenderer {
@@ -274,6 +284,7 @@ impl MetalRenderer {
                 limits.glyph_max_bytes,
             ),
             glyph_pages: GlyphPages::default(),
+            frame_stats: MetalFrameStats::default(),
         })
     }
 
@@ -284,6 +295,11 @@ impl MetalRenderer {
 
     pub fn diagnostics(&self) -> RendererDiagnostics {
         <Self as Renderer>::diagnostics(self)
+    }
+
+    /// Draw calls and instances of the last frame rendered.
+    pub fn last_frame_stats(&self) -> MetalFrameStats {
+        self.frame_stats
     }
 
     pub fn capture_frame_pixels(
@@ -362,6 +378,7 @@ impl MetalRenderer {
         self.texture_resources.begin_frame();
         self.image_cache.begin_frame();
         self.text_cache.begin_frame();
+        self.frame_stats = MetalFrameStats::default();
 
         let command_queue = self.command_queue.to_owned();
         let command_buffer = command_queue.new_command_buffer();
@@ -579,7 +596,7 @@ impl MetalRenderer {
     }
 
     fn flush_quads(
-        &self,
+        &mut self,
         encoder: &RenderCommandEncoderRef,
         quads: &mut Vec<GpuQuad>,
         uniforms: &Uniforms,
@@ -591,6 +608,7 @@ impl MetalRenderer {
         bind_vertex_slice(&self.device, encoder, 0, quads);
         bind_vertex_value(encoder, 1, uniforms);
         encoder.draw_primitives_instanced(MTLPrimitiveType::Triangle, 0, 6, quads.len() as u64);
+        self.count_draw(quads.len());
         quads.clear();
     }
 
@@ -614,12 +632,18 @@ impl MetalRenderer {
         encoder.set_fragment_texture(0, Some(texture));
         encoder.set_fragment_sampler_state(0, Some(&self.sampler));
         encoder.draw_primitives_instanced(MTLPrimitiveType::Triangle, 0, 6, glyphs.len() as u64);
+        self.count_draw(glyphs.len());
         glyphs.clear();
         Ok(())
     }
 
+    fn count_draw(&mut self, instances: usize) {
+        self.frame_stats.draw_calls += 1;
+        self.frame_stats.instances += instances as u32;
+    }
+
     fn draw_shadow(
-        &self,
+        &mut self,
         encoder: &RenderCommandEncoderRef,
         shadow: &GpuShadow,
         uniforms: &Uniforms,
@@ -630,10 +654,11 @@ impl MetalRenderer {
         bind_vertex_value(encoder, 1, uniforms);
 
         encoder.draw_primitives_instanced(MTLPrimitiveType::Triangle, 0, 6, 1);
+        self.count_draw(1);
     }
 
     fn draw_image(
-        &self,
+        &mut self,
         encoder: &RenderCommandEncoderRef,
         texture: &Texture,
         instance: &GpuImage,
@@ -647,10 +672,11 @@ impl MetalRenderer {
         encoder.set_fragment_sampler_state(0, Some(&self.sampler));
 
         encoder.draw_primitives_instanced(MTLPrimitiveType::Triangle, 0, 6, 1);
+        self.count_draw(1);
     }
 
     fn draw_path(
-        &self,
+        &mut self,
         encoder: &RenderCommandEncoderRef,
         vertices: &[super::path::GpuPathVertex],
         uniforms: &Uniforms,
@@ -660,6 +686,7 @@ impl MetalRenderer {
         bind_vertex_slice(&self.device, encoder, 0, vertices);
         bind_vertex_value(encoder, 1, uniforms);
         encoder.draw_primitives(MTLPrimitiveType::Triangle, 0, vertices.len() as u64);
+        self.count_draw(1);
     }
 
     fn draw_image_primitive(
@@ -676,11 +703,13 @@ impl MetalRenderer {
         clip_stack: &mut Vec<Bounds>,
     ) -> Result<(), RendererError> {
         if let ImageSource::Texture(id) = source {
-            let texture = self.textures.get(id).ok_or_else(|| {
-                RendererResourceError::missing(RendererResourceKind::Texture, *id)
-            })?;
+            let texture = self
+                .textures
+                .get(id)
+                .ok_or_else(|| RendererResourceError::missing(RendererResourceKind::Texture, *id))?
+                .clone();
             let instance = GpuImage::new(*bounds, corner_radii, [1.0, 1.0, 1.0, 1.0], opacity);
-            self.draw_image(encoder, texture, &instance, uniforms);
+            self.draw_image(encoder, &texture, &instance, uniforms);
             return Ok(());
         }
 
