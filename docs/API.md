@@ -403,7 +403,7 @@ text_area()
 
 Stateful controls separate persistent values from transient interaction state:
 
-- Controlled values are supplied on every render, for example `Checkbox::checked`, `SegmentedControl::selected`, and `Input::value`. Event handlers should update caller-owned state or an `AppContext` entity, then notify the view so the next rebuild supplies the new value.
+- Controlled values are supplied on every render, for example `Checkbox::checked`, `SegmentedControl::selected`, and `Input::value`. Wrap event handlers in `cx.listener` (no arguments), `cx.listener_with` (a value such as `bool`) or `cx.text_listener` (`&str`): the handler receives the view and a `ViewContext` that reaches every `AppContext` entity, runs before the next render, and the view renders again afterwards without a manual notify.
 - Uncontrolled values are local to the current element instance. They can handle immediate interaction, but they are not a persistence boundary across rebuilds.
 - Disabled controls refuse activation, do not call mutation callbacks, expose disabled accessibility state, and clear hover/pressed transients.
 - Read-only controls still expose their value, but refuse internal value mutation and mutation callbacks.
@@ -411,22 +411,16 @@ Stateful controls separate persistent values from transient interaction state:
 
 ```rust
 struct SyncView {
-    checked: Rc<Cell<bool>>,
+    checked: bool,
 }
 
 impl View for SyncView {
     type Element = Checkbox;
 
     fn render(&mut self, cx: &mut ViewContext<Self>) -> Self::Element {
-        let notifier = cx.notifier();
-        let checked_for_handler = Rc::clone(&self.checked);
-
         Checkbox::new("Sync")
-            .checked(self.checked.get())
-            .on_change(move |value| {
-                checked_for_handler.set(value);
-                notifier.notify();
-            })
+            .checked(self.checked)
+            .on_change(cx.listener_with(|this, value, _| this.checked = value))
     }
 }
 ```

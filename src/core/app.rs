@@ -3,7 +3,7 @@
 use crate::core::action::{ActionHandler, ActionId, ActionOutcome, Keymap};
 use crate::core::entity::{Entity, EntityId, EntityStore};
 use crate::core::geometry::Size;
-use crate::core::view::{View, ViewContext, ViewNotifier};
+use crate::core::view::{View, ViewContext, ViewNotifier, ViewUpdates};
 use crate::core::window::{Window, WindowId, WindowOptions};
 use crate::elements::Element;
 use crate::platform::window::{PlatformWindowError, PlatformWindowFeature};
@@ -281,6 +281,7 @@ impl Default for AppContext {
 pub(crate) struct RuntimeView<V: View> {
     entity: Entity<V>,
     notifier: ViewNotifier,
+    updates: ViewUpdates<V>,
     view: V,
 }
 
@@ -289,13 +290,34 @@ impl<V: View> RuntimeView<V> {
         Self {
             entity,
             notifier,
+            updates: ViewUpdates::new(),
             view,
         }
     }
 
     pub(crate) fn render(&mut self, app: &mut AppContext) -> V::Element {
-        let mut view_cx = ViewContext::with_notifier(app, self.entity, self.notifier.clone());
+        // Listener updates run in the order their events arrived; one may queue more.
+        loop {
+            let updates = self.updates.take();
+            if updates.is_empty() {
+                break;
+            }
+            for update in updates {
+                let mut view_cx = self.context(app);
+                update(&mut self.view, &mut view_cx);
+            }
+        }
+        let mut view_cx = self.context(app);
         self.view.render(&mut view_cx)
+    }
+
+    fn context<'a>(&self, app: &'a mut AppContext) -> ViewContext<'a, V> {
+        ViewContext::with_parts(
+            app,
+            self.entity,
+            self.notifier.clone(),
+            self.updates.clone(),
+        )
     }
 }
 

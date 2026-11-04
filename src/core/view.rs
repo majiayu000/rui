@@ -2,7 +2,7 @@
 
 use crate::core::app::AppContext;
 use crate::core::entity::Entity;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 /// Cloneable rebuild signal for callbacks created while rendering a view.
@@ -30,28 +30,97 @@ impl ViewNotifier {
     }
 }
 
+type ViewUpdate<T> = Box<dyn FnOnce(&mut T, &mut ViewContext<'_, T>)>;
+
+/// Updates queued by listeners, applied to the view before it next renders.
+pub(crate) struct ViewUpdates<T>(Rc<RefCell<Vec<ViewUpdate<T>>>>);
+
+impl<T> ViewUpdates<T> {
+    pub(crate) fn new() -> Self {
+        Self(Rc::new(RefCell::new(Vec::new())))
+    }
+
+    fn push(&self, update: ViewUpdate<T>) {
+        self.0.borrow_mut().push(update);
+    }
+
+    pub(crate) fn take(&self) -> Vec<ViewUpdate<T>> {
+        std::mem::take(&mut *self.0.borrow_mut())
+    }
+}
+
+impl<T> Clone for ViewUpdates<T> {
+    fn clone(&self) -> Self {
+        Self(Rc::clone(&self.0))
+    }
+}
+
 /// Context provided to views during rendering
 pub struct ViewContext<'a, T> {
     pub(crate) app: &'a mut AppContext,
     pub(crate) view: Entity<T>,
     pub(crate) notifier: ViewNotifier,
+    updates: ViewUpdates<T>,
 }
 
 impl<'a, T: 'static> ViewContext<'a, T> {
     pub fn new(app: &'a mut AppContext, view: Entity<T>) -> Self {
-        Self::with_notifier(app, view, ViewNotifier::new())
+        Self::with_parts(app, view, ViewNotifier::new(), ViewUpdates::new())
     }
 
-    pub(crate) fn with_notifier(
+    pub(crate) fn with_parts(
         app: &'a mut AppContext,
         view: Entity<T>,
         notifier: ViewNotifier,
+        updates: ViewUpdates<T>,
     ) -> Self {
         Self {
             app,
             view,
             notifier,
+            updates,
         }
+    }
+
+    /// An event handler that updates this view.
+    ///
+    /// When the event fires, `handler` is queued and the view is scheduled to render;
+    /// before that render it runs with the view and a context that reaches every
+    /// entity. The view renders again afterwards, so `handler` need not notify it.
+    ///
+    /// ```ignore
+    /// button("+").on_click(cx.listener(|this, _| this.count += 1))
+    /// ```
+    pub fn listener(
+        &self,
+        handler: impl Fn(&mut T, &mut ViewContext<'_, T>) + 'static,
+    ) -> impl Fn() + 'static {
+        let listener = self.listener_with(move |view, (), cx| handler(view, cx));
+        move || listener(())
+    }
+
+    /// [`Self::listener`] for handlers that receive a value, such as `on_hover(bool)`.
+    pub fn listener_with<A: 'static>(
+        &self,
+        handler: impl Fn(&mut T, A, &mut ViewContext<'_, T>) + 'static,
+    ) -> impl Fn(A) + 'static {
+        let handler = Rc::new(handler);
+        let updates = self.updates.clone();
+        let notifier = self.notifier.clone();
+        move |value| {
+            let handler = Rc::clone(&handler);
+            updates.push(Box::new(move |view, cx| handler(view, value, cx)));
+            notifier.notify();
+        }
+    }
+
+    /// [`Self::listener`] for handlers that receive text, such as `on_change(&str)`.
+    pub fn text_listener(
+        &self,
+        handler: impl Fn(&mut T, String, &mut ViewContext<'_, T>) + 'static,
+    ) -> impl Fn(&str) + 'static {
+        let listener = self.listener_with(handler);
+        move |text| listener(text.to_owned())
     }
 
     /// Get the view's entity handle
