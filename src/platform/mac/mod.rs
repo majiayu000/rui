@@ -5,6 +5,7 @@ mod app;
 mod display_link;
 mod events;
 mod frame;
+mod frame_ticker;
 mod ime_state;
 mod key_suppression;
 mod lifecycle;

@@ -16,11 +16,11 @@ use crate::core::text_editing::TextInputEvent;
 use crate::core::window::WindowOptions;
 use crate::elements::element::{Element, PointerEvent, PointerEventKind};
 use crate::platform::mac::accessibility::MacAccessibilityActionRequest;
-use crate::platform::mac::display_link::DisplayLink;
 use crate::platform::mac::events::{
     MAC_REDRAW_EVENT_DATA, MacWindowEvent, post_application_event_from_any_thread,
 };
 use crate::platform::mac::frame::{NativeFrameEvents, dispatch_native_events};
+use crate::platform::mac::frame_ticker::FrameTicker;
 use crate::platform::mac::window::create_window;
 use crate::platform::window::{
     PlatformImeEvent, PlatformInputEvent, PlatformMouseEvent, PlatformMouseEventKind,
@@ -130,13 +130,7 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
         let mut profile_recorder = RendererTelemetryRecorder::enabled_from_env();
         let mut native_dogfood_automation = NativeDogfoodAutomation::load_from_environment();
         let mut native_ime_state = crate::platform::mac::ime_state::NativeImeState::default();
-        let mut display_link = match DisplayLink::new(window_number) {
-            Ok(display_link) => display_link,
-            Err(err) => panic!("failed to create display link: {}", err),
-        };
-        if let Some(interval) = display_link.refresh_interval() {
-            context.set_frame_interval(interval);
-        }
+        let mut frame_ticker = FrameTicker::new(window_number);
 
         // Render loop (event-driven)
         loop {
@@ -176,7 +170,7 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
                         ordered_input_events.push(OrderedInputEvent::Text(command));
                     }
                     MacWindowEvent::DisplayTick => {
-                        display_link.tick_handled();
+                        frame_ticker.tick_handled();
                         context.begin_animation_frame();
                     }
                     MacWindowEvent::Platform(event) => {
@@ -283,7 +277,7 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
                     }
                     run_between_frames(
                         &mut context,
-                        &mut display_link,
+                        &mut frame_ticker,
                         &window,
                         &app,
                         iteration_started_at,
@@ -395,7 +389,7 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
             }
             run_between_frames(
                 &mut context,
-                &mut display_link,
+                &mut frame_ticker,
                 &window,
                 &app,
                 iteration_started_at,
@@ -409,40 +403,41 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
     }
 }
 
-/// Keep the display link running exactly while an animation asks for frames,
-/// then spend what is left of the idle budget on idle work.
+/// Keep frame ticks running exactly while an animation asks for frames, then
+/// spend what is left of the idle budget on idle work.
 ///
 /// Idle work stops at the budget, measured from when this loop iteration
-/// started, and as soon as an event is waiting, so input and the next display
+/// started, and as soon as an event is waiting, so input and the next frame
 /// tick are never queued behind it.
 fn run_between_frames(
     context: &mut AppContext,
-    display_link: &mut DisplayLink,
+    frame_ticker: &mut FrameTicker,
     window: &crate::platform::mac::window::MacWindow,
     app: &NSApplication,
     iteration_started_at: Instant,
-    report_display_link: bool,
+    report_frame_ticks: bool,
 ) {
     let animating = context.animation_frame_requested();
-    if animating != display_link.is_running() {
-        let result = if animating {
-            display_link.start(window.display_id())
-        } else {
-            display_link.stop()
+    let source_before = frame_ticker.source();
+    if let Err(err) = frame_ticker.update(animating, window.display_id(), context.frame_interval())
+    {
+        panic!("failed to drive animation frames: {err}");
+    }
+    if let Some(interval) = frame_ticker.refresh_interval() {
+        context.set_frame_interval(interval);
+    }
+    let source = frame_ticker.source();
+    if report_frame_ticks && source != source_before {
+        let source = match source {
+            Some(source) => format!("\"{}\"", source.name()),
+            None => String::from("null"),
         };
-        if let Err(err) = result {
-            panic!("failed to drive frames from the display: {err}");
-        }
-        if animating && let Some(interval) = display_link.refresh_interval() {
-            context.set_frame_interval(interval);
-        }
-        if report_display_link {
-            eprintln!(
-                "{{\"schema\":\"rui.display_link.v1\",\"running\":{},\"refresh_interval_ns\":{}}}",
-                animating,
-                context.frame_interval().as_nanos()
-            );
-        }
+        eprintln!(
+            "{{\"schema\":\"rui.display_link.v1\",\"running\":{},\"source\":{},\"refresh_interval_ns\":{}}}",
+            animating,
+            source,
+            context.frame_interval().as_nanos()
+        );
     }
 
     if context.has_idle_work() {
