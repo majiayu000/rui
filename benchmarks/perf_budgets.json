@@ -1,10 +1,11 @@
 {
-  "calibration": "M2 Max, macOS 26.5.2, main 4242c71: list.frame_cpu 23.6 M / 24014 allocs, list.layout_retained 12.8 M / 10001, virtual_list 0.4 M / 445 at 1k and 100k, footprint 28.5 MB. list.full_frame 71.3 M / 49338 and list.one_row_changed 33.9 M / 34014 on the same machine at the stable-identity PR (one row changed costs 0.47 of a full frame; #173's target is 0.10). Instruction budgets carry 25% headroom for other CPUs and compilers, allocation budgets 10%. Recalibrate with the same run after an intended cost change.",
+  "calibration": "M2 Max, macOS 26.5.2, main 4242c71: list.frame_cpu 23.6 M / 24014 allocs, list.layout_retained 12.8 M / 10001, virtual_list 0.4 M / 445 at 1k and 100k, footprint 28.5 MB. list.full_frame 71.3 M / 49338 and list.one_row_changed 33.9 M / 34014 on the same machine at the stable-identity PR (one row changed costs 0.47 of a full frame; #173's target is 0.10). text.paragraphs (200 wrapped paragraphs, one changing) 9.7 M / 6768 at the text-cache PR. Instruction budgets carry 25% headroom for other CPUs and compilers, allocation budgets 10%. Recalibrate with the same run after an intended cost change.",
   "instructions_m": {
     "list.frame_cpu": 30.0,
     "list.layout_retained": 16.0,
     "list.full_frame": 89.0,
     "list.one_row_changed": 42.5,
+    "text.paragraphs": 12.0,
     "virtual_list.1k": 0.6,
     "virtual_list.100k": 0.6
   },
@@ -13,6 +14,7 @@
     "list.layout_retained": 11000,
     "list.full_frame": 54300,
     "list.one_row_changed": 37500,
+    "text.paragraphs": 7500,
     "virtual_list.1k": 500,
     "virtual_list.100k": 500
   },

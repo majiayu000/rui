@@ -91,6 +91,7 @@ impl FramePipeline {
     where
         E: Element,
     {
+        text_measurer.begin_frame();
         let mut layout_cx = LayoutContext::retained(taffy, viewport_size, text_measurer, nodes);
         let root_node = root.layout(&mut layout_cx);
         Self::compute_root_layout(layout_cx, root_node, viewport_size)?;
@@ -107,6 +108,7 @@ impl FramePipeline {
         E: Element,
     {
         taffy.clear();
+        text_measurer.begin_frame();
         let mut layout_cx = LayoutContext::with_text_measurer(taffy, viewport_size, text_measurer);
         let root_node = root.layout(&mut layout_cx);
         Self::compute_root_layout(layout_cx, root_node, viewport_size)?;

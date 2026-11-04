@@ -53,16 +53,26 @@ pub(crate) struct TextWrapRequest {
 }
 
 impl TextWrapRequest {
-    fn wrap(&self, measurer: &mut TextMeasureCache, width: f32) -> WrappedText {
-        let request = TextRequest::new(
+    fn request(&self) -> TextRequest<'_> {
+        TextRequest::new(
             &self.content,
             self.font_size,
             self.font_weight,
             self.font_family.as_deref(),
             self.line_height,
-        );
-        match measurer.wrap(request, width, self.max_lines) {
+        )
+    }
+
+    fn wrap(&self, measurer: &mut TextMeasureCache, width: f32) -> WrappedText {
+        match measurer.wrap(self.request(), width, self.max_lines) {
             Ok(wrapped) => wrapped,
+            Err(err) => panic!("text layout failed: {:?}", err),
+        }
+    }
+
+    fn wrapped_size(&self, measurer: &mut TextMeasureCache, width: f32) -> Size {
+        match measurer.wrapped_size(self.request(), width, self.max_lines) {
+            Ok(size) => size,
             Err(err) => panic!("text layout failed: {:?}", err),
         }
     }
@@ -127,7 +137,7 @@ impl<'a> RetainedPass<'a> {
 /// [`LayoutTextMeasurer::Borrowed`], so measurements survive between frames.
 /// One-off layout passes own a throwaway cache instead.
 enum LayoutTextMeasurer<'a> {
-    Owned(TextMeasureCache),
+    Owned(Box<TextMeasureCache>),
     Borrowed(&'a mut TextMeasureCache),
 }
 
@@ -136,7 +146,7 @@ impl<'a> LayoutContext<'a> {
         Self::with_measurer(
             taffy,
             available_space,
-            LayoutTextMeasurer::Owned(TextMeasureCache::new()),
+            LayoutTextMeasurer::Owned(Box::default()),
             None,
         )
     }
@@ -222,10 +232,10 @@ impl<'a> LayoutContext<'a> {
                         AvailableSpace::MinContent => 0.0,
                         AvailableSpace::MaxContent => f32::INFINITY,
                     });
-                    let wrapped = text.request.wrap(measurer, width);
+                    let wrapped = text.request.wrapped_size(measurer, width);
                     taffy::Size {
-                        width: known.width.unwrap_or(wrapped.size.width),
-                        height: known.height.unwrap_or(wrapped.size.height),
+                        width: known.width.unwrap_or(wrapped.width),
+                        height: known.height.unwrap_or(wrapped.height),
                     }
                 },
             )?;

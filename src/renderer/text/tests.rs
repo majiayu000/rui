@@ -594,3 +594,68 @@ fn retained_metrics_stay_within_the_byte_budget() {
     );
     assert_eq!(cache.cached_metrics_len(), entries_before_oversized_key);
 }
+
+pub(super) const PARAGRAPH: &str = "Text shaping is the costliest part of layout. A paragraph wraps \
+the same for a range of widths, so resizing a window should not wrap it again \
+until a line actually breaks somewhere else.\nA second paragraph, 中文也要换行。";
+
+fn wrap(
+    cache: &mut TextMeasureCache,
+    content: &str,
+    width: f32,
+    max_lines: Option<usize>,
+) -> WrappedText {
+    match cache.wrap(request(content), width, max_lines) {
+        Ok(wrapped) => wrapped,
+        Err(err) => panic!("text wrapping failed: {:?}", err),
+    }
+}
+
+#[test]
+fn resizing_rewraps_only_when_a_break_moves_and_never_reshapes() {
+    let mut cache = TextMeasureCache::new();
+    if !cache.has_fonts() {
+        return;
+    }
+    let mut previous = wrap(&mut cache, PARAGRAPH, 300.0, None);
+    let shapes = cache.stats().shapes;
+    assert_eq!(shapes, 2, "one shape per paragraph");
+
+    let mut changed = 0;
+    for step in 1..=200 {
+        let wrapped = wrap(&mut cache, PARAGRAPH, 300.0 + step as f32, None);
+        if wrapped.lines != previous.lines {
+            changed += 1;
+        }
+        previous = wrapped;
+    }
+    let stats = cache.stats();
+    assert_eq!(stats.shapes, shapes, "rewrapping reuses the kept clusters");
+    assert!(changed > 0);
+    assert_eq!(
+        stats.wrap_misses,
+        1 + changed,
+        "a width rewraps only when the lines change: {stats:?}"
+    );
+}
+
+#[test]
+fn text_scrolled_out_and_back_is_shaped_once() {
+    let mut cache = TextMeasureCache::new();
+    if !cache.has_fonts() {
+        return;
+    }
+    let lines: Vec<String> = (0..300).map(|row| format!("row {row}")).collect();
+    let window = 20;
+    let tops = (0..=lines.len() - window)
+        .step_by(7)
+        .chain((0..=lines.len() - window).rev().step_by(5));
+    for top in tops {
+        cache.begin_frame();
+        for line in &lines[top..top + window] {
+            measure(&mut cache, request(line));
+        }
+    }
+    assert_eq!(cache.stats().shapes, lines.len());
+    assert_eq!(cache.stats().measure_misses, lines.len());
+}
