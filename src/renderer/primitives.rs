@@ -141,6 +141,63 @@ impl Primitive {
             Self::PopClip => PrimitiveKind::PopClip,
         }
     }
+
+    /// Whether this primitive can put any pixel inside `visible`.
+    ///
+    /// Conservative: `true` whenever that cannot be ruled out from the primitive
+    /// alone. Images can draw past their bounds when filling, and text is centred
+    /// on its ink, which can be wider than its bounds, so neither is ruled out
+    /// horizontally.
+    pub fn may_touch(&self, visible: &Bounds) -> bool {
+        // Antialiasing reaches about one pixel past an edge.
+        const EDGE: f32 = 1.0;
+        let reach = match self {
+            Self::Quad { bounds, .. }
+            | Self::LinearGradient { bounds, .. }
+            | Self::RadialGradient { bounds, .. } => outset(*bounds, EDGE, EDGE),
+            Self::Shadow {
+                bounds,
+                blur_radius,
+                ..
+            } => {
+                let blur = blur_radius.max(0.0) * 3.0 + EDGE;
+                outset(*bounds, blur, blur)
+            }
+            Self::Text {
+                bounds, font_size, ..
+            } => outset(*bounds, f32::INFINITY, font_size.max(0.0) * 2.0 + EDGE),
+            Self::Path {
+                vertices,
+                stroke_width,
+                ..
+            } => {
+                let Some(first) = vertices.first() else {
+                    return false;
+                };
+                let (mut x0, mut y0) = (first.position[0], first.position[1]);
+                let (mut x1, mut y1) = (x0, y0);
+                for vertex in vertices {
+                    x0 = x0.min(vertex.position[0]);
+                    y0 = y0.min(vertex.position[1]);
+                    x1 = x1.max(vertex.position[0]);
+                    y1 = y1.max(vertex.position[1]);
+                }
+                let pad = stroke_width.unwrap_or(0.0).max(0.0) * 0.5 + EDGE;
+                outset(Bounds::from_xywh(x0, y0, x1 - x0, y1 - y0), pad, pad)
+            }
+            Self::Image { .. } | Self::PushClip { .. } | Self::PopClip => return true,
+        };
+        reach.intersects(visible)
+    }
+}
+
+fn outset(bounds: Bounds, dx: f32, dy: f32) -> Bounds {
+    let (x, width) = if dx.is_infinite() {
+        (f32::MIN / 4.0, f32::MAX / 2.0)
+    } else {
+        (bounds.x() - dx, bounds.width() + dx * 2.0)
+    };
+    Bounds::from_xywh(x, bounds.y() - dy, width, bounds.height() + dy * 2.0)
 }
 
 /// Vertex for path rendering
@@ -300,5 +357,93 @@ impl GpuShadow {
             color: color.to_array(),
             _padding: [0.0; 3],
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn view() -> Bounds {
+        Bounds::from_xywh(0.0, 0.0, 100.0, 100.0)
+    }
+
+    fn quad(bounds: Bounds) -> Primitive {
+        Primitive::Quad {
+            bounds,
+            background: Rgba::new(1.0, 1.0, 1.0, 1.0),
+            border_color: Rgba::new(0.0, 0.0, 0.0, 0.0),
+            border_widths: Edges::ZERO,
+            corner_radii: Corners::all(0.0),
+        }
+    }
+
+    fn text(bounds: Bounds) -> Primitive {
+        Primitive::Text {
+            bounds,
+            content: "label".to_string(),
+            color: Rgba::new(1.0, 1.0, 1.0, 1.0),
+            font_size: 14.0,
+            font_weight: 400,
+            font_family: None,
+            line_height: 1.2,
+            align: TextAlign::Left,
+        }
+    }
+
+    #[test]
+    fn quads_outside_are_ruled_out_and_edge_antialiasing_is_kept() {
+        assert!(!quad(Bounds::from_xywh(0.0, 200.0, 50.0, 20.0)).may_touch(&view()));
+        assert!(quad(Bounds::from_xywh(0.0, 99.0, 50.0, 20.0)).may_touch(&view()));
+        // Ends half a pixel above the view: its antialiased edge can still land inside.
+        assert!(quad(Bounds::from_xywh(0.0, -20.5, 50.0, 20.0)).may_touch(&view()));
+    }
+
+    #[test]
+    fn shadow_blur_reaching_into_view_is_kept() {
+        let shadow = |y| Primitive::Shadow {
+            bounds: Bounds::from_xywh(0.0, y, 50.0, 20.0),
+            corner_radii: Corners::all(0.0),
+            blur_radius: 10.0,
+            color: Rgba::new(0.0, 0.0, 0.0, 0.5),
+        };
+        assert!(shadow(120.0).may_touch(&view()));
+        assert!(!shadow(200.0).may_touch(&view()));
+    }
+
+    #[test]
+    fn text_is_only_ruled_out_vertically() {
+        // Narrow bounds far to the side: centred ink may still overflow into view.
+        assert!(text(Bounds::from_xywh(400.0, 10.0, 1.0, 20.0)).may_touch(&view()));
+        assert!(!text(Bounds::from_xywh(0.0, 400.0, 100.0, 20.0)).may_touch(&view()));
+    }
+
+    #[test]
+    fn paths_use_their_vertex_extent_and_stroke() {
+        let path = |stroke_width| Primitive::Path {
+            vertices: vec![PathVertex::new(110.0, 10.0), PathVertex::new(150.0, 10.0)],
+            color: Rgba::new(1.0, 1.0, 1.0, 1.0),
+            stroke_width,
+        };
+        assert!(!path(None).may_touch(&view()));
+        assert!(path(Some(24.0)).may_touch(&view()));
+        let empty = Primitive::Path {
+            vertices: Vec::new(),
+            color: Rgba::new(1.0, 1.0, 1.0, 1.0),
+            stroke_width: None,
+        };
+        assert!(!empty.may_touch(&view()));
+    }
+
+    #[test]
+    fn images_and_clips_are_never_ruled_out() {
+        assert!(Primitive::PopClip.may_touch(&view()));
+        assert!(
+            Primitive::PushClip {
+                bounds: Bounds::from_xywh(500.0, 500.0, 1.0, 1.0),
+                corner_radii: Corners::all(0.0),
+            }
+            .may_touch(&view())
+        );
     }
 }
