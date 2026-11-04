@@ -1,25 +1,28 @@
 //! Cost of pointer hit testing on a long list. Prints JSON.
 //!
-//! `cargo bench --bench hit_test` (`STRESS_ROWS=500` for another length)
+//! `cargo bench --bench hit_test` (`STRESS_ROWS=500` for one other length)
 //!
 //! Each row of the list registers a hit region, as a list of clickable rows does,
-//! and the column registers one covering them all. Queries sweep the viewport.
+//! and the column registers one covering them all. The scene is rebuilt every
+//! frame, so a frame's queries pay for anything `hit_test` builds; queries sweep
+//! the viewport.
 use rui::renderer::Scene;
 use rui::{Bounds, ElementId, Point};
 use std::hint::black_box;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
-const DEFAULT_ROWS: usize = 2_000;
+const ROWS: [usize; 3] = [200, 2_000, 20_000];
 const ROW_HEIGHT: f32 = 28.0;
 const SAMPLES: usize = 9;
-const QUERIES: usize = 10_000;
+const FRAMES: usize = 20;
+const QUERIES_PER_FRAME: [usize; 3] = [1, 3, 100];
 const VIEWPORT: (f32, f32) = (1440.0, 900.0);
 
-fn rows() -> usize {
-    std::env::var("STRESS_ROWS")
-        .ok()
-        .and_then(|rows| rows.parse().ok())
-        .unwrap_or(DEFAULT_ROWS)
+fn rows() -> Vec<usize> {
+    match std::env::var("STRESS_ROWS") {
+        Ok(rows) => vec![rows.parse().expect("STRESS_ROWS must be a row count")],
+        Err(_) => ROWS.to_vec(),
+    }
 }
 
 fn register(scene: &mut Scene, rows: usize) {
@@ -36,14 +39,19 @@ fn register(scene: &mut Scene, rows: usize) {
     }
 }
 
-/// Median nanoseconds of `SAMPLES` timed runs, each divided by `per`.
-fn median_ns(per: usize, mut run: impl FnMut()) -> f64 {
+fn query_point(index: usize) -> Point {
+    let x = (index * 37 % 1_000) as f32 / 1_000.0 * VIEWPORT.0;
+    let y = (index * 61 % 1_000) as f32 / 1_000.0 * VIEWPORT.1;
+    Point::new(x, y)
+}
+
+/// Median over `SAMPLES` of the mean time `run` reports for one of `FRAMES` frames.
+fn median_us(mut run: impl FnMut() -> Duration) -> f64 {
     run();
     let mut samples: Vec<f64> = (0..SAMPLES)
         .map(|_| {
-            let t0 = Instant::now();
-            run();
-            t0.elapsed().as_nanos() as f64 / per as f64
+            let total: Duration = (0..FRAMES).map(|_| run()).sum();
+            total.as_secs_f64() * 1e6 / FRAMES as f64
         })
         .collect();
     samples.sort_by(f64::total_cmp);
@@ -51,32 +59,40 @@ fn median_ns(per: usize, mut run: impl FnMut()) -> f64 {
 }
 
 fn main() {
-    let rows = rows();
     let mut scene = Scene::new();
-    let register_ns = median_ns(1, || register(&mut scene, rows));
-
-    let points: Vec<Point> = (0..QUERIES)
-        .map(|index| {
-            let x = (index * 37 % 1_000) as f32 / 1_000.0 * VIEWPORT.0;
-            let y = (index * 61 % 1_000) as f32 / 1_000.0 * VIEWPORT.1;
-            Point::new(x, y)
+    let cases: Vec<String> = rows()
+        .into_iter()
+        .map(|rows| {
+            let register_us = median_us(|| {
+                let t0 = Instant::now();
+                register(&mut scene, rows);
+                t0.elapsed()
+            });
+            let queries: Vec<String> = QUERIES_PER_FRAME
+                .iter()
+                .map(|&count| {
+                    let us = median_us(|| {
+                        register(&mut scene, rows);
+                        let t0 = Instant::now();
+                        for index in 0..count {
+                            let hit = black_box(scene.hit_test(query_point(index)));
+                            assert!(hit.is_some(), "every query should hit a row");
+                        }
+                        t0.elapsed()
+                    });
+                    format!("\"{count}\": {us:.2}")
+                })
+                .collect();
+            format!(
+                "    {{\"rows\": {rows}, \"register_frame_us\": {register_us:.2}, \"queries_frame_us\": {{{}}}}}",
+                queries.join(", ")
+            )
         })
         .collect();
-    let mut hits = 0usize;
-    let hit_test_ns = median_ns(QUERIES, || {
-        for point in &points {
-            hits += black_box(scene.hit_test(*point)).is_some() as usize;
-        }
-    });
-    assert_eq!(
-        hits,
-        QUERIES * (SAMPLES + 1),
-        "every query should hit a row"
-    );
 
     println!("{{");
-    println!("  \"rows\": {rows},");
-    println!("  \"register_frame_us\": {:.2},", register_ns / 1e3);
-    println!("  \"hit_test_ns\": {hit_test_ns:.1}");
+    println!("  \"cases\": [");
+    println!("{}", cases.join(",\n"));
+    println!("  ]");
     println!("}}");
 }

@@ -4,6 +4,7 @@ use crate::core::ElementId;
 use crate::core::geometry::{Bounds, Point};
 use crate::renderer::primitives::Primitive;
 use smallvec::SmallVec;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hasher};
 
@@ -85,23 +86,36 @@ impl Hasher for CellHasher {
     }
 }
 
-/// Sparse uniform grid over hit regions, keyed by registration order.
+/// Queries in one frame after which `hit_test` builds the grid. Building costs
+/// about as much as 30 linear scans (`benches/hit_test.rs`), so building once that
+/// many have run keeps a frame within twice the cost of the better choice, and a
+/// frame with a handful of queries never builds.
+const HIT_INDEX_MIN_QUERIES: usize = 32;
+
+/// Scenes with fewer regions always scan: a grid lookup costs about as much as
+/// scanning a few dozen regions.
+const HIT_INDEX_MIN_REGIONS: usize = 64;
+
+/// `(layer index, slot in layer)` of a hit region.
+type RegionSlot = (usize, usize);
+
+/// Sparse uniform grid over hit regions, built on demand from the layers.
 #[derive(Debug, Default)]
 struct HitIndex {
-    /// `(layer index, slot in layer)` for each region, indexed by its order.
-    locations: Vec<(usize, usize)>,
-    cells: HashMap<(i32, i32), Vec<usize>, BuildHasherDefault<CellHasher>>,
+    built: bool,
+    /// The regions overlapping each cell.
+    cells: HashMap<(i32, i32), Vec<RegionSlot>, BuildHasherDefault<CellHasher>>,
     /// Regions too large (or not finite) for the grid.
-    oversized: Vec<usize>,
+    oversized: Vec<RegionSlot>,
 }
 
 impl HitIndex {
     fn clear(&mut self) {
-        self.locations.clear();
-        // Keep last frame's cells and their buffers; drop cells that frame left empty.
-        self.cells.retain(|_, orders| {
-            let used = !orders.is_empty();
-            orders.clear();
+        self.built = false;
+        // Keep the last build's cells and their buffers; drop cells it left empty.
+        self.cells.retain(|_, regions| {
+            let used = !regions.is_empty();
+            regions.clear();
             used
         });
         self.oversized.clear();
@@ -116,10 +130,19 @@ impl HitIndex {
         Some((cell(x, HIT_CELL_WIDTH)?, cell(y, HIT_CELL_HEIGHT)?))
     }
 
-    fn insert(&mut self, order: usize, location: (usize, usize), bounds: Bounds) {
-        debug_assert_eq!(order, self.locations.len());
-        self.locations.push(location);
+    fn build(&mut self, layers: &[Layer]) {
+        // Empty the cells in place: their buffers are what makes a rebuild cheap.
+        self.cells.values_mut().for_each(Vec::clear);
+        self.oversized.clear();
+        for (layer_index, layer) in layers.iter().enumerate() {
+            for (slot, region) in layer.hit_regions.iter().enumerate() {
+                self.insert((layer_index, slot), region.visible_bounds);
+            }
+        }
+        self.built = true;
+    }
 
+    fn insert(&mut self, location: RegionSlot, bounds: Bounds) {
         // Same edges `Bounds::contains` tests against, so every contained point maps
         // to a cell this region is filed under.
         let x1 = bounds.origin.x;
@@ -128,23 +151,23 @@ impl HitIndex {
         let y2 = y1 + bounds.size.height;
         let (Some((cx1, cy1)), Some((cx2, cy2))) = (Self::cell_of(x1, y1), Self::cell_of(x2, y2))
         else {
-            self.oversized.push(order);
+            self.oversized.push(location);
             return;
         };
         let span = |from: i32, to: i32| (i64::from(to) - i64::from(from) + 1).max(0);
         if span(cx1, cx2) * span(cy1, cy2) > HIT_MAX_CELLS_PER_REGION {
-            self.oversized.push(order);
+            self.oversized.push(location);
             return;
         }
         for cy in cy1..=cy2 {
             for cx in cx1..=cx2 {
-                self.cells.entry((cx, cy)).or_default().push(order);
+                self.cells.entry((cx, cy)).or_default().push(location);
             }
         }
     }
 
-    /// Orders of regions that may contain `point`; a superset of the true hits.
-    fn candidates(&self, point: Point) -> impl Iterator<Item = usize> + '_ {
+    /// Regions that may contain `point`; a superset of the true hits.
+    fn candidates(&self, point: Point) -> impl Iterator<Item = RegionSlot> + '_ {
         Self::cell_of(point.x, point.y)
             .and_then(|cell| self.cells.get(&cell))
             .into_iter()
@@ -152,6 +175,14 @@ impl HitIndex {
             .chain(self.oversized.iter())
             .copied()
     }
+}
+
+/// The region containing `point` with the highest `(z_index, order)`.
+fn topmost<'a>(regions: impl Iterator<Item = &'a HitRegion>, point: Point) -> Option<ElementId> {
+    regions
+        .filter(|region| region.contains(point))
+        .max_by_key(|region| (region.z_index, region.order))
+        .map(|region| region.id)
 }
 
 /// A render layer groups primitives and hit regions at a z-index.
@@ -216,7 +247,10 @@ pub struct Scene {
 
     next_hit_order: usize,
 
-    hit_index: HitIndex,
+    /// Hit tests since the last `clear`, which decide when to build `hit_index`.
+    hit_queries: Cell<usize>,
+
+    hit_index: RefCell<HitIndex>,
 }
 
 impl Scene {
@@ -229,7 +263,8 @@ impl Scene {
             active_layers: smallvec::smallvec![root_id],
             accessibility_regions: HashMap::new(),
             next_hit_order: 0,
-            hit_index: HitIndex::default(),
+            hit_queries: Cell::new(0),
+            hit_index: RefCell::default(),
         }
     }
 
@@ -244,7 +279,8 @@ impl Scene {
         self.layers.push(Layer::new(root_id, 0, ZIndex::ROOT, None));
         self.active_layers.push(root_id);
         self.next_hit_order = 0;
-        self.hit_index.clear();
+        self.hit_queries.set(0);
+        self.hit_index.get_mut().clear();
     }
 
     /// Insert a primitive into the scene
@@ -335,42 +371,47 @@ impl Scene {
             None => return false,
         };
 
-        let layer_index = self.current_render_layer().index();
-        let Some(layer) = self.layers.get_mut(layer_index) else {
-            return false;
-        };
-        let order = self.next_hit_order;
-        self.next_hit_order += 1;
-        layer.hit_regions.push(HitRegion {
+        let region = HitRegion {
             id,
             bounds,
             visible_bounds,
             z_index,
-            order,
-        });
-        self.hit_index.insert(
-            order,
-            (layer_index, layer.hit_regions.len() - 1),
-            visible_bounds,
-        );
+            order: self.next_hit_order,
+        };
+        self.next_hit_order += 1;
+
+        if let Some(layer) = self.active_layer_mut() {
+            layer.hit_regions.push(region);
+        }
+        self.hit_index.get_mut().built = false;
 
         true
     }
 
     /// Hit test a point, returning the topmost registered element.
     ///
-    /// Only regions filed under the point's grid cell are tested, so the cost does
-    /// not grow with the number of regions elsewhere in the scene.
+    /// A frame's first queries scan every region. A frame that keeps querying a
+    /// large scene builds a grid index once and then tests only the regions filed
+    /// under the point's cell.
     pub fn hit_test(&self, point: Point) -> Option<ElementId> {
-        self.hit_index
+        let queries = self.hit_queries.get() + 1;
+        self.hit_queries.set(queries);
+        if queries < HIT_INDEX_MIN_QUERIES || self.next_hit_order < HIT_INDEX_MIN_REGIONS {
+            let regions = self
+                .layers
+                .iter()
+                .flat_map(|layer| layer.hit_regions.iter());
+            return topmost(regions, point);
+        }
+
+        let mut index = self.hit_index.borrow_mut();
+        if !index.built {
+            index.build(&self.layers);
+        }
+        let regions = index
             .candidates(point)
-            .map(|order| {
-                let (layer, slot) = self.hit_index.locations[order];
-                &self.layers[layer].hit_regions[slot]
-            })
-            .filter(|region| region.contains(point))
-            .max_by_key(|region| (region.z_index, region.order))
-            .map(|region| region.id)
+            .map(|(layer, slot)| &self.layers[layer].hit_regions[slot]);
+        topmost(regions, point)
     }
 
     /// Push a clipping layer
@@ -627,6 +668,16 @@ mod tests {
             .map(|region| region.id)
     }
 
+    /// The grid's answer, built regardless of the thresholds `hit_test` applies.
+    fn grid_hit_test(scene: &Scene, point: Point) -> Option<ElementId> {
+        let mut index = HitIndex::default();
+        index.build(scene.layers());
+        let regions = index
+            .candidates(point)
+            .map(|(layer, slot)| &scene.layers[layer].hit_regions[slot]);
+        topmost(regions, point)
+    }
+
     struct XorShift(u64);
 
     impl XorShift {
@@ -698,7 +749,7 @@ mod tests {
     fn indexed_hit_test_matches_linear_scan_on_random_scenes() {
         let mut rng = XorShift(0x9e37_79b9_7f4a_7c15);
         let mut scene = Scene::new();
-        let mut hits = 0;
+        let (mut hits, mut indexed) = (0, 0);
         for _ in 0..300 {
             scene.clear();
             let registered = random_scene(&mut rng, &mut scene);
@@ -714,11 +765,17 @@ mod tests {
                 let expected = linear_hit_test(&scene, point);
                 hits += expected.is_some() as usize;
                 assert_eq!(scene.hit_test(point), expected, "at {point:?}");
+                assert_eq!(grid_hit_test(&scene, point), expected, "grid at {point:?}");
+                indexed += scene.hit_index.borrow().built as usize;
             }
         }
         assert!(
             hits > 1_000,
             "random scenes should produce real hits, got {hits}"
+        );
+        assert!(
+            indexed > 1_000,
+            "hit_test should answer from the grid in large scenes, got {indexed}"
         );
     }
 
@@ -739,12 +796,31 @@ mod tests {
             point(f32::INFINITY, 5.0),
             point(f32::NAN, f32::NAN),
         ] {
-            assert_eq!(
-                scene.hit_test(point),
-                linear_hit_test(&scene, point),
-                "at {point:?}"
-            );
+            let expected = linear_hit_test(&scene, point);
+            assert_eq!(scene.hit_test(point), expected, "at {point:?}");
+            assert_eq!(grid_hit_test(&scene, point), expected, "grid at {point:?}");
         }
         assert_eq!(scene.hit_test(point(5.0, 5.0)), Some(infinite));
+    }
+
+    #[test]
+    fn hit_region_registered_after_the_grid_is_built_is_hit() {
+        let mut scene = Scene::new();
+        for row in 0..HIT_INDEX_MIN_REGIONS {
+            let y = row as f32 * 10.0;
+            assert!(scene.register_hit_region_at(
+                ElementId::from(row as u64),
+                bounds(0.0, y, 100.0, 10.0),
+                0
+            ));
+        }
+        for _ in 0..HIT_INDEX_MIN_QUERIES {
+            assert_eq!(scene.hit_test(point(5.0, 5.0)), Some(ElementId::from(0)));
+        }
+        assert!(scene.hit_index.borrow().built);
+
+        let top = ElementId::from(1_000);
+        assert!(scene.register_hit_region_at(top, bounds(0.0, 0.0, 10.0, 10.0), 1));
+        assert_eq!(scene.hit_test(point(5.0, 5.0)), Some(top));
     }
 }
