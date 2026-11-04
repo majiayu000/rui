@@ -39,3 +39,14 @@ Refresh flow:
 2. Copy the new `median` and `p95` values into `benchmarks/runtime_baselines.json`.
 3. Update `generated_at`, `baseline_revision`, and environment notes.
 4. Run `cargo test benchmark_config`, `cargo check`, and the benchmark command again.
+
+## Long-list stress benchmark
+
+`runtime_baselines` covers small, fixed workloads. `stress_frame` covers a long list:
+
+```sh
+cargo bench --bench stress_frame
+STRESS_ROWS=500 cargo bench --bench stress_frame
+```
+
+It prints JSON with the cost of each frame stage on 2000 rows (a background and two texts each), by default: milliseconds and retired instructions for the whole process. Compare instructions across runs, since milliseconds move with machine load. `pixel_checksum` hashes one rendered frame, so a renderer optimisation should leave it unchanged. `footprint_mb` is the process's physical footprint after start, after the first layout and at the end. It reports only: it has no baseline and fails nothing yet.

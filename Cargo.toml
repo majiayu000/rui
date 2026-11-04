@@ -85,3 +85,8 @@ path = "examples/glm_chat.rs"
 name = "runtime_baselines"
 path = "benches/runtime_baselines.rs"
 harness = false
+
+[[bench]]
+name = "stress_frame"
+path = "benches/stress_frame.rs"
+harness = false
