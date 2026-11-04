@@ -2,6 +2,7 @@
 
 use crate::core::action::{ActionHandler, ActionId, ActionOutcome, Keymap};
 use crate::core::app_handle::{AppHandle, AppUpdateQueue};
+use crate::core::effects::Effects;
 use crate::core::entity::{Entity, EntityId, EntityStore};
 use crate::core::geometry::Size;
 use crate::core::view::{View, ViewContext, ViewNotifier, ViewUpdates};
@@ -28,6 +29,7 @@ pub struct AppContext {
     viewport_size: Size,
     runtime_view_notifier: Option<(EntityId, ViewNotifier)>,
     update_queue: Arc<AppUpdateQueue>,
+    pub(crate) effects: Effects,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -117,6 +119,7 @@ impl AppContext {
             viewport_size: Size::ZERO,
             runtime_view_notifier: None,
             update_queue: Arc::default(),
+            effects: Effects::default(),
         }
     }
 
@@ -160,6 +163,7 @@ impl AppContext {
 
     /// Mark an entity as needing re-render
     pub fn notify(&mut self, entity_id: EntityId) {
+        self.effects.push_notify(entity_id);
         self.pending_updates.insert(entity_id);
         self.needs_rebuild = true;
         self.mark_redraw_from(RedrawSource::ViewNotification);
@@ -202,7 +206,10 @@ impl AppContext {
     /// The single definition of "idle" for the frame pipeline; runners must not
     /// re-derive it from the individual flags.
     pub fn has_frame_work(&self) -> bool {
-        self.dirty || self.needs_rebuild || !self.pending_updates.is_empty()
+        self.dirty
+            || self.needs_rebuild
+            || !self.pending_updates.is_empty()
+            || !self.effects.is_empty()
     }
 
     pub fn redraw_source_counts(&self) -> RedrawSourceCounts {
@@ -333,6 +340,8 @@ impl<V: View> RuntimeView<V> {
                 update(&mut self.view, &mut view_cx);
             }
         }
+        // So this render already shows what observers derive from those updates.
+        app.flush_effects();
         let mut view_cx = self.context(app);
         self.view.render(&mut view_cx)
     }
