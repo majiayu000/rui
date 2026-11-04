@@ -7,27 +7,53 @@ use std::sync::Arc;
 use unicode_bidi::{BidiClass, bidi_class};
 use unicode_segmentation::UnicodeSegmentation;
 
+/// The bytes of one font file, shared by every face in it.
+#[derive(Debug)]
+pub(crate) enum FontBytes {
+    /// Mapped from disk: only the pages that are read become resident, and they
+    /// are clean file pages, not part of the process footprint.
+    Mapped(crate::renderer::system_fonts::MappedFile),
+    #[cfg_attr(all(unix, not(test)), allow(dead_code))]
+    Owned(Vec<u8>),
+}
+
+impl FontBytes {
+    pub(crate) fn as_slice(&self) -> &[u8] {
+        match self {
+            Self::Mapped(map) => map.as_slice(),
+            Self::Owned(bytes) => bytes,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct TextShapingFont {
     pub family: String,
     pub index: u32,
-    pub data: Arc<Vec<u8>>,
-    pub font: Font<'static>,
+    // Borrows from `data`. Declared first so it is dropped first, and private so no
+    // `Font<'static>` or glyph outlives the bytes it reads.
+    font: Font<'static>,
+    data: Arc<FontBytes>,
 }
 
 impl TextShapingFont {
-    pub(crate) fn new(
-        family: impl Into<String>,
-        index: u32,
-        data: Arc<Vec<u8>>,
-        font: Font<'static>,
-    ) -> Self {
-        Self {
+    /// `None` when face `index` of `data` cannot be parsed by rusttype.
+    pub(crate) fn new(family: impl Into<String>, index: u32, data: Arc<FontBytes>) -> Option<Self> {
+        // SAFETY: the slice points into `data`, whose heap or mapping does not move
+        // while the `Arc` lives. The font is stored next to that `Arc`, dropped before
+        // it, and only handed out with its lifetime shortened to `&self`.
+        let bytes: &'static [u8] = unsafe { std::mem::transmute(data.as_slice()) };
+        let font = Font::try_from_bytes_and_index(bytes, index)?;
+        Some(Self {
             family: family.into(),
             index,
-            data,
             font,
-        }
+            data,
+        })
+    }
+
+    pub(crate) fn font(&self) -> &Font<'_> {
+        &self.font
     }
 
     fn face(&self) -> Option<Face<'_>> {
@@ -318,9 +344,9 @@ pub(crate) fn rasterize_with_plan(
             continue;
         };
         let scale = Scale::uniform(request.font_size);
-        let v_metrics = font.font.v_metrics(scale);
+        let v_metrics = font.font().v_metrics(scale);
         let glyph = font
-            .font
+            .font()
             .glyph(GlyphId(shaped.glyph_id))
             .scaled(scale)
             .positioned(point(shaped.x_offset, v_metrics.ascent + shaped.y_offset));
@@ -529,9 +555,9 @@ fn shape_run_glyphs(
     }
 
     let shaped = rustybuzz::shape(&face, &[], buffer);
-    let position_scale = font.font.scale_for_pixel_height(request.font_size);
+    let position_scale = font.font().scale_for_pixel_height(request.font_size);
     let rust_scale = Scale::uniform(request.font_size);
-    let v_metrics = font.font.v_metrics(rust_scale);
+    let v_metrics = font.font().v_metrics(rust_scale);
     let mut cursor_x = start_x;
     let mut glyphs = Vec::new();
     let run_end = clusters.last().map(|cluster| cluster.byte_end).unwrap_or(0);
@@ -549,7 +575,7 @@ fn shape_run_glyphs(
         let advance_width = position.x_advance as f32 * position_scale;
         let glyph_id = info.glyph_id as u16;
         let glyph = font
-            .font
+            .font()
             .glyph(GlyphId(glyph_id))
             .scaled(rust_scale)
             .positioned(point(x_offset, v_metrics.ascent + y_offset));
@@ -631,7 +657,7 @@ fn simple_cluster_advance(font: &TextShapingFont, scale: Scale, cluster: &str) -
     cluster
         .chars()
         .filter(|ch| !ch.is_control())
-        .map(|ch| font.font.glyph(ch).scaled(scale).h_metrics().advance_width)
+        .map(|ch| font.font().glyph(ch).scaled(scale).h_metrics().advance_width)
         .sum()
 }
 

@@ -6,8 +6,7 @@
 //! never stored, so a transient read failure cannot freeze an empty font set
 //! into the rest of the process lifetime.
 
-use crate::renderer::text_shaping::TextShapingFont;
-use rusttype::Font;
+use crate::renderer::text_shaping::{FontBytes, TextShapingFont};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -275,16 +274,103 @@ fn load_font_faces(
     path: &str,
     fonts: &mut Vec<TextShapingFont>,
 ) -> Result<(), FontLoadError> {
-    load_font_faces_with(family, path, fonts, |candidate_path| {
-        std::fs::read(candidate_path)
-    })
+    load_font_faces_with(family, path, fonts, read_font_file)
+}
+
+#[cfg(unix)]
+fn read_font_file(path: &str) -> std::io::Result<FontBytes> {
+    MappedFile::open(path).map(FontBytes::Mapped)
+}
+
+#[cfg(not(unix))]
+fn read_font_file(path: &str) -> std::io::Result<FontBytes> {
+    std::fs::read(path).map(FontBytes::Owned)
+}
+
+#[cfg(unix)]
+unsafe extern "C" {
+    fn mmap(
+        addr: *mut std::ffi::c_void,
+        len: usize,
+        prot: i32,
+        flags: i32,
+        fd: i32,
+        offset: i64,
+    ) -> *mut std::ffi::c_void;
+    fn munmap(addr: *mut std::ffi::c_void, len: usize) -> i32;
+}
+
+/// A read-only private mapping of a whole file.
+#[derive(Debug)]
+pub(crate) struct MappedFile {
+    ptr: *const u8,
+    len: usize,
+}
+
+// SAFETY: the mapping is read-only and owned by this value alone.
+unsafe impl Send for MappedFile {}
+unsafe impl Sync for MappedFile {}
+
+#[cfg(unix)]
+impl MappedFile {
+    const PROT_READ: i32 = 0x1;
+    const MAP_PRIVATE: i32 = 0x2;
+
+    fn open(path: &str) -> std::io::Result<Self> {
+        use std::os::fd::AsRawFd;
+
+        let file = std::fs::File::open(path)?;
+        let len = usize::try_from(file.metadata()?.len())
+            .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "font file too large"))?;
+        if len == 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "font file is empty",
+            ));
+        }
+        // SAFETY: a fresh read-only private mapping of an open file; the descriptor
+        // may close afterwards. System font files are not rewritten while the
+        // process runs, the same assumption every mapping font loader makes.
+        let ptr = unsafe {
+            mmap(
+                std::ptr::null_mut(),
+                len,
+                Self::PROT_READ,
+                Self::MAP_PRIVATE,
+                file.as_raw_fd(),
+                0,
+            )
+        };
+        if ptr as isize == -1 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(Self {
+            ptr: ptr as *const u8,
+            len,
+        })
+    }
+}
+
+impl MappedFile {
+    pub(crate) fn as_slice(&self) -> &[u8] {
+        // SAFETY: `ptr` maps `len` readable bytes until `drop`.
+        unsafe { std::slice::from_raw_parts(self.ptr, self.len) }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for MappedFile {
+    fn drop(&mut self) {
+        // SAFETY: unmaps exactly the region `open` mapped, once.
+        unsafe { munmap(self.ptr as *mut std::ffi::c_void, self.len) };
+    }
 }
 
 fn load_font_faces_with(
     family: &str,
     path: &str,
     fonts: &mut Vec<TextShapingFont>,
-    read: impl FnOnce(&str) -> std::io::Result<Vec<u8>>,
+    read: impl FnOnce(&str) -> std::io::Result<FontBytes>,
 ) -> Result<(), FontLoadError> {
     let bytes = match read(path) {
         Ok(bytes) => bytes,
@@ -295,12 +381,10 @@ fn load_font_faces_with(
     let face_count = font_face_count(path, data.as_slice())?;
 
     for index in 0..face_count {
-        let rusttype_font = Font::try_from_vec_and_index(data.as_ref().clone(), index);
+        let rusttype_font = TextShapingFont::new(family, index, Arc::clone(&data));
         let rustybuzz_font = rustybuzz::Face::from_slice(data.as_slice(), index);
         match (rusttype_font, rustybuzz_font) {
-            (Some(font), Some(_)) => {
-                fonts.push(TextShapingFont::new(family, index, data.clone(), font));
-            }
+            (Some(font), Some(_)) => fonts.push(font),
             (None, None) => {
                 return Err(FontLoadError::invalid_data(
                     path,
@@ -414,7 +498,7 @@ mod tests {
     fn malformed_font_data_is_an_explicit_retryable_error() {
         let mut fonts = Vec::new();
         let error = load_font_faces_with("Broken", "/fonts/broken.ttf", &mut fonts, |_| {
-            Ok(b"not a font".to_vec())
+            Ok(FontBytes::Owned(b"not a font".to_vec()))
         })
         .expect_err("readable malformed font data must not be cached as a successful load");
 
