@@ -1,6 +1,7 @@
 //! UI Elements - the building blocks of the UI
 
 mod button;
+mod canvas;
 mod div;
 pub mod element;
 mod image;
@@ -15,6 +16,7 @@ mod text_area;
 mod virtual_list;
 
 pub use button::{Button, ButtonSize, ButtonVariant, button};
+pub use canvas::{Canvas, Painter, canvas};
 pub use div::{Div, div};
 pub use element::{AnyElement, Element, EventResult, IntoElement, Render};
 pub use image::{Image, ImageFit, ImageSource, image};

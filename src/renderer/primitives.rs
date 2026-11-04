@@ -333,8 +333,8 @@ impl GpuQuad {
 pub struct GpuShadow {
     pub bounds: [f32; 4],
     pub corner_radii: [f32; 4],
-    pub blur_radius: f32,
     pub color: [f32; 4],
+    pub blur_radius: f32,
     pub _padding: [f32; 3],
 }
 
@@ -353,8 +353,8 @@ impl GpuShadow {
                 corner_radii.bottom_right,
                 corner_radii.bottom_left,
             ],
-            blur_radius,
             color: color.to_array(),
+            blur_radius,
             _padding: [0.0; 3],
         }
     }

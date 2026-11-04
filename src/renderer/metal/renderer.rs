@@ -17,6 +17,10 @@ use crate::{ImageFit, ImageSource};
 use metal::*;
 use std::collections::HashMap;
 
+/// Pixel format of every render target: drawables, captures and offscreen
+/// textures. Blending happens in linear light and stores sRGB-encoded bytes.
+pub(crate) const TARGET_PIXEL_FORMAT: MTLPixelFormat = MTLPixelFormat::BGRA8Unorm_sRGB;
+
 /// Uniform data passed to shaders
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -54,25 +58,40 @@ impl MetalRenderer {
 
         // Compile shaders
         let library = device
-            .new_library_with_source(super::shaders::QUAD_SHADER, &CompileOptions::new())
+            .new_library_with_source(
+                &with_color(super::shaders::QUAD_SHADER),
+                &CompileOptions::new(),
+            )
             .expect("Failed to compile quad shader");
 
         let shadow_library = device
-            .new_library_with_source(super::shaders::SHADOW_SHADER, &CompileOptions::new())
+            .new_library_with_source(
+                &with_color(super::shaders::SHADOW_SHADER),
+                &CompileOptions::new(),
+            )
             .expect("Failed to compile shadow shader");
 
         let image_library = device
-            .new_library_with_source(super::shaders::IMAGE_SHADER, &CompileOptions::new())
+            .new_library_with_source(
+                &with_color(super::shaders::IMAGE_SHADER),
+                &CompileOptions::new(),
+            )
             .expect("Failed to compile image shader");
 
         let path_library = device
-            .new_library_with_source(super::shaders::PATH_SHADER, &CompileOptions::new())
+            .new_library_with_source(
+                &with_color(super::shaders::PATH_SHADER),
+                &CompileOptions::new(),
+            )
             .map_err(|err| {
                 RendererError::render_failed(format!("failed to compile path shader: {err}"))
             })?;
 
         let glyph_library = device
-            .new_library_with_source(super::shaders::GLYPH_SHADER, &CompileOptions::new())
+            .new_library_with_source(
+                &with_color(super::shaders::GLYPH_SHADER),
+                &CompileOptions::new(),
+            )
             .map_err(|err| {
                 RendererError::render_failed(format!("failed to compile glyph shader: {err}"))
             })?;
@@ -88,7 +107,7 @@ impl MetalRenderer {
             .color_attachments()
             .object_at(0)
             .unwrap()
-            .set_pixel_format(MTLPixelFormat::BGRA8Unorm);
+            .set_pixel_format(TARGET_PIXEL_FORMAT);
 
         // Enable blending for transparency
         let color_attachment = quad_pipeline_desc.color_attachments().object_at(0).unwrap();
@@ -115,7 +134,7 @@ impl MetalRenderer {
             .color_attachments()
             .object_at(0)
             .unwrap()
-            .set_pixel_format(MTLPixelFormat::BGRA8Unorm);
+            .set_pixel_format(TARGET_PIXEL_FORMAT);
 
         let shadow_color = shadow_pipeline_desc
             .color_attachments()
@@ -142,7 +161,7 @@ impl MetalRenderer {
             .color_attachments()
             .object_at(0)
             .unwrap()
-            .set_pixel_format(MTLPixelFormat::BGRA8Unorm);
+            .set_pixel_format(TARGET_PIXEL_FORMAT);
 
         let image_color = image_pipeline_desc
             .color_attachments()
@@ -176,7 +195,7 @@ impl MetalRenderer {
             .color_attachments()
             .object_at(0)
             .unwrap()
-            .set_pixel_format(MTLPixelFormat::BGRA8Unorm);
+            .set_pixel_format(TARGET_PIXEL_FORMAT);
 
         let path_color = path_pipeline_desc.color_attachments().object_at(0).unwrap();
         path_color.set_blending_enabled(true);
@@ -209,7 +228,7 @@ impl MetalRenderer {
             .color_attachments()
             .object_at(0)
             .unwrap();
-        glyph_color.set_pixel_format(MTLPixelFormat::BGRA8Unorm);
+        glyph_color.set_pixel_format(TARGET_PIXEL_FORMAT);
         glyph_color.set_blending_enabled(true);
         glyph_color.set_source_rgb_blend_factor(MTLBlendFactor::SourceAlpha);
         glyph_color.set_destination_rgb_blend_factor(MTLBlendFactor::OneMinusSourceAlpha);
@@ -352,7 +371,9 @@ impl MetalRenderer {
         color_attachment.set_texture(Some(texture));
         color_attachment.set_load_action(MTLLoadAction::Clear);
         color_attachment.set_store_action(MTLStoreAction::Store);
-        color_attachment.set_clear_color(MTLClearColor::new(0.1, 0.1, 0.1, 1.0));
+        // The clear color is linear; this is 0.1 in sRGB, as before.
+        let clear = srgb_to_linear(0.1);
+        color_attachment.set_clear_color(MTLClearColor::new(clear, clear, clear, 1.0));
 
         let encoder = command_buffer.new_render_command_encoder(render_pass_desc);
 
@@ -808,7 +829,7 @@ impl MetalRenderer {
 
             let desc = TextureDescriptor::new();
             desc.set_texture_type(MTLTextureType::D2);
-            desc.set_pixel_format(MTLPixelFormat::RGBA8Unorm);
+            desc.set_pixel_format(MTLPixelFormat::RGBA8Unorm_sRGB);
             desc.set_width(width);
             desc.set_height(height);
             desc.set_usage(MTLTextureUsage::ShaderRead);
@@ -885,6 +906,19 @@ impl MetalRenderer {
             };
             encoder.set_scissor_rect(rect);
         }
+    }
+}
+
+/// Shader source with the shared color helpers in front.
+fn with_color(source: &str) -> String {
+    [super::shaders::COLOR_SHADER, source].concat()
+}
+
+fn srgb_to_linear(c: f64) -> f64 {
+    if c <= 0.04045 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
     }
 }
 
