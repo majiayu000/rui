@@ -2,6 +2,7 @@
 
 mod accessibility;
 mod app;
+mod display_link;
 mod events;
 mod frame;
 mod ime_state;

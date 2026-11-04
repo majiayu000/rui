@@ -152,6 +152,14 @@ impl<'a, T: 'static> ViewContext<'a, T> {
     pub fn notify(&mut self) {
         self.app.notify(self.view.id());
     }
+
+    /// Render this view again on the next display refresh.
+    ///
+    /// Call it from every render that animates; the display stops driving
+    /// frames once no render asks.
+    pub fn request_animation_frame(&mut self) {
+        self.app.request_animation_frame_for(self.view.id());
+    }
 }
 
 /// Trait for types that can be rendered as views

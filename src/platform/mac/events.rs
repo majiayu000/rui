@@ -11,12 +11,15 @@ use objc2_foundation::{NSDate, NSPoint};
 
 pub(crate) const MAC_REDRAW_EVENT_DATA: isize = 0x5255_4952;
 pub(crate) const MAC_ACCESSIBILITY_EVENT_DATA: isize = 0x5255_4941;
+pub(crate) const MAC_DISPLAY_TICK_EVENT_DATA: isize = 0x5255_4954;
 const MAC_APPLICATION_EVENT_SUBTYPE: i16 = 0;
 
 pub(crate) enum MacWindowEvent {
     Platform(PlatformWindowEvent),
     Text(TextInputCommand),
     Accessibility(MacAccessibilityActionRequest),
+    /// The display refreshed while an animation asked for frames.
+    DisplayTick,
 }
 
 /// Ordered macOS events with lossless native text-input and accessibility payloads.
@@ -36,6 +39,7 @@ impl MacWindowEvent {
             Self::Platform(event) => MacPlatformEvent::Platform(event),
             Self::Text(command) => MacPlatformEvent::Text(command),
             Self::Accessibility(request) => MacPlatformEvent::Accessibility(request),
+            Self::DisplayTick => MacPlatformEvent::Platform(PlatformWindowEvent::RedrawRequested),
         }
     }
 
@@ -44,6 +48,7 @@ impl MacWindowEvent {
     ) -> Result<PlatformWindowEvent, PlatformWindowError> {
         match self {
             Self::Platform(event) => Ok(event),
+            Self::DisplayTick => Ok(PlatformWindowEvent::RedrawRequested),
             Self::Text(command) if command_has_lossless_legacy_representation(&command) => {
                 let Some(event) = command.into_legacy_event() else {
                     return Err(PlatformWindowError::backend(
@@ -109,12 +114,14 @@ impl MacWindow {
 pub(crate) enum MacApplicationEvent {
     Redraw,
     Accessibility,
+    DisplayTick,
 }
 
 pub(crate) fn application_event(data: isize) -> Option<MacApplicationEvent> {
     match data {
         MAC_REDRAW_EVENT_DATA => Some(MacApplicationEvent::Redraw),
         MAC_ACCESSIBILITY_EVENT_DATA => Some(MacApplicationEvent::Accessibility),
+        MAC_DISPLAY_TICK_EVENT_DATA => Some(MacApplicationEvent::DisplayTick),
         _ => None,
     }
 }
@@ -191,6 +198,10 @@ mod tests {
         assert_eq!(
             application_event(MAC_ACCESSIBILITY_EVENT_DATA),
             Some(MacApplicationEvent::Accessibility)
+        );
+        assert_eq!(
+            application_event(MAC_DISPLAY_TICK_EVENT_DATA),
+            Some(MacApplicationEvent::DisplayTick)
         );
         assert_eq!(application_event(0), None);
     }
