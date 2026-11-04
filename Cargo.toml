@@ -70,6 +70,10 @@ name = "counter"
 path = "examples/counter.rs"
 
 [[example]]
+name = "streaming_reply"
+path = "examples/streaming_reply.rs"
+
+[[example]]
 name = "dashboard"
 path = "examples/dashboard.rs"
 

@@ -4,6 +4,7 @@ pub mod accessibility;
 pub mod action;
 pub mod animation;
 pub mod app;
+pub mod app_handle;
 pub mod color;
 pub mod color_palette;
 pub mod entity;
@@ -18,6 +19,7 @@ pub mod view;
 pub mod window;
 
 pub use app::{App, AppContext, RedrawSource, RedrawSourceCounts};
+pub use app_handle::{AppClosed, AppHandle};
 pub use color::{Color, Hsla, Rgba};
 pub use entity::EntityId;
 pub use frame_pipeline::{FramePipeline, FramePipelineError};

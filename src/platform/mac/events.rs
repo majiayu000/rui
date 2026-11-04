@@ -4,7 +4,8 @@ use crate::platform::mac::accessibility::MacAccessibilityActionRequest;
 use crate::platform::window::{
     PlatformImeEvent, PlatformInputEvent, PlatformWindowError, PlatformWindowEvent,
 };
-use objc2::MainThreadMarker;
+use objc2::rc::Retained;
+use objc2::{ClassType, MainThreadMarker, msg_send};
 use objc2_app_kit::{NSApplication, NSEvent, NSEventModifierFlags, NSEventType};
 use objc2_foundation::{NSDate, NSPoint};
 
@@ -132,7 +133,34 @@ pub(crate) fn post_application_event(
     let mtm = MainThreadMarker::new().ok_or_else(|| {
         PlatformWindowError::backend("macos", "application event posted off the main thread")
     })?;
-    let app = NSApplication::sharedApplication(mtm);
+    post_application_event_to(&NSApplication::sharedApplication(mtm), window_number, data)
+}
+
+/// [`post_application_event`] from any thread, for waking the event loop.
+///
+/// AppKit allows `postEvent:atStart:` off the main thread. The shared application
+/// already exists by then: the runner creates it before installing the waker.
+pub(crate) fn post_application_event_from_any_thread(
+    window_number: isize,
+    data: isize,
+) -> Result<(), PlatformWindowError> {
+    objc2::rc::autoreleasepool(|_| {
+        // SAFETY: `sharedApplication` returns the existing shared instance; it is
+        // only messaged here with `postEvent:atStart:`, which is thread safe.
+        let app: Option<Retained<NSApplication>> =
+            unsafe { msg_send![NSApplication::class(), sharedApplication] };
+        let app = app.ok_or_else(|| {
+            PlatformWindowError::backend("macos", "shared application is unavailable")
+        })?;
+        post_application_event_to(&app, window_number, data)
+    })
+}
+
+fn post_application_event_to(
+    app: &NSApplication,
+    window_number: isize,
+    data: isize,
+) -> Result<(), PlatformWindowError> {
     let event =
         NSEvent::otherEventWithType_location_modifierFlags_timestamp_windowNumber_context_subtype_data1_data2(
             NSEventType::ApplicationDefined,

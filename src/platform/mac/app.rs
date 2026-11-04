@@ -16,7 +16,9 @@ use crate::core::text_editing::TextInputEvent;
 use crate::core::window::WindowOptions;
 use crate::elements::element::{Element, PointerEvent, PointerEventKind};
 use crate::platform::mac::accessibility::MacAccessibilityActionRequest;
-use crate::platform::mac::events::MacWindowEvent;
+use crate::platform::mac::events::{
+    MAC_REDRAW_EVENT_DATA, MacWindowEvent, post_application_event_from_any_thread,
+};
 use crate::platform::mac::frame::{NativeFrameEvents, dispatch_native_events};
 use crate::platform::mac::window::create_window;
 use crate::platform::window::{
@@ -83,6 +85,15 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
             Err(err) => panic!("failed to create platform window: {}", err),
         };
         window.install_application_delegate(&app);
+        let window_number = window.window_number();
+        context.update_queue().set_waker(move || {
+            if let Err(err) =
+                post_application_event_from_any_thread(window_number, MAC_REDRAW_EVENT_DATA)
+            {
+                // The update stays queued and is applied with the next event.
+                log::error!("failed to wake the event loop for an app handle update: {err}");
+            }
+        });
         let attachment = match window.renderer_attachment() {
             Ok(attachment) => attachment,
             Err(err) => panic!("failed to attach renderer to platform window: {}", err),

@@ -1,6 +1,7 @@
 //! Application context and lifecycle
 
 use crate::core::action::{ActionHandler, ActionId, ActionOutcome, Keymap};
+use crate::core::app_handle::{AppHandle, AppUpdateQueue};
 use crate::core::entity::{Entity, EntityId, EntityStore};
 use crate::core::geometry::Size;
 use crate::core::view::{View, ViewContext, ViewNotifier, ViewUpdates};
@@ -8,6 +9,7 @@ use crate::core::window::{Window, WindowId, WindowOptions};
 use crate::elements::Element;
 use crate::platform::window::{PlatformWindowError, PlatformWindowFeature};
 use std::collections::HashSet;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static WINDOW_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -25,6 +27,7 @@ pub struct AppContext {
     app_action_handlers: Vec<Box<dyn ActionHandler>>,
     viewport_size: Size,
     runtime_view_notifier: Option<(EntityId, ViewNotifier)>,
+    update_queue: Arc<AppUpdateQueue>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -113,6 +116,29 @@ impl AppContext {
             app_action_handlers: Vec::new(),
             viewport_size: Size::ZERO,
             runtime_view_notifier: None,
+            update_queue: Arc::default(),
+        }
+    }
+
+    /// A `Send` handle that other threads use to update this application.
+    pub fn app_handle(&self) -> AppHandle {
+        AppHandle::new(&self.update_queue)
+    }
+
+    pub(crate) fn update_queue(&self) -> &Arc<AppUpdateQueue> {
+        &self.update_queue
+    }
+
+    /// Apply updates sent through [`AppHandle`], in the order they were sent.
+    pub(crate) fn apply_handle_updates(&mut self) {
+        loop {
+            let updates = self.update_queue.take();
+            if updates.is_empty() {
+                break;
+            }
+            for update in updates {
+                update(self);
+            }
         }
     }
 
