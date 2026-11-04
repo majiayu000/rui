@@ -111,3 +111,32 @@ fn text_is_rasterized_at_device_scale() {
         "{partial} partial, {solid} solid"
     );
 }
+
+#[test]
+fn text_sits_on_one_baseline_whatever_its_ink() {
+    // Wrapped lines are drawn one primitive each; a short line must not float
+    // to a different baseline than a tall one.
+    let green = Rgba::new(0.0, 1.0, 0.0, 1.0);
+    let mut scene = Scene::new();
+    scene.insert(text("xx", 5.0, green));
+    scene.insert(text("Xx", 65.0, green));
+    scene.finish();
+    let Some(pixels) = capture(&scene, 1.0) else {
+        return;
+    };
+
+    let width = VIEWPORT.width as usize;
+    let half = |x0: usize| {
+        let pixels: Vec<u8> = pixels
+            .chunks_exact(4 * width)
+            .flat_map(|row| row[x0 * 4..(x0 + 55) * 4].to_vec())
+            .collect();
+        lit_box(&pixels, 55, 128).expect("text drew pixels")
+    };
+    let (short, tall) = (half(0), half(60));
+    assert_eq!(short.3, tall.3, "baselines differ: {short:?} vs {tall:?}");
+    assert!(
+        tall.1 < short.1,
+        "capital should reach higher: {short:?} vs {tall:?}"
+    );
+}

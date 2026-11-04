@@ -2,8 +2,11 @@
 
 use crate::core::ElementId;
 use crate::core::color::Color;
+use crate::core::geometry::Bounds;
 use crate::core::style::Style;
-use crate::elements::element::{Element, LayoutContext, PaintContext, style_to_taffy};
+use crate::elements::element::{
+    Element, LayoutContext, PaintContext, TextWrapRequest, WrappedLines, style_to_taffy,
+};
 use crate::renderer::Primitive;
 use crate::renderer::text::{TextMeasureCache, TextMetrics, TextRequest};
 use taffy::prelude::*;
@@ -44,7 +47,77 @@ impl FontWeight {
     }
 }
 
+/// Text style a [`Text`] resolves against during layout: its own settings
+/// first, then the nearest ancestor that set the property, then these defaults.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextStyle {
+    pub color: Color,
+    pub font_size: f32,
+    pub font_weight: FontWeight,
+    pub font_family: Option<String>,
+    pub line_height: f32,
+}
+
+impl Default for TextStyle {
+    fn default() -> Self {
+        Self {
+            color: Color::BLACK,
+            font_size: 14.0,
+            font_weight: FontWeight::Regular,
+            font_family: None,
+            line_height: 1.4,
+        }
+    }
+}
+
+impl TextStyle {
+    /// This style with every property `refinement` sets replaced.
+    pub fn refined(&self, refinement: &TextStyleRefinement) -> Self {
+        Self {
+            color: refinement.color.unwrap_or(self.color),
+            font_size: refinement.font_size.unwrap_or(self.font_size),
+            font_weight: refinement.font_weight.unwrap_or(self.font_weight),
+            font_family: refinement
+                .font_family
+                .clone()
+                .or_else(|| self.font_family.clone()),
+            line_height: refinement.line_height.unwrap_or(self.line_height),
+        }
+    }
+}
+
+/// Text properties an element sets for the text inside it; unset ones are
+/// inherited from further up.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct TextStyleRefinement {
+    pub color: Option<Color>,
+    pub font_size: Option<f32>,
+    pub font_weight: Option<FontWeight>,
+    pub font_family: Option<String>,
+    pub line_height: Option<f32>,
+}
+
+impl TextStyleRefinement {
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// Which text properties were set on the element itself rather than inherited.
+#[derive(Debug, Clone, Copy, Default)]
+struct OwnTextStyle {
+    color: bool,
+    font_size: bool,
+    font_weight: bool,
+    font_family: bool,
+    line_height: bool,
+}
+
 /// Text element
+///
+/// Text is one line by default and sized to its content. [`Text::wrap`] makes
+/// it wrap to the width its container offers, and [`Text::max_lines`] cuts it
+/// off with an ellipsis.
 pub struct Text {
     id: Option<ElementId>,
     content: String,
@@ -54,22 +127,30 @@ pub struct Text {
     font_weight: FontWeight,
     font_family: Option<String>,
     line_height: f32,
+    own: OwnTextStyle,
     align: TextAlign,
+    max_lines: Option<usize>,
+    /// Lines laid out for wrapped text; `None` keeps the text on one line.
+    wrapped: Option<WrappedLines>,
     layout_node: Option<NodeId>,
 }
 
 impl Text {
     pub fn new(content: impl Into<String>) -> Self {
+        let defaults = TextStyle::default();
         Self {
             id: None,
             content: content.into(),
             style: Style::new(),
-            color: Color::BLACK,
-            font_size: 14.0,
-            font_weight: FontWeight::Regular,
-            font_family: None,
-            line_height: 1.4,
+            color: defaults.color,
+            font_size: defaults.font_size,
+            font_weight: defaults.font_weight,
+            font_family: defaults.font_family,
+            line_height: defaults.line_height,
+            own: OwnTextStyle::default(),
             align: TextAlign::Left,
+            max_lines: None,
+            wrapped: None,
             layout_node: None,
         }
     }
@@ -81,46 +162,55 @@ impl Text {
 
     pub fn color(mut self, color: impl Into<Color>) -> Self {
         self.color = color.into();
+        self.own.color = true;
         self
     }
 
     pub fn size(mut self, size: f32) -> Self {
         self.font_size = size;
+        self.own.font_size = true;
         self
     }
 
     pub fn weight(mut self, weight: FontWeight) -> Self {
         self.font_weight = weight;
+        self.own.font_weight = true;
         self
     }
 
     pub fn bold(mut self) -> Self {
         self.font_weight = FontWeight::Bold;
+        self.own.font_weight = true;
         self
     }
 
     pub fn semibold(mut self) -> Self {
         self.font_weight = FontWeight::Semibold;
+        self.own.font_weight = true;
         self
     }
 
     pub fn medium(mut self) -> Self {
         self.font_weight = FontWeight::Medium;
+        self.own.font_weight = true;
         self
     }
 
     pub fn light(mut self) -> Self {
         self.font_weight = FontWeight::Light;
+        self.own.font_weight = true;
         self
     }
 
     pub fn font(mut self, family: impl Into<String>) -> Self {
         self.font_family = Some(family.into());
+        self.own.font_family = true;
         self
     }
 
     pub fn line_height(mut self, height: f32) -> Self {
         self.line_height = height;
+        self.own.line_height = true;
         self
     }
 
@@ -137,6 +227,62 @@ impl Text {
     pub fn right(mut self) -> Self {
         self.align = TextAlign::Right;
         self
+    }
+
+    /// Wrap onto as many lines as the container's width needs. The height
+    /// reported to layout covers every line.
+    pub fn wrap(mut self) -> Self {
+        self.wrapped.get_or_insert_with(WrappedLines::default);
+        self
+    }
+
+    /// Wrap, showing at most `lines` lines and ending the last one in an
+    /// ellipsis when text is cut off.
+    ///
+    /// # Panics
+    ///
+    /// When `lines` is zero.
+    pub fn max_lines(mut self, lines: usize) -> Self {
+        assert!(lines > 0, "Text::max_lines needs at least one line");
+        self.max_lines = Some(lines);
+        self.wrap()
+    }
+
+    /// One line cut off with an ellipsis where it would overflow its container.
+    pub fn truncate(self) -> Self {
+        self.max_lines(1)
+    }
+
+    /// Take every property not set on this text from `inherited`.
+    fn inherit(&mut self, inherited: &TextStyle) {
+        if !self.own.color {
+            self.color = inherited.color;
+        }
+        if !self.own.font_size {
+            self.font_size = inherited.font_size;
+        }
+        if !self.own.font_weight {
+            self.font_weight = inherited.font_weight;
+        }
+        if !self.own.font_family && self.font_family != inherited.font_family {
+            self.font_family = inherited.font_family.clone();
+        }
+        if !self.own.line_height {
+            self.line_height = inherited.line_height;
+        }
+    }
+
+    fn primitive(&self, bounds: Bounds, content: String) -> Primitive {
+        Primitive::Text {
+            bounds,
+            content,
+            color: self.color.to_rgba(),
+            font_size: self.font_size,
+            font_weight: self.font_weight.to_value(),
+            font_family: self.font_family.clone(),
+            line_height: self.line_height,
+            align: self.align,
+        }
     }
 
     fn measure_with(&self, cache: &mut TextMeasureCache) -> TextMetrics {
@@ -175,6 +321,26 @@ impl Element for Text {
     }
 
     fn layout(&mut self, cx: &mut LayoutContext) -> NodeId {
+        self.inherit(cx.text_style());
+        if let Some(lines) = &self.wrapped {
+            let request = TextWrapRequest {
+                content: self.content.clone(),
+                font_size: self.font_size,
+                font_weight: self.font_weight.to_value(),
+                font_family: self.font_family.clone(),
+                line_height: self.line_height,
+                max_lines: self.max_lines,
+            };
+            let node =
+                match cx.new_wrapped_text_leaf(style_to_taffy(&self.style), request, lines.clone())
+                {
+                    Ok(node) => node,
+                    Err(err) => panic!("failed to create text layout node: {:?}", err),
+                };
+            self.layout_node = Some(node);
+            return node;
+        }
+
         let metrics = self.measure_with(cx.text_measurer());
 
         let mut style = style_to_taffy(&self.style);
@@ -198,17 +364,25 @@ impl Element for Text {
         }
 
         let bounds = cx.bounds();
+        let Some(wrapped) = &self.wrapped else {
+            cx.paint(self.primitive(bounds, self.content.clone()));
+            return;
+        };
 
-        cx.paint(Primitive::Text {
-            bounds,
-            content: self.content.clone(),
-            color: self.color.to_rgba(),
-            font_size: self.font_size,
-            font_weight: self.font_weight.to_value(),
-            font_family: self.font_family.clone(),
-            line_height: self.line_height,
-            align: self.align,
-        });
+        let lines = wrapped.borrow();
+        let Some(lines) = lines.as_ref() else {
+            panic!("wrapped text painted without LayoutContext::compute_layout measuring it");
+        };
+        let line_box = self.font_size * self.line_height;
+        for (index, line) in lines.iter().enumerate() {
+            let line_bounds = Bounds::from_xywh(
+                bounds.x(),
+                bounds.y() + index as f32 * line_box,
+                bounds.width(),
+                line_box,
+            );
+            cx.paint(self.primitive(line_bounds, line.content.clone()));
+        }
     }
 }
 

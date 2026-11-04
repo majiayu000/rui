@@ -210,6 +210,10 @@ pub struct PlacedGlyph {
 pub struct ShapedText {
     pub metrics: TextMetrics,
     pub glyphs: Vec<PlacedGlyph>,
+    /// Ascent and descent of the primary font, the same for any content, so
+    /// lines can be placed on a common baseline.
+    pub ascent: f32,
+    pub descent: f32,
 }
 
 /// A rasterized glyph: where it sits in the atlas and its offset from the pen
@@ -416,7 +420,13 @@ impl TextGlyphCache {
                     })
                 })
                 .collect();
-            Arc::new(ShapedText { metrics, glyphs })
+            let v_metrics = fonts[primary_index].font().v_metrics(scale);
+            Arc::new(ShapedText {
+                metrics,
+                glyphs,
+                ascent: v_metrics.ascent,
+                descent: v_metrics.descent,
+            })
         });
 
         self.shapes.insert(

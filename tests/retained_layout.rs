@@ -44,11 +44,21 @@ fn tree(rng: &mut Rng, depth: u32) -> Div {
     let children = if depth == 0 { 0 } else { rng.below(5) };
     for _ in 0..children {
         node = if rng.below(3) == 0 {
-            let words = ["a", "row", "longer label", "x y z", ""];
-            node.child(
-                text(words[rng.below(words.len() as u64) as usize])
-                    .size(10.0 + rng.below(8) as f32),
-            )
+            let words = [
+                "a",
+                "row",
+                "longer label",
+                "x y z",
+                "",
+                "a paragraph long enough to wrap onto several lines in a narrow box",
+            ];
+            let label = text(words[rng.below(words.len() as u64) as usize])
+                .size(10.0 + rng.below(8) as f32);
+            node.child(match rng.below(4) {
+                0 => label.wrap(),
+                1 => label.max_lines(1 + rng.below(2) as usize),
+                _ => label,
+            })
         } else {
             node.child(tree(rng, depth - 1))
         };

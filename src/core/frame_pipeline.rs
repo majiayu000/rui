@@ -93,8 +93,8 @@ impl FramePipeline {
     {
         let mut layout_cx = LayoutContext::retained(taffy, viewport_size, text_measurer, nodes);
         let root_node = root.layout(&mut layout_cx);
-        layout_cx.finish();
-        Self::compute_root_layout(taffy, root_node, viewport_size)
+        Self::compute_root_layout(layout_cx, root_node, viewport_size)?;
+        Self::root_bounds(taffy, root_node)
     }
 
     pub fn layout_root_with_text_measurer<E>(
@@ -109,15 +109,16 @@ impl FramePipeline {
         taffy.clear();
         let mut layout_cx = LayoutContext::with_text_measurer(taffy, viewport_size, text_measurer);
         let root_node = root.layout(&mut layout_cx);
-        Self::compute_root_layout(taffy, root_node, viewport_size)
+        Self::compute_root_layout(layout_cx, root_node, viewport_size)?;
+        Self::root_bounds(taffy, root_node)
     }
 
     fn compute_root_layout(
-        taffy: &mut TaffyTree<ElementId>,
+        layout_cx: LayoutContext<'_>,
         root_node: NodeId,
         viewport_size: Size,
-    ) -> Result<Bounds, FramePipelineError> {
-        taffy
+    ) -> Result<(), FramePipelineError> {
+        layout_cx
             .compute_layout(
                 root_node,
                 taffy::Size {
@@ -125,8 +126,13 @@ impl FramePipeline {
                     height: AvailableSpace::Definite(viewport_size.height),
                 },
             )
-            .map_err(|err| FramePipelineError::layout(err.to_string()))?;
+            .map_err(|err| FramePipelineError::layout(err.to_string()))
+    }
 
+    fn root_bounds(
+        taffy: &TaffyTree<ElementId>,
+        root_node: NodeId,
+    ) -> Result<Bounds, FramePipelineError> {
         let layout = taffy
             .layout(root_node)
             .map_err(|err| FramePipelineError::layout(err.to_string()))?;

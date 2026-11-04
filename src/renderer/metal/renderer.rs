@@ -755,11 +755,14 @@ impl MetalRenderer {
                 x += bounds.width() - ink.width();
             }
         }
-        let y = bounds.y() + (bounds.height() - ink.height()) * 0.5;
+        // Center the primary font's ascent and descent rather than the ink, so
+        // every line of a wrapped paragraph lands on the same baseline.
+        let font_height = shaped.ascent - shaped.descent;
+        let line_top = bounds.y() + (bounds.height() - font_height) * 0.5;
 
-        // Glyph positions are relative to the ink box, which is placed at (x, y).
+        // Glyph x positions are relative to the ink box; baselines to the line top.
         let origin_x = x - ink.x();
-        let origin_y = y - ink.y();
+        let origin_y = line_top;
         let device_font_size = font_size * scale_factor;
         let variants = f32::from(SUBPIXEL_VARIANTS);
         let color = color.to_array();

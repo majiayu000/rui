@@ -12,6 +12,7 @@ use crate::elements::element::{
     AnyElement, Element, EventContext, LayoutContext, PaintContext, PointerEvent, PointerEventKind,
     dispatch_action_to_children, style_to_taffy,
 };
+use crate::elements::text::{FontWeight, TextStyleRefinement};
 use crate::renderer::Primitive;
 use crate::renderer::text::TextMeasureCache;
 use smallvec::SmallVec;
@@ -21,6 +22,7 @@ use taffy::prelude::*;
 pub struct Div {
     id: Option<ElementId>,
     style: Style,
+    text_style: TextStyleRefinement,
     children: SmallVec<[AnyElement; 4]>,
     on_click: Option<Box<dyn Fn()>>,
     on_hover: Option<Box<dyn Fn(bool)>>,
@@ -34,6 +36,7 @@ impl Div {
         Self {
             id: None,
             style: Style::new(),
+            text_style: TextStyleRefinement::default(),
             children: SmallVec::new(),
             on_click: None,
             on_hover: None,
@@ -408,6 +411,32 @@ impl Div {
         self
     }
 
+    // Text style inherited by descendant text that does not set its own
+    pub fn text_color(mut self, color: impl Into<Color>) -> Self {
+        self.text_style.color = Some(color.into());
+        self
+    }
+
+    pub fn text_size(mut self, size: f32) -> Self {
+        self.text_style.font_size = Some(size);
+        self
+    }
+
+    pub fn font_weight(mut self, weight: FontWeight) -> Self {
+        self.text_style.font_weight = Some(weight);
+        self
+    }
+
+    pub fn font_family(mut self, family: impl Into<String>) -> Self {
+        self.text_style.font_family = Some(family.into());
+        self
+    }
+
+    pub fn line_height(mut self, height: f32) -> Self {
+        self.text_style.line_height = Some(height);
+        self
+    }
+
     // Events
     pub fn on_click(mut self, handler: impl Fn() + 'static) -> Self {
         self.on_click = Some(Box::new(handler));
@@ -437,11 +466,10 @@ impl Element for Div {
 
     fn layout(&mut self, cx: &mut LayoutContext) -> NodeId {
         // Layout children first
-        let child_nodes: Vec<NodeId> = self
-            .children
-            .iter_mut()
-            .map(|child| child.layout(cx))
-            .collect();
+        let children = &mut self.children;
+        let child_nodes: Vec<NodeId> = cx.with_text_style(&self.text_style, |cx| {
+            children.iter_mut().map(|child| child.layout(cx)).collect()
+        });
 
         // Create this node
         let taffy_style = style_to_taffy(&self.style);
