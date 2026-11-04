@@ -2,6 +2,7 @@
 
 mod batch;
 mod capture;
+mod glyph;
 mod image_primitive;
 mod path;
 mod renderer;
