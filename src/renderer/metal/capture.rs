@@ -1,7 +1,8 @@
+use super::renderer::TARGET_PIXEL_FORMAT;
 use crate::renderer::RendererError;
 use metal::{
-    Device, MTLPixelFormat, MTLRegion, MTLSize, MTLStorageMode, MTLTextureType, MTLTextureUsage,
-    Texture, TextureDescriptor, TextureRef,
+    Device, MTLRegion, MTLSize, MTLStorageMode, MTLTextureType, MTLTextureUsage, Texture,
+    TextureDescriptor, TextureRef,
 };
 use std::ffi::c_void;
 
@@ -17,7 +18,7 @@ pub(super) fn texture_extent(value: f32, axis: &str) -> Result<u64, RendererErro
 pub(super) fn create_capture_texture(device: &Device, width: u64, height: u64) -> Texture {
     let desc = TextureDescriptor::new();
     desc.set_texture_type(MTLTextureType::D2);
-    desc.set_pixel_format(MTLPixelFormat::BGRA8Unorm);
+    desc.set_pixel_format(TARGET_PIXEL_FORMAT);
     desc.set_width(width);
     desc.set_height(height);
     desc.set_storage_mode(MTLStorageMode::Shared);

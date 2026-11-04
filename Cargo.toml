@@ -85,6 +85,15 @@ path = "examples/animation_demo.rs"
 name = "glm_chat"
 path = "examples/glm_chat.rs"
 
+[[example]]
+name = "canvas_grid"
+path = "examples/canvas_grid.rs"
+
+[[bench]]
+name = "perf_gate"
+path = "benches/perf_gate.rs"
+harness = false
+
 [[bench]]
 name = "compare_frame"
 path = "benches/compare_frame.rs"

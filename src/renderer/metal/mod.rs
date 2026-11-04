@@ -9,3 +9,4 @@ mod renderer;
 mod shaders;
 
 pub use renderer::MetalRenderer;
+pub(crate) use renderer::TARGET_PIXEL_FORMAT;

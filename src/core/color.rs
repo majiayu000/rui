@@ -2,7 +2,7 @@
 
 use bytemuck::{Pod, Zeroable};
 
-/// RGBA color (linear space, 0.0-1.0 range)
+/// RGBA color (sRGB encoded, 0.0-1.0 range; the renderer blends in linear light)
 #[derive(Debug, Clone, Copy, PartialEq, Default, Pod, Zeroable)]
 #[repr(C)]
 pub struct Rgba {

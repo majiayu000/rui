@@ -1,5 +1,50 @@
 //! Metal shader source code
 
+/// Color helpers compiled ahead of every shader. Scene colors are sRGB encoded;
+/// shaders convert them to linear light, and the sRGB render target encodes the
+/// blended result again.
+pub const COLOR_SHADER: &str = r#"
+#include <metal_stdlib>
+using namespace metal;
+
+float srgb_to_linear(float c) {
+    return c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4);
+}
+
+float3 srgb_to_linear(float3 c) {
+    return float3(srgb_to_linear(c.r), srgb_to_linear(c.g), srgb_to_linear(c.b));
+}
+
+float4 linear_color(float4 srgb) {
+    return float4(srgb_to_linear(saturate(srgb.rgb)), srgb.a);
+}
+
+// Oklab, from https://bottosson.github.io/posts/oklab/
+float3 linear_to_oklab(float3 c) {
+    float3 lms = float3(
+        0.4122214708 * c.r + 0.5363325363 * c.g + 0.0514459929 * c.b,
+        0.2119034982 * c.r + 0.6806995451 * c.g + 0.1073969566 * c.b,
+        0.0883024619 * c.r + 0.2817188376 * c.g + 0.6299787005 * c.b);
+    lms = sign(lms) * pow(abs(lms), 1.0 / 3.0);
+    return float3(
+        0.2104542553 * lms.x + 0.7936177850 * lms.y - 0.0040720468 * lms.z,
+        1.9779984951 * lms.x - 2.4285922050 * lms.y + 0.4505937099 * lms.z,
+        0.0259040371 * lms.x + 0.7827717662 * lms.y - 0.8086757660 * lms.z);
+}
+
+float3 oklab_to_linear(float3 lab) {
+    float3 lms = float3(
+        lab.x + 0.3963377774 * lab.y + 0.2158037573 * lab.z,
+        lab.x - 0.1055613458 * lab.y - 0.0638541728 * lab.z,
+        lab.x - 0.0894841775 * lab.y - 1.2914855480 * lab.z);
+    lms = lms * lms * lms;
+    return float3(
+        4.0767416621 * lms.x - 3.3077115913 * lms.y + 0.2309699292 * lms.z,
+        -1.2684380046 * lms.x + 2.6097574011 * lms.y - 0.3413193965 * lms.z,
+        -0.0041960863 * lms.x - 0.7034186147 * lms.y + 1.7076147010 * lms.z);
+}
+"#;
+
 /// Metal Shading Language source for quad rendering
 pub const QUAD_SHADER: &str = r#"
 #include <metal_stdlib>
@@ -72,12 +117,15 @@ vertex VertexOut quad_vertex(
     VertexOut out;
     out.position = to_clip_space(pixel_pos, uniforms.viewport_size);
     out.uv = unit_pos;
-    out.background = instance.background;
-    out.border_color = instance.border_color;
+    out.background = linear_color(instance.background);
+    out.border_color = linear_color(instance.border_color);
     out.border_widths = instance.border_widths;
     out.corner_radii = instance.corner_radii;
-    out.gradient_start = instance.gradient_start;
-    out.gradient_end = instance.gradient_end;
+    // Gradient stops go to the fragment shader as premultiplied oklab.
+    float4 start = linear_color(instance.gradient_start);
+    float4 end = linear_color(instance.gradient_end);
+    out.gradient_start = float4(linear_to_oklab(start.rgb) * start.a, start.a);
+    out.gradient_end = float4(linear_to_oklab(end.rgb) * end.a, end.a);
     out.gradient_params = instance.gradient_params;
     out.size = size;
 
@@ -99,6 +147,15 @@ float pick_corner_radius(float2 uv, float4 radii) {
     }
 }
 
+// Mix premultiplied oklab stops and return a linear color.
+float4 mix_oklab(float4 start, float4 end, float t) {
+    float4 lab = mix(start, end, t);
+    if (lab.a <= 0.0) {
+        return float4(0.0);
+    }
+    return float4(saturate(oklab_to_linear(lab.xyz / lab.a)), lab.a);
+}
+
 float4 resolve_fill(VertexOut in) {
     float fill_type = in.gradient_params.x;
     if (fill_type < 0.5) {
@@ -109,12 +166,12 @@ float4 resolve_fill(VertexOut in) {
         float2 uv = in.uv - float2(0.5, 0.5);
         float t = dot(uv, dir) + 0.5;
         t = clamp(t, 0.0, 1.0);
-        return mix(in.gradient_start, in.gradient_end, t);
+        return mix_oklab(in.gradient_start, in.gradient_end, t);
     } else {
         float2 uv = in.uv - float2(0.5, 0.5);
         float t = length(uv) * 2.0;
         t = clamp(t, 0.0, 1.0);
-        return mix(in.gradient_start, in.gradient_end, t);
+        return mix_oklab(in.gradient_start, in.gradient_end, t);
     }
 }
 
@@ -165,7 +222,11 @@ fragment float4 quad_fragment(VertexOut in [[stage_in]]) {
 }
 "#;
 
-/// Metal shader for shadow rendering
+/// Metal shader for shadow rendering: a rounded rectangle blurred by a Gaussian
+/// with sigma = blur_radius / 2, as CSS box shadows are. The blur is separable
+/// for square corners and integrated numerically along y for rounded ones
+/// (Evan Wallace, "Fast Rounded Rectangle Shadows"; GPUI draws its shadows the
+/// same way).
 pub const SHADOW_SHADER: &str = r#"
 #include <metal_stdlib>
 using namespace metal;
@@ -173,9 +234,8 @@ using namespace metal;
 struct ShadowInstance {
     float4 bounds;        // x, y, width, height
     float4 corner_radii;  // top_left, top_right, bottom_right, bottom_left
-    float blur_radius;
-    float4 color;
-    float3 _padding;
+    float4 color;         // r, g, b, a
+    float4 params;        // x = blur_radius
 };
 
 struct Uniforms {
@@ -184,11 +244,11 @@ struct Uniforms {
 
 struct VertexOut {
     float4 position [[position]];
-    float2 uv;
+    float2 point;         // relative to the rectangle's center
+    float2 half_size;
     float4 color;
-    float blur_radius;
-    float2 size;
     float4 corner_radii;
+    float sigma;
 };
 
 float4 to_clip_space(float2 position, float2 viewport_size) {
@@ -211,20 +271,21 @@ vertex VertexOut shadow_vertex(
     ShadowInstance instance = instances[instance_id];
     float2 unit_pos = positions[vertex_id];
 
-    // Expand bounds for blur
-    float expand = instance.blur_radius * 2.0;
-    float2 origin = instance.bounds.xy - expand;
-    float2 size = instance.bounds.zw + expand * 2.0;
-    float2 pixel_pos = origin + unit_pos * size;
+    // Past three sigma the blur adds nothing visible. One more pixel keeps the
+    // antialiased edge of an unblurred shadow.
+    float sigma = max(instance.params.x, 0.0) * 0.5;
+    float margin = 3.0 * sigma + 1.0;
+    float2 half_size = instance.bounds.zw * 0.5;
+    float2 center = instance.bounds.xy + half_size;
+    float2 pixel_pos = center - half_size - margin + unit_pos * (instance.bounds.zw + 2.0 * margin);
 
     VertexOut out;
     out.position = to_clip_space(pixel_pos, uniforms.viewport_size);
-    out.uv = unit_pos;
-    out.color = instance.color;
-    out.blur_radius = instance.blur_radius;
-    out.size = instance.bounds.zw;
+    out.point = pixel_pos - center;
+    out.half_size = half_size;
+    out.color = linear_color(instance.color);
     out.corner_radii = instance.corner_radii;
-
+    out.sigma = sigma;
     return out;
 }
 
@@ -233,33 +294,64 @@ float rounded_rect_sdf(float2 point, float2 half_size, float radius) {
     return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0) - radius;
 }
 
-// Gaussian blur approximation
+// Abramowitz and Stegun 7.1.27, accurate to 5e-4.
+float2 erf(float2 x) {
+    float2 s = sign(x);
+    float2 a = abs(x);
+    float2 r = 1.0 + (0.278393 + (0.230389 + 0.078108 * (a * a)) * a) * a;
+    r *= r;
+    return s - s / (r * r);
+}
+
 float gaussian(float x, float sigma) {
-    return exp(-(x * x) / (2.0 * sigma * sigma));
+    return exp(-(x * x) / (2.0 * sigma * sigma)) / (sqrt(2.0 * M_PI_F) * sigma);
+}
+
+// The blurred step from -edge to edge, at x.
+float blur_span(float x, float edge, float sigma) {
+    float2 integral = 0.5 + 0.5 * erf((x + float2(-edge, edge)) * (M_SQRT1_2_F / sigma));
+    return integral.y - integral.x;
+}
+
+// The row of the rounded rectangle at height y, blurred along x.
+float blur_along_x(float x, float y, float sigma, float corner, float2 half_size) {
+    float delta = min(half_size.y - corner - abs(y), 0.0);
+    float curved = half_size.x - corner + sqrt(max(0.0, corner * corner - delta * delta));
+    return blur_span(x, curved, sigma);
 }
 
 fragment float4 shadow_fragment(VertexOut in [[stage_in]]) {
-    float blur = in.blur_radius;
-    float2 expand = blur * 2.0;
-    float2 size = in.size;
-    float2 expanded_size = size + expand * 2.0;
+    float2 point = in.point;
+    float2 half_size = in.half_size;
+    float sigma = in.sigma;
 
-    // Map UV to original rect coordinates
-    float2 point = in.uv * expanded_size - expand;
-    float2 half_size = size / 2.0;
-    float2 rel_point = point - half_size;
+    float corner = point.x < 0.0
+        ? (point.y < 0.0 ? in.corner_radii.x : in.corner_radii.w)
+        : (point.y < 0.0 ? in.corner_radii.y : in.corner_radii.z);
+    corner = clamp(corner, 0.0, min(half_size.x, half_size.y));
 
-    float radius = in.corner_radii.x;  // Simplified: use top-left radius
-    radius = min(radius, min(half_size.x, half_size.y));
+    float alpha;
+    if (sigma <= 0.0) {
+        alpha = saturate(0.5 - rounded_rect_sdf(point, half_size, corner));
+    } else if (corner <= 0.0) {
+        alpha = blur_span(point.x, half_size.x, sigma) * blur_span(point.y, half_size.y, sigma);
+    } else {
+        // Sum the blurred rows within three sigma, weighted by the Gaussian along y.
+        float low = point.y - half_size.y;
+        float high = point.y + half_size.y;
+        float start = clamp(-3.0 * sigma, low, high);
+        float end = clamp(3.0 * sigma, low, high);
+        float step = (end - start) / 8.0;
+        float y = start + step * 0.5;
+        alpha = 0.0;
+        for (int i = 0; i < 8; i++) {
+            alpha += blur_along_x(point.x, point.y - y, sigma, corner, half_size)
+                * gaussian(y, sigma) * step;
+            y += step;
+        }
+    }
 
-    float dist = rounded_rect_sdf(rel_point, half_size, radius);
-
-    // Soft shadow using gaussian falloff
-    float sigma = blur / 2.0;
-    float shadow_alpha = 1.0 - smoothstep(0.0, blur, dist);
-    shadow_alpha *= gaussian(max(0.0, dist), sigma);
-
-    return float4(in.color.rgb, in.color.a * shadow_alpha);
+    return float4(in.color.rgb, in.color.a * alpha);
 }
 "#;
 
@@ -318,7 +410,7 @@ vertex VertexOut image_vertex(
     out.uv = unit_pos;
     out.size = size;
     out.corner_radii = instance.corner_radii;
-    out.color = instance.color;
+    out.color = linear_color(instance.color);
     out.opacity = instance.opacity;
     return out;
 }
@@ -399,7 +491,7 @@ vertex VertexOut path_vertex(
 
     VertexOut out;
     out.position = to_clip_space(path_vertex_data.position, uniforms.viewport_size);
-    out.color = path_vertex_data.color;
+    out.color = linear_color(path_vertex_data.color);
     return out;
 }
 
@@ -427,6 +519,7 @@ struct VertexOut {
     float4 position [[position]];
     float2 uv;
     float4 color;
+    float luma;
 };
 
 float4 to_clip_space(float2 position, float2 viewport_size) {
@@ -453,7 +546,8 @@ vertex VertexOut glyph_vertex(
     out.position = to_clip_space(instance.bounds.xy + unit_pos * instance.bounds.zw,
                                  uniforms.viewport_size);
     out.uv = instance.uv.xy + unit_pos * instance.uv.zw;
-    out.color = instance.color;
+    out.color = linear_color(instance.color);
+    out.luma = dot(saturate(instance.color.rgb), float3(0.2126, 0.7152, 0.0722));
     return out;
 }
 
@@ -461,6 +555,11 @@ fragment float4 glyph_fragment(VertexOut in [[stage_in]],
                                texture2d<float> atlas [[texture(0)]],
                                sampler samp [[sampler(0)]]) {
     float coverage = atlas.sample(samp, in.uv).r;
-    return float4(in.color.rgb, in.color.a * coverage);
+    // Raw coverage blended in linear light thins dark text and bolds light text.
+    // Remap it so text keeps the ink it had when blending encoded values: exact
+    // for dark text on a light background and light on dark, mixed by luma between.
+    float dark = 1.0 - srgb_to_linear(1.0 - coverage);
+    float light = srgb_to_linear(coverage);
+    return float4(in.color.rgb, in.color.a * mix(dark, light, in.luma));
 }
 "#;
