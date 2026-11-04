@@ -13,6 +13,7 @@ use crate::core::text_editing::{TextInputCommand, TextInputEvent, TextInputSnaps
 use crate::elements::text::{TextStyle, TextStyleRefinement};
 use crate::renderer::text::{TextLine, TextMeasureCache, TextRequest, WrappedText};
 use crate::renderer::{Primitive, Scene};
+use std::any::TypeId;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -31,6 +32,10 @@ pub struct LayoutContext<'a> {
     /// Wrapped text of the previous retained pass, to dirty nodes whose text
     /// changed while their taffy style did not.
     previous_measured_text: HashMap<NodeId, MeasuredText>,
+    /// Identity of the element whose children are being laid out.
+    identity_parent: ElementId,
+    /// Position the next child laid out under `identity_parent` takes.
+    next_child_index: u64,
 }
 
 /// Lines of a wrapped text, filled in once layout has given it a width.
@@ -150,6 +155,8 @@ impl<'a> LayoutContext<'a> {
             text_style: TextStyle::default(),
             measured_text: HashMap::new(),
             previous_measured_text: HashMap::new(),
+            identity_parent: ElementId::ROOT,
+            next_child_index: 0,
         }
     }
 
@@ -254,6 +261,13 @@ impl<'a> LayoutContext<'a> {
         let result = f(self);
         self.text_style = parent;
         result
+    }
+
+    /// Lay out `child` as the child at `index` of the element being laid out,
+    /// instead of at the next position. For elements that build only some of
+    /// their children, such as the rows in view, so each keeps its identity.
+    pub fn layout_child_at(&mut self, index: u64, child: &mut AnyElement) -> NodeId {
+        child.layout_at(self, index)
     }
 
     /// A layout node without children.
@@ -772,6 +786,12 @@ pub trait Element: 'static {
         None
     }
 
+    /// Called in layout with the element's stable identity. An element that
+    /// made its own id with [`ElementId::new`] takes this one instead, so focus,
+    /// hit regions and accessibility keep pointing at it across rebuilds. Ids
+    /// set by the application are kept.
+    fn adopt_stable_id(&mut self, _id: ElementId) {}
+
     /// Get the element's style
     fn style(&self) -> &Style;
 
@@ -880,12 +900,16 @@ pub trait Element: 'static {
 /// Type-erased element wrapper
 pub struct AnyElement {
     inner: Box<dyn Element>,
+    kind: TypeId,
+    stable_id: Option<ElementId>,
 }
 
 impl AnyElement {
     pub fn new<E: Element>(element: E) -> Self {
         Self {
             inner: Box::new(element),
+            kind: TypeId::of::<E>(),
+            stable_id: None,
         }
     }
 
@@ -894,7 +918,30 @@ impl AnyElement {
     }
 
     pub fn layout(&mut self, cx: &mut LayoutContext) -> NodeId {
-        self.inner.layout(cx)
+        let index = cx.next_child_index;
+        self.layout_at(cx, index)
+    }
+
+    fn layout_at(&mut self, cx: &mut LayoutContext, index: u64) -> NodeId {
+        cx.next_child_index = index + 1;
+        let id = match self.inner.id() {
+            Some(id) if !id.is_ephemeral() => id,
+            _ => ElementId::derived(cx.identity_parent, index, self.kind),
+        };
+        self.stable_id = Some(id);
+        self.inner.adopt_stable_id(id);
+        let parent = std::mem::replace(&mut cx.identity_parent, id);
+        let next_child_index = std::mem::replace(&mut cx.next_child_index, 0);
+        let node = self.inner.layout(cx);
+        cx.identity_parent = parent;
+        cx.next_child_index = next_child_index;
+        node
+    }
+
+    /// Identity given to this element by the last layout: the same for the
+    /// same element in every rebuild. `None` before the first layout.
+    pub fn stable_id(&self) -> Option<ElementId> {
+        self.stable_id
     }
 
     pub fn paint(&mut self, cx: &mut PaintContext) {
@@ -1011,6 +1058,10 @@ impl AnyElement {
 
     pub fn contains_id(&self, id: ElementId) -> bool {
         self.inner.contains_id(id)
+    }
+
+    pub fn children(&self) -> &[AnyElement] {
+        self.inner.children()
     }
 
     pub(crate) fn accessibility_nodes(

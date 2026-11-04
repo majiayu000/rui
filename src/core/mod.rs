@@ -31,18 +31,75 @@ pub use style::{Background, BorderStyle, Corners, Dimension, DimensionConstraint
 pub use view::{View, ViewContext, ViewNotifier};
 pub use window::{Window, WindowOptions};
 
+use std::any::TypeId;
+use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Generate unique element IDs
 static ELEMENT_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-/// Unique identifier for elements in the UI tree
+/// Set on ids the framework makes: [`ElementId::new`] and identities derived
+/// in layout. Ids without it are the application's own.
+const GENERATED_BIT: u64 = 1 << 63;
+/// Set, together with [`GENERATED_BIT`], on identities derived in layout.
+const DERIVED_BIT: u64 = 1 << 62;
+
+/// Identifier for elements in the UI tree.
+///
+/// Ids from [`ElementId::new`] are unique but change every time the tree is
+/// rebuilt. Layout gives each element a stable identity instead: its explicit
+/// id when it has one, otherwise one derived from its parent's identity, its
+/// position among its siblings and its type (see [`ElementId::derived`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ElementId(pub u64);
 
 impl ElementId {
+    /// Identity of the root element; layout derives everything below it.
+    pub const ROOT: Self = Self(GENERATED_BIT | DERIVED_BIT);
+
     pub fn new() -> Self {
-        Self(ELEMENT_ID_COUNTER.fetch_add(1, Ordering::Relaxed))
+        let count = ELEMENT_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
+        Self(GENERATED_BIT | (count & !(GENERATED_BIT | DERIVED_BIT)))
+    }
+
+    /// Identity of the child at `index` under `parent` whose type is `kind`.
+    /// The same inputs give the same id in every rebuild.
+    pub fn derived(parent: ElementId, index: u64, kind: TypeId) -> Self {
+        let mut hasher = IdHasher(parent.0 ^ index.wrapping_mul(0x9e37_79b9_7f4a_7c15));
+        kind.hash(&mut hasher);
+        Self(GENERATED_BIT | DERIVED_BIT | (hasher.finish() & !(GENERATED_BIT | DERIVED_BIT)))
+    }
+
+    /// Whether this id came from [`ElementId::new`], so it does not survive a
+    /// rebuild and cannot key an element's identity.
+    pub fn is_ephemeral(self) -> bool {
+        self.0 & (GENERATED_BIT | DERIVED_BIT) == GENERATED_BIT
+    }
+}
+
+/// Mixes the words a `TypeId` hashes into the seed. Not a general-purpose
+/// hasher: it only has to spread `derived` inputs over 62 bits.
+struct IdHasher(u64);
+
+impl Hasher for IdHasher {
+    fn finish(&self) -> u64 {
+        // splitmix64 finalizer.
+        let mut z = self.0;
+        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        z ^ (z >> 31)
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        for chunk in bytes.chunks(8) {
+            let mut word = [0u8; 8];
+            word[..chunk.len()].copy_from_slice(chunk);
+            self.write_u64(u64::from_le_bytes(word));
+        }
+    }
+
+    fn write_u64(&mut self, word: u64) {
+        self.0 = (self.0.rotate_left(23) ^ word).wrapping_mul(0x2127_599b_f432_5c37);
     }
 }
 

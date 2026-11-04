@@ -56,6 +56,8 @@ type RowBuilder = Box<dyn Fn(usize) -> AnyElement>;
 /// only the rows in view. Rows are built during layout by `row(index)`.
 pub struct VirtualList {
     id: ElementId,
+    /// `id` was set by the application, so layout keeps it.
+    explicit_id: bool,
     style: Style,
     handle: VirtualListHandle,
     count: usize,
@@ -82,6 +84,7 @@ pub fn virtual_list<E: Into<AnyElement>>(
     };
     VirtualList {
         id: ElementId::new(),
+        explicit_id: false,
         style,
         handle: handle.clone(),
         count,
@@ -96,6 +99,7 @@ pub fn virtual_list<E: Into<AnyElement>>(
 impl VirtualList {
     pub fn id(mut self, id: ElementId) -> Self {
         self.id = id;
+        self.explicit_id = true;
         self
     }
 
@@ -164,6 +168,12 @@ impl Element for VirtualList {
         Some(self.id)
     }
 
+    fn adopt_stable_id(&mut self, id: ElementId) {
+        if !self.explicit_id {
+            self.id = id;
+        }
+    }
+
     fn style(&self) -> &Style {
         &self.style
     }
@@ -201,7 +211,11 @@ impl Element for VirtualList {
             })
             .collect();
         self.first_row = range.start;
-        self.row_nodes = self.rows.iter_mut().map(|row| row.layout(cx)).collect();
+        // Rows take their row index as position, so scrolling keeps identities.
+        self.row_nodes = (range.start as u64..)
+            .zip(self.rows.iter_mut())
+            .map(|(index, row)| cx.layout_child_at(index, row))
+            .collect();
         cx.new_with_children(style_to_taffy(&self.style), &self.row_nodes)
             .expect("Failed to create virtual list layout node")
     }
