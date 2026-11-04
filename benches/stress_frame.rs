@@ -8,7 +8,7 @@
 //! repeats within about 1%; the Metal stage moves more (671 M and 769 M in two runs of
 //! one build), since the driver's threads count too. Milliseconds move with machine load.
 use rui::core::frame_pipeline::FramePipeline;
-use rui::elements::element::Element;
+use rui::elements::element::{Element, LayoutNodes};
 use rui::renderer::Scene;
 use rui::renderer::metal::MetalRenderer;
 use rui::renderer::text::TextMeasureCache;
@@ -136,6 +136,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .unwrap(),
         );
     });
+    // A kept layout tree, as the runtime has: each round selects another row, which
+    // changes one row's background and no layout input.
+    let mut retained_taffy = TaffyTree::<ElementId>::new();
+    let mut nodes = LayoutNodes::new();
+    let mut rounds: Vec<_> = (0..=SAMPLES).map(list).collect();
+    let layout_retained = measure(|round| {
+        black_box(
+            FramePipeline::layout_root_retained(
+                &mut rounds[round],
+                &mut retained_taffy,
+                &mut nodes,
+                &mut measurer,
+                viewport,
+            )
+            .unwrap(),
+        );
+    });
+    drop(rounds);
     let paint = measure(|_| FramePipeline::paint_root(&mut root, &taffy, &mut scene, bounds));
     let primitives = scene.primitives().len();
 
@@ -160,6 +178,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  \"stages\": {{");
     line("build", &build, false);
     line("layout", &layout, false);
+    line("layout_retained", &layout_retained, false);
     line("paint", &paint, false);
     line("metal_render_with_readback", &render, true);
     println!("  }},");

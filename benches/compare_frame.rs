@@ -4,12 +4,12 @@
 //!
 //! The fixture matches `benchmarks/gpui_compare/long_list.rs`: rows of 28 px, a
 //! background, a title and a time, in one column of a 1440x900 window at scale 2, with
-//! nothing culled. Each frame rebuilds, lays out, paints and submits to Metal without
-//! waiting, as GPUI's headless renderer does. RUI has no incremental path yet, so a
-//! frame where one row changes costs the same as this one. Instructions are the whole
-//! process's retired instructions, as GPUI's `BENCH_MEASUREMENT=instructions` counts.
+//! nothing culled. Each frame selects another row, then rebuilds, lays out against the
+//! kept layout tree, paints and submits to Metal without waiting, as GPUI's headless
+//! renderer does. Instructions are the whole process's retired instructions, as GPUI's
+//! `BENCH_MEASUREMENT=instructions` counts.
 use rui::core::frame_pipeline::FramePipeline;
-use rui::elements::element::Element;
+use rui::elements::element::{Element, LayoutNodes};
 use rui::renderer::Scene;
 use rui::renderer::metal::MetalRenderer;
 use rui::renderer::text::TextMeasureCache;
@@ -72,6 +72,8 @@ fn median(mut values: Vec<f64>) -> f64 {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let viewport = Size::new(VIEWPORT.0, VIEWPORT.1);
     let mut taffy = TaffyTree::<ElementId>::new();
+    // The runtime keeps its layout tree across frames, so this does too.
+    let mut nodes = LayoutNodes::new();
     let mut scene = Scene::new();
     // The native runner keeps one measure cache across frames, so this does too.
     let mut measurer = TextMeasureCache::new();
@@ -79,9 +81,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut frame = |selected: usize| -> Result<(), Box<dyn std::error::Error>> {
         let mut root = list(selected);
-        let bounds = FramePipeline::layout_root_with_text_measurer(
+        let bounds = FramePipeline::layout_root_retained(
             &mut root,
             &mut taffy,
+            &mut nodes,
             &mut measurer,
             viewport,
         )?;

@@ -118,7 +118,7 @@ impl Element for Checkbox {
         style.size.width = Dimension::Length(self.preferred_width());
         style.size.height = Dimension::Length(self.theme.control_height(self.size));
 
-        match cx.taffy.new_leaf(style) {
+        match cx.new_leaf(style) {
             Ok(node) => node,
             Err(err) => panic!("failed to create advanced checkbox layout node: {}", err),
         }

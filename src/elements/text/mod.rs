@@ -183,7 +183,7 @@ impl Element for Text {
             height: Dimension::Length(metrics.size.height),
         };
 
-        let node = match cx.taffy.new_leaf(style) {
+        let node = match cx.new_leaf(style) {
             Ok(node) => node,
             Err(err) => panic!("failed to create text layout node: {:?}", err),
         };

@@ -21,6 +21,52 @@ pub struct LayoutContext<'a> {
     pub(crate) taffy: &'a mut TaffyTree<ElementId>,
     pub(crate) available_space: Size,
     text_measurer: LayoutTextMeasurer<'a>,
+    retained: Option<RetainedPass<'a>>,
+}
+
+/// Layout nodes kept from one frame to the next.
+///
+/// A retained layout pass hands out the node created at the same position in the
+/// previous pass, in creation order, and only restyles or rewires it when its style
+/// or children changed. Taffy then dirties just those nodes and their ancestors, so
+/// unchanged subtrees keep their cached layout. A change of tree shape costs more
+/// restyling but stays correct: every node's style and children are still written.
+#[derive(Debug, Default)]
+pub struct LayoutNodes {
+    nodes: Vec<NodeId>,
+    /// Node count of the tree after the last retained pass. Anything else means the
+    /// tree was changed outside a retained pass and the kept ids are stale.
+    tree_node_count: usize,
+}
+
+impl LayoutNodes {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Nodes created in the last retained pass.
+    pub fn len(&self) -> usize {
+        self.nodes.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.nodes.is_empty()
+    }
+}
+
+struct RetainedPass<'a> {
+    kept: &'a mut LayoutNodes,
+    cursor: usize,
+}
+
+impl RetainedPass<'_> {
+    /// Remove nodes the previous pass had and this one did not reach.
+    fn finish(self, taffy: &mut TaffyTree<ElementId>) {
+        for node in self.kept.nodes.drain(self.cursor..) {
+            let _ = taffy.remove(node);
+        }
+        self.kept.tree_node_count = taffy.total_node_count();
+    }
 }
 
 /// Where a layout pass gets its text measurement cache from.
@@ -39,7 +85,75 @@ impl<'a> LayoutContext<'a> {
             taffy,
             available_space,
             text_measurer: LayoutTextMeasurer::Owned(TextMeasureCache::new()),
+            retained: None,
         }
+    }
+
+    /// A pass that reuses the nodes `kept` from the previous pass over `taffy`.
+    /// Call [`Self::finish`] once the root is laid out.
+    pub fn retained(
+        taffy: &'a mut TaffyTree<ElementId>,
+        available_space: Size,
+        text_measurer: &'a mut TextMeasureCache,
+        kept: &'a mut LayoutNodes,
+    ) -> Self {
+        if kept.tree_node_count != taffy.total_node_count() {
+            taffy.clear();
+            kept.nodes.clear();
+        }
+        Self {
+            taffy,
+            available_space,
+            text_measurer: LayoutTextMeasurer::Borrowed(text_measurer),
+            retained: Some(RetainedPass { kept, cursor: 0 }),
+        }
+    }
+
+    /// End a retained pass, dropping nodes this pass did not reuse.
+    pub fn finish(mut self) {
+        if let Some(pass) = self.retained.take() {
+            pass.finish(self.taffy);
+        }
+    }
+
+    /// A layout node without children.
+    pub fn new_leaf(&mut self, style: taffy::Style) -> taffy::TaffyResult<NodeId> {
+        self.new_with_children(style, &[])
+    }
+
+    /// A layout node with `children`, reused from the previous pass when retained.
+    pub fn new_with_children(
+        &mut self,
+        style: taffy::Style,
+        children: &[NodeId],
+    ) -> taffy::TaffyResult<NodeId> {
+        let Some(pass) = self.retained.as_mut() else {
+            return self.taffy.new_with_children(style, children);
+        };
+        let Some(&node) = pass.kept.nodes.get(pass.cursor) else {
+            // `set_children`, unlike `new_with_children`, detaches each child from
+            // the parent it had last pass, which that parent may still list.
+            let node = self.taffy.new_leaf(style)?;
+            if !children.is_empty() {
+                self.taffy.set_children(node, children)?;
+            }
+            pass.kept.nodes.push(node);
+            pass.cursor += 1;
+            return Ok(node);
+        };
+        pass.cursor += 1;
+        if *self.taffy.style(node)? != style {
+            self.taffy.set_style(node, style)?;
+        }
+        let same_children = self.taffy.child_count(node) == children.len()
+            && children
+                .iter()
+                .enumerate()
+                .all(|(index, child)| self.taffy.child_at_index(node, index).ok() == Some(*child));
+        if !same_children {
+            self.taffy.set_children(node, children)?;
+        }
+        Ok(node)
     }
 
     /// Layout against a text measurement cache owned by the caller, so cached
@@ -53,6 +167,7 @@ impl<'a> LayoutContext<'a> {
             taffy,
             available_space,
             text_measurer: LayoutTextMeasurer::Borrowed(text_measurer),
+            retained: None,
         }
     }
 

@@ -139,7 +139,6 @@ impl Element for Popover {
             .map(|child| child.layout(cx))
             .collect();
         let node = cx
-            .taffy
             .new_with_children(style_to_taffy(&self.style), &child_nodes)
             .unwrap_or_else(|err| panic!("failed to create advanced popover layout node: {err}"));
         self.child_nodes = child_nodes;
@@ -411,7 +410,6 @@ impl Element for Dialog {
             closed.size.height = Dimension::Length(0.0);
             self.content_node = None;
             return cx
-                .taffy
                 .new_leaf(closed)
                 .unwrap_or_else(|err| panic!("failed to create closed dialog layout node: {err}"));
         }
@@ -421,7 +419,6 @@ impl Element for Dialog {
         style.size.width = Dimension::Length(cx.available_space.width);
         style.size.height = Dimension::Length(cx.available_space.height);
         let node = cx
-            .taffy
             .new_with_children(style, &[content_node])
             .unwrap_or_else(|err| panic!("failed to create advanced dialog layout node: {err}"));
         self.content_node = Some(content_node);

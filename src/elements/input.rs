@@ -504,7 +504,6 @@ impl Element for Input {
         };
 
         let node = cx
-            .taffy
             .new_leaf(style)
             .expect("Failed to create input layout node");
         node

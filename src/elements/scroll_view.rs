@@ -356,7 +356,6 @@ impl Element for ScrollView {
 
         let style = style_to_taffy(&self.style);
         let node = cx
-            .taffy
             .new_with_children(style, &child_nodes)
             .expect("Failed to create scroll view layout node");
 

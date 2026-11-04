@@ -274,8 +274,7 @@ impl Element for Menu {
         style.size.height =
             Dimension::Length(self.item_height() * self.items.len() as f32 + MENU_PADDING * 2.0);
 
-        cx.taffy
-            .new_leaf(style)
+        cx.new_leaf(style)
             .unwrap_or_else(|err| panic!("failed to create advanced menu layout node: {err}"))
     }
 

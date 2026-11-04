@@ -223,7 +223,6 @@ impl Element for Spinner {
         };
 
         let node = cx
-            .taffy
             .new_leaf(style)
             .expect("Failed to create spinner layout node");
 

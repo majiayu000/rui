@@ -311,7 +311,7 @@ mod tests {
         }
 
         fn layout(&mut self, cx: &mut LayoutContext) -> NodeId {
-            match cx.taffy.new_leaf(taffy::Style::default()) {
+            match cx.new_leaf(taffy::Style::default()) {
                 Ok(node) => node,
                 Err(err) => panic!("accessibility action probe layout failed: {err}"),
             }

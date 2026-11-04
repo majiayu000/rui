@@ -449,7 +449,6 @@ impl Element for TextArea {
         };
 
         let node = cx
-            .taffy
             .new_leaf(style)
             .expect("Failed to create text area layout node");
         node

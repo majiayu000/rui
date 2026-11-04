@@ -334,8 +334,7 @@ impl Element for DataTableRow {
         let mut style = style_to_taffy(&self.style);
         style.size.width = Dimension::Length(self.preferred_width());
         style.size.height = Dimension::Length(self.preferred_height());
-        cx.taffy
-            .new_leaf(style)
+        cx.new_leaf(style)
             .expect("failed to create advanced data table row layout node")
     }
 

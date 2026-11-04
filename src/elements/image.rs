@@ -244,7 +244,6 @@ impl Element for Image {
         }
 
         let node = cx
-            .taffy
             .new_leaf(style)
             .expect("Failed to create image layout node");
         self.layout_node = Some(node);

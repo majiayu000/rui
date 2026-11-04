@@ -152,7 +152,7 @@ impl Element for ProgressBar {
         style.size.width = style_dimension_or(Some(self.width), None, Dimension::Auto);
         style.size.height = Dimension::Length(self.theme.control_height(self.size) / 2.0);
 
-        match cx.taffy.new_leaf(style) {
+        match cx.new_leaf(style) {
             Ok(node) => node,
             Err(err) => panic!(
                 "failed to create advanced progress bar layout node: {}",
