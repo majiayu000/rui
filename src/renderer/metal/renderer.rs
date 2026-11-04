@@ -1,5 +1,6 @@
 //! Metal renderer implementation
 
+use super::batch::{bind_vertex_slice, bind_vertex_value};
 use super::capture::{create_capture_texture, read_texture_rgba, texture_extent};
 use super::image_primitive::{GpuImage, calculate_fit_bounds};
 use super::path::build_path_mesh;
@@ -14,7 +15,6 @@ use crate::renderer::{
 use crate::{ImageFit, ImageSource};
 use metal::*;
 use std::collections::HashMap;
-use std::mem;
 
 /// Uniform data passed to shaders
 #[repr(C)]
@@ -288,7 +288,19 @@ impl MetalRenderer {
         let mut clip_stack: Vec<Bounds> = Vec::new();
         self.set_scissor_rect(encoder, None, scale_factor, drawable_size);
 
+        // Adjacent quads share one instanced draw. Anything else in the scene ends the
+        // run first, so paint order and clipping stay as the scene has them.
+        let mut pending_quads: Vec<GpuQuad> = Vec::new();
+
         for primitive in scene.primitives() {
+            if !matches!(
+                primitive,
+                Primitive::Quad { .. }
+                    | Primitive::LinearGradient { .. }
+                    | Primitive::RadialGradient { .. }
+            ) {
+                self.flush_quads(encoder, &mut pending_quads, &uniforms);
+            }
             match primitive {
                 Primitive::Shadow {
                     bounds,
@@ -314,7 +326,7 @@ impl MetalRenderer {
                         *border_widths,
                         *corner_radii,
                     );
-                    self.draw_quad(encoder, &instance, &uniforms);
+                    pending_quads.push(instance);
                 }
                 Primitive::LinearGradient {
                     bounds,
@@ -334,7 +346,7 @@ impl MetalRenderer {
                         *border_widths,
                         *corner_radii,
                     );
-                    self.draw_quad(encoder, &instance, &uniforms);
+                    pending_quads.push(instance);
                 }
                 Primitive::RadialGradient {
                     bounds,
@@ -352,7 +364,7 @@ impl MetalRenderer {
                         *border_widths,
                         *corner_radii,
                     );
-                    self.draw_quad(encoder, &instance, &uniforms);
+                    pending_quads.push(instance);
                 }
                 Primitive::Image {
                     bounds,
@@ -432,6 +444,7 @@ impl MetalRenderer {
             }
         }
 
+        self.flush_quads(encoder, &mut pending_quads, &uniforms);
         encoder.end_encoding();
         if let Some(drawable) = present_drawable {
             command_buffer.present_drawable(drawable);
@@ -448,25 +461,20 @@ impl MetalRenderer {
         Ok(())
     }
 
-    fn draw_quad(&self, encoder: &RenderCommandEncoderRef, quad: &GpuQuad, uniforms: &Uniforms) {
+    fn flush_quads(
+        &self,
+        encoder: &RenderCommandEncoderRef,
+        quads: &mut Vec<GpuQuad>,
+        uniforms: &Uniforms,
+    ) {
+        if quads.is_empty() {
+            return;
+        }
         encoder.set_render_pipeline_state(&self.quad_pipeline);
-
-        let instance_buffer = self.device.new_buffer_with_data(
-            quad as *const _ as *const _,
-            mem::size_of::<GpuQuad>() as u64,
-            MTLResourceOptions::CPUCacheModeDefaultCache,
-        );
-
-        let uniform_buffer = self.device.new_buffer_with_data(
-            uniforms as *const _ as *const _,
-            mem::size_of::<Uniforms>() as u64,
-            MTLResourceOptions::CPUCacheModeDefaultCache,
-        );
-
-        encoder.set_vertex_buffer(0, Some(&instance_buffer), 0);
-        encoder.set_vertex_buffer(1, Some(&uniform_buffer), 0);
-
-        encoder.draw_primitives_instanced(MTLPrimitiveType::Triangle, 0, 6, 1);
+        bind_vertex_slice(&self.device, encoder, 0, quads);
+        bind_vertex_value(encoder, 1, uniforms);
+        encoder.draw_primitives_instanced(MTLPrimitiveType::Triangle, 0, 6, quads.len() as u64);
+        quads.clear();
     }
 
     fn draw_shadow(
@@ -477,20 +485,8 @@ impl MetalRenderer {
     ) {
         encoder.set_render_pipeline_state(&self.shadow_pipeline);
 
-        let instance_buffer = self.device.new_buffer_with_data(
-            shadow as *const _ as *const _,
-            mem::size_of::<GpuShadow>() as u64,
-            MTLResourceOptions::CPUCacheModeDefaultCache,
-        );
-
-        let uniform_buffer = self.device.new_buffer_with_data(
-            uniforms as *const _ as *const _,
-            mem::size_of::<Uniforms>() as u64,
-            MTLResourceOptions::CPUCacheModeDefaultCache,
-        );
-
-        encoder.set_vertex_buffer(0, Some(&instance_buffer), 0);
-        encoder.set_vertex_buffer(1, Some(&uniform_buffer), 0);
+        bind_vertex_value(encoder, 0, shadow);
+        bind_vertex_value(encoder, 1, uniforms);
 
         encoder.draw_primitives_instanced(MTLPrimitiveType::Triangle, 0, 6, 1);
     }
@@ -504,20 +500,8 @@ impl MetalRenderer {
     ) {
         encoder.set_render_pipeline_state(&self.image_pipeline);
 
-        let instance_buffer = self.device.new_buffer_with_data(
-            instance as *const _ as *const _,
-            mem::size_of::<GpuImage>() as u64,
-            MTLResourceOptions::CPUCacheModeDefaultCache,
-        );
-
-        let uniform_buffer = self.device.new_buffer_with_data(
-            uniforms as *const _ as *const _,
-            mem::size_of::<Uniforms>() as u64,
-            MTLResourceOptions::CPUCacheModeDefaultCache,
-        );
-
-        encoder.set_vertex_buffer(0, Some(&instance_buffer), 0);
-        encoder.set_vertex_buffer(1, Some(&uniform_buffer), 0);
+        bind_vertex_value(encoder, 0, instance);
+        bind_vertex_value(encoder, 1, uniforms);
         encoder.set_fragment_texture(0, Some(texture));
         encoder.set_fragment_sampler_state(0, Some(&self.sampler));
 
@@ -532,19 +516,8 @@ impl MetalRenderer {
     ) {
         encoder.set_render_pipeline_state(&self.path_pipeline);
 
-        let vertex_buffer = self.device.new_buffer_with_data(
-            vertices.as_ptr() as *const _,
-            std::mem::size_of_val(vertices) as u64,
-            MTLResourceOptions::CPUCacheModeDefaultCache,
-        );
-        let uniform_buffer = self.device.new_buffer_with_data(
-            uniforms as *const _ as *const _,
-            mem::size_of::<Uniforms>() as u64,
-            MTLResourceOptions::CPUCacheModeDefaultCache,
-        );
-
-        encoder.set_vertex_buffer(0, Some(&vertex_buffer), 0);
-        encoder.set_vertex_buffer(1, Some(&uniform_buffer), 0);
+        bind_vertex_slice(&self.device, encoder, 0, vertices);
+        bind_vertex_value(encoder, 1, uniforms);
         encoder.draw_primitives(MTLPrimitiveType::Triangle, 0, vertices.len() as u64);
     }
 

@@ -130,3 +130,151 @@ fn metal_diagnostics_report_path_as_supported_when_backend_exists() {
 
     assert_eq!(diagnostics.unsupported_primitive(PrimitiveKind::Path), None);
 }
+
+fn solid(bounds: Bounds, background: Rgba) -> Primitive {
+    Primitive::Quad {
+        bounds,
+        background,
+        border_color: Rgba::new(0.0, 0.0, 0.0, 0.0),
+        border_widths: Edges::ZERO,
+        corner_radii: Corners::all(0.0),
+    }
+}
+
+fn pixel(pixels: &[u8], width: usize, x: usize, y: usize) -> [u8; 3] {
+    let at = (y * width + x) * 4;
+    [pixels[at], pixels[at + 1], pixels[at + 2]]
+}
+
+fn assert_near(got: [u8; 3], want: [u8; 3], what: &str) {
+    let close = got.iter().zip(want).all(|(g, w)| g.abs_diff(w) <= 2);
+    assert!(close, "{what}: got {got:?}, want {want:?}");
+}
+
+fn capture(scene: &Scene, width: f32, height: f32) -> Option<Vec<u8>> {
+    let mut backend = match MetalFrameCaptureBackend::new() {
+        Ok(backend) => backend,
+        Err(RendererError::BackendUnavailable(_)) => return None,
+        Err(err) => panic!("metal capture backend should initialize: {err}"),
+    };
+    let frame = backend
+        .capture_frame(scene, Size::new(width, height))
+        .expect("capture");
+    Some(frame.pixels)
+}
+
+/// Sizes on both sides of the 4 KB inline limit, each quad with its own colour, so a
+/// wrong instance stride or a dropped instance shows at that quad's pixel.
+#[test]
+fn metal_quads_in_one_run_each_draw_their_own_instance() {
+    for count in [1usize, 4, 30, 400] {
+        let mut scene = Scene::new();
+        let colour = |index: usize| {
+            [
+                (index % 16 * 16 + 8) as u8,
+                (index / 16 * 16 + 8) as u8,
+                200u8,
+            ]
+        };
+        for index in 0..count {
+            let [r, g, b] = colour(index);
+            scene.insert(solid(
+                Bounds::from_xywh(
+                    (index % 20) as f32 * 8.0,
+                    (index / 20) as f32 * 8.0,
+                    8.0,
+                    8.0,
+                ),
+                Rgba::new(r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0),
+            ));
+        }
+        scene.finish();
+        let Some(pixels) = capture(&scene, 160.0, 160.0) else {
+            return;
+        };
+        for index in 0..count {
+            let (x, y) = (index % 20 * 8 + 4, index / 20 * 8 + 4);
+            assert_near(
+                pixel(&pixels, 160, x, y),
+                colour(index),
+                &format!("quad {index} of {count}"),
+            );
+        }
+    }
+}
+
+#[test]
+fn metal_quad_runs_keep_paint_order_around_images_and_clips() {
+    let (red, green, blue) = (
+        Rgba::new(1.0, 0.0, 0.0, 1.0),
+        Rgba::new(0.0, 1.0, 0.0, 1.0),
+        Rgba::new(0.0, 0.0, 1.0, 1.0),
+    );
+    let mut scene = Scene::new();
+    // A later quad in the same run covers an earlier one.
+    scene.insert(solid(Bounds::from_xywh(0.0, 0.0, 20.0, 20.0), red));
+    scene.insert(solid(Bounds::from_xywh(0.0, 0.0, 20.0, 20.0), blue));
+    // An image painted between two quads stays between them.
+    scene.insert(solid(Bounds::from_xywh(30.0, 0.0, 20.0, 20.0), red));
+    scene.insert(Primitive::Image {
+        bounds: Bounds::from_xywh(30.0, 0.0, 40.0, 20.0),
+        source: ImageSource::Data {
+            data: vec![0, 255, 0, 255],
+            width: 1,
+            height: 1,
+        },
+        fit: ImageFit::Fill,
+        corner_radii: Corners::ZERO,
+        opacity: 1.0,
+    });
+    scene.insert(solid(Bounds::from_xywh(30.0, 0.0, 6.0, 6.0), blue));
+    // A clip applies to the quads inside it and to no others.
+    scene.insert(solid(Bounds::from_xywh(0.0, 40.0, 10.0, 10.0), red));
+    scene.insert(Primitive::PushClip {
+        bounds: Bounds::from_xywh(20.0, 40.0, 10.0, 10.0),
+        corner_radii: Corners::all(0.0),
+    });
+    scene.insert(solid(Bounds::from_xywh(0.0, 40.0, 60.0, 10.0), green));
+    scene.insert(Primitive::PopClip);
+    scene.insert(solid(Bounds::from_xywh(40.0, 40.0, 10.0, 10.0), blue));
+    scene.finish();
+    let Some(pixels) = capture(&scene, 80.0, 60.0) else {
+        return;
+    };
+    let width = 80;
+    assert_near(
+        pixel(&pixels, width, 10, 10),
+        [0, 0, 255],
+        "later quad on top",
+    );
+    assert_near(
+        pixel(&pixels, width, 40, 5),
+        [0, 255, 0],
+        "image over the earlier quad",
+    );
+    assert_near(
+        pixel(&pixels, width, 32, 2),
+        [0, 0, 255],
+        "later quad over the image",
+    );
+    assert_near(
+        pixel(&pixels, width, 5, 45),
+        [255, 0, 0],
+        "quad before the clip is whole",
+    );
+    assert_near(
+        pixel(&pixels, width, 25, 45),
+        [0, 255, 0],
+        "inside the clip",
+    );
+    assert_near(
+        pixel(&pixels, width, 15, 45),
+        pixel(&pixels, width, 78, 58),
+        "clipped away",
+    );
+    assert_near(
+        pixel(&pixels, width, 45, 45),
+        [0, 0, 255],
+        "quad after the clip is whole",
+    );
+}
