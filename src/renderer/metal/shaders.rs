@@ -369,9 +369,10 @@ pub const PATH_SHADER: &str = r#"
 #include <metal_stdlib>
 using namespace metal;
 
+// Packed to match GpuPathVertex: 24 bytes, with color at offset 8.
 struct PathVertex {
-    float2 position;
-    float4 color;
+    packed_float2 position;
+    packed_float4 color;
 };
 
 struct Uniforms {
