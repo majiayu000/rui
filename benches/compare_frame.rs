@@ -10,6 +10,7 @@
 //! `BENCH_MEASUREMENT=instructions` counts.
 use rui::core::frame_pipeline::FramePipeline;
 use rui::elements::element::{Element, LayoutNodes};
+use rui::elements::{VirtualListHandle, virtual_list};
 use rui::renderer::Scene;
 use rui::renderer::metal::MetalRenderer;
 use rui::renderer::text::TextMeasureCache;
@@ -47,21 +48,30 @@ fn list(selected: usize) -> impl Element {
     div()
         .w_full()
         .flex_col()
-        .children((0..rows()).map(move |row| {
-            let background = if row == selected {
-                Color::hex(0x2d3748)
-            } else {
-                Color::hex(0x1a202c)
-            };
-            div()
-                .w_full()
-                .h(28.0)
-                .flex_row()
-                .justify_between()
-                .bg(background)
-                .child(text(format!("task {row}: fix the failing check")))
-                .child(text(format!("{} min", row % 60)))
-        }))
+        .children((0..rows()).map(move |index| row(index, selected)))
+}
+
+fn row(index: usize, selected: usize) -> rui::Div {
+    let background = if index == selected {
+        Color::hex(0x2d3748)
+    } else {
+        Color::hex(0x1a202c)
+    };
+    div()
+        .w_full()
+        .h(28.0)
+        .flex_row()
+        .justify_between()
+        .bg(background)
+        .child(text(format!("task {index}: fix the failing check")))
+        .child(text(format!("{} min", index % 60)))
+}
+
+/// The same rows in a [`rui::elements::VirtualList`], scrolled to the middle.
+fn virtual_rows(handle: &VirtualListHandle, count: usize, selected: usize) -> impl Element {
+    virtual_list(handle, count, 28.0, move |index| row(index, selected))
+        .w_full()
+        .h_full()
 }
 
 fn median(mut values: Vec<f64>) -> f64 {
@@ -107,6 +117,39 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         instructions.push(rusage()[31].saturating_sub(i0) as f64 / 1e6);
     }
 
+    // Virtualized: the frame cost should not depend on the row count.
+    let mut virtual_cost = Vec::new();
+    for count in [1_000usize, 100_000] {
+        let handle = VirtualListHandle::new();
+        handle.scroll_to(count as f32 * 28.0 / 2.0);
+        let (mut taffy, mut nodes, mut scene) =
+            (TaffyTree::new(), LayoutNodes::new(), Scene::new());
+        let mut frame = |selected: usize| -> Result<(), Box<dyn std::error::Error>> {
+            let mut root = virtual_rows(&handle, count, selected);
+            let bounds = FramePipeline::layout_root_retained(
+                &mut root,
+                &mut taffy,
+                &mut nodes,
+                &mut measurer,
+                viewport,
+            )?;
+            FramePipeline::paint_root(&mut root, &taffy, &mut scene, bounds);
+            renderer.render_offscreen(&scene, viewport, SCALE_FACTOR)?;
+            Ok(())
+        };
+        for round in 0..=WARMUP {
+            frame(count / 2 + round)?;
+        }
+        let (mut ms, mut instructions) = (Vec::new(), Vec::new());
+        for round in 0..SAMPLES {
+            let (i0, t0) = (rusage()[31], Instant::now());
+            frame(count / 2 + WARMUP + 1 + round)?;
+            ms.push(t0.elapsed().as_secs_f64() * 1e3);
+            instructions.push(rusage()[31].saturating_sub(i0) as f64 / 1e6);
+        }
+        virtual_cost.push((count, median(ms), median(instructions)));
+    }
+
     println!("{{");
     println!("  \"framework\": \"rui\",");
     println!("  \"rows\": {},", rows());
@@ -115,6 +158,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         median(ms),
         median(instructions)
     );
+    let virtual_rows: Vec<String> = virtual_cost
+        .iter()
+        .map(|(count, ms, instructions)| {
+            format!("\"{count}\": {{\"ms\": {ms:.2}, \"instructions_m\": {instructions:.1}}}")
+        })
+        .collect();
+    println!("  \"virtual_list\": {{{}}},", virtual_rows.join(", "));
     println!("  \"first_frame_ms\": {first_frame_ms:.1},");
     println!(
         "  \"footprint_mb\": {:.1}",
