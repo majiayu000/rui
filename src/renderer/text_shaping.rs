@@ -657,7 +657,13 @@ fn simple_cluster_advance(font: &TextShapingFont, scale: Scale, cluster: &str) -
     cluster
         .chars()
         .filter(|ch| !ch.is_control())
-        .map(|ch| font.font().glyph(ch).scaled(scale).h_metrics().advance_width)
+        .map(|ch| {
+            font.font()
+                .glyph(ch)
+                .scaled(scale)
+                .h_metrics()
+                .advance_width
+        })
         .sum()
 }
 

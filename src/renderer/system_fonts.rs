@@ -320,8 +320,9 @@ impl MappedFile {
         use std::os::fd::AsRawFd;
 
         let file = std::fs::File::open(path)?;
-        let len = usize::try_from(file.metadata()?.len())
-            .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "font file too large"))?;
+        let len = usize::try_from(file.metadata()?.len()).map_err(|_| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, "font file too large")
+        })?;
         if len == 0 {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
@@ -506,6 +507,26 @@ mod tests {
         assert_eq!(error.kind, std::io::ErrorKind::InvalidData);
         assert!(error.message.contains("face 0 cannot be parsed"));
         assert!(fonts.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn mapped_font_file_reads_the_same_bytes_as_the_file() {
+        let path = std::env::temp_dir().join(format!("rui-mapped-font-{}", std::process::id()));
+        let bytes: Vec<u8> = (0..10_000u32).map(|n| (n % 251) as u8).collect();
+        std::fs::write(&path, &bytes).expect("write temp file");
+
+        let mapped = MappedFile::open(path.to_str().expect("utf-8 temp path"));
+        std::fs::remove_file(&path).expect("remove temp file");
+        let mapped = mapped.expect("map temp file");
+        assert_eq!(mapped.as_slice(), bytes.as_slice());
+
+        let empty = path.with_extension("empty");
+        std::fs::write(&empty, b"").expect("write empty file");
+        let error = MappedFile::open(empty.to_str().expect("utf-8 temp path"))
+            .expect_err("an empty font file must be an explicit error");
+        std::fs::remove_file(&empty).expect("remove empty file");
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
     }
 
     #[test]
