@@ -726,7 +726,9 @@ pub unsafe fn create_window(
     let _: () = msg_send![&*metal_layer, setDevice: device_ptr];
 
     // Configure layer
-    let _: () = msg_send![&*metal_layer, setPixelFormat: 80u64]; // MTLPixelFormatBGRA8Unorm = 80
+    // The layer's drawables are the renderer's render targets.
+    let pixel_format = crate::renderer::metal::TARGET_PIXEL_FORMAT as u64;
+    let _: () = msg_send![&*metal_layer, setPixelFormat: pixel_format];
     let _: () = msg_send![&*metal_layer, setFramebufferOnly: true];
 
     let scale_factor: f64 = unsafe { msg_send![&*window, backingScaleFactor] };
