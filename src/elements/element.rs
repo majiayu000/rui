@@ -10,9 +10,11 @@ use crate::core::event::{Cursor, KeyEvent, MouseButton, ScrollEvent};
 use crate::core::geometry::{Bounds, Point, Size};
 use crate::core::style::{Dimension as StyleDimension, Style};
 use crate::core::text_editing::{TextInputCommand, TextInputEvent, TextInputSnapshot};
-use crate::renderer::text::TextMeasureCache;
+use crate::elements::text::{TextStyle, TextStyleRefinement};
+use crate::renderer::text::{TextLine, TextMeasureCache, TextRequest, WrappedText};
 use crate::renderer::{Primitive, Scene};
 use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::rc::Rc;
 use taffy::prelude::*;
 
@@ -22,6 +24,49 @@ pub struct LayoutContext<'a> {
     pub(crate) available_space: Size,
     text_measurer: LayoutTextMeasurer<'a>,
     retained: Option<RetainedPass<'a>>,
+    /// Text style inherited by the element being laid out.
+    text_style: TextStyle,
+    /// Wrapped text in this pass, measured by taffy in [`Self::compute_layout`].
+    measured_text: HashMap<NodeId, MeasuredText>,
+    /// Wrapped text of the previous retained pass, to dirty nodes whose text
+    /// changed while their taffy style did not.
+    previous_measured_text: HashMap<NodeId, MeasuredText>,
+}
+
+/// Lines of a wrapped text, filled in once layout has given it a width.
+pub(crate) type WrappedLines = Rc<RefCell<Option<Vec<TextLine>>>>;
+
+/// What a wrapped text leaf needs to be measured at any width.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct TextWrapRequest {
+    pub(crate) content: String,
+    pub(crate) font_size: f32,
+    pub(crate) font_weight: u16,
+    pub(crate) font_family: Option<String>,
+    pub(crate) line_height: f32,
+    pub(crate) max_lines: Option<usize>,
+}
+
+impl TextWrapRequest {
+    fn wrap(&self, measurer: &mut TextMeasureCache, width: f32) -> WrappedText {
+        let request = TextRequest::new(
+            &self.content,
+            self.font_size,
+            self.font_weight,
+            self.font_family.as_deref(),
+            self.line_height,
+        );
+        match measurer.wrap(request, width, self.max_lines) {
+            Ok(wrapped) => wrapped,
+            Err(err) => panic!("text layout failed: {:?}", err),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct MeasuredText {
+    request: TextWrapRequest,
+    lines: WrappedLines,
 }
 
 /// Layout nodes kept from one frame to the next.
@@ -37,6 +82,7 @@ pub struct LayoutNodes {
     /// Node count of the tree after the last retained pass. Anything else means the
     /// tree was changed outside a retained pass and the kept ids are stale.
     tree_node_count: usize,
+    measured_text: HashMap<NodeId, MeasuredText>,
 }
 
 impl LayoutNodes {
@@ -59,13 +105,14 @@ struct RetainedPass<'a> {
     cursor: usize,
 }
 
-impl RetainedPass<'_> {
+impl<'a> RetainedPass<'a> {
     /// Remove nodes the previous pass had and this one did not reach.
-    fn finish(self, taffy: &mut TaffyTree<ElementId>) {
+    fn finish(self, taffy: &mut TaffyTree<ElementId>) -> &'a mut LayoutNodes {
         for node in self.kept.nodes.drain(self.cursor..) {
             let _ = taffy.remove(node);
         }
         self.kept.tree_node_count = taffy.total_node_count();
+        self.kept
     }
 }
 
@@ -81,11 +128,28 @@ enum LayoutTextMeasurer<'a> {
 
 impl<'a> LayoutContext<'a> {
     pub fn new(taffy: &'a mut TaffyTree<ElementId>, available_space: Size) -> Self {
+        Self::with_measurer(
+            taffy,
+            available_space,
+            LayoutTextMeasurer::Owned(TextMeasureCache::new()),
+            None,
+        )
+    }
+
+    fn with_measurer(
+        taffy: &'a mut TaffyTree<ElementId>,
+        available_space: Size,
+        text_measurer: LayoutTextMeasurer<'a>,
+        retained: Option<RetainedPass<'a>>,
+    ) -> Self {
         Self {
             taffy,
             available_space,
-            text_measurer: LayoutTextMeasurer::Owned(TextMeasureCache::new()),
-            retained: None,
+            text_measurer,
+            retained,
+            text_style: TextStyle::default(),
+            measured_text: HashMap::new(),
+            previous_measured_text: HashMap::new(),
         }
     }
 
@@ -100,20 +164,96 @@ impl<'a> LayoutContext<'a> {
         if kept.tree_node_count != taffy.total_node_count() {
             taffy.clear();
             kept.nodes.clear();
+            kept.measured_text.clear();
         }
-        Self {
+        let previous_measured_text = std::mem::take(&mut kept.measured_text);
+        let mut cx = Self::with_measurer(
             taffy,
             available_space,
-            text_measurer: LayoutTextMeasurer::Borrowed(text_measurer),
-            retained: Some(RetainedPass { kept, cursor: 0 }),
-        }
+            LayoutTextMeasurer::Borrowed(text_measurer),
+            Some(RetainedPass { kept, cursor: 0 }),
+        );
+        cx.previous_measured_text = previous_measured_text;
+        cx
     }
 
     /// End a retained pass, dropping nodes this pass did not reuse.
+    ///
+    /// Wrapped text is only measured by [`Self::compute_layout`], which also
+    /// finishes the pass.
     pub fn finish(mut self) {
         if let Some(pass) = self.retained.take() {
-            pass.finish(self.taffy);
+            pass.finish(self.taffy).measured_text = std::mem::take(&mut self.measured_text);
         }
+    }
+
+    /// Finish the pass and lay out the tree under `root`, measuring wrapped text
+    /// against the width its parent offers it.
+    pub fn compute_layout(
+        mut self,
+        root: NodeId,
+        available_space: taffy::Size<AvailableSpace>,
+    ) -> taffy::TaffyResult<()> {
+        let kept = self.retained.take().map(|pass| pass.finish(self.taffy));
+        let measured = &self.measured_text;
+        if measured.is_empty() {
+            self.taffy.compute_layout(root, available_space)?;
+        } else {
+            let measurer = match &mut self.text_measurer {
+                LayoutTextMeasurer::Owned(cache) => cache,
+                LayoutTextMeasurer::Borrowed(cache) => &mut **cache,
+            };
+            self.taffy.compute_layout_with_measure(
+                root,
+                available_space,
+                |known, available, node, _, _| {
+                    let Some(text) = measured.get(&node) else {
+                        return taffy::Size::ZERO;
+                    };
+                    let width = known.width.unwrap_or(match available.width {
+                        AvailableSpace::Definite(width) => width,
+                        AvailableSpace::MinContent => 0.0,
+                        AvailableSpace::MaxContent => f32::INFINITY,
+                    });
+                    let wrapped = text.request.wrap(measurer, width);
+                    taffy::Size {
+                        width: known.width.unwrap_or(wrapped.size.width),
+                        height: known.height.unwrap_or(wrapped.size.height),
+                    }
+                },
+            )?;
+            // Break each text at its final width; the unrounded one is what
+            // the measure above saw.
+            for (node, text) in measured {
+                let width = self.taffy.unrounded_layout(*node).size.width;
+                *text.lines.borrow_mut() = Some(text.request.wrap(measurer, width).lines);
+            }
+        }
+        if let Some(kept) = kept {
+            kept.measured_text = std::mem::take(&mut self.measured_text);
+        }
+        Ok(())
+    }
+
+    /// Text style the element being laid out inherits.
+    pub fn text_style(&self) -> &TextStyle {
+        &self.text_style
+    }
+
+    /// Run `f` with `refinement` applied over the inherited text style.
+    pub fn with_text_style<R>(
+        &mut self,
+        refinement: &TextStyleRefinement,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        if refinement.is_empty() {
+            return f(self);
+        }
+        let inherited = self.text_style.refined(refinement);
+        let parent = std::mem::replace(&mut self.text_style, inherited);
+        let result = f(self);
+        self.text_style = parent;
+        result
     }
 
     /// A layout node without children.
@@ -121,8 +261,42 @@ impl<'a> LayoutContext<'a> {
         self.new_with_children(style, &[])
     }
 
+    /// A leaf measured by taffy as text wrapped to the width it is offered.
+    /// `lines` receives the final lines in [`Self::compute_layout`].
+    pub(crate) fn new_wrapped_text_leaf(
+        &mut self,
+        style: taffy::Style,
+        request: TextWrapRequest,
+        lines: WrappedLines,
+    ) -> taffy::TaffyResult<NodeId> {
+        let node = self.reuse_or_create(style, &[])?;
+        let previous = self.previous_measured_text.remove(&node);
+        if previous.is_none_or(|previous| previous.request != request) {
+            self.taffy.mark_dirty(node)?;
+        }
+        *lines.borrow_mut() = None;
+        self.measured_text
+            .insert(node, MeasuredText { request, lines });
+        Ok(node)
+    }
+
     /// A layout node with `children`, reused from the previous pass when retained.
     pub fn new_with_children(
+        &mut self,
+        style: taffy::Style,
+        children: &[NodeId],
+    ) -> taffy::TaffyResult<NodeId> {
+        let node = self.reuse_or_create(style, children)?;
+        // A node that was wrapped text last pass keeps its measured size cached.
+        if !self.previous_measured_text.is_empty()
+            && self.previous_measured_text.remove(&node).is_some()
+        {
+            self.taffy.mark_dirty(node)?;
+        }
+        Ok(node)
+    }
+
+    fn reuse_or_create(
         &mut self,
         style: taffy::Style,
         children: &[NodeId],
@@ -163,12 +337,12 @@ impl<'a> LayoutContext<'a> {
         available_space: Size,
         text_measurer: &'a mut TextMeasureCache,
     ) -> Self {
-        Self {
+        Self::with_measurer(
             taffy,
             available_space,
-            text_measurer: LayoutTextMeasurer::Borrowed(text_measurer),
-            retained: None,
-        }
+            LayoutTextMeasurer::Borrowed(text_measurer),
+            None,
+        )
     }
 
     pub fn text_measurer(&mut self) -> &mut TextMeasureCache {
@@ -330,7 +504,11 @@ impl<'a> EventContext<'a> {
 
     /// Whether `bounds` should suppress legacy `bounds().contains` for the
     /// active pointer against `hit_clip`.
-    fn clip_hit_suppressed_for(bounds: Bounds, hit_clip: Option<Bounds>, point: Option<Point>) -> bool {
+    fn clip_hit_suppressed_for(
+        bounds: Bounds,
+        hit_clip: Option<Bounds>,
+        point: Option<Point>,
+    ) -> bool {
         match (hit_clip, point) {
             (Some(clip), Some(point)) => bounds
                 .intersection(&clip)
@@ -550,8 +728,7 @@ impl<'a> EventContext<'a> {
     /// outside the positive-area visible intersection while keeping
     /// [`Self::layout_bounds`] stable for local coordinates.
     pub fn for_pointer_dispatch(&mut self, point: Point) -> EventContext<'_> {
-        let hit_suppressed =
-            Self::clip_hit_suppressed_for(self.bounds, self.hit_clip, Some(point));
+        let hit_suppressed = Self::clip_hit_suppressed_for(self.bounds, self.hit_clip, Some(point));
         self.pointer_dispatch_context(hit_suppressed, self.force_hit_suppressed, Some(point))
     }
 

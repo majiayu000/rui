@@ -14,6 +14,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 mod atlas;
+mod wrap;
 
 pub use crate::renderer::text_shaping::{
     TextCluster, TextDirection, TextRun, TextScript, TextShapeDiagnostic, TextShapePlan,
@@ -22,6 +23,7 @@ pub use atlas::{
     ATLAS_PAGE_SIZE, AtlasGlyph, AtlasRect, AtlasSlot, GlyphAtlas, GlyphUpload, PlacedGlyph,
     SUBPIXEL_VARIANTS, ShapedText, TextGlyphCache,
 };
+pub use wrap::{TextLine, WrappedText};
 
 pub const TEXT_BOUNDS_TOLERANCE: f32 = 1.0;
 
@@ -131,6 +133,7 @@ pub struct TextMeasureCache {
     refreshed_missing_families: HashSet<String>,
     metrics: HashMap<TextMeasureKey, TextMetrics>,
     retained_metric_bytes: usize,
+    wraps: wrap::WrapCache,
     #[cfg(test)]
     metric_hits: usize,
     #[cfg(test)]
@@ -148,6 +151,7 @@ impl TextMeasureCache {
             refreshed_missing_families: HashSet::new(),
             metrics: HashMap::new(),
             retained_metric_bytes: 0,
+            wraps: wrap::WrapCache::default(),
             #[cfg(test)]
             metric_hits: 0,
             #[cfg(test)]
@@ -165,6 +169,7 @@ impl TextMeasureCache {
             refreshed_missing_families: HashSet::new(),
             metrics: HashMap::new(),
             retained_metric_bytes: 0,
+            wraps: wrap::WrapCache::default(),
             metric_hits: 0,
             font_refresh_enabled: false,
         }
@@ -180,6 +185,7 @@ impl TextMeasureCache {
             refreshed_missing_families: HashSet::new(),
             metrics: HashMap::new(),
             retained_metric_bytes: 0,
+            wraps: wrap::WrapCache::default(),
             metric_hits: 0,
             font_refresh_enabled: true,
         }
@@ -203,6 +209,7 @@ impl TextMeasureCache {
             refreshed_missing_families: HashSet::new(),
             metrics: HashMap::new(),
             retained_metric_bytes: 0,
+            wraps: wrap::WrapCache::default(),
             metric_hits: 0,
             font_refresh_enabled: false,
         }
@@ -383,6 +390,7 @@ impl TextMeasureCache {
     fn clear_metrics(&mut self) {
         self.metrics.clear();
         self.retained_metric_bytes = 0;
+        self.wraps.clear();
     }
 
     fn font_refresh_enabled(&self) -> bool {
