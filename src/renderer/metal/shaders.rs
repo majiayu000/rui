@@ -45,17 +45,30 @@ float3 oklab_to_linear(float3 lab) {
 }
 "#;
 
-/// Metal Shading Language source for quad rendering
-pub const QUAD_SHADER: &str = r#"
+/// One instanced pipeline for quads, shadows and glyph sprites. Each instance is
+/// a reference: the top two bits of `index` pick the kind and the rest index that
+/// kind's buffer, so draws of different kinds share a call while each kind keeps
+/// its own compact layout. `clip` indexes device pixel clip rectangles, applied
+/// per fragment as a scissor rectangle would be.
+///
+/// Quads are rounded rectangles with borders and solid or oklab gradient fills.
+/// Shadows are a rounded rectangle blurred by a Gaussian with sigma =
+/// blur_radius / 2, as CSS box shadows are: separable for square corners and
+/// integrated numerically along y for rounded ones (Evan Wallace, "Fast Rounded
+/// Rectangle Shadows"; GPUI draws its shadows the same way). Glyphs sample an A8
+/// atlas page.
+pub const SPRITE_SHADER: &str = r#"
 #include <metal_stdlib>
 using namespace metal;
 
-// Vertex input
-struct QuadVertex {
-    float2 position [[attribute(0)]];
+constant uint KIND_QUAD = 0;
+constant uint KIND_SHADOW = 1;
+
+struct SpriteRef {
+    uint index;              // kind << 30 | index into that kind's buffer
+    uint clip;
 };
 
-// Instance data (per quad)
 struct QuadInstance {
     float4 bounds;           // x, y, width, height
     float4 background;       // r, g, b, a
@@ -67,23 +80,39 @@ struct QuadInstance {
     float4 gradient_params;  // x=fill_type (0 solid, 1 linear, 2 radial), y=angle (radians)
 };
 
-// Uniforms
+struct ShadowInstance {
+    float4 bounds;        // x, y, width, height
+    float4 corner_radii;  // top_left, top_right, bottom_right, bottom_left
+    float4 color;         // r, g, b, a
+    float4 params;        // x = blur_radius
+};
+
+struct GlyphInstance {
+    float4 bounds;    // x, y, width, height in logical pixels
+    float4 uv;        // x, y, width, height in normalized atlas coordinates
+    float4 color;
+};
+
 struct Uniforms {
     float2 viewport_size;
 };
 
-// Vertex output / Fragment input
+// Fields are shared between kinds where their meaning matches.
 struct VertexOut {
     float4 position [[position]];
-    float2 uv;
-    float4 background;
+    uint kind [[flat]];
+    float4 clip [[flat]];    // x0, y0, x1, y1 in device pixels
+    float2 uv;               // quad: unit position; glyph: atlas position
+    float4 color;            // quad: background; shadow and glyph: color
     float4 border_color;
     float4 border_widths;
-    float4 corner_radii;
+    float4 corner_radii;     // quad and shadow
     float4 gradient_start;
     float4 gradient_end;
     float4 gradient_params;
-    float2 size;
+    float2 size;             // quad: size; shadow: half size
+    float2 point;            // shadow: position relative to the rectangle's center
+    float scalar;            // shadow: sigma; glyph: luma
 };
 
 // Convert from pixel coordinates to clip space
@@ -93,31 +122,16 @@ float4 to_clip_space(float2 position, float2 viewport_size) {
     return float4(ndc, 0.0, 1.0);
 }
 
-// Vertex shader
-vertex VertexOut quad_vertex(
-    uint vertex_id [[vertex_id]],
-    uint instance_id [[instance_id]],
-    constant QuadInstance* instances [[buffer(0)]],
-    constant Uniforms& uniforms [[buffer(1)]]
-) {
-    // Unit quad vertices (two triangles)
-    float2 positions[6] = {
-        float2(0, 0), float2(1, 0), float2(0, 1),
-        float2(1, 0), float2(1, 1), float2(0, 1)
-    };
-
-    QuadInstance instance = instances[instance_id];
-    float2 unit_pos = positions[vertex_id];
-
+void quad_vertex(thread VertexOut& out, QuadInstance instance, float2 unit_pos,
+                 float2 viewport_size) {
     // Calculate pixel position
     float2 origin = instance.bounds.xy;
     float2 size = instance.bounds.zw;
     float2 pixel_pos = origin + unit_pos * size;
 
-    VertexOut out;
-    out.position = to_clip_space(pixel_pos, uniforms.viewport_size);
+    out.position = to_clip_space(pixel_pos, viewport_size);
     out.uv = unit_pos;
-    out.background = linear_color(instance.background);
+    out.color = linear_color(instance.background);
     out.border_color = linear_color(instance.border_color);
     out.border_widths = instance.border_widths;
     out.corner_radii = instance.corner_radii;
@@ -128,7 +142,66 @@ vertex VertexOut quad_vertex(
     out.gradient_end = float4(linear_to_oklab(end.rgb) * end.a, end.a);
     out.gradient_params = instance.gradient_params;
     out.size = size;
+}
 
+void shadow_vertex(thread VertexOut& out, ShadowInstance instance, float2 unit_pos,
+                   float2 viewport_size) {
+    // Past three sigma the blur adds nothing visible. One more pixel keeps the
+    // antialiased edge of an unblurred shadow.
+    float sigma = max(instance.params.x, 0.0) * 0.5;
+    float margin = 3.0 * sigma + 1.0;
+    float2 half_size = instance.bounds.zw * 0.5;
+    float2 center = instance.bounds.xy + half_size;
+    float2 pixel_pos = center - half_size - margin + unit_pos * (instance.bounds.zw + 2.0 * margin);
+
+    out.position = to_clip_space(pixel_pos, viewport_size);
+    out.point = pixel_pos - center;
+    out.size = half_size;
+    out.color = linear_color(instance.color);
+    out.corner_radii = instance.corner_radii;
+    out.scalar = sigma;
+}
+
+void glyph_vertex(thread VertexOut& out, GlyphInstance instance, float2 unit_pos,
+                  float2 viewport_size) {
+    out.position = to_clip_space(instance.bounds.xy + unit_pos * instance.bounds.zw,
+                                 viewport_size);
+    out.uv = instance.uv.xy + unit_pos * instance.uv.zw;
+    out.color = linear_color(instance.color);
+    out.scalar = dot(saturate(instance.color.rgb), float3(0.2126, 0.7152, 0.0722));
+}
+
+vertex VertexOut sprite_vertex(
+    uint vertex_id [[vertex_id]],
+    uint instance_id [[instance_id]],
+    constant SpriteRef* refs [[buffer(0)]],
+    constant Uniforms& uniforms [[buffer(1)]],
+    constant QuadInstance* quads [[buffer(2)]],
+    constant ShadowInstance* shadows [[buffer(3)]],
+    constant GlyphInstance* glyphs [[buffer(4)]],
+    constant float4* clips [[buffer(5)]]
+) {
+    // Unit quad vertices (two triangles)
+    float2 positions[6] = {
+        float2(0, 0), float2(1, 0), float2(0, 1),
+        float2(1, 0), float2(1, 1), float2(0, 1)
+    };
+
+    SpriteRef sprite = refs[instance_id];
+    uint kind = sprite.index >> 30;
+    uint index = sprite.index & 0x3fffffff;
+    float2 unit_pos = positions[vertex_id];
+
+    VertexOut out = {};
+    out.kind = kind;
+    out.clip = clips[sprite.clip];
+    if (kind == KIND_QUAD) {
+        quad_vertex(out, quads[index], unit_pos, uniforms.viewport_size);
+    } else if (kind == KIND_SHADOW) {
+        shadow_vertex(out, shadows[index], unit_pos, uniforms.viewport_size);
+    } else {
+        glyph_vertex(out, glyphs[index], unit_pos, uniforms.viewport_size);
+    }
     return out;
 }
 
@@ -159,7 +232,7 @@ float4 mix_oklab(float4 start, float4 end, float t) {
 float4 resolve_fill(VertexOut in) {
     float fill_type = in.gradient_params.x;
     if (fill_type < 0.5) {
-        return in.background;
+        return in.color;
     } else if (fill_type < 1.5) {
         float angle = in.gradient_params.y;
         float2 dir = float2(cos(angle), sin(angle));
@@ -175,8 +248,7 @@ float4 resolve_fill(VertexOut in) {
     }
 }
 
-// Fragment shader
-fragment float4 quad_fragment(VertexOut in [[stage_in]]) {
+float4 quad_fragment(VertexOut in) {
     float2 size = in.size;
     float2 half_size = size / 2.0;
     float2 center = half_size;
@@ -220,79 +292,6 @@ fragment float4 quad_fragment(VertexOut in [[stage_in]]) {
 
     return float4(fill_color.rgb, fill_color.a * alpha);
 }
-"#;
-
-/// Metal shader for shadow rendering: a rounded rectangle blurred by a Gaussian
-/// with sigma = blur_radius / 2, as CSS box shadows are. The blur is separable
-/// for square corners and integrated numerically along y for rounded ones
-/// (Evan Wallace, "Fast Rounded Rectangle Shadows"; GPUI draws its shadows the
-/// same way).
-pub const SHADOW_SHADER: &str = r#"
-#include <metal_stdlib>
-using namespace metal;
-
-struct ShadowInstance {
-    float4 bounds;        // x, y, width, height
-    float4 corner_radii;  // top_left, top_right, bottom_right, bottom_left
-    float4 color;         // r, g, b, a
-    float4 params;        // x = blur_radius
-};
-
-struct Uniforms {
-    float2 viewport_size;
-};
-
-struct VertexOut {
-    float4 position [[position]];
-    float2 point;         // relative to the rectangle's center
-    float2 half_size;
-    float4 color;
-    float4 corner_radii;
-    float sigma;
-};
-
-float4 to_clip_space(float2 position, float2 viewport_size) {
-    float2 ndc = (position / viewport_size) * 2.0 - 1.0;
-    ndc.y = -ndc.y;
-    return float4(ndc, 0.0, 1.0);
-}
-
-vertex VertexOut shadow_vertex(
-    uint vertex_id [[vertex_id]],
-    uint instance_id [[instance_id]],
-    constant ShadowInstance* instances [[buffer(0)]],
-    constant Uniforms& uniforms [[buffer(1)]]
-) {
-    float2 positions[6] = {
-        float2(0, 0), float2(1, 0), float2(0, 1),
-        float2(1, 0), float2(1, 1), float2(0, 1)
-    };
-
-    ShadowInstance instance = instances[instance_id];
-    float2 unit_pos = positions[vertex_id];
-
-    // Past three sigma the blur adds nothing visible. One more pixel keeps the
-    // antialiased edge of an unblurred shadow.
-    float sigma = max(instance.params.x, 0.0) * 0.5;
-    float margin = 3.0 * sigma + 1.0;
-    float2 half_size = instance.bounds.zw * 0.5;
-    float2 center = instance.bounds.xy + half_size;
-    float2 pixel_pos = center - half_size - margin + unit_pos * (instance.bounds.zw + 2.0 * margin);
-
-    VertexOut out;
-    out.position = to_clip_space(pixel_pos, uniforms.viewport_size);
-    out.point = pixel_pos - center;
-    out.half_size = half_size;
-    out.color = linear_color(instance.color);
-    out.corner_radii = instance.corner_radii;
-    out.sigma = sigma;
-    return out;
-}
-
-float rounded_rect_sdf(float2 point, float2 half_size, float radius) {
-    float2 d = abs(point) - half_size + radius;
-    return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0) - radius;
-}
 
 // Abramowitz and Stegun 7.1.27, accurate to 5e-4.
 float2 erf(float2 x) {
@@ -320,10 +319,10 @@ float blur_along_x(float x, float y, float sigma, float corner, float2 half_size
     return blur_span(x, curved, sigma);
 }
 
-fragment float4 shadow_fragment(VertexOut in [[stage_in]]) {
+float4 shadow_fragment(VertexOut in) {
     float2 point = in.point;
-    float2 half_size = in.half_size;
-    float sigma = in.sigma;
+    float2 half_size = in.size;
+    float sigma = in.scalar;
 
     float corner = point.x < 0.0
         ? (point.y < 0.0 ? in.corner_radii.x : in.corner_radii.w)
@@ -352,6 +351,36 @@ fragment float4 shadow_fragment(VertexOut in [[stage_in]]) {
     }
 
     return float4(in.color.rgb, in.color.a * alpha);
+}
+
+float4 glyph_fragment(VertexOut in, texture2d<float> atlas, sampler samp) {
+    float coverage = atlas.sample(samp, in.uv).r;
+    // Raw coverage blended in linear light thins dark text and bolds light text.
+    // Remap it so text keeps the ink it had when blending encoded values: exact
+    // for dark text on a light background and light on dark, mixed by luma between.
+    float dark = 1.0 - srgb_to_linear(1.0 - coverage);
+    float light = srgb_to_linear(coverage);
+    return float4(in.color.rgb, in.color.a * mix(dark, light, in.scalar));
+}
+
+fragment float4 sprite_fragment(VertexOut in [[stage_in]],
+                                texture2d<float> atlas [[texture(0)]],
+                                sampler samp [[sampler(0)]]) {
+    float4 color;
+    if (in.kind == KIND_QUAD) {
+        color = quad_fragment(in);
+    } else if (in.kind == KIND_SHADOW) {
+        color = shadow_fragment(in);
+    } else {
+        color = glyph_fragment(in, atlas, samp);
+    }
+    // Pixel centers sit on half pixels, so this keeps exactly the pixels a
+    // scissor rectangle of the same integer edges would.
+    float2 pixel = in.position.xy;
+    if (pixel.x < in.clip.x || pixel.y < in.clip.y || pixel.x >= in.clip.z || pixel.y >= in.clip.w) {
+        discard_fragment();
+    }
+    return color;
 }
 "#;
 
@@ -497,69 +526,5 @@ vertex VertexOut path_vertex(
 
 fragment float4 path_fragment(VertexOut in [[stage_in]]) {
     return in.color;
-}
-"#;
-
-/// Metal shader for text: instanced glyph sprites sampled from an A8 atlas page.
-pub const GLYPH_SHADER: &str = r#"
-#include <metal_stdlib>
-using namespace metal;
-
-struct GlyphInstance {
-    float4 bounds;    // x, y, width, height in logical pixels
-    float4 uv;        // x, y, width, height in normalized atlas coordinates
-    float4 color;
-};
-
-struct Uniforms {
-    float2 viewport_size;
-};
-
-struct VertexOut {
-    float4 position [[position]];
-    float2 uv;
-    float4 color;
-    float luma;
-};
-
-float4 to_clip_space(float2 position, float2 viewport_size) {
-    float2 ndc = (position / viewport_size) * 2.0 - 1.0;
-    ndc.y = -ndc.y;
-    return float4(ndc, 0.0, 1.0);
-}
-
-vertex VertexOut glyph_vertex(
-    uint vertex_id [[vertex_id]],
-    uint instance_id [[instance_id]],
-    constant GlyphInstance* instances [[buffer(0)]],
-    constant Uniforms& uniforms [[buffer(1)]]
-) {
-    float2 positions[6] = {
-        float2(0, 0), float2(1, 0), float2(0, 1),
-        float2(1, 0), float2(1, 1), float2(0, 1)
-    };
-
-    GlyphInstance instance = instances[instance_id];
-    float2 unit_pos = positions[vertex_id];
-
-    VertexOut out;
-    out.position = to_clip_space(instance.bounds.xy + unit_pos * instance.bounds.zw,
-                                 uniforms.viewport_size);
-    out.uv = instance.uv.xy + unit_pos * instance.uv.zw;
-    out.color = linear_color(instance.color);
-    out.luma = dot(saturate(instance.color.rgb), float3(0.2126, 0.7152, 0.0722));
-    return out;
-}
-
-fragment float4 glyph_fragment(VertexOut in [[stage_in]],
-                               texture2d<float> atlas [[texture(0)]],
-                               sampler samp [[sampler(0)]]) {
-    float coverage = atlas.sample(samp, in.uv).r;
-    // Raw coverage blended in linear light thins dark text and bolds light text.
-    // Remap it so text keeps the ink it had when blending encoded values: exact
-    // for dark text on a light background and light on dark, mixed by luma between.
-    float dark = 1.0 - srgb_to_linear(1.0 - coverage);
-    float light = srgb_to_linear(coverage);
-    return float4(in.color.rgb, in.color.a * mix(dark, light, in.luma));
 }
 "#;
