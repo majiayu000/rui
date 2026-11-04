@@ -44,6 +44,7 @@ pub struct FramePipeline;
 impl FramePipeline {
     pub fn prepare_frame(context: &mut AppContext) {
         context.apply_handle_updates();
+        context.flush_effects();
         if context.consume_runtime_view_notification() {
             context.request_redraw();
         }
