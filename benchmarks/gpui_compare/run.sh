@@ -4,7 +4,8 @@
 #   benchmarks/gpui_compare/run.sh [zed-checkout-dir]
 #
 # The Zed checkout defaults to target/gpui_compare/zed and is cloned at ZED_REV when
-# missing. GPUI uses runtime_shaders so the Xcode Metal toolchain is not required.
+# missing. GPUI uses runtime_shaders so the Xcode Metal toolchain is not required, and
+# font-kit so it shapes and rasterizes real text.
 # Each case runs in its own process on each side, RUI then GPUI, REPEATS times
 # (default 3); the table shows the range over the repeats. CASES picks cases.
 # Raw lines are kept in target/gpui_compare/results.txt.
@@ -31,6 +32,12 @@ manifest="$ZED_DIR/crates/gpui_platform/Cargo.toml"
 if ! grep -q 'name = "rui_compare"' "$manifest"; then
   printf '\n[[bench]]\nname = "rui_compare"\nharness = false\nrequired-features = ["bench-support"]\n' >> "$manifest"
 fi
+# The draw-counting renderer wrapper names `image::RgbaImage`; `image` is already a
+# Zed workspace dependency.
+if ! grep -q '^image.workspace = true' "$manifest"; then
+  sed -i '' 's/^criterion.workspace = true$/criterion.workspace = true\
+image.workspace = true/' "$manifest"
+fi
 
 # Prints the bench executable cargo built, from its "Executable ... (path)" line.
 executable() {
@@ -41,7 +48,8 @@ echo "== building RUI ($(git -C "$ROOT" rev-parse --short HEAD))" >&2
 rui_bin="$(cd "$ROOT" && cargo bench --bench compare_frame --no-run 2>&1 | executable)"
 rui_bin="$ROOT/$rui_bin"
 echo "== building GPUI (${ZED_REV:0:7})" >&2
-gpui_bin="$(cd "$ZED_DIR" && cargo bench -p gpui_platform --features bench-support,runtime_shaders \
+# Without font-kit, gpui_macos uses NoopTextSystem: fixed advances and no glyphs.
+gpui_bin="$(cd "$ZED_DIR" && cargo bench -p gpui_platform --features bench-support,runtime_shaders,font-kit \
   --bench rui_compare --no-run 2>&1 | executable)"
 gpui_bin="$ZED_DIR/$gpui_bin"
 
@@ -57,10 +65,18 @@ gpui_line() {
       if (text ~ /µs$/) return value / 1e3; if (text ~ /ns$/) return value / 1e6
       if (text ~ /[0-9]s$/) return value * 1e3; return value
     }
-    # Printed after every call of the bench function; criterion calls it many times.
+    # The bench prints `key=value` lines: footprint after every call of the bench
+    # function (criterion calls it many times), draw counts and startup once.
     $0 ~ "^gpui " case " " {
-      startup = $0; footprint_end = $NF; sub(/footprint_mb=/, "", footprint_end)
-      if (footprint == "") footprint = footprint_end
+      for (i = 3; i <= NF; i++) {
+        split($i, pair, "=")
+        if (pair[1] == "footprint_mb") {
+          footprint_end = pair[2]; if (footprint == "") footprint = footprint_end
+        } else {
+          if (!(pair[1] in extra)) keys[++key_count] = pair[1]
+          extra[pair[1]] = pair[2]
+        }
+      }
     }
     $2 == "time:" || $1 == "time:" {
       for (i = 1; i <= NF; i++) if ($i ~ /^\[/) { first = i; break }
@@ -74,9 +90,14 @@ gpui_line() {
     /^  window draw:/ { draw = 1 }
     draw && /p95:/ { p95 = ms($2); draw = 0 }
     END {
-      if (case == "startup") { print startup; exit }
-      printf "gpui %s instructions_m=%.2f ms_p50=%.3f ms_p95=%.3f allocations=%.0f footprint_mb=%s footprint_end_mb=%s\n",
-        case, instructions, p50, p95, allocations, footprint, footprint_end
+      line = "gpui " case
+      if (case != "startup") {
+        line = line sprintf(" instructions_m=%.2f ms_p50=%.3f ms_p95=%.3f allocations=%.0f footprint_end_mb=%s",
+          instructions, p50, p95, allocations, footprint_end)
+      }
+      line = line " footprint_mb=" footprint
+      for (k = 1; k <= key_count; k++) line = line " " keys[k] "=" extra[keys[k]]
+      print line
     }'
 }
 
@@ -110,20 +131,32 @@ awk '
       has[key, metric] = 1
     }
   }
+  # RUI against GPUI on one lower-is-better metric: a tie when the ranges overlap or
+  # the midpoints are within `noise`, otherwise the ratio of the midpoints.
+  function verdict(name, metric, noise,    rui, gpui, ratio) {
+    rui = name SUBSEP "rui"; gpui = name SUBSEP "gpui"
+    if (!has[rui, metric] || !has[gpui, metric]) return "-"
+    if (low[rui, metric] <= high[gpui, metric] && low[gpui, metric] <= high[rui, metric])
+      return "tie (ranges overlap)"
+    ratio = (low[rui, metric] + high[rui, metric]) / (low[gpui, metric] + high[gpui, metric])
+    if (ratio < 1 / (1 + noise)) return sprintf("RUI ahead %.1fx", 1 / ratio)
+    if (ratio > 1 + noise) return sprintf("RUI behind %.1fx", ratio)
+    return "tie (within noise)"
+  }
   function cell(key, metric) {
     if (!has[key, metric]) return "-"
     if (low[key, metric] == high[key, metric]) return sprintf("%g", low[key, metric])
     return sprintf("%g-%g", low[key, metric], high[key, metric])
   }
   END {
-    split("instructions_m ms_p50 ms_p95 allocations footprint_mb footprint_end_mb", frame_metrics, " ")
-    print "| case | side | instructions (M) / frame | ms / frame p50 | ms / frame p95 | allocations / frame | footprint (MB) | footprint at end (MB) |"
-    print "|---|---|---|---|---|---|---|---|"
+    metric_count = split("instructions_m ms_p50 ms_p95 allocations draw_calls instances gpu_ms_p50 gpu_ms_p95 footprint_mb footprint_end_mb", frame_metrics, " ")
+    print "| case | side | instructions (M) / frame | ms / frame p50 | ms / frame p95 | allocations / frame | draw calls / frame | instances / frame | GPU ms p50 | GPU ms p95 | footprint (MB) | footprint at end (MB) |"
+    print "|---|---|---|---|---|---|---|---|---|---|---|---|"
     for (row = 1; row <= rows; row++) {
       split(order[row], parts, SUBSEP)
       if (parts[1] == "startup") continue
       line = "| " parts[1] " | " parts[2]
-      for (m = 1; m <= 6; m++) line = line " | " cell(order[row], frame_metrics[m])
+      for (m = 1; m <= metric_count; m++) line = line " | " cell(order[row], frame_metrics[m])
       print line " |"
     }
     print ""
@@ -135,5 +168,17 @@ awk '
       print "| startup | " parts[2] " | " cell(order[row], "process_to_fixture_ms") " | " \
         cell(order[row], "first_frame_ms") " | " cell(order[row], "process_to_first_frame_ms") " | " \
         cell(order[row], "footprint_mb") " |"
+    }
+    print ""
+    print "| case | verdict by instructions (5% noise) | verdict by wall p50 (10% noise) |"
+    print "|---|---|---|"
+    for (row = 1; row <= rows; row++) {
+      split(order[row], parts, SUBSEP)
+      if (parts[2] != "rui") continue
+      if (parts[1] == "startup") {
+        print "| startup | - | " verdict("startup", "process_to_first_frame_ms", 0.10) " (process start to first frame) |"
+        continue
+      }
+      print "| " parts[1] " | " verdict(parts[1], "instructions_m", 0.05) " | " verdict(parts[1], "ms_p50", 0.10) " |"
     }
   }' "$results"

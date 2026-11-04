@@ -166,6 +166,8 @@ pub struct MetalRenderer {
     frame: FrameData,
     instances: InstancePool,
     frame_stats: MetalFrameStats,
+    /// GPU time of the last frame that waited for completion.
+    gpu_time: Option<std::time::Duration>,
 }
 
 /// A pipeline drawing into the target format with source-over blending.
@@ -276,6 +278,7 @@ impl MetalRenderer {
             frame: FrameData::default(),
             instances: InstancePool::default(),
             frame_stats: MetalFrameStats::default(),
+            gpu_time: None,
         })
     }
 
@@ -333,7 +336,28 @@ impl MetalRenderer {
     ) -> Result<(), RendererError> {
         let width = texture_extent(viewport_size.width * scale_factor, "width")?;
         let height = texture_extent(viewport_size.height * scale_factor, "height")?;
-        let texture = match &self.offscreen_target {
+        let texture = self.offscreen_texture(width, height);
+        self.render_to_texture(scene, &texture, viewport_size, None, false)
+    }
+
+    /// [`Self::render_offscreen`], then wait for the GPU and return the command
+    /// buffer's GPU time (`GPUEndTime - GPUStartTime`). For benchmarks.
+    pub fn render_offscreen_gpu_time(
+        &mut self,
+        scene: &Scene,
+        viewport_size: Size,
+        scale_factor: f32,
+    ) -> Result<std::time::Duration, RendererError> {
+        let width = texture_extent(viewport_size.width * scale_factor, "width")?;
+        let height = texture_extent(viewport_size.height * scale_factor, "height")?;
+        let texture = self.offscreen_texture(width, height);
+        self.render_to_texture(scene, &texture, viewport_size, None, true)?;
+        self.gpu_time
+            .ok_or_else(|| RendererError::render_failed("the frame reported no GPU time"))
+    }
+
+    fn offscreen_texture(&mut self, width: u64, height: u64) -> Texture {
+        match &self.offscreen_target {
             Some(texture) if texture.width() == width && texture.height() == height => {
                 texture.clone()
             }
@@ -342,8 +366,7 @@ impl MetalRenderer {
                 self.offscreen_target = Some(texture.clone());
                 texture
             }
-        };
-        self.render_to_texture(scene, &texture, viewport_size, None, false)
+        }
     }
 
     /// Render a scene to a drawable
@@ -376,6 +399,7 @@ impl MetalRenderer {
         self.image_cache.begin_frame();
         self.text_cache.begin_frame();
         self.frame_stats = MetalFrameStats::default();
+        self.gpu_time = None;
 
         let scale_factor = texture.width() as f32 / viewport_size.width.max(1.0);
         let drawable_size = Size::new(texture.width() as f32, texture.height() as f32);
@@ -774,6 +798,7 @@ impl MetalRenderer {
                     "metal command buffer failed during offscreen capture",
                 ));
             }
+            self.gpu_time = Some(gpu_time(command_buffer));
         }
         Ok(())
     }
@@ -1092,4 +1117,21 @@ impl Renderer for MetalRenderer {
         )
         .with_unsupported_primitives(RendererPrimitiveSupport::metal().unsupported_primitives())
     }
+}
+
+/// `GPUEndTime - GPUStartTime` of a completed command buffer; metal-rs does not
+/// wrap these properties.
+fn gpu_time(command_buffer: &CommandBufferRef) -> std::time::Duration {
+    // SAFETY: a metal-rs `CommandBufferRef` is the `MTLCommandBuffer` object itself.
+    let object = unsafe {
+        &*(command_buffer as *const CommandBufferRef as *const objc2::runtime::AnyObject)
+    };
+    // SAFETY: both properties are `CFTimeInterval` (f64) getters on MTLCommandBuffer.
+    let (start, end): (f64, f64) = unsafe {
+        (
+            objc2::msg_send![object, GPUStartTime],
+            objc2::msg_send![object, GPUEndTime],
+        )
+    };
+    std::time::Duration::from_secs_f64((end - start).max(0.0))
 }
