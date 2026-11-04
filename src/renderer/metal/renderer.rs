@@ -36,6 +36,7 @@ pub struct MetalRenderer {
     texture_resources: RendererResourceCache<u32>,
     image_cache: RendererImageCache,
     text_cache: TextRasterCache,
+    offscreen_target: Option<Texture>,
 }
 
 impl MetalRenderer {
@@ -207,6 +208,7 @@ impl MetalRenderer {
                 limits.image_max_entries,
                 limits.image_max_bytes,
             ),
+            offscreen_target: None,
             text_cache: TextRasterCache::with_limits(
                 limits.glyph_max_entries,
                 limits.glyph_max_bytes,
@@ -234,6 +236,29 @@ impl MetalRenderer {
 
         self.render_to_texture(scene, &texture, viewport_size, None, true)?;
         Ok(read_texture_rgba(&texture, width, height))
+    }
+
+    /// Render a scene into a kept offscreen texture at `scale_factor` and commit
+    /// without waiting, as a window's present does. For benchmarks.
+    pub fn render_offscreen(
+        &mut self,
+        scene: &Scene,
+        viewport_size: Size,
+        scale_factor: f32,
+    ) -> Result<(), RendererError> {
+        let width = texture_extent(viewport_size.width * scale_factor, "width")?;
+        let height = texture_extent(viewport_size.height * scale_factor, "height")?;
+        let texture = match &self.offscreen_target {
+            Some(texture) if texture.width() == width && texture.height() == height => {
+                texture.clone()
+            }
+            _ => {
+                let texture = create_capture_texture(&self.device, width, height);
+                self.offscreen_target = Some(texture.clone());
+                texture
+            }
+        };
+        self.render_to_texture(scene, &texture, viewport_size, None, false)
     }
 
     /// Render a scene to a drawable
