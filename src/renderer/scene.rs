@@ -5,6 +5,7 @@ use crate::core::geometry::{Bounds, Point};
 use crate::renderer::primitives::Primitive;
 use smallvec::SmallVec;
 use std::collections::HashMap;
+use std::hash::{BuildHasherDefault, Hasher};
 
 /// Draw order for scene layers and hit regions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
@@ -47,6 +48,109 @@ pub struct HitRegion {
 impl HitRegion {
     fn contains(&self, point: Point) -> bool {
         self.visible_bounds.contains(point)
+    }
+}
+
+/// Size of a hit-index cell, in logical pixels. Wider than tall because rows, lines
+/// and buttons are; powers of two keep the division that maps a point to its cell
+/// exact.
+const HIT_CELL_WIDTH: f32 = 256.0;
+const HIT_CELL_HEIGHT: f32 = 64.0;
+
+/// Regions spanning more cells than this are scanned on every query instead.
+const HIT_MAX_CELLS_PER_REGION: i64 = 256;
+
+/// Multiplicative hash for cell coordinates. SipHash made registering a long list
+/// several times slower than painting it.
+#[derive(Debug, Default)]
+struct CellHasher(u64);
+
+impl Hasher for CellHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        for byte in bytes {
+            self.write_u32(u32::from(*byte));
+        }
+    }
+
+    fn write_u32(&mut self, value: u32) {
+        self.0 = (self.0.rotate_left(5) ^ u64::from(value)).wrapping_mul(0x517c_c1b7_2722_0a95);
+    }
+
+    fn write_i32(&mut self, value: i32) {
+        self.write_u32(value as u32);
+    }
+}
+
+/// Sparse uniform grid over hit regions, keyed by registration order.
+#[derive(Debug, Default)]
+struct HitIndex {
+    /// `(layer index, slot in layer)` for each region, indexed by its order.
+    locations: Vec<(usize, usize)>,
+    cells: HashMap<(i32, i32), Vec<usize>, BuildHasherDefault<CellHasher>>,
+    /// Regions too large (or not finite) for the grid.
+    oversized: Vec<usize>,
+}
+
+impl HitIndex {
+    fn clear(&mut self) {
+        self.locations.clear();
+        // Keep last frame's cells and their buffers; drop cells that frame left empty.
+        self.cells.retain(|_, orders| {
+            let used = !orders.is_empty();
+            orders.clear();
+            used
+        });
+        self.oversized.clear();
+    }
+
+    /// The cell holding `(x, y)`, or `None` outside the grid's `i32` range.
+    fn cell_of(x: f32, y: f32) -> Option<(i32, i32)> {
+        let cell = |value: f32, size: f32| {
+            let cell = (value / size).floor();
+            (cell >= i32::MIN as f32 && cell < i32::MAX as f32).then_some(cell as i32)
+        };
+        Some((cell(x, HIT_CELL_WIDTH)?, cell(y, HIT_CELL_HEIGHT)?))
+    }
+
+    fn insert(&mut self, order: usize, location: (usize, usize), bounds: Bounds) {
+        debug_assert_eq!(order, self.locations.len());
+        self.locations.push(location);
+
+        // Same edges `Bounds::contains` tests against, so every contained point maps
+        // to a cell this region is filed under.
+        let x1 = bounds.origin.x;
+        let y1 = bounds.origin.y;
+        let x2 = x1 + bounds.size.width;
+        let y2 = y1 + bounds.size.height;
+        let (Some((cx1, cy1)), Some((cx2, cy2))) = (Self::cell_of(x1, y1), Self::cell_of(x2, y2))
+        else {
+            self.oversized.push(order);
+            return;
+        };
+        let span = |from: i32, to: i32| (i64::from(to) - i64::from(from) + 1).max(0);
+        if span(cx1, cx2) * span(cy1, cy2) > HIT_MAX_CELLS_PER_REGION {
+            self.oversized.push(order);
+            return;
+        }
+        for cy in cy1..=cy2 {
+            for cx in cx1..=cx2 {
+                self.cells.entry((cx, cy)).or_default().push(order);
+            }
+        }
+    }
+
+    /// Orders of regions that may contain `point`; a superset of the true hits.
+    fn candidates(&self, point: Point) -> impl Iterator<Item = usize> + '_ {
+        Self::cell_of(point.x, point.y)
+            .and_then(|cell| self.cells.get(&cell))
+            .into_iter()
+            .flatten()
+            .chain(self.oversized.iter())
+            .copied()
     }
 }
 
@@ -111,6 +215,8 @@ pub struct Scene {
     accessibility_regions: HashMap<ElementId, Bounds>,
 
     next_hit_order: usize,
+
+    hit_index: HitIndex,
 }
 
 impl Scene {
@@ -123,6 +229,7 @@ impl Scene {
             active_layers: smallvec::smallvec![root_id],
             accessibility_regions: HashMap::new(),
             next_hit_order: 0,
+            hit_index: HitIndex::default(),
         }
     }
 
@@ -137,6 +244,7 @@ impl Scene {
         self.layers.push(Layer::new(root_id, 0, ZIndex::ROOT, None));
         self.active_layers.push(root_id);
         self.next_hit_order = 0;
+        self.hit_index.clear();
     }
 
     /// Insert a primitive into the scene
@@ -227,27 +335,39 @@ impl Scene {
             None => return false,
         };
 
-        let region = HitRegion {
+        let layer_index = self.current_render_layer().index();
+        let Some(layer) = self.layers.get_mut(layer_index) else {
+            return false;
+        };
+        let order = self.next_hit_order;
+        self.next_hit_order += 1;
+        layer.hit_regions.push(HitRegion {
             id,
             bounds,
             visible_bounds,
             z_index,
-            order: self.next_hit_order,
-        };
-        self.next_hit_order += 1;
-
-        if let Some(layer) = self.active_layer_mut() {
-            layer.hit_regions.push(region);
-        }
+            order,
+        });
+        self.hit_index.insert(
+            order,
+            (layer_index, layer.hit_regions.len() - 1),
+            visible_bounds,
+        );
 
         true
     }
 
     /// Hit test a point, returning the topmost registered element.
+    ///
+    /// Only regions filed under the point's grid cell are tested, so the cost does
+    /// not grow with the number of regions elsewhere in the scene.
     pub fn hit_test(&self, point: Point) -> Option<ElementId> {
-        self.layers
-            .iter()
-            .flat_map(|layer| layer.hit_regions.iter())
+        self.hit_index
+            .candidates(point)
+            .map(|order| {
+                let (layer, slot) = self.hit_index.locations[order];
+                &self.layers[layer].hit_regions[slot]
+            })
             .filter(|region| region.contains(point))
             .max_by_key(|region| (region.z_index, region.order))
             .map(|region| region.id)
@@ -494,5 +614,137 @@ mod tests {
         assert!(!scene.register_hit_region_at(id, region, 0));
         assert_eq!(scene.hit_test(point(21.0, 21.0)), None);
         assert_eq!(scene.accessibility_regions().get(&id), Some(&region));
+    }
+
+    /// The linear scan `hit_test` answered with before the grid index.
+    fn linear_hit_test(scene: &Scene, point: Point) -> Option<ElementId> {
+        scene
+            .layers()
+            .iter()
+            .flat_map(|layer| layer.hit_regions())
+            .filter(|region| region.contains(point))
+            .max_by_key(|region| (region.z_index, region.order))
+            .map(|region| region.id)
+    }
+
+    struct XorShift(u64);
+
+    impl XorShift {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0
+        }
+
+        fn below(&mut self, bound: u64) -> u64 {
+            self.next() % bound
+        }
+
+        /// A coordinate on a coarse lattice, so edges often coincide with each
+        /// other, with query points, and with grid cell boundaries.
+        fn coord(&mut self, span: u64) -> f32 {
+            (self.below(span) as f32 - (span / 4) as f32) * 8.0
+        }
+
+        fn bounds(&mut self) -> Bounds {
+            let (x, y) = (self.coord(200), self.coord(200));
+            match self.below(10) {
+                0 => bounds(x, y, 0.0, 0.0),
+                1 => bounds(
+                    x,
+                    y,
+                    self.coord(2_000).abs() * 4.0,
+                    self.coord(2_000).abs() * 4.0,
+                ),
+                _ => bounds(x, y, self.coord(40).abs(), self.coord(40).abs()),
+            }
+        }
+    }
+
+    fn random_scene(rng: &mut XorShift, scene: &mut Scene) -> Vec<Bounds> {
+        let mut registered = Vec::new();
+        for _ in 0..rng.below(400) {
+            match rng.below(12) {
+                0 => {
+                    let clip = (rng.below(2) == 0).then(|| rng.bounds());
+                    scene.push_render_layer(rng.below(5) as i32 - 2, clip);
+                }
+                1 => {
+                    scene.pop_render_layer();
+                }
+                2 => scene.push_layer(rng.bounds()),
+                3 if scene.current_clip().is_some() => scene.pop_layer(),
+                4 => {
+                    let region = rng.bounds();
+                    if scene.register_hit_region(ElementId::from(rng.below(64)), region) {
+                        registered.push(region);
+                    }
+                }
+                _ => {
+                    let region = rng.bounds();
+                    let z_index = rng.below(5) as i32 - 2;
+                    if scene.register_hit_region_at(ElementId::from(rng.below(64)), region, z_index)
+                    {
+                        registered.push(region);
+                    }
+                }
+            }
+        }
+        registered
+    }
+
+    #[test]
+    fn indexed_hit_test_matches_linear_scan_on_random_scenes() {
+        let mut rng = XorShift(0x9e37_79b9_7f4a_7c15);
+        let mut scene = Scene::new();
+        let mut hits = 0;
+        for _ in 0..300 {
+            scene.clear();
+            let registered = random_scene(&mut rng, &mut scene);
+            let mut points: Vec<Point> = (0..64)
+                .map(|_| point(rng.coord(200), rng.coord(200)))
+                .collect();
+            for region in &registered {
+                let (x, y) = (region.origin.x, region.origin.y);
+                let (w, h) = (region.size.width, region.size.height);
+                points.extend([point(x, y), point(x + w, y + h), point(x + w / 2.0, y)]);
+            }
+            for point in points {
+                let expected = linear_hit_test(&scene, point);
+                hits += expected.is_some() as usize;
+                assert_eq!(scene.hit_test(point), expected, "at {point:?}");
+            }
+        }
+        assert!(
+            hits > 1_000,
+            "random scenes should produce real hits, got {hits}"
+        );
+    }
+
+    #[test]
+    fn indexed_hit_test_handles_empty_and_non_finite_input() {
+        let mut scene = Scene::new();
+        assert_eq!(scene.hit_test(point(0.0, 0.0)), None);
+        assert_eq!(scene.hit_test(point(f32::NAN, 1.0)), None);
+
+        let huge = ElementId::from(1);
+        let infinite = ElementId::from(2);
+        assert!(scene.register_hit_region_at(huge, bounds(-1e30, -1e30, 2e30, 2e30), 0));
+        assert!(scene.register_hit_region_at(infinite, bounds(0.0, 0.0, f32::INFINITY, 10.0), 1));
+        for point in [
+            point(5.0, 5.0),
+            point(-1e29, 1e29),
+            point(1e20, 5.0),
+            point(f32::INFINITY, 5.0),
+            point(f32::NAN, f32::NAN),
+        ] {
+            assert_eq!(
+                scene.hit_test(point),
+                linear_hit_test(&scene, point),
+                "at {point:?}"
+            );
+        }
+        assert_eq!(scene.hit_test(point(5.0, 5.0)), Some(infinite));
     }
 }
