@@ -86,6 +86,11 @@ name = "glm_chat"
 path = "examples/glm_chat.rs"
 
 [[bench]]
+name = "perf_gate"
+path = "benches/perf_gate.rs"
+harness = false
+
+[[bench]]
 name = "compare_frame"
 path = "benches/compare_frame.rs"
 harness = false

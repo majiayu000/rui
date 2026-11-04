@@ -1,5 +1,31 @@
 # Performance Benchmarks
 
+## Performance gate (CI)
+
+`perf_gate` fails when a frame costs more than `benchmarks/perf_budgets.json` allows. CI runs it after the tests:
+
+```sh
+cargo bench --bench perf_gate
+```
+
+| Check | Where | Why |
+|---|---|---|
+| Heap allocations per frame, by case | CI and local | Counted by the gate's own allocator; exact on any machine. |
+| CPU instructions per frame (build, layout, paint), by case | Wherever the machine exposes the counter | Repeat within about 1% locally. Hosted VMs may not expose the counter; the report then says the instruction budgets were not checked. |
+| `virtual_list` at 100 000 rows vs 1 000 | CI and local | By instructions, or by allocations without the counter. Must stay within 1.2x. |
+| Resident footprint | CI and local | Includes the Metal renderer when a device is present. |
+| Pixel checksum of the long list | Local, `PERF_GATE_PIXELS=1` | Different GPUs antialias differently. Run before and after a renderer change. |
+
+Cases use the long-list fixture (2000 rows of 28 px, 1440x900) with one row's selection changing per frame, and the same rows in a `virtual_list`. Metal work is not gated by instructions: driver threads make it move too much.
+
+Budgets carry 25% headroom over the calibration in the file for instructions and 10% for allocations. After an intended cost change, rerun the gate, update the numbers and the `calibration` note in the same PR.
+
+Correctness checks that guard the incremental paths run in `cargo test`: `tests/retained_layout.rs` compares retained and fresh layouts over randomly changing trees.
+
+The head-to-head comparison with GPUI is local only: see `docs/gpui-comparison.md`.
+
+## Runtime baselines
+
 `runtime_baselines` is a stable, CI-friendly benchmark harness for the runtime paths that are most likely to regress user-facing responsiveness.
 
 Run the full benchmark report with:
