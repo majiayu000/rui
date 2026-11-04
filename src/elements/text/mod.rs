@@ -129,9 +129,9 @@ pub struct Text {
     line_height: f32,
     own: OwnTextStyle,
     align: TextAlign,
-    wrap: bool,
     max_lines: Option<usize>,
-    lines: WrappedLines,
+    /// Lines laid out for wrapped text; `None` keeps the text on one line.
+    wrapped: Option<WrappedLines>,
     layout_node: Option<NodeId>,
 }
 
@@ -149,9 +149,8 @@ impl Text {
             line_height: defaults.line_height,
             own: OwnTextStyle::default(),
             align: TextAlign::Left,
-            wrap: false,
             max_lines: None,
-            lines: WrappedLines::default(),
+            wrapped: None,
             layout_node: None,
         }
     }
@@ -233,7 +232,7 @@ impl Text {
     /// Wrap onto as many lines as the container's width needs. The height
     /// reported to layout covers every line.
     pub fn wrap(mut self) -> Self {
-        self.wrap = true;
+        self.wrapped.get_or_insert_with(WrappedLines::default);
         self
     }
 
@@ -245,9 +244,8 @@ impl Text {
     /// When `lines` is zero.
     pub fn max_lines(mut self, lines: usize) -> Self {
         assert!(lines > 0, "Text::max_lines needs at least one line");
-        self.wrap = true;
         self.max_lines = Some(lines);
-        self
+        self.wrap()
     }
 
     /// One line cut off with an ellipsis where it would overflow its container.
@@ -324,7 +322,7 @@ impl Element for Text {
 
     fn layout(&mut self, cx: &mut LayoutContext) -> NodeId {
         self.inherit(cx.text_style());
-        if self.wrap {
+        if let Some(lines) = &self.wrapped {
             let request = TextWrapRequest {
                 content: self.content.clone(),
                 font_size: self.font_size,
@@ -333,14 +331,12 @@ impl Element for Text {
                 line_height: self.line_height,
                 max_lines: self.max_lines,
             };
-            let node = match cx.new_wrapped_text_leaf(
-                style_to_taffy(&self.style),
-                request,
-                self.lines.clone(),
-            ) {
-                Ok(node) => node,
-                Err(err) => panic!("failed to create text layout node: {:?}", err),
-            };
+            let node =
+                match cx.new_wrapped_text_leaf(style_to_taffy(&self.style), request, lines.clone())
+                {
+                    Ok(node) => node,
+                    Err(err) => panic!("failed to create text layout node: {:?}", err),
+                };
             self.layout_node = Some(node);
             return node;
         }
@@ -368,12 +364,12 @@ impl Element for Text {
         }
 
         let bounds = cx.bounds();
-        if !self.wrap {
+        let Some(wrapped) = &self.wrapped else {
             cx.paint(self.primitive(bounds, self.content.clone()));
             return;
-        }
+        };
 
-        let lines = self.lines.borrow();
+        let lines = wrapped.borrow();
         let Some(lines) = lines.as_ref() else {
             panic!("wrapped text painted without LayoutContext::compute_layout measuring it");
         };
