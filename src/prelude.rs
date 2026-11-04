@@ -24,9 +24,9 @@ pub use crate::core::{
 };
 
 pub use crate::elements::{
-    Button, ButtonSize, ButtonVariant, Div, Element, EventResult, Image, ImageFit, Input,
+    Button, ButtonSize, ButtonVariant, Canvas, Div, Element, EventResult, Image, ImageFit, Input,
     InputType, IntoElement, Render, ScrollDirection, ScrollView, Text, TextArea, TextAreaState,
-    button, div, image, input, scroll_view, text, text_area,
+    button, canvas, div, image, input, scroll_view, text, text_area,
 };
 
 pub use crate::advanced_ui;
