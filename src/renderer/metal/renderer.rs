@@ -317,7 +317,15 @@ impl MetalRenderer {
         // run first, so paint order and clipping stay as the scene has them.
         let mut pending_quads: Vec<GpuQuad> = Vec::new();
 
+        let viewport = Bounds::from_xywh(0.0, 0.0, viewport_size.width, viewport_size.height);
+
         for primitive in scene.primitives() {
+            // Nothing a primitive outside the current clip draws can be seen. Skipping
+            // it also lets quads on either side of it share one draw.
+            let visible = clip_stack.last().copied().unwrap_or(viewport);
+            if !primitive.may_touch(&visible) {
+                continue;
+            }
             if !matches!(
                 primitive,
                 Primitive::Quad { .. }
