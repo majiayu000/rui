@@ -226,7 +226,7 @@ impl Element for SegmentedControl {
         style.size.width = Dimension::Length(self.option_width() * self.options.len() as f32);
         style.size.height = Dimension::Length(self.theme.control_height(self.size));
 
-        match cx.taffy.new_leaf(style) {
+        match cx.new_leaf(style) {
             Ok(node) => node,
             Err(err) => panic!(
                 "failed to create advanced segmented control layout node: {}",

@@ -3,14 +3,14 @@ use crate::core::app::AppContext;
 use crate::core::geometry::{Bounds, Size};
 use crate::core::presenter::Presenter;
 use crate::elements::Element;
-use crate::elements::element::{LayoutContext, PaintContext};
+use crate::elements::element::{LayoutContext, LayoutNodes, PaintContext};
 use crate::renderer::RendererDiagnostics;
 use crate::renderer::Scene;
 use crate::renderer::text::TextMeasureCache;
 use std::error::Error;
 use std::fmt;
 use std::time::Instant;
-use taffy::prelude::{AvailableSpace, TaffyTree};
+use taffy::prelude::{AvailableSpace, NodeId, TaffyTree};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FramePipelineError {
@@ -77,6 +77,26 @@ impl FramePipeline {
         Self::layout_root_with_text_measurer(root, taffy, &mut text_measurer, viewport_size)
     }
 
+    /// [`Self::layout_root_with_text_measurer`] keeping the layout tree across
+    /// frames: nodes are reused from the previous pass and only changed ones are
+    /// restyled, so taffy recomputes just the dirty parts. `taffy` and `nodes` must
+    /// be kept together from frame to frame.
+    pub fn layout_root_retained<E>(
+        root: &mut E,
+        taffy: &mut TaffyTree<ElementId>,
+        nodes: &mut LayoutNodes,
+        text_measurer: &mut TextMeasureCache,
+        viewport_size: Size,
+    ) -> Result<Bounds, FramePipelineError>
+    where
+        E: Element,
+    {
+        let mut layout_cx = LayoutContext::retained(taffy, viewport_size, text_measurer, nodes);
+        let root_node = root.layout(&mut layout_cx);
+        layout_cx.finish();
+        Self::compute_root_layout(taffy, root_node, viewport_size)
+    }
+
     pub fn layout_root_with_text_measurer<E>(
         root: &mut E,
         taffy: &mut TaffyTree<ElementId>,
@@ -89,7 +109,14 @@ impl FramePipeline {
         taffy.clear();
         let mut layout_cx = LayoutContext::with_text_measurer(taffy, viewport_size, text_measurer);
         let root_node = root.layout(&mut layout_cx);
+        Self::compute_root_layout(taffy, root_node, viewport_size)
+    }
 
+    fn compute_root_layout(
+        taffy: &mut TaffyTree<ElementId>,
+        root_node: NodeId,
+        viewport_size: Size,
+    ) -> Result<Bounds, FramePipelineError> {
         taffy
             .compute_layout(
                 root_node,
@@ -228,6 +255,30 @@ impl FramePipeline {
             &mut text_measurer,
             viewport_size,
         )
+    }
+
+    /// [`Self::build_frame_with_text_measurer`] with a retained layout tree.
+    #[allow(clippy::too_many_arguments)]
+    pub fn build_frame_retained<E, F>(
+        context: &mut AppContext,
+        root: &mut E,
+        build_root: &mut F,
+        taffy: &mut TaffyTree<ElementId>,
+        nodes: &mut LayoutNodes,
+        scene: &mut Scene,
+        text_measurer: &mut TextMeasureCache,
+        viewport_size: Size,
+    ) -> Result<Bounds, FramePipelineError>
+    where
+        E: Element,
+        F: FnMut(&mut AppContext) -> E,
+    {
+        Self::prepare_frame(context);
+        Self::rebuild_if_needed(context, root, build_root);
+        let bounds = Self::layout_root_retained(root, taffy, nodes, text_measurer, viewport_size)?;
+        Self::paint_root(root, taffy, scene, bounds);
+        Self::finish_frame(context);
+        Ok(bounds)
     }
 
     pub fn build_frame_with_text_measurer<E, F>(

@@ -307,8 +307,7 @@ impl Element for DataList {
                 .height
                 .unwrap_or(self.row_height * self.items.len() as f32),
         );
-        cx.taffy
-            .new_leaf(style)
+        cx.new_leaf(style)
             .expect("failed to create advanced data list layout node")
     }
 

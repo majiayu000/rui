@@ -476,7 +476,6 @@ impl Element for Table {
         };
 
         let node = cx
-            .taffy
             .new_leaf(style)
             .expect("Failed to create table layout node");
 

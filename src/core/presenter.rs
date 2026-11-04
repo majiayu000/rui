@@ -7,7 +7,7 @@ use crate::core::event::Event;
 use crate::core::frame_pipeline::{FramePipeline, FramePipelineError};
 use crate::core::geometry::{Bounds, Point, Size};
 use crate::elements::Element;
-use crate::elements::element::{EventContext, PointerEvent, PointerEventKind};
+use crate::elements::element::{EventContext, LayoutNodes, PointerEvent, PointerEventKind};
 use crate::renderer::RendererDiagnostics;
 use crate::renderer::Scene;
 use crate::renderer::text::TextMeasureCache;
@@ -44,6 +44,7 @@ pub struct Presenter<E = ()> {
     root: E,
     legacy_viewport_size: Option<Size>,
     taffy: TaffyTree<ElementId>,
+    layout_nodes: LayoutNodes,
     scene: Scene,
     text_measurer: TextMeasureCache,
     root_bounds: Bounds,
@@ -67,6 +68,7 @@ impl<E> Presenter<E> {
             root,
             legacy_viewport_size: None,
             taffy: TaffyTree::new(),
+            layout_nodes: LayoutNodes::new(),
             scene: Scene::new(),
             text_measurer: TextMeasureCache::new(),
             root_bounds,
@@ -293,9 +295,10 @@ where
 
     /// Lays the presented tree out and stores the resulting root bounds.
     pub fn layout(&mut self, viewport_size: Size) -> Result<Bounds, FramePipelineError> {
-        let root_bounds = FramePipeline::layout_root_with_text_measurer(
+        let root_bounds = FramePipeline::layout_root_retained(
             &mut self.root,
             &mut self.taffy,
+            &mut self.layout_nodes,
             &mut self.text_measurer,
             viewport_size,
         )?;
@@ -329,11 +332,12 @@ where
     where
         F: FnMut(&mut AppContext) -> E,
     {
-        let root_bounds = FramePipeline::build_frame_with_text_measurer(
+        let root_bounds = FramePipeline::build_frame_retained(
             context,
             &mut self.root,
             build_root,
             &mut self.taffy,
+            &mut self.layout_nodes,
             &mut self.scene,
             &mut self.text_measurer,
             viewport_size,
@@ -459,7 +463,7 @@ mod tests {
                 width: Dimension::Length(self.size.width),
                 height: Dimension::Length(self.size.height),
             };
-            match cx.taffy.new_leaf(style) {
+            match cx.new_leaf(style) {
                 Ok(node) => node,
                 Err(err) => panic!("capture probe layout failed: {err}"),
             }

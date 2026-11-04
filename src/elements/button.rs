@@ -340,7 +340,7 @@ impl Element for Button {
             height: LengthPercentage::Length(0.0),
         };
 
-        let node = match cx.taffy.new_leaf(style) {
+        let node = match cx.new_leaf(style) {
             Ok(node) => node,
             Err(err) => panic!("Failed to create button layout node: {err}"),
         };

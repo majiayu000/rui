@@ -331,8 +331,7 @@ impl Element for DataTree {
                 .height
                 .unwrap_or(self.row_height * self.visible_item_count() as f32),
         );
-        cx.taffy
-            .new_leaf(style)
+        cx.new_leaf(style)
             .expect("failed to create advanced data tree layout node")
     }
 

@@ -184,7 +184,6 @@ impl Element for Progress {
         };
 
         let node = cx
-            .taffy
             .new_leaf(style)
             .expect("Failed to create progress layout node");
 

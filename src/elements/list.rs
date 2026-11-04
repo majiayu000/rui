@@ -162,7 +162,6 @@ impl Element for ListItem {
         item_style.align_items = Some(taffy::AlignItems::FlexStart);
 
         let node = cx
-            .taffy
             .new_with_children(item_style, &[content_node])
             .expect("Failed to create list item layout node");
 
@@ -445,7 +444,6 @@ impl Element for List {
         };
 
         let node = cx
-            .taffy
             .new_with_children(taffy_style, &child_nodes)
             .expect("Failed to create list layout node");
 

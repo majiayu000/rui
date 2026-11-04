@@ -186,7 +186,7 @@ impl Element for Tabs {
         let mut style = style_to_taffy(&self.style);
         style.flex_direction = taffy::FlexDirection::Column;
         style.align_items = Some(taffy::AlignItems::Stretch);
-        let node = match cx.taffy.new_with_children(style, &child_nodes) {
+        let node = match cx.new_with_children(style, &child_nodes) {
             Ok(node) => node,
             Err(err) => panic!("failed to create advanced tabs layout node: {}", err),
         };

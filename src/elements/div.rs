@@ -446,7 +446,6 @@ impl Element for Div {
         // Create this node
         let taffy_style = style_to_taffy(&self.style);
         let node = cx
-            .taffy
             .new_with_children(taffy_style, &child_nodes)
             .expect("Failed to create layout node");
 

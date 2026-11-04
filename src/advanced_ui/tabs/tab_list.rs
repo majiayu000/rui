@@ -246,7 +246,7 @@ impl Element for TabList {
         style.size.width = Dimension::Length(self.tab_width() * self.tabs.len() as f32);
         style.size.height = Dimension::Length(self.theme.control_height(self.size));
 
-        match cx.taffy.new_leaf(style) {
+        match cx.new_leaf(style) {
             Ok(node) => node,
             Err(err) => panic!("failed to create advanced tab list layout node: {}", err),
         }
