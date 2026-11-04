@@ -69,6 +69,8 @@ pub(crate) struct InputPaintTokens {
 /// Text input component
 pub struct Input {
     id: Option<ElementId>,
+    /// `id` was set by the application, so layout keeps it.
+    explicit_id: bool,
     placeholder: String,
     accessibility_label: Option<String>,
     input_type: InputType,
@@ -101,6 +103,7 @@ impl Input {
 
         Self {
             id: Some(ElementId::new()),
+            explicit_id: false,
             placeholder: String::new(),
             accessibility_label: None,
             input_type: InputType::default(),
@@ -124,6 +127,7 @@ impl Input {
 
     pub fn id(mut self, id: ElementId) -> Self {
         self.id = Some(id);
+        self.explicit_id = true;
         self
     }
 
@@ -477,6 +481,12 @@ impl Default for Input {
 impl Element for Input {
     fn id(&self) -> Option<ElementId> {
         self.id
+    }
+
+    fn adopt_stable_id(&mut self, id: ElementId) {
+        if !self.explicit_id {
+            self.id = Some(id);
+        }
     }
 
     fn style(&self) -> &Style {

@@ -62,6 +62,8 @@ type PointerFn = Box<dyn Fn(&PointerEvent)>;
 /// to those bounds. Size it like a [`Div`](crate::elements::Div).
 pub struct Canvas {
     id: ElementId,
+    /// `id` was set by the application, so layout keeps it.
+    explicit_id: bool,
     style: Style,
     paint: PaintFn,
     on_pointer: Option<PointerFn>,
@@ -72,6 +74,7 @@ pub struct Canvas {
 pub fn canvas(paint: impl FnMut(Bounds, &mut Painter) + 'static) -> Canvas {
     Canvas {
         id: ElementId::new(),
+        explicit_id: false,
         style: Style::default(),
         paint: Box::new(paint),
         on_pointer: None,
@@ -82,6 +85,7 @@ pub fn canvas(paint: impl FnMut(Bounds, &mut Painter) + 'static) -> Canvas {
 impl Canvas {
     pub fn id(mut self, id: ElementId) -> Self {
         self.id = id;
+        self.explicit_id = true;
         self
     }
 
@@ -125,6 +129,12 @@ impl Canvas {
 impl Element for Canvas {
     fn id(&self) -> Option<ElementId> {
         Some(self.id)
+    }
+
+    fn adopt_stable_id(&mut self, id: ElementId) {
+        if !self.explicit_id {
+            self.id = id;
+        }
     }
 
     fn style(&self) -> &Style {

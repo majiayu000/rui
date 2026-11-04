@@ -29,6 +29,7 @@ use taffy::prelude::TaffyTree;
 const BUDGETS_JSON: &str = include_str!("../benchmarks/perf_budgets.json");
 const VIEWPORT: (f32, f32) = (1440.0, 900.0);
 const ROW_HEIGHT: f32 = 28.0;
+const EDITED_ROW: usize = 1_000;
 const WARMUP: usize = 3;
 const SAMPLES: usize = 15;
 
@@ -136,6 +137,20 @@ fn list(rows: usize, selected: usize) -> Div {
         .children((0..rows).map(move |index| row(index, selected)))
 }
 
+/// The list with one row's label changed: the edit `round` made to row `EDITED_ROW`.
+fn list_with_edit(rows: usize, round: usize) -> Div {
+    div()
+        .w_full()
+        .flex_col()
+        .children((0..rows).map(move |index| {
+            if index == EDITED_ROW {
+                row(index, usize::MAX).child(text(format!("edit {round}")))
+            } else {
+                row(index, usize::MAX).child(text("edit"))
+            }
+        }))
+}
+
 /// Layout and paint state a runner keeps across frames.
 struct Surfaces {
     taffy: TaffyTree<ElementId>,
@@ -235,8 +250,54 @@ fn main() -> ExitCode {
         );
     }
 
-    let counters = costs.values().any(|cost| cost.instructions_m > 0.0);
     let mut failures = Vec::new();
+    // Footprint with the long list drawn once, including the renderer when present.
+    let footprint_note = match MetalRenderer::new() {
+        Ok(mut renderer) => {
+            let viewport = Size::new(VIEWPORT.0, VIEWPORT.1);
+            match renderer.render_offscreen(&surfaces.scene, viewport, 2.0) {
+                Ok(()) => "with the Metal renderer",
+                Err(err) => {
+                    failures.push(format!("rendering the long list failed: {err}"));
+                    "render failed"
+                }
+            }
+        }
+        Err(_) => "no Metal device: CPU stages only",
+    };
+    let footprint = rusage()[9] as f64 / 1_048_576.0;
+    println!(
+        "footprint: {footprint:.1} MB (max {:.1}, {footprint_note})",
+        budgets.footprint_mb_max
+    );
+    if footprint > budgets.footprint_mb_max {
+        failures.push(format!(
+            "footprint {footprint:.1} MB, max {:.1} MB",
+            budgets.footprint_mb_max
+        ));
+    }
+
+    // One row's text changes per frame. #173's target is under 10% of a full
+    // frame: the same list laid out from an empty layout tree, with warm caches.
+    // Measured after the footprint so it stays that of the long list drawn once.
+    let mut full_surfaces = Surfaces::new();
+    costs.insert(
+        "list.full_frame",
+        measure(|round| {
+            full_surfaces.taffy.clear();
+            full_surfaces.nodes = LayoutNodes::new();
+            full_surfaces.frame(&mut list_with_edit(2_000, round), &mut measurer);
+        }),
+    );
+    drop(full_surfaces);
+    let mut edit_surfaces = Surfaces::new();
+    costs.insert(
+        "list.one_row_changed",
+        measure(|round| edit_surfaces.frame(&mut list_with_edit(2_000, round), &mut measurer)),
+    );
+    drop(edit_surfaces);
+
+    let counters = costs.values().any(|cost| cost.instructions_m > 0.0);
     println!(
         "{:<24} {:>14} {:>10} {:>14} {:>10}",
         "case", "instructions", "budget", "allocations", "budget"
@@ -273,6 +334,13 @@ fn main() -> ExitCode {
         );
     }
 
+    let (full, changed) = (costs["list.full_frame"], costs["list.one_row_changed"]);
+    println!(
+        "list one row changed / full frame: {:.2} by instructions, {:.2} by allocations (#173 target 0.10)",
+        changed.instructions_m / full.instructions_m,
+        changed.allocations / full.allocations
+    );
+
     let (small, large) = (costs["virtual_list.1k"], costs["virtual_list.100k"]);
     let scaling = if counters {
         large.instructions_m / small.instructions_m
@@ -292,32 +360,6 @@ fn main() -> ExitCode {
         failures.push(format!(
             "virtual_list: 100 000 rows cost {scaling:.2}x 1 000 rows, max {:.2}x",
             budgets.virtual_list_scaling_max
-        ));
-    }
-
-    // Footprint with the long list drawn once, including the renderer when present.
-    let footprint_note = match MetalRenderer::new() {
-        Ok(mut renderer) => {
-            let viewport = Size::new(VIEWPORT.0, VIEWPORT.1);
-            match renderer.render_offscreen(&surfaces.scene, viewport, 2.0) {
-                Ok(()) => "with the Metal renderer",
-                Err(err) => {
-                    failures.push(format!("rendering the long list failed: {err}"));
-                    "render failed"
-                }
-            }
-        }
-        Err(_) => "no Metal device: CPU stages only",
-    };
-    let footprint = rusage()[9] as f64 / 1_048_576.0;
-    println!(
-        "footprint: {footprint:.1} MB (max {:.1}, {footprint_note})",
-        budgets.footprint_mb_max
-    );
-    if footprint > budgets.footprint_mb_max {
-        failures.push(format!(
-            "footprint {footprint:.1} MB, max {:.1} MB",
-            budgets.footprint_mb_max
         ));
     }
 
