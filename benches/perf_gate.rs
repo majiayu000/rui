@@ -88,6 +88,11 @@ struct Budgets {
     allocations: BTreeMap<String, f64>,
     /// Most the 100 000-row virtual list may cost relative to 1 000 rows.
     virtual_list_scaling_max: f64,
+    /// Footprint before any renderer exists: what RUI's own data costs, the same on
+    /// any machine.
+    footprint_cpu_mb_max: f64,
+    /// Footprint once the long list has been rendered. GPU driver memory is part of
+    /// it, so this varies with the GPU: hosted CI VMs measure about 20 MB more.
     footprint_mb_max: f64,
     /// Most of the window one changed row may draw again (#175).
     one_row_damage_max: f64,
@@ -385,6 +390,18 @@ fn main() -> ExitCode {
     }
 
     let mut failures = Vec::new();
+    // RUI's own memory, before a renderer and its driver allocations exist.
+    let cpu_footprint = rusage()[9] as f64 / 1_048_576.0;
+    println!(
+        "footprint before the renderer: {cpu_footprint:.1} MB (max {:.1})",
+        budgets.footprint_cpu_mb_max
+    );
+    if cpu_footprint > budgets.footprint_cpu_mb_max {
+        failures.push(format!(
+            "footprint before the renderer {cpu_footprint:.1} MB, max {:.1} MB",
+            budgets.footprint_cpu_mb_max
+        ));
+    }
     // Footprint with the long list drawn once, including the renderer when present.
     let footprint_note = match MetalRenderer::new() {
         Ok(mut renderer) => {
@@ -588,9 +605,13 @@ fn main() -> ExitCode {
         ("rows as views", "list.one_row_changed_views"),
     ] {
         let changed = costs[case];
+        let by_instructions = if counters {
+            format!("{:.3}", changed.instructions_m / full.instructions_m)
+        } else {
+            "unavailable".to_string()
+        };
         println!(
-            "one row changed, {name} / full frame: {:.3} by instructions, {:.3} by allocations (#173 target 0.10)",
-            changed.instructions_m / full.instructions_m,
+            "one row changed, {name} / full frame: {by_instructions} by instructions, {:.3} by allocations (#173 target 0.10)",
             changed.allocations / full.allocations
         );
     }

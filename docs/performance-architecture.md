@@ -215,10 +215,11 @@ machine. The target for a one-row change is allocations proportional to that row
 | Wrap cache | keyed by exact width | keyed by width interval |
 | Font fallback | Core Text, per-platform code | script runs over rustybuzz, one implementation |
 | Foreground scheduling | FIFO | priority queue with frame budget |
-| Startup shaders | precompiled metallib | binary-archive cache + parallel init (metallib where available) |
+| Startup shaders | precompiled metallib | renderer created off the main thread, in parallel with the first layout (#226); build-time metallib still open (#177) |
 
-Rows that are done today: layout tree, hit testing, color, glyph atlas, culling.
-The rest are in lanes 2–5.
+Every row is implemented on main as of `c2e3596`, except a build-time metallib (#177,
+needs the Xcode `metal` tool). `MTLBinaryArchive` was measured and dropped: the cold
+cost is the source compile, which runs before any archive lookup (#226).
 
 ## Verification
 
@@ -255,19 +256,21 @@ serially on one quiet machine.
 
 ## Targets
 
-| Fixture | Target |
-|---|---|
-| One row changed, 2000-row list | < 10% of a full frame; below GPUI's `.cached()` case by 10x |
-| Full redraw, 2000-row list | ≤ 50% of GPUI's instructions (met: ~15%) |
-| `virtual_list` 100 000 vs 1 000 rows | within 20% (met: equal) |
-| Text page resize within a wrap interval | zero reshapes, zero rewraps |
-| Idle window | zero frames |
-| Startup to first frame, warm | below GPUI's |
-| Footprint, long list with renderer | below GPUI's (met on this fixture) |
+| Fixture | Target | Result on `c2e3596` |
+|---|---|---|
+| One row changed, 2000-row list | < 10% of a full frame | rows as views: 0.029 (2.0 M instructions, 23 allocations); list rebuilt from the root: 0.25 |
+| One row changed vs GPUI's `.cached()` case | 10x fewer instructions | 10.0x, with the list rebuilt from the root |
+| Full redraw, 2000-row list | ≤ 50% of GPUI's instructions | 16% (25.1 M vs 159.7 M) |
+| `virtual_list` 100 000 vs 1 000 rows | within 20% | equal; 4.2x fewer instructions than `uniform_list` |
+| Text page resize within a wrap interval | zero reshapes, zero rewraps | met (`benches/text_cache.rs` fails otherwise) |
+| Idle window | zero frames | met (#215, verified natively) |
+| Startup to first frame, warm | below GPUI's | 53 ms vs 183–191 ms |
+| Footprint | below GPUI's | lower on every fixture in `docs/gpui-comparison.md` |
 
 ## Stop conditions
 
 From #179: if the incremental core is complete and a full redraw still cannot
-match GPUI's cost, position RUI as a framework for small tools. On the current
-numbers the full redraw already costs less, so the remaining risk is
-correctness, which the oracles above exist to catch.
+match GPUI's cost, position RUI as a framework for small tools. The incremental
+core is complete and a full redraw costs 16% of GPUI's, so this condition is not
+met. The remaining risk is correctness, which the oracles above exist to catch,
+and scope: RUI is macOS only.
