@@ -4,6 +4,7 @@ use crate::core::action::{ActionHandler, ActionId, ActionOutcome, Keymap};
 use crate::core::app_handle::{AppHandle, AppUpdateQueue};
 use crate::core::effects::Effects;
 use crate::core::entity::{Entity, EntityId, EntityStore};
+use crate::core::executor::{BackgroundExecutor, ForegroundExecutor};
 use crate::core::foreground::{AnimationFrameRequests, ForegroundQueue, FrameTiming};
 use crate::core::geometry::Size;
 use crate::core::view::{View, ViewContext, ViewNotifier, ViewUpdates};
@@ -27,6 +28,8 @@ pub struct AppContext {
     app_action_handlers: Vec<Box<dyn ActionHandler>>,
     update_queue: Arc<AppUpdateQueue>,
     pub(crate) effects: Effects,
+    pub(crate) foreground_tasks: ForegroundExecutor,
+    pub(crate) background: BackgroundExecutor,
     pub(crate) foreground: ForegroundQueue,
     pub(crate) animation_frames: AnimationFrameRequests,
     pub(crate) frame_timing: FrameTiming,
@@ -161,6 +164,8 @@ impl AppContext {
             app_action_handlers: Vec::new(),
             update_queue: Arc::default(),
             effects: Effects::default(),
+            foreground_tasks: ForegroundExecutor::default(),
+            background: BackgroundExecutor::default(),
             foreground: ForegroundQueue::default(),
             animation_frames: AnimationFrameRequests::default(),
             frame_timing: FrameTiming::default(),

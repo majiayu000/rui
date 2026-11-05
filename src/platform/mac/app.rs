@@ -60,6 +60,7 @@ where
     E: Element + 'static,
 {
     let mut context = context;
+    context.use_background_threads();
     let mtm = MainThreadMarker::new().expect("Must be called from main thread");
     let app = NSApplication::sharedApplication(mtm);
     app.setActivationPolicy(NSApplicationActivationPolicy::Regular);

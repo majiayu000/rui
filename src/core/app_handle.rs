@@ -12,6 +12,8 @@ type Waker = Box<dyn Fn() + Send + Sync>;
 #[derive(Default)]
 pub(crate) struct AppUpdateQueue {
     updates: Mutex<Vec<AppUpdate>>,
+    /// Foreground tasks woken since they were last polled, by task id.
+    ready_tasks: Mutex<Vec<u64>>,
     waker: Mutex<Option<Waker>>,
 }
 
@@ -28,6 +30,24 @@ impl AppUpdateQueue {
 
     fn push(&self, update: AppUpdate) {
         lock(&self.updates).push(update);
+        self.wake();
+    }
+
+    /// Mark a foreground task ready to poll, from any thread.
+    pub(crate) fn schedule_task(&self, task: u64) {
+        lock(&self.ready_tasks).push(task);
+        self.wake();
+    }
+
+    pub(crate) fn take_ready_tasks(&self) -> Vec<u64> {
+        std::mem::take(&mut *lock(&self.ready_tasks))
+    }
+
+    pub(crate) fn has_ready_tasks(&self) -> bool {
+        !lock(&self.ready_tasks).is_empty()
+    }
+
+    fn wake(&self) {
         if let Some(wake) = lock(&self.waker).as_ref() {
             wake();
         }
@@ -35,7 +55,7 @@ impl AppUpdateQueue {
 }
 
 /// An update closure panicking on the UI thread must not wedge every later sender.
-fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+pub(crate) fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     match mutex.lock() {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
