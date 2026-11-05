@@ -4,6 +4,7 @@
 
 use rui::core::event::MouseButton;
 use rui::elements::element::{PointerEvent, PointerEventKind};
+use rui::elements::{AnyElement, span, styled_text};
 use rui::{Color, Div, Point, Presenter, Size, div, input, text};
 use std::cell::Cell;
 use std::rc::Rc;
@@ -20,13 +21,16 @@ struct Seen {
 }
 
 /// 100 rows 20 px tall. Rows 10 and 50 take clicks, row 20 reports hover, row
-/// 30 holds an input; the rest have no handlers.
+/// 30 holds an input; the rest have no handlers. Odd rows label themselves with
+/// `StyledText`, even rows with `Text`, so both kinds of inert text are passed by.
 fn rows(seen: &Rc<Seen>) -> Div {
     div().w(320.0).flex_col().children((0..100).map(|row| {
-        let line = div()
-            .h(20.0)
-            .bg(Color::hex(0x334455))
-            .child(text(format!("row {row}")));
+        let label: AnyElement = if row % 2 == 1 {
+            styled_text([span("row ").bold(), span(format!("{row}"))]).into()
+        } else {
+            text(format!("row {row}")).into()
+        };
+        let line = div().h(20.0).bg(Color::hex(0x334455)).child(label);
         match row {
             10 | 50 => {
                 let seen = Rc::clone(seen);
