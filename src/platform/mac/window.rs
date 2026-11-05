@@ -160,15 +160,17 @@ impl MacWindow {
         }
     }
 
-    /// Whether an event this window handles is waiting, without taking it.
-    pub(crate) fn has_pending_event(&self, app: &NSApplication) -> bool {
-        app.nextEventMatchingMask_untilDate_inMode_dequeue(
-            platform_event_mask(),
-            Some(&NSDate::distantPast()),
-            unsafe { NSDefaultRunLoopMode },
-            false,
-        )
-        .is_some()
+    /// Place this window down and to the right of `previous`, as AppKit cascades.
+    pub(crate) fn cascade_after(&self, previous: &MacWindow) {
+        const CASCADE_OFFSET: f64 = 24.0;
+        let frame: NSRect = unsafe { msg_send![&*previous.window, frame] };
+        let top_left = NSPoint::new(
+            frame.origin.x + CASCADE_OFFSET,
+            frame.origin.y + frame.size.height - CASCADE_OFFSET,
+        );
+        unsafe {
+            let _: () = msg_send![&*self.window, setFrameTopLeftPoint: top_left];
+        }
     }
 
     /// The CoreGraphics display id of the screen the window is on.
@@ -193,90 +195,70 @@ impl MacWindow {
         app: &NSApplication,
         wait_for_event: bool,
     ) -> Result<Vec<MacWindowEvent>, PlatformWindowError> {
-        let mut events = Vec::new();
-        let mut lifecycle_events = Vec::new();
-        self.push_lifecycle_events(&mut lifecycle_events)?;
-        append_platform_events(&mut events, lifecycle_events);
+        let polled = poll_windows(app, &mut [self], wait_for_event)?;
+        let mut events: Vec<MacWindowEvent> = polled
+            .app
+            .into_iter()
+            .map(|event| match event {
+                MacAppEvent::DisplayTick => MacWindowEvent::DisplayTick,
+                MacAppEvent::Wake => MacWindowEvent::Platform(PlatformWindowEvent::RedrawRequested),
+            })
+            .collect();
+        events.extend(polled.windows.into_iter().flatten());
+        Ok(events)
+    }
 
-        let mask = platform_event_mask();
-        let mut expiration = if wait_for_event {
-            NSDate::distantFuture()
-        } else {
-            NSDate::distantPast()
-        };
-        let window_number = self.window_number();
-
-        while let Some(event) = app.nextEventMatchingMask_untilDate_inMode_dequeue(
-            mask,
-            Some(&expiration),
-            unsafe { NSDefaultRunLoopMode },
-            true,
-        ) {
-            expiration = NSDate::distantPast();
-
-            if !event_ends_poll_batch(event.windowNumber(), window_number) {
-                if event.r#type() == NSEventType::KeyUp {
-                    self.suppressed_key_ups.forget_key_up(event.keyCode());
+    /// Handle one native event addressed to this window. Returns whether it ends
+    /// the poll batch.
+    fn handle_targeted_event(
+        &mut self,
+        app: &NSApplication,
+        event: &NSEvent,
+        events: &mut Vec<MacWindowEvent>,
+    ) -> Result<bool, PlatformWindowError> {
+        let event_type = event.r#type();
+        if event_type == NSEventType::ApplicationDefined {
+            match application_event(event.data1()) {
+                Some(MacApplicationEvent::Redraw) => {
+                    events.push(MacWindowEvent::Platform(
+                        PlatformWindowEvent::RedrawRequested,
+                    ));
+                    return Ok(true);
                 }
-                app.sendEvent(&event);
-                let mut lifecycle_events = Vec::new();
-                self.push_delegate_lifecycle_events(&mut lifecycle_events)?;
-                append_platform_events(&mut events, lifecycle_events);
-                continue;
-            }
-
-            let event_type = event.r#type();
-            if event_type == NSEventType::ApplicationDefined {
-                match application_event(event.data1()) {
-                    Some(MacApplicationEvent::Redraw) => {
-                        events.push(MacWindowEvent::Platform(
-                            PlatformWindowEvent::RedrawRequested,
-                        ));
-                        break;
-                    }
-                    Some(MacApplicationEvent::DisplayTick) => {
-                        events.push(MacWindowEvent::DisplayTick);
-                        break;
-                    }
-                    Some(MacApplicationEvent::Accessibility) => {
-                        if let Some(request) = self.accessibility_bridge.take_action_request() {
-                            events.push(MacWindowEvent::Accessibility(request));
-                        }
-                        break;
-                    }
-                    None => {}
+                Some(MacApplicationEvent::DisplayTick) => {
+                    events.push(MacWindowEvent::DisplayTick);
+                    return Ok(true);
                 }
+                Some(MacApplicationEvent::Accessibility) => {
+                    if let Some(request) = self.accessibility_bridge.take_action_request() {
+                        events.push(MacWindowEvent::Accessibility(request));
+                    }
+                    return Ok(true);
+                }
+                None => {}
             }
-
-            let mut platform_events = Vec::new();
-            let suppress_key_up = event_type == NSEventType::KeyUp
-                && !self.suppressed_key_ups.should_emit_key_up(event.keyCode());
-            if !suppress_key_up {
-                append_platform_events_from_native_event(
-                    &event,
-                    self.last_content_size,
-                    &mut platform_events,
-                );
-            }
-            app.sendEvent(&event);
-            let ime_events = self.content_view.drain_ime_events();
-            let consumed_key_down = suppress_key_down_for_ime(&mut platform_events, &ime_events);
-            if event_type == NSEventType::KeyDown {
-                self.suppressed_key_ups
-                    .record_key_down(event.keyCode(), consumed_key_down);
-            }
-            append_platform_events(&mut events, platform_events);
-            events.extend(ime_events.into_iter().map(MacWindowEvent::Text));
-            let mut lifecycle_events = Vec::new();
-            self.push_delegate_lifecycle_events(&mut lifecycle_events)?;
-            append_platform_events(&mut events, lifecycle_events);
-            break;
         }
 
-        let mut lifecycle_events = Vec::new();
-        self.push_lifecycle_events(&mut lifecycle_events)?;
-        append_platform_events(&mut events, lifecycle_events);
-        Ok(events)
+        let mut platform_events = Vec::new();
+        let suppress_key_up = event_type == NSEventType::KeyUp
+            && !self.suppressed_key_ups.should_emit_key_up(event.keyCode());
+        if !suppress_key_up {
+            append_platform_events_from_native_event(
+                event,
+                self.last_content_size,
+                &mut platform_events,
+            );
+        }
+        app.sendEvent(event);
+        let ime_events = self.content_view.drain_ime_events();
+        let consumed_key_down = suppress_key_down_for_ime(&mut platform_events, &ime_events);
+        if event_type == NSEventType::KeyDown {
+            self.suppressed_key_ups
+                .record_key_down(event.keyCode(), consumed_key_down);
+        }
+        append_platform_events(events, platform_events);
+        events.extend(ime_events.into_iter().map(MacWindowEvent::Text));
+        Ok(true)
     }
 
     fn push_lifecycle_events(
@@ -498,6 +480,116 @@ impl PlatformWindow for MacWindow {
             let _: () = msg_send![&*self.window, close];
         }
         Ok(())
+    }
+}
+
+/// Events addressed to the application rather than to one window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MacAppEvent {
+    /// The display refreshed while an animation asked for frames.
+    DisplayTick,
+    /// Another thread queued work for the UI thread.
+    Wake,
+}
+
+pub(crate) struct PolledEvents {
+    pub(crate) app: Vec<MacAppEvent>,
+    /// Events for each window, in the order the windows were passed.
+    pub(crate) windows: Vec<Vec<MacWindowEvent>>,
+}
+
+/// Wait for (or, without `wait_for_event`, check for) the next native event and
+/// route it to the window it is addressed to, alongside each window's lifecycle
+/// changes. Events for no window are dispatched to AppKit.
+pub(crate) fn poll_windows(
+    app: &NSApplication,
+    windows: &mut [&mut MacWindow],
+    wait_for_event: bool,
+) -> Result<PolledEvents, PlatformWindowError> {
+    let mut polled = PolledEvents {
+        app: Vec::new(),
+        windows: windows.iter().map(|_| Vec::new()).collect(),
+    };
+    for (window, events) in windows.iter_mut().zip(&mut polled.windows) {
+        let mut lifecycle_events = Vec::new();
+        window.push_lifecycle_events(&mut lifecycle_events)?;
+        append_platform_events(events, lifecycle_events);
+    }
+
+    let mask = platform_event_mask();
+    let mut expiration = if wait_for_event {
+        NSDate::distantFuture()
+    } else {
+        NSDate::distantPast()
+    };
+
+    while let Some(event) = app.nextEventMatchingMask_untilDate_inMode_dequeue(
+        mask,
+        Some(&expiration),
+        unsafe { NSDefaultRunLoopMode },
+        true,
+    ) {
+        expiration = NSDate::distantPast();
+        let target = windows
+            .iter()
+            .position(|window| event_ends_poll_batch(event.windowNumber(), window.window_number()));
+
+        let ends_batch = match target {
+            Some(index) => {
+                windows[index].handle_targeted_event(app, &event, &mut polled.windows[index])?
+            }
+            None => {
+                if event.r#type() == NSEventType::ApplicationDefined
+                    && let Some(app_event) = app_event(event.data1())
+                {
+                    polled.app.push(app_event);
+                    true
+                } else {
+                    if event.r#type() == NSEventType::KeyUp {
+                        for window in windows.iter_mut() {
+                            window.suppressed_key_ups.forget_key_up(event.keyCode());
+                        }
+                    }
+                    app.sendEvent(&event);
+                    false
+                }
+            }
+        };
+        for (window, events) in windows.iter_mut().zip(&mut polled.windows) {
+            let mut lifecycle_events = Vec::new();
+            window.push_delegate_lifecycle_events(&mut lifecycle_events)?;
+            append_platform_events(events, lifecycle_events);
+        }
+        if ends_batch {
+            break;
+        }
+    }
+
+    for (window, events) in windows.iter_mut().zip(&mut polled.windows) {
+        let mut lifecycle_events = Vec::new();
+        window.push_lifecycle_events(&mut lifecycle_events)?;
+        append_platform_events(events, lifecycle_events);
+    }
+    Ok(polled)
+}
+
+/// Whether an event the windows handle is waiting, without taking it.
+pub(crate) fn has_pending_event(app: &NSApplication) -> bool {
+    app.nextEventMatchingMask_untilDate_inMode_dequeue(
+        platform_event_mask(),
+        Some(&NSDate::distantPast()),
+        unsafe { NSDefaultRunLoopMode },
+        false,
+    )
+    .is_some()
+}
+
+/// Application-defined events posted for no window: display ticks and wakes.
+fn app_event(data: isize) -> Option<MacAppEvent> {
+    match application_event(data)? {
+        MacApplicationEvent::DisplayTick => Some(MacAppEvent::DisplayTick),
+        MacApplicationEvent::Redraw => Some(MacAppEvent::Wake),
+        MacApplicationEvent::Accessibility => None,
     }
 }
 
