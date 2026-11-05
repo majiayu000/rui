@@ -97,6 +97,7 @@ impl FramePipeline {
         }
         // Views new to the tree render, and so do the ones notified.
         root.refresh_views(context, &dirty);
+        context.release_unplaced_views();
         if !context.frame.pending_updates.is_empty() {
             context.frame.needs_rebuild = true;
         }

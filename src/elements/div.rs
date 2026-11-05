@@ -10,7 +10,7 @@ use crate::core::style::{
 use crate::core::text_editing::{TextInputCommand, TextInputEvent};
 use crate::elements::element::{
     AnyElement, Element, EventContext, LayoutContext, PaintContext, PointerEvent, PointerEventKind,
-    dispatch_action_to_children, style_to_taffy,
+    dispatch_action_to_children, reconcile_children, style_to_taffy,
 };
 use crate::elements::text::{FontWeight, TextStyleRefinement};
 use crate::renderer::Primitive;
@@ -480,10 +480,7 @@ impl Element for Div {
         let Some(previous) = (previous as &mut dyn Any).downcast_mut::<Div>() else {
             return false;
         };
-        let mut same = self.children.len() == previous.children.len();
-        for (child, old) in self.children.iter_mut().zip(previous.children.iter_mut()) {
-            same &= child.reconcile(old);
-        }
+        let mut same = reconcile_children(&mut self.children, &mut previous.children);
         // Handlers cannot be compared, so a div with any keeps the new instance.
         same &= self.on_click.is_none()
             && self.on_hover.is_none()
