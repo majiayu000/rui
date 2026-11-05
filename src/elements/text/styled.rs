@@ -10,6 +10,7 @@ use crate::elements::element::{
 };
 use crate::renderer::Primitive;
 use crate::renderer::text::{RichPieceText, RichSpan};
+use std::any::Any;
 use taffy::prelude::*;
 
 /// A run of a [`StyledText`]: its text and the style properties it sets over
@@ -162,6 +163,24 @@ impl Element for StyledText {
 
     fn style(&self) -> &Style {
         &self.style
+    }
+
+    fn memoizable(&self) -> bool {
+        true
+    }
+
+    /// Kept when every span sets the same text and style properties. What
+    /// the spans inherit is compared in layout, against the style the kept
+    /// text resolved them from.
+    fn reconcile(&mut self, previous: &mut dyn Element) -> bool {
+        let Some(previous) = (previous as &mut dyn Any).downcast_ref::<StyledText>() else {
+            return false;
+        };
+        self.id == previous.id
+            && self.spans == previous.spans
+            && self.style == previous.style
+            && self.align == previous.align
+            && self.max_lines == previous.max_lines
     }
 
     fn layout(&mut self, cx: &mut LayoutContext) -> NodeId {

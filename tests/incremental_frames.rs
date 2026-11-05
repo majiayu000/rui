@@ -7,7 +7,7 @@
 
 use rui::core::frame_pipeline::FramePipeline;
 use rui::elements::element::LayoutNodes;
-use rui::elements::{Div, Element, canvas, div, text};
+use rui::elements::{Div, Element, canvas, div, span, styled_text, text};
 use rui::renderer::text::TextMeasureCache;
 use rui::renderer::{Primitive, Scene};
 use rui::{Bounds, Color, ElementId, Size};
@@ -56,6 +56,8 @@ enum Node {
         word: usize,
         size: f32,
         wrap: bool,
+        /// Drawn as a `StyledText` of two spans instead of a `Text`.
+        styled: bool,
     },
 }
 
@@ -66,6 +68,7 @@ impl Node {
                 word: rng.below(WORDS.len() as u64) as usize,
                 size: 10.0 + rng.below(8) as f32,
                 wrap: rng.below(3) == 0,
+                styled: rng.below(3) == 0,
             };
         }
         Node::Box {
@@ -109,7 +112,21 @@ impl Node {
                 }
                 node.children(children.iter().map(Node::build))
             }
-            Node::Label { word, size, wrap } => {
+            Node::Label {
+                word,
+                size,
+                styled: true,
+                ..
+            } => {
+                let (head, tail) = WORDS[*word].split_at(WORDS[*word].len() / 2);
+                div().flex_row().child(styled_text([
+                    span(head).size(*size),
+                    span(tail).bold().size(*size + 4.0).color(Color::BLUE),
+                ]))
+            }
+            Node::Label {
+                word, size, wrap, ..
+            } => {
                 let label = text(WORDS[*word]).size(*size);
                 // Text sizes are fractional, so siblings after it move by
                 // fractions of a pixel when it changes.
@@ -166,9 +183,15 @@ impl Node {
                     children.insert(at, Node::random(rng, 2));
                 }
             },
-            Node::Label { word, size, wrap } => match rng.below(3) {
+            Node::Label {
+                word,
+                size,
+                wrap,
+                styled,
+            } => match rng.below(4) {
                 0 => *word = rng.below(WORDS.len() as u64) as usize,
                 1 => *size = 10.0 + rng.below(8) as f32,
+                2 => *styled = !*styled,
                 _ => *wrap = !*wrap,
             },
         }
@@ -338,6 +361,35 @@ fn a_changed_inherited_text_style_repaints_kept_text() {
         let kept = incremental.frame(&mut measurer, viewport);
         let full = full_frame(tree(color), &mut measurer, viewport);
         assert_same(&kept, &full, &format!("color {color:06x}"));
+    }
+}
+
+#[test]
+fn a_changed_inherited_text_style_repaints_kept_styled_text() {
+    let mut measurer = TextMeasureCache::new();
+    let tree = |color: u32, size: f32| {
+        div()
+            .w(120.0)
+            .text_color(Color::hex(color))
+            .text_size(size)
+            .child(styled_text([
+                span("same styled "),
+                span("text that wraps").bold(),
+            ]))
+    };
+    let viewport = Size::new(320.0, 240.0);
+    let mut incremental = Incremental::new();
+    for (color, size) in [
+        (0x112233, 14.0),
+        (0x112233, 14.0),
+        (0x445566, 14.0),
+        (0x445566, 18.0),
+        (0x445566, 18.0),
+    ] {
+        incremental.rebuild(tree(color, size));
+        let kept = incremental.frame(&mut measurer, viewport);
+        let full = full_frame(tree(color, size), &mut measurer, viewport);
+        assert_same(&kept, &full, &format!("color {color:06x}, size {size}"));
     }
 }
 
