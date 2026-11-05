@@ -218,7 +218,7 @@ impl Incremental {
         }
     }
 
-    /// Lay out and paint the kept tree.
+    /// Lay out and paint the kept tree, as a window `viewport` large does.
     pub fn frame(&mut self, measurer: &mut TextMeasureCache, viewport: Size) {
         let bounds = match FramePipeline::layout_root_retained(
             &mut self.root,
@@ -230,6 +230,12 @@ impl Incremental {
             Ok(bounds) => bounds,
             Err(err) => panic!("retained layout failed: {err}"),
         };
-        FramePipeline::paint_root(&mut self.root, &self.taffy, &mut self.scene, bounds);
+        FramePipeline::paint_root_in_viewport(
+            &mut self.root,
+            &self.taffy,
+            &mut self.scene,
+            bounds,
+            viewport,
+        );
     }
 }

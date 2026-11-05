@@ -310,11 +310,12 @@ where
     /// Paints the presented tree into the scene using the stored root bounds.
     pub fn paint(&mut self) {
         self.root.refresh_text_geometry(&mut self.text_measurer);
-        FramePipeline::paint_root(
+        FramePipeline::paint_root_in_viewport(
             &mut self.root,
             &self.taffy,
             &mut self.scene,
             self.root_bounds,
+            self.laid_out_viewport,
         );
         self.prepared_frame = PresenterFrame {
             viewport_size: self.laid_out_viewport,

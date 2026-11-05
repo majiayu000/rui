@@ -169,6 +169,10 @@ impl Element for StyledText {
         true
     }
 
+    fn ignores_pointer(&self) -> bool {
+        true
+    }
+
     /// Kept when every span sets the same text and style properties. What
     /// the spans inherit is compared in layout, against the style the kept
     /// text resolved them from.

@@ -169,23 +169,52 @@ impl FramePipeline {
     ) where
         E: Element,
     {
+        Self::paint(root, taffy, scene, bounds, None);
+    }
+
+    /// [`Self::paint_root`] for a window `viewport_size` large: unchanged
+    /// subtrees that nothing in the window can show are not painted.
+    pub fn paint_root_in_viewport<E>(
+        root: &mut E,
+        taffy: &TaffyTree<ElementId>,
+        scene: &mut Scene,
+        bounds: Bounds,
+        viewport_size: Size,
+    ) where
+        E: Element,
+    {
+        let viewport = Bounds::from_xywh(0.0, 0.0, viewport_size.width, viewport_size.height);
+        Self::paint(root, taffy, scene, bounds, Some(viewport));
+    }
+
+    fn paint<E>(
+        root: &mut E,
+        taffy: &TaffyTree<ElementId>,
+        scene: &mut Scene,
+        bounds: Bounds,
+        viewport: Option<Bounds>,
+    ) where
+        E: Element,
+    {
         scene.clear();
-        let mut paint_cx = PaintContext::for_root(scene, bounds, taffy);
+        let mut paint_cx = PaintContext::for_root(scene, bounds, taffy, viewport);
         root.paint(&mut paint_cx);
         scene.finish();
         if verify_replay() {
-            Self::verify_replayed_scene(root, taffy, scene, bounds);
+            Self::verify_replayed_scene(root, taffy, scene, bounds, viewport);
         }
     }
 
     /// Paint `root` again without replaying anything and panic, naming the first
     /// difference, unless it matches `scene`. Run by [`Self::paint_root`] when
-    /// `RUI_VERIFY_REPLAY=1`.
+    /// `RUI_VERIFY_REPLAY=1`. With a `viewport`, only primitives that can be
+    /// seen in it are compared, since unseen subtrees may not have been painted.
     fn verify_replayed_scene<E>(
         root: &mut E,
         taffy: &TaffyTree<ElementId>,
         scene: &Scene,
         bounds: Bounds,
+        viewport: Option<Bounds>,
     ) where
         E: Element,
     {
@@ -195,7 +224,14 @@ impl FramePipeline {
             bounds,
             taffy,
         ));
-        let (replayed, repainted) = (scene.primitives(), repainted.primitives());
+        let seen = |primitives: &[crate::renderer::Primitive]| {
+            primitives
+                .iter()
+                .filter(|primitive| viewport.is_none_or(|viewport| primitive.may_touch(&viewport)))
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        let (replayed, repainted) = (seen(scene.primitives()), seen(repainted.primitives()));
         let differs = |index: usize| {
             format!("{:?}", replayed.get(index)) != format!("{:?}", repainted.get(index))
         };
@@ -336,7 +372,7 @@ impl FramePipeline {
         Self::prepare_frame(context);
         Self::rebuild_if_needed(context, root, build_root);
         let bounds = Self::layout_root_retained(root, taffy, nodes, text_measurer, viewport_size)?;
-        Self::paint_root(root, taffy, scene, bounds);
+        Self::paint_root_in_viewport(root, taffy, scene, bounds, viewport_size);
         Self::finish_frame(context);
         Ok(bounds)
     }

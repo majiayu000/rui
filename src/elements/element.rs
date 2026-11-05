@@ -12,7 +12,7 @@ use crate::core::style::{Dimension as StyleDimension, Style};
 use crate::core::text_editing::{TextInputCommand, TextInputEvent, TextInputSnapshot};
 use crate::elements::text::{TextStyle, TextStyleRefinement};
 use crate::renderer::text::{RichSpan, RichWrapped, TextMeasureCache, TextRequest, WrappedText};
-use crate::renderer::{Primitive, Scene};
+use crate::renderer::{PaintRecord, Primitive, Scene};
 use std::any::{Any, TypeId};
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -494,6 +494,9 @@ pub struct PaintContext<'a> {
     /// The last [`Self::child_bounds`] result and its unrounded layout, which
     /// [`Self::with_bounds`] passes on when it is given those bounds.
     last_child: Cell<Option<(Bounds, Unrounded)>>,
+    /// The part of the window that is seen. Unchanged subtrees entirely outside
+    /// it and the active clip are not painted. `None` paints everything.
+    viewport: Option<Bounds>,
 }
 
 /// A node's layout before taffy rounds it.
@@ -516,6 +519,7 @@ impl<'a> PaintContext<'a> {
             memo: true,
             unrounded: None,
             last_child: Cell::new(None),
+            viewport: None,
         }
     }
 
@@ -525,8 +529,10 @@ impl<'a> PaintContext<'a> {
         scene: &'a mut Scene,
         bounds: Bounds,
         taffy: &'a TaffyTree<ElementId>,
+        viewport: Option<Bounds>,
     ) -> Self {
         Self {
+            viewport,
             unrounded: Some(Unrounded {
                 origin: Point::new(0.0, 0.0),
                 size: bounds.size,
@@ -604,6 +610,7 @@ impl<'a> PaintContext<'a> {
             memo: self.memo,
             unrounded,
             last_child: Cell::new(None),
+            viewport: self.viewport,
         }
     }
 }
@@ -988,6 +995,13 @@ pub trait Element: Any {
         false
     }
 
+    /// Whether pointer moves, releases and scrolls change nothing this element
+    /// shows or calls, so dispatch can skip it when its children do too. Only
+    /// consulted for [`Element::memoizable`] elements.
+    fn ignores_pointer(&self) -> bool {
+        false
+    }
+
     /// Called on a freshly built element with the one built at the same place
     /// in the previous tree. Returns true when `self` would lay out and paint
     /// exactly as `previous` did; the caller then keeps `previous`, with the
@@ -1112,7 +1126,8 @@ pub struct AnyElement {
     /// Layout of a memoizable subtree, which the next retained pass can keep.
     layout_record: Option<LayoutRecord>,
     /// Paint of a memoizable subtree, which the next frame can replay.
-    paint_record: Option<PaintRecord>,
+    /// Frame and index of the subtree's [`PaintRecord`] in the scene.
+    paint_record: Option<(u64, u32)>,
 }
 
 /// Where a memoizable subtree's layout nodes sit in the retained pass. Kept
@@ -1124,15 +1139,9 @@ struct LayoutRecord {
     start: u32,
     end: u32,
     text_style: Rc<TextStyle>,
-}
-
-/// What a memoizable subtree painted, to replay moved by its change of origin.
-struct PaintRecord {
-    frame: u64,
-    start: u32,
-    end: u32,
-    origin: Point,
-    unrounded: Unrounded,
+    /// No element in the subtree reacts to pointer moves, releases or scrolls,
+    /// so dispatch can pass it by.
+    pointer_inert: bool,
 }
 
 impl AnyElement {
@@ -1196,6 +1205,13 @@ impl AnyElement {
                     start: start as u32,
                     end: pass.cursor as u32,
                     text_style: Rc::clone(&cx.text_style),
+                    pointer_inert: self.inner.ignores_pointer()
+                        && self.children().iter().all(|child| {
+                            child
+                                .layout_record
+                                .as_ref()
+                                .is_some_and(|record| record.pointer_inert)
+                        }),
                 })
             }
             _ => None,
@@ -1254,46 +1270,81 @@ impl AnyElement {
             self.inner.paint(cx);
             return;
         };
-        if let Some(record) = self.paint_record.take()
-            && record.frame == cx.scene.previous_frame()
-            && record.unrounded.size == unrounded.size
+        let previous = self
+            .paint_record
+            .take()
+            .filter(|(frame, _)| *frame == cx.scene.previous_frame())
+            .and_then(|(frame, index)| cx.scene.paint_record(frame, index));
+        if let Some(record) = previous
+            && record.unrounded_size == unrounded.size
             && let (dx, dy) = (origin.x - record.origin.x, origin.y - record.origin.y)
             // Rounding inside the subtree repeats only after a whole-pixel move.
-            && unrounded.origin.x - record.unrounded.origin.x == dx
-            && unrounded.origin.y - record.unrounded.origin.y == dy
-            && let Some(primitives) =
-                cx.scene.replay(record.start as usize..record.end as usize, dx, dy)
+            && unrounded.origin.x - record.unrounded_origin.x == dx
+            && unrounded.origin.y - record.unrounded_origin.y == dy
         {
-            self.paint_record = Some(PaintRecord {
-                frame: cx.scene.frame(),
-                start: primitives.start as u32,
-                end: primitives.end as u32,
-                origin,
-                unrounded,
+            // It would draw what it drew, moved: nothing of that is seen.
+            let mut reach = record.reach;
+            reach.origin.x += dx;
+            reach.origin.y += dy;
+            let seen = cx.viewport.is_none_or(|viewport| {
+                let visible = match cx.scene.current_clip() {
+                    Some(clip) => clip.intersection(&viewport),
+                    None => Some(viewport),
+                };
+                visible.is_some_and(|visible| reach.intersects(&visible))
             });
-            return;
+            let replayed = if !seen {
+                Some(0..0)
+            } else if record.painted {
+                cx.scene
+                    .replay(record.start as usize..record.end as usize, dx, dy)
+            } else {
+                None
+            };
+            if let Some(primitives) = replayed {
+                let index = cx.scene.record(PaintRecord {
+                    // A subtree left out has no range to replay next time.
+                    painted: seen,
+                    start: primitives.start as u32,
+                    end: primitives.end as u32,
+                    origin,
+                    unrounded_origin: unrounded.origin,
+                    unrounded_size: unrounded.size,
+                    reach,
+                });
+                self.paint_record = Some((cx.scene.frame(), index));
+                return;
+            }
         }
         let start = cx.scene.len();
         let regions = cx.scene.region_count();
         let layers = cx.scene.layers().len();
         self.inner.paint(cx);
         let frame = cx.scene.frame();
+        let scene = &*cx.scene;
         let replayable = self.layout_record.is_some()
-            && cx.scene.region_count() == regions
-            && cx.scene.layers().len() == layers
+            && scene.region_count() == regions
+            && scene.layers().len() == layers
             && self.children().iter().all(|child| {
-                child
-                    .paint_record
-                    .as_ref()
-                    .is_some_and(|record| record.frame == frame)
+                child.paint_record.is_some_and(|(at, index)| {
+                    at == frame
+                        && scene
+                            .paint_record(at, index)
+                            .is_some_and(|record| record.painted)
+                })
             });
-        self.paint_record = replayable.then(|| PaintRecord {
-            frame,
-            start: start as u32,
-            end: cx.scene.len() as u32,
-            origin,
-            unrounded,
-        });
+        if replayable {
+            let index = cx.scene.record(PaintRecord {
+                painted: true,
+                start: start as u32,
+                end: cx.scene.len() as u32,
+                origin,
+                unrounded_origin: unrounded.origin,
+                unrounded_size: unrounded.size,
+                reach: cx.scene.reach_of(start..cx.scene.len()),
+            });
+            self.paint_record = Some((frame, index));
+        }
     }
 
     pub fn refresh_text_geometry(&mut self, text_measurer: &mut TextMeasureCache) {
@@ -1301,6 +1352,10 @@ impl AnyElement {
     }
 
     pub fn handle_pointer_event(&mut self, cx: &mut EventContext, event: &PointerEvent) -> bool {
+        // A press can clear focus in any div it misses, so presses always go in.
+        if !matches!(event.kind, PointerEventKind::Down) && self.pointer_inert() {
+            return false;
+        }
         let matches_current = cx
             .hit_target()
             .map(|target| self.contains_id(target))
@@ -1365,7 +1420,18 @@ impl AnyElement {
     }
 
     pub fn handle_scroll_event(&mut self, cx: &mut EventContext, event: &ScrollEvent) -> bool {
+        if self.pointer_inert() {
+            return false;
+        }
         self.inner.handle_scroll_event(cx, event)
+    }
+
+    /// Whether the last layout found nothing in the subtree that reacts to
+    /// pointer moves, releases or scrolls.
+    pub(crate) fn pointer_inert(&self) -> bool {
+        self.layout_record
+            .as_ref()
+            .is_some_and(|record| record.pointer_inert)
     }
 
     pub fn handle_key_event(&mut self, cx: &mut EventContext, event: &KeyEvent) -> bool {

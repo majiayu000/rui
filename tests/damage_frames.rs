@@ -8,7 +8,7 @@ use random_tree::{Incremental, Node, Rng};
 use rui::renderer::metal::{MetalRenderer, RetainedTarget};
 use rui::renderer::text::TextMeasureCache;
 use rui::renderer::{Reach, RendererError};
-use rui::{Color, Div, Size, div, text};
+use rui::{Bounds, Color, Div, Size, div, text};
 
 const SCALE: f32 = 2.0;
 
@@ -151,7 +151,12 @@ fn one_changed_row_redraws_about_one_row() {
                 redrawn * 5 < total,
                 "round {round} redrew {redrawn} of {total} pixels"
             );
-            assert!(matches!(incremental.scene.damage(), Reach::Within(_)));
+            assert!(matches!(
+                incremental
+                    .scene
+                    .damage(Bounds::from_xywh(0.0, 0.0, 320.0, 600.0)),
+                Reach::Within(_)
+            ));
         }
     }
 }
@@ -242,5 +247,42 @@ fn rows_moved_by_a_growing_row_are_redrawn_at_both_places() {
                 "round {round} replayed nothing"
             );
         }
+    }
+}
+
+#[test]
+fn rows_scrolled_out_and_back_redraw_correctly() {
+    let Some(mut renderer) = renderer() else {
+        return;
+    };
+    let mut measurer = TextMeasureCache::new();
+    let viewport = Size::new(320.0, 200.0);
+    let column = |spacer: f32| {
+        div()
+            .w(320.0)
+            .flex_col()
+            .child(div().h(spacer))
+            .children((0..200).map(|row| {
+                div()
+                    .h(20.0)
+                    .bg(Color::hex(0x223344 + (row as u32 % 3) * 0x111111))
+                    .child(text(format!("row {row}")))
+            }))
+    };
+    let mut incremental = Incremental::new();
+    let mut target = RetainedTarget::new();
+    for (round, spacer) in [0.0, 40.0, 300.0, 0.0, 1_000.0, 10.0]
+        .into_iter()
+        .enumerate()
+    {
+        incremental.rebuild(column(spacer));
+        incremental.frame(&mut measurer, viewport);
+        assert_same_pixels(
+            &mut renderer,
+            &mut target,
+            &incremental,
+            viewport,
+            &format!("round {round}"),
+        );
     }
 }
