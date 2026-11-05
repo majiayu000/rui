@@ -150,3 +150,20 @@ fn test_image_unicode_path() {
         panic!("Expected File source");
     }
 }
+
+#[test]
+fn an_unchanged_image_reconciles_and_a_changed_one_does_not() {
+    let pixels = || Image::from_data(vec![1, 2, 3, 255], 1, 1).cover().w(40.0);
+    assert!(pixels().reconcile(&mut pixels()));
+    assert!(!pixels().fill().reconcile(&mut pixels()));
+    assert!(
+        !Image::from_data(vec![9, 2, 3, 255], 1, 1)
+            .cover()
+            .w(40.0)
+            .reconcile(&mut pixels())
+    );
+    assert!(!pixels().h(10.0).reconcile(&mut pixels()));
+    // A handler cannot be compared, so it is never kept.
+    assert!(!pixels().on_error(|| {}).reconcile(&mut pixels()));
+    assert!(!pixels().reconcile(&mut pixels().on_load(|| {})));
+}

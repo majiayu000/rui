@@ -1,8 +1,9 @@
 //! Rendering primitives - the basic shapes the GPU can draw
 
 use crate::core::color::Rgba;
-use crate::core::geometry::{Bounds, Edges};
+use crate::core::geometry::{Bounds, Edges, Size};
 use crate::core::style::Corners;
+use crate::elements::fit_bounds;
 use crate::elements::text::TextAlign;
 use crate::{ImageFit, ImageSource};
 use bytemuck::{Pod, Zeroable};
@@ -203,9 +204,8 @@ impl Primitive {
     /// Whether this primitive can put any pixel inside `visible`.
     ///
     /// Conservative: `true` whenever that cannot be ruled out from the primitive
-    /// alone. Images can draw past their bounds when filling, and text is centred
-    /// on its ink, which can be wider than its bounds, so neither is ruled out
-    /// horizontally.
+    /// alone. Text is centred on its ink, which can be wider than its bounds,
+    /// so it is not ruled out horizontally.
     pub fn may_touch(&self, visible: &Bounds) -> bool {
         match self.reach() {
             Reach::Nothing => false,
@@ -252,7 +252,28 @@ impl Primitive {
                 let pad = stroke_width.unwrap_or(0.0).max(0.0) * 0.5 + EDGE;
                 outset(Bounds::from_xywh(x0, y0, x1 - x0, y1 - y0), pad, pad)
             }
-            Self::Image { .. } | Self::PushClip { .. } | Self::PopClip => return Reach::Unbounded,
+            // The renderer clips an image to its bounds, so a fit that lands
+            // past them (cover, none) draws no further. With its size known, a
+            // fit that letterboxes (contain, scale down) draws less.
+            Self::Image {
+                bounds,
+                source,
+                fit,
+                ..
+            } => {
+                let drawn = match source {
+                    ImageSource::Data { width, height, .. } => {
+                        let size = Size::new(*width as f32, *height as f32);
+                        fit_bounds(*bounds, size, *fit).intersection(bounds)
+                    }
+                    ImageSource::File(_) | ImageSource::Texture(_) => Some(*bounds),
+                };
+                match drawn {
+                    Some(drawn) if !drawn.is_empty() => outset(drawn, EDGE, EDGE),
+                    _ => return Reach::Nothing,
+                }
+            }
+            Self::PushClip { .. } | Self::PopClip => return Reach::Unbounded,
         })
     }
 }
@@ -264,8 +285,8 @@ pub enum Reach {
     Nothing,
     /// Only pixels inside these bounds.
     Within(Bounds),
-    /// Cannot be bounded from the primitive alone: images can draw past their
-    /// bounds when filling, and a clip changes what other primitives show.
+    /// Cannot be bounded from the primitive alone: a clip changes what other
+    /// primitives show.
     Unbounded,
 }
 
@@ -513,8 +534,81 @@ mod tests {
         assert!(!empty.may_touch(&view()));
     }
 
+    fn image(bounds: Bounds, source: ImageSource, fit: ImageFit) -> Primitive {
+        Primitive::Image {
+            bounds,
+            source,
+            fit,
+            corner_radii: Corners::all(0.0),
+            opacity: 1.0,
+        }
+    }
+
+    fn data(width: u32, height: u32) -> ImageSource {
+        ImageSource::Data {
+            data: vec![0; (width * height * 4) as usize],
+            width,
+            height,
+        }
+    }
+
     #[test]
-    fn images_and_clips_are_never_ruled_out() {
+    fn images_reach_no_further_than_their_bounds() {
+        let bounds = Bounds::from_xywh(10.0, 20.0, 40.0, 20.0);
+        let edge = Reach::Within(Bounds::from_xywh(9.0, 19.0, 42.0, 22.0));
+        for source in [
+            data(400, 10),
+            data(10, 400),
+            ImageSource::File("photo.png".to_string()),
+            ImageSource::Texture(3),
+        ] {
+            for fit in [ImageFit::Fill, ImageFit::Cover] {
+                assert_eq!(image(bounds, source.clone(), fit).reach(), edge, "{fit:?}");
+            }
+        }
+        assert_eq!(image(bounds, data(400, 400), ImageFit::None).reach(), edge);
+        // Unknown size: contain may fill the bounds.
+        let file = ImageSource::File("photo.png".to_string());
+        assert_eq!(image(bounds, file, ImageFit::Contain).reach(), edge);
+    }
+
+    #[test]
+    fn letterboxed_images_reach_only_what_they_draw() {
+        let bounds = Bounds::from_xywh(0.0, 0.0, 40.0, 20.0);
+        // A square in a 40 x 20 box: 20 x 20 in the middle.
+        let square = Reach::Within(Bounds::from_xywh(9.0, -1.0, 22.0, 22.0));
+        assert_eq!(image(bounds, data(8, 8), ImageFit::Contain).reach(), square);
+        assert_eq!(
+            image(bounds, data(80, 80), ImageFit::ScaleDown).reach(),
+            square
+        );
+        // Small enough to draw at its own size.
+        let small = Reach::Within(Bounds::from_xywh(14.0, 4.0, 12.0, 12.0));
+        assert_eq!(
+            image(bounds, data(10, 10), ImageFit::ScaleDown).reach(),
+            small
+        );
+        assert_eq!(image(bounds, data(10, 10), ImageFit::None).reach(), small);
+    }
+
+    #[test]
+    fn offscreen_and_empty_images_are_ruled_out() {
+        let below = Bounds::from_xywh(0.0, 300.0, 50.0, 50.0);
+        for fit in [ImageFit::Cover, ImageFit::None, ImageFit::Fill] {
+            assert!(!image(below, data(1, 400), fit).may_touch(&view()));
+            assert!(!image(below, ImageSource::Texture(1), fit).may_touch(&view()));
+        }
+        let edge = Bounds::from_xywh(0.0, 100.5, 50.0, 50.0);
+        assert!(image(edge, data(4, 4), ImageFit::Fill).may_touch(&view()));
+        let empty = Bounds::from_xywh(10.0, 10.0, 0.0, 40.0);
+        assert_eq!(
+            image(empty, data(4, 4), ImageFit::Cover).reach(),
+            Reach::Nothing
+        );
+    }
+
+    #[test]
+    fn clips_are_never_ruled_out() {
         assert!(Primitive::PopClip.may_touch(&view()));
         assert!(
             Primitive::PushClip {
