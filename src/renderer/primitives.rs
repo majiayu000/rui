@@ -128,6 +128,64 @@ impl PrimitiveKind {
 }
 
 impl Primitive {
+    /// Whether [`Self::translate`] by `(dx, dy)` gives bit for bit the
+    /// coordinates painting at the moved origin computes.
+    ///
+    /// Paint computes a coordinate as an integral origin plus an offset, so
+    /// moving it by a whole number is exact unless the sum changes binade,
+    /// where rounding to the coarser grid can land on a neighbouring float.
+    pub fn translates_exactly(&self, dx: f32, dy: f32) -> bool {
+        fn exact(value: f32, by: f32) -> bool {
+            if by == 0.0 {
+                return true;
+            }
+            let moved = value + by;
+            by.fract() == 0.0
+                && moved.is_finite()
+                && ((value.fract() == 0.0 && moved.abs() < 16_777_216.0)
+                    || (value.is_sign_negative() == moved.is_sign_negative()
+                        && value.abs().to_bits() >> 23 == moved.abs().to_bits() >> 23))
+        }
+        let bounds = |bounds: &Bounds| exact(bounds.origin.x, dx) && exact(bounds.origin.y, dy);
+        match self {
+            Self::Quad { bounds: b, .. }
+            | Self::Shadow { bounds: b, .. }
+            | Self::LinearGradient { bounds: b, .. }
+            | Self::RadialGradient { bounds: b, .. }
+            | Self::Text { bounds: b, .. }
+            | Self::Image { bounds: b, .. }
+            | Self::PushClip { bounds: b, .. } => bounds(b),
+            Self::Path { vertices, .. } => vertices
+                .iter()
+                .all(|vertex| exact(vertex.position[0], dx) && exact(vertex.position[1], dy)),
+            Self::PopClip => true,
+        }
+    }
+
+    /// Move the primitive by `(dx, dy)`.
+    pub fn translate(&mut self, dx: f32, dy: f32) {
+        let shift = |bounds: &mut Bounds| {
+            bounds.origin.x += dx;
+            bounds.origin.y += dy;
+        };
+        match self {
+            Self::Quad { bounds, .. }
+            | Self::Shadow { bounds, .. }
+            | Self::LinearGradient { bounds, .. }
+            | Self::RadialGradient { bounds, .. }
+            | Self::Text { bounds, .. }
+            | Self::Image { bounds, .. }
+            | Self::PushClip { bounds, .. } => shift(bounds),
+            Self::Path { vertices, .. } => {
+                for vertex in vertices {
+                    vertex.position[0] += dx;
+                    vertex.position[1] += dy;
+                }
+            }
+            Self::PopClip => {}
+        }
+    }
+
     pub fn kind(&self) -> PrimitiveKind {
         match self {
             Self::Quad { .. } => PrimitiveKind::Quad,

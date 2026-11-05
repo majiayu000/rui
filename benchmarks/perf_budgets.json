@@ -1,22 +1,22 @@
 {
-  "calibration": "M2 Max, macOS 26.5.2, main 4242c71: list.frame_cpu 23.6 M / 24014 allocs, list.layout_retained 12.8 M / 10001, virtual_list 0.4 M / 445 at 1k and 100k, footprint 28.5 MB. list.full_frame 71.3 M / 49338 and list.one_row_changed 33.9 M / 34014 on the same machine at the stable-identity PR (one row changed costs 0.47 of a full frame; #173's target is 0.10). text.paragraphs (200 wrapped paragraphs, one changing) 9.7 M / 6768 at the text-cache PR. Instruction budgets carry 25% headroom for other CPUs and compilers, allocation budgets 10%. Recalibrate with the same run after an intended cost change.",
+  "calibration": "M2 Max, macOS 26.5.2, main 78da070 plus memoized subtrees (#173 step 2), two runs: list.frame_cpu 13.8 M / 10019 allocs, list.layout_retained 10.6 M / 2002, list.full_frame 65.6 M / 36094, list.one_row_changed 17.9 M / 14017 (0.27 of a full frame; #173's target is 0.10), text.paragraphs 7.9 M / 3432, virtual_list 0.4 M / 298 at 1k and 100k, footprint 50 MB with the previous frame's primitives kept for replay. The list, edit and paragraph cases rebuild through Element::reconcile as the frame pipeline does. Instruction budgets carry 25% headroom for other CPUs and compilers, allocation budgets 10%. Recalibrate with the same run after an intended cost change.",
   "instructions_m": {
-    "list.frame_cpu": 30.0,
-    "list.layout_retained": 16.0,
-    "list.full_frame": 89.0,
-    "list.one_row_changed": 42.5,
-    "text.paragraphs": 12.0,
-    "virtual_list.1k": 0.6,
-    "virtual_list.100k": 0.6
+    "list.frame_cpu": 17.5,
+    "list.layout_retained": 13.3,
+    "list.full_frame": 82.0,
+    "list.one_row_changed": 22.4,
+    "text.paragraphs": 9.9,
+    "virtual_list.1k": 0.5,
+    "virtual_list.100k": 0.5
   },
   "allocations": {
-    "list.frame_cpu": 26500,
-    "list.layout_retained": 11000,
-    "list.full_frame": 54300,
-    "list.one_row_changed": 37500,
-    "text.paragraphs": 7500,
-    "virtual_list.1k": 500,
-    "virtual_list.100k": 500
+    "list.frame_cpu": 11000,
+    "list.layout_retained": 2200,
+    "list.full_frame": 39700,
+    "list.one_row_changed": 15500,
+    "text.paragraphs": 3800,
+    "virtual_list.1k": 330,
+    "virtual_list.100k": 330
   },
   "virtual_list_scaling_max": 1.2,
   "footprint_mb_max": 64.0,

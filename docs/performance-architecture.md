@@ -200,7 +200,13 @@ Each optimization ships with three things.
    one, over seeded random inputs.
    - `tests/retained_layout.rs`: retained vs fresh layout, 24 seeds × 30 frames of
      reshaping trees, wrapped text included.
-   - Lane 2 adds replayed vs repainted scenes, and damaged vs full-redraw pixels.
+   - `tests/incremental_frames.rs`: reconciled, kept and replayed frames vs fresh
+     full frames, 32 seeds × 40 frames of random edits and resizes. Injected bugs
+     (skipping the inherited text style check, the unrounded size check, the
+     exact-translation check, or comparing div styles) fail it.
+   - `RUI_VERIFY_REPLAY=1` repaints every frame in full and panics at the first
+     primitive that differs from the replayed one.
+   - Lane 2 adds damaged vs full-redraw pixels.
    - Hit index vs linear scan: 300 random scenes.
    - Injected bugs (skip a restyle, skip a rewire) must fail the oracle; this has
      been shown for the layout oracle.

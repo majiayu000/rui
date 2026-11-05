@@ -9,8 +9,16 @@ use crate::renderer::Scene;
 use crate::renderer::text::TextMeasureCache;
 use std::error::Error;
 use std::fmt;
+use std::sync::OnceLock;
 use std::time::Instant;
 use taffy::prelude::{AvailableSpace, NodeId, TaffyTree};
+
+/// Whether `RUI_VERIFY_REPLAY=1` asks every painted frame to be checked
+/// against a full repaint.
+fn verify_replay() -> bool {
+    static VERIFY: OnceLock<bool> = OnceLock::new();
+    *VERIFY.get_or_init(|| std::env::var_os("RUI_VERIFY_REPLAY").is_some_and(|value| value == "1"))
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FramePipelineError {
@@ -59,7 +67,12 @@ impl FramePipeline {
         if context.needs_rebuild || !context.pending_updates.is_empty() {
             context.pending_updates.clear();
             context.needs_rebuild = false;
-            *root = build_root(context);
+            let mut next = build_root(context);
+            // Unchanged parts of the previous tree are kept, with their layout
+            // and paint; see `Element::reconcile`.
+            if !next.reconcile(root) {
+                *root = next;
+            }
             if !context.pending_updates.is_empty() {
                 context.needs_rebuild = true;
             }
@@ -156,9 +169,46 @@ impl FramePipeline {
         E: Element,
     {
         scene.clear();
-        let mut paint_cx = PaintContext::new(scene, bounds, taffy);
+        let mut paint_cx = PaintContext::for_root(scene, bounds, taffy);
         root.paint(&mut paint_cx);
         scene.finish();
+        if verify_replay() {
+            Self::verify_replayed_scene(root, taffy, scene, bounds);
+        }
+    }
+
+    /// Paint `root` again without replaying anything and panic, naming the first
+    /// difference, unless it matches `scene`. Run by [`Self::paint_root`] when
+    /// `RUI_VERIFY_REPLAY=1`.
+    fn verify_replayed_scene<E>(
+        root: &mut E,
+        taffy: &TaffyTree<ElementId>,
+        scene: &Scene,
+        bounds: Bounds,
+    ) where
+        E: Element,
+    {
+        let mut repainted = Scene::new();
+        root.paint(&mut PaintContext::without_replay(
+            &mut repainted,
+            bounds,
+            taffy,
+        ));
+        let (replayed, repainted) = (scene.primitives(), repainted.primitives());
+        let differs = |index: usize| {
+            format!("{:?}", replayed.get(index)) != format!("{:?}", repainted.get(index))
+        };
+        if let Some(index) = (0..replayed.len().max(repainted.len())).find(|&index| differs(index))
+        {
+            panic!(
+                "RUI_VERIFY_REPLAY: primitive {index} of the replayed frame ({} in all) differs \
+                 from a full repaint ({} in all)\n  replayed: {:?}\n  repainted: {:?}",
+                replayed.len(),
+                repainted.len(),
+                replayed.get(index),
+                repainted.get(index)
+            );
+        }
     }
 
     pub fn finish_frame(context: &mut AppContext) {

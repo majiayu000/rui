@@ -16,6 +16,7 @@ use crate::elements::text::{FontWeight, TextStyleRefinement};
 use crate::renderer::Primitive;
 use crate::renderer::text::TextMeasureCache;
 use smallvec::SmallVec;
+use std::any::Any;
 use taffy::prelude::*;
 
 /// A flexible container element (like HTML div)
@@ -462,6 +463,36 @@ impl Element for Div {
 
     fn style(&self) -> &Style {
         &self.style
+    }
+
+    fn memoizable(&self) -> bool {
+        // Hover and click state change what handlers see, never layout or paint.
+        true
+    }
+
+    fn reconcile(&mut self, previous: &mut dyn Element) -> bool {
+        let Some(previous) = (previous as &mut dyn Any).downcast_mut::<Div>() else {
+            return false;
+        };
+        let mut same = self.children.len() == previous.children.len();
+        for (child, old) in self.children.iter_mut().zip(previous.children.iter_mut()) {
+            same &= child.reconcile(old);
+        }
+        // Handlers cannot be compared, so a div with any keeps the new instance.
+        same &= self.on_click.is_none()
+            && self.on_hover.is_none()
+            && previous.on_click.is_none()
+            && previous.on_hover.is_none()
+            && self.id == previous.id
+            && self.style == previous.style
+            && self.text_style == previous.text_style;
+        if same {
+            // `previous` is kept whole, so it gets its own children back.
+            for (child, old) in self.children.iter_mut().zip(previous.children.iter_mut()) {
+                std::mem::swap(child, old);
+            }
+        }
+        same
     }
 
     fn layout(&mut self, cx: &mut LayoutContext) -> NodeId {
