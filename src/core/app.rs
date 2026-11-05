@@ -7,28 +7,24 @@ use crate::core::entity::{Entity, EntityId, EntityStore};
 use crate::core::foreground::{AnimationFrameRequests, ForegroundQueue, FrameTiming};
 use crate::core::geometry::Size;
 use crate::core::view::{View, ViewContext, ViewNotifier, ViewUpdates};
-use crate::core::window::{Window, WindowId, WindowOptions};
+#[cfg(all(target_os = "macos", feature = "metal"))]
+use crate::core::window::WindowId;
+use crate::core::window::WindowOptions;
+use crate::core::windows::Windows;
 use crate::elements::Element;
-use crate::platform::window::{PlatformWindowError, PlatformWindowFeature};
 use std::collections::HashSet;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
-
-static WINDOW_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// The main application context - owns all state
 pub struct AppContext {
     pub(crate) entities: EntityStore,
-    pub(crate) windows: Vec<Window>,
-    pub(crate) pending_updates: HashSet<EntityId>,
+    /// Frame state of the window whose frame runs now. The other windows keep
+    /// theirs in [`Self::windows`] until they are activated.
+    pub(crate) frame: WindowFrameState,
+    pub(crate) windows: Windows,
     pub(crate) running: bool,
-    pub(crate) needs_rebuild: bool,
-    pub(crate) dirty: bool,
-    redraw_scheduler: RedrawScheduler,
     keymap: Keymap,
     app_action_handlers: Vec<Box<dyn ActionHandler>>,
-    viewport_size: Size,
-    runtime_view_notifier: Option<(EntityId, ViewNotifier)>,
     update_queue: Arc<AppUpdateQueue>,
     pub(crate) effects: Effects,
     pub(crate) foreground: ForegroundQueue,
@@ -81,6 +77,49 @@ impl RedrawSourceCounts {
     }
 }
 
+/// What one window needs drawn, and the inputs its build reads.
+pub(crate) struct WindowFrameState {
+    pub(crate) pending_updates: HashSet<EntityId>,
+    pub(crate) needs_rebuild: bool,
+    pub(crate) dirty: bool,
+    redraw_scheduler: RedrawScheduler,
+    pub(crate) viewport_size: Size,
+    pub(crate) runtime_view_notifier: Option<(EntityId, ViewNotifier)>,
+}
+
+impl WindowFrameState {
+    pub(crate) fn new(viewport_size: Size) -> Self {
+        Self {
+            pending_updates: HashSet::new(),
+            needs_rebuild: true,
+            dirty: true,
+            redraw_scheduler: RedrawScheduler::default(),
+            viewport_size,
+            runtime_view_notifier: None,
+        }
+    }
+
+    pub(crate) fn mark_notified(&mut self, entity_id: EntityId) {
+        self.pending_updates.insert(entity_id);
+        self.needs_rebuild = true;
+        self.mark_redraw(RedrawSource::ViewNotification);
+    }
+
+    pub(crate) fn request_rebuild(&mut self) {
+        self.needs_rebuild = true;
+        self.mark_redraw(RedrawSource::Explicit);
+    }
+
+    pub(crate) fn mark_redraw(&mut self, source: RedrawSource) {
+        self.dirty = true;
+        self.redraw_scheduler.mark_redraw(source);
+    }
+
+    pub(crate) fn has_frame_work(&self) -> bool {
+        self.dirty || self.needs_rebuild || !self.pending_updates.is_empty()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 struct RedrawScheduler {
     counts: RedrawSourceCounts,
@@ -115,16 +154,11 @@ impl AppContext {
 
         Self {
             entities: EntityStore::new(),
-            windows: Vec::new(),
-            pending_updates: HashSet::new(),
+            frame: WindowFrameState::new(Size::ZERO),
+            windows: Windows::default(),
             running: false,
-            needs_rebuild: true,
-            dirty: true,
-            redraw_scheduler: RedrawScheduler::default(),
             keymap,
             app_action_handlers: Vec::new(),
-            viewport_size: Size::ZERO,
-            runtime_view_notifier: None,
             update_queue: Arc::default(),
             effects: Effects::default(),
             foreground: ForegroundQueue::default(),
@@ -171,63 +205,72 @@ impl AppContext {
         self.entities.get_mut::<T>(entity.id())
     }
 
-    /// Mark an entity as needing re-render
+    /// Mark an entity as needing re-render.
+    ///
+    /// A window's root view redraws only its own window; any other entity may be
+    /// read by every window, so every window rebuilds.
     pub fn notify(&mut self, entity_id: EntityId) {
         self.effects.push_notify(entity_id);
-        self.pending_updates.insert(entity_id);
-        self.needs_rebuild = true;
-        self.mark_redraw_from(RedrawSource::ViewNotification);
+        match self.windows.window_of_view(entity_id) {
+            Some(window) => self.window_frame_mut(window).mark_notified(entity_id),
+            None => self.for_each_window_frame(|frame| frame.mark_notified(entity_id)),
+        }
     }
 
-    /// Request a full rebuild of the UI tree
+    /// Request a full rebuild of every window's UI tree
     pub fn request_rebuild(&mut self) {
-        self.needs_rebuild = true;
-        self.mark_redraw_from(RedrawSource::Explicit);
+        self.for_each_window_frame(WindowFrameState::request_rebuild);
     }
 
-    /// Request a redraw without rebuilding the UI tree
+    /// Request a redraw of every window without rebuilding the UI tree
     pub fn request_redraw(&mut self) {
-        self.mark_redraw_from(RedrawSource::Explicit);
+        self.for_each_window_frame(|frame| frame.mark_redraw(RedrawSource::Explicit));
+    }
+
+    /// Rebuild only the window whose frame runs now, such as after it resized.
+    pub(crate) fn request_window_rebuild(&mut self) {
+        self.frame.request_rebuild();
     }
 
     pub(crate) fn mark_redraw_from(&mut self, source: RedrawSource) {
-        self.dirty = true;
-        self.redraw_scheduler.mark_redraw(source);
+        self.frame.mark_redraw(source);
     }
 
     pub(crate) fn request_platform_redraw_from(&mut self, source: RedrawSource) -> bool {
-        self.dirty = true;
-        self.redraw_scheduler.request_platform_redraw(source)
+        self.frame.dirty = true;
+        self.frame.redraw_scheduler.request_platform_redraw(source)
     }
 
     pub(crate) fn complete_redraw_frame(&mut self) {
-        self.redraw_scheduler.complete_frame();
-        if !self.needs_rebuild && self.pending_updates.is_empty() {
-            self.dirty = false;
+        self.frame.redraw_scheduler.complete_frame();
+        if !self.frame.needs_rebuild && self.frame.pending_updates.is_empty() {
+            self.frame.dirty = false;
         }
     }
 
     pub(crate) fn preserve_frame_work(&mut self) {
-        self.dirty = true;
+        self.frame.dirty = true;
     }
 
-    /// Whether anything is pending that a frame would render.
+    /// Whether anything is pending that a frame of the current window would render.
     ///
     /// The single definition of "idle" for the frame pipeline; runners must not
     /// re-derive it from the individual flags.
     pub fn has_frame_work(&self) -> bool {
-        self.dirty
-            || self.needs_rebuild
-            || !self.pending_updates.is_empty()
-            || !self.effects.is_empty()
+        self.frame.has_frame_work() || !self.effects.is_empty()
+    }
+
+    /// Whether any open window has something to draw.
+    pub fn any_window_has_frame_work(&self) -> bool {
+        self.has_frame_work() || self.windows.any_inactive_frame_work()
     }
 
     pub fn redraw_source_counts(&self) -> RedrawSourceCounts {
-        self.redraw_scheduler.counts
+        self.frame.redraw_scheduler.counts
     }
 
     pub fn platform_redraw_pending(&self) -> bool {
-        self.redraw_scheduler.platform_redraw_pending
+        self.frame.redraw_scheduler.platform_redraw_pending
     }
 
     pub fn keymap(&self) -> &Keymap {
@@ -257,13 +300,13 @@ impl AppContext {
         ActionOutcome::Ignored
     }
 
-    /// Current drawable viewport size for the main window.
+    /// Drawable viewport size of the window being built or drawn.
     pub fn viewport_size(&self) -> Size {
-        self.viewport_size
+        self.frame.viewport_size
     }
 
     pub(crate) fn set_viewport_size(&mut self, size: Size) {
-        self.viewport_size = size;
+        self.frame.viewport_size = size;
     }
 
     pub(crate) fn set_runtime_view_notifier(
@@ -271,11 +314,11 @@ impl AppContext {
         entity_id: EntityId,
         notifier: ViewNotifier,
     ) {
-        self.runtime_view_notifier = Some((entity_id, notifier));
+        self.frame.runtime_view_notifier = Some((entity_id, notifier));
     }
 
     pub(crate) fn consume_runtime_view_notification(&mut self) -> bool {
-        let Some((entity_id, notifier)) = &self.runtime_view_notifier else {
+        let Some((entity_id, notifier)) = &self.frame.runtime_view_notifier else {
             return false;
         };
         let entity_id = *entity_id;
@@ -286,22 +329,6 @@ impl AppContext {
 
         self.notify(entity_id);
         true
-    }
-
-    /// Open a new window
-    pub fn open_window(&mut self, options: WindowOptions) -> Result<WindowId, PlatformWindowError> {
-        if !self.windows.is_empty() {
-            return Err(PlatformWindowError::unsupported(
-                std::env::consts::OS,
-                PlatformWindowFeature::MultiWindow,
-            ));
-        }
-
-        let id = WindowId::new(WINDOW_ID_COUNTER.fetch_add(1, Ordering::Relaxed));
-        self.viewport_size = options.size;
-        let window = Window::new(id, options);
-        self.windows.push(window);
-        Ok(id)
     }
 
     /// Check if the application is running
@@ -460,12 +487,12 @@ impl App {
         {
             self.context.running = true;
 
-            let _window_id = open_main_window(&mut self.context, options.clone());
+            let window_id = open_main_window(&mut self.context, options.clone());
             let view_marker = self.context.create(());
             let view_entity = Entity::<V>::new(view_marker.id());
             let notifier = ViewNotifier::new();
             self.context
-                .set_runtime_view_notifier(view_entity.id(), notifier.clone());
+                .attach_root_view(window_id, view_entity.id(), notifier.clone());
 
             let mut runtime_view = RuntimeView::new(view_entity, notifier, view);
 
@@ -486,10 +513,7 @@ impl App {
 
 #[cfg(all(target_os = "macos", feature = "metal"))]
 fn open_main_window(context: &mut AppContext, options: WindowOptions) -> WindowId {
-    match context.open_window(options) {
-        Ok(window_id) => window_id,
-        Err(err) => panic!("failed to open main window: {err}"),
-    }
+    context.register_window(options)
 }
 
 #[cfg(not(all(target_os = "macos", feature = "metal")))]
@@ -565,9 +589,9 @@ mod tests {
 
         let _rendered = runtime.render(&mut context);
 
-        assert!(context.pending_updates.contains(&entity_id));
-        assert!(context.needs_rebuild);
-        assert!(context.dirty);
+        assert!(context.frame.pending_updates.contains(&entity_id));
+        assert!(context.frame.needs_rebuild);
+        assert!(context.frame.dirty);
     }
 
     #[test]
@@ -580,9 +604,9 @@ mod tests {
         notifier.notify();
 
         assert!(context.consume_runtime_view_notification());
-        assert!(context.pending_updates.contains(&marker.id()));
-        assert!(context.needs_rebuild);
-        assert!(context.dirty);
+        assert!(context.frame.pending_updates.contains(&marker.id()));
+        assert!(context.frame.needs_rebuild);
+        assert!(context.frame.dirty);
     }
 
     #[test]
@@ -591,7 +615,7 @@ mod tests {
 
         assert_eq!(context.viewport_size(), Size::ZERO);
 
-        context.open_window(WindowOptions::new().size(320.0, 240.0));
+        context.register_window(WindowOptions::new().size(320.0, 240.0));
         assert_eq!(context.viewport_size(), Size::new(320.0, 240.0));
 
         context.set_viewport_size(Size::new(640.0, 480.0));
@@ -610,9 +634,9 @@ mod tests {
         let notifier = runtime.notifier.clone();
 
         let _first_render = runtime.render(&mut context);
-        context.pending_updates.clear();
-        context.needs_rebuild = false;
-        context.dirty = false;
+        context.frame.pending_updates.clear();
+        context.frame.needs_rebuild = false;
+        context.frame.dirty = false;
 
         notifier.notify();
         assert!(context.consume_runtime_view_notification());
@@ -632,23 +656,23 @@ mod tests {
         let entity_id = runtime.entity.id();
 
         context.notify(entity_id);
-        context.pending_updates.clear();
-        context.needs_rebuild = false;
+        context.frame.pending_updates.clear();
+        context.frame.needs_rebuild = false;
         let _rendered = runtime.render(&mut context);
-        if !context.pending_updates.is_empty() {
-            context.needs_rebuild = true;
+        if !context.frame.pending_updates.is_empty() {
+            context.frame.needs_rebuild = true;
         }
 
-        assert!(context.pending_updates.contains(&entity_id));
-        assert!(context.needs_rebuild);
+        assert!(context.frame.pending_updates.contains(&entity_id));
+        assert!(context.frame.needs_rebuild);
     }
 
     #[test]
     fn redraw_scheduler_counts_sources_and_coalesces_platform_requests() {
         let mut context = AppContext::new();
-        context.pending_updates.clear();
-        context.needs_rebuild = false;
-        context.dirty = false;
+        context.frame.pending_updates.clear();
+        context.frame.needs_rebuild = false;
+        context.frame.dirty = false;
 
         assert!(context.request_platform_redraw_from(RedrawSource::Element));
         assert!(!context.request_platform_redraw_from(RedrawSource::Element));
@@ -657,34 +681,12 @@ mod tests {
         let counts = context.redraw_source_counts();
         assert_eq!(counts.element, 2);
         assert_eq!(counts.view_notification, 1);
-        assert!(context.dirty);
+        assert!(context.frame.dirty);
         assert!(context.platform_redraw_pending());
 
         context.complete_redraw_frame();
-        assert!(!context.dirty);
+        assert!(!context.frame.dirty);
         assert!(!context.platform_redraw_pending());
         assert!(context.request_platform_redraw_from(RedrawSource::PlatformLifecycle));
-    }
-
-    #[test]
-    fn second_window_returns_explicit_unsupported_error() {
-        let mut context = AppContext::new();
-        match context.open_window(WindowOptions::default()) {
-            Ok(_) => {}
-            Err(err) => panic!("first window should open: {err}"),
-        }
-
-        let err = match context.open_window(WindowOptions::default()) {
-            Ok(_) => panic!("second window should be unsupported"),
-            Err(err) => err,
-        };
-
-        assert_eq!(
-            err,
-            PlatformWindowError::unsupported(
-                std::env::consts::OS,
-                PlatformWindowFeature::MultiWindow
-            )
-        );
     }
 }

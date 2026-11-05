@@ -1,5 +1,6 @@
 mod frame_capture;
 mod snapshot;
+mod windows;
 
 use crate::core::ElementId;
 use crate::core::accessibility::{AccessibilityContext, AccessibilityError, AccessibilityTree};
@@ -25,6 +26,9 @@ pub use snapshot::{
     PrimitiveSnapshot, PrimitiveSnapshotError, assert_primitive_snapshot_file,
     assert_primitive_snapshot_text, primitive_snapshot,
 };
+
+pub use windows::{HeadlessApp, headless_app};
+pub(crate) use windows::{HeadlessWindowDriver, headless_window};
 
 pub type HeadlessFrame = PresenterFrame;
 
@@ -114,8 +118,8 @@ where
 {
     context.set_viewport_size(viewport_size);
     let root = build_root(&mut context);
-    context.needs_rebuild = false;
-    context.dirty = true;
+    context.frame.needs_rebuild = false;
+    context.frame.dirty = true;
 
     let mut session = HeadlessSession {
         context,
@@ -241,7 +245,7 @@ where
 
     pub fn resize(&mut self, viewport_size: Size) -> bool {
         self.context.set_viewport_size(viewport_size);
-        self.context.request_rebuild();
+        self.context.request_window_rebuild();
         FramePipeline::prepare_frame(&mut self.context);
         self.presenter
             .rebuild_if_needed(&mut self.context, &mut self.build_root);

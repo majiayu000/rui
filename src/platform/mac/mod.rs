@@ -15,6 +15,7 @@ mod window;
 pub use accessibility::{
     MacAccessibilityActionRequest, MacAccessibilityBridge, MacAccessibilityRequest,
 };
+pub(crate) use app::{NativeWindowDriver, NativeWindowParts, native_window};
 pub use app::{run_app, run_app_with_options};
 pub use events::MacPlatformEvent;
 pub use window::{MacWindow, MacWindowBackend};

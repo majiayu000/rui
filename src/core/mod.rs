@@ -19,6 +19,7 @@ pub mod style;
 pub mod text_editing;
 pub mod view;
 pub mod window;
+mod windows;
 
 pub use app::{App, AppContext, RedrawSource, RedrawSourceCounts};
 pub use app_handle::{AppClosed, AppHandle};
@@ -31,7 +32,7 @@ pub use geometry::{Bounds, Edges, Point, Rect, Size};
 pub use presenter::{PointerDispatch, Presenter, PresenterFrame};
 pub use style::{Background, BorderStyle, Corners, Dimension, DimensionConstraints, Style};
 pub use view::{View, ViewContext, ViewNotifier};
-pub use window::{Window, WindowOptions};
+pub use window::{Window, WindowId, WindowOptions};
 
 use std::any::TypeId;
 use std::hash::{Hash, Hasher};

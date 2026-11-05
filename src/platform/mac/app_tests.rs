@@ -137,12 +137,12 @@ fn every_platform_event_maps_to_its_redraw_source() {
 #[test]
 fn minimizing_leaves_the_context_clean_while_restoring_dirties_it() {
     let mut context = AppContext::new();
-    context.dirty = false;
+    context.frame.dirty = false;
     mark_platform_event_redraw(&PlatformWindowEvent::Minimized(true), &mut context);
-    assert!(!context.dirty, "minimizing must not request a frame");
+    assert!(!context.frame.dirty, "minimizing must not request a frame");
 
     mark_platform_event_redraw(&PlatformWindowEvent::Minimized(false), &mut context);
-    assert!(context.dirty, "restoring must request a frame");
+    assert!(context.frame.dirty, "restoring must request a frame");
 }
 
 #[test]
@@ -151,7 +151,7 @@ fn native_viewport_resize_sync_requests_one_rebuild() {
     let resized = Size::new(640.0, 480.0);
     let mut context = AppContext::new();
     context.set_viewport_size(initial_size);
-    context.needs_rebuild = false;
+    context.frame.needs_rebuild = false;
 
     assert!(synchronize_viewport_after_platform_events(
         &mut context,
@@ -159,15 +159,15 @@ fn native_viewport_resize_sync_requests_one_rebuild() {
         initial_size,
     ));
     assert_eq!(context.viewport_size(), resized);
-    assert!(context.needs_rebuild);
+    assert!(context.frame.needs_rebuild);
 
-    context.needs_rebuild = false;
+    context.frame.needs_rebuild = false;
     assert!(!synchronize_viewport_after_platform_events(
         &mut context,
         resized,
         resized,
     ));
-    assert!(!context.needs_rebuild);
+    assert!(!context.frame.needs_rebuild);
 }
 
 #[test]

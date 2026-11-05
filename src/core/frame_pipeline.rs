@@ -55,7 +55,7 @@ impl FramePipeline {
         context.run_frame_tasks();
         context.flush_effects();
         if context.consume_runtime_view_notification() {
-            context.request_redraw();
+            context.mark_redraw_from(crate::core::app::RedrawSource::ViewNotification);
         }
     }
 
@@ -64,17 +64,17 @@ impl FramePipeline {
         E: Element,
         F: FnMut(&mut AppContext) -> E,
     {
-        if context.needs_rebuild || !context.pending_updates.is_empty() {
-            context.pending_updates.clear();
-            context.needs_rebuild = false;
+        if context.frame.needs_rebuild || !context.frame.pending_updates.is_empty() {
+            context.frame.pending_updates.clear();
+            context.frame.needs_rebuild = false;
             let mut next = build_root(context);
             // Unchanged parts of the previous tree are kept, with their layout
             // and paint; see `Element::reconcile`.
             if !next.reconcile(root) {
                 *root = next;
             }
-            if !context.pending_updates.is_empty() {
-                context.needs_rebuild = true;
+            if !context.frame.pending_updates.is_empty() {
+                context.frame.needs_rebuild = true;
             }
         }
     }
@@ -547,8 +547,8 @@ mod tests {
         let (outcome, stages, context, _) = run_recording_frame(
             IdlePolicy::AlwaysDraw,
             |context| {
-                context.dirty = false;
-                context.needs_rebuild = false;
+                context.frame.dirty = false;
+                context.frame.needs_rebuild = false;
             },
             FramePresentation::Presented(None),
         );
@@ -563,8 +563,8 @@ mod tests {
         let (outcome, stages, _, _) = run_recording_frame(
             IdlePolicy::SkipWhenIdle,
             |context| {
-                context.dirty = false;
-                context.needs_rebuild = false;
+                context.frame.dirty = false;
+                context.frame.needs_rebuild = false;
             },
             FramePresentation::Presented(None),
         );
