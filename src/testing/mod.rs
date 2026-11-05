@@ -167,6 +167,11 @@ where
         self.presenter.scene()
     }
 
+    /// The window's profiler, while the profiling overlay is on.
+    pub fn profiler(&self) -> Option<&crate::devtools::Profiler> {
+        self.presenter.profiler()
+    }
+
     pub fn frame(&mut self) -> Result<&HeadlessFrame, HeadlessError> {
         let viewport_size = self.context.viewport_size();
         // Headless supplies no events and no backend, but runs the same stage

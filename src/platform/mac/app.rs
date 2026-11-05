@@ -14,6 +14,7 @@ use crate::core::geometry::{Point, Size};
 use crate::core::presenter::Presenter;
 use crate::core::text_editing::TextInputEvent;
 use crate::core::window::{WindowId, WindowOptions};
+use crate::devtools::RenderSample;
 use crate::elements::element::{Element, PointerEvent, PointerEventKind};
 use crate::platform::mac::accessibility::MacAccessibilityActionRequest;
 use crate::platform::mac::events::{
@@ -463,6 +464,7 @@ where
                         .saturating_duration_since(observed_at)
                         .as_nanos()
                 });
+                renderer.set_time_completed_frames(presenter.profiler().is_some());
                 let presentation = match metal_drawable {
                     Some(metal_drawable) => {
                         // Hold the owned retain across render+present; MetalRenderer
@@ -485,6 +487,17 @@ where
                     None => FramePresentation::Deferred,
                 };
                 phases.render_ns = render_started_at.elapsed().as_nanos();
+                if let Some(profiler) = presenter.profiler_mut() {
+                    let stats = renderer.last_frame_stats();
+                    profiler.record_render(RenderSample {
+                        drawable_wait_ns: phases.drawable_wait_ns,
+                        render_ns: phases.render_ns,
+                        draw_calls: stats.draw_calls,
+                        instances: stats.instances,
+                        redrawn_pixels: stats.redrawn_pixels,
+                        gpu_ns: renderer.completed_gpu_time().map(|time| time.as_nanos()),
+                    });
+                }
                 Ok(presentation)
             },
         ) {

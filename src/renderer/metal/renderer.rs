@@ -215,6 +215,9 @@ pub struct MetalRenderer {
     frame_stats: MetalFrameStats,
     /// GPU time of the last frame that waited for completion.
     gpu_time: Option<std::time::Duration>,
+    /// Read the GPU time of frames found finished, for the profiler.
+    time_completed_frames: bool,
+    completed_gpu_time: Option<std::time::Duration>,
 }
 
 /// A pipeline drawing into the target format with source-over blending.
@@ -363,6 +366,8 @@ impl MetalRenderer {
             frames_in_flight: Vec::new(),
             frame_stats: MetalFrameStats::default(),
             gpu_time: None,
+            time_completed_frames: false,
+            completed_gpu_time: None,
         })
     }
 
@@ -383,6 +388,22 @@ impl MetalRenderer {
     /// GPU time of the last frame, when it waited for the GPU (captures).
     pub fn last_gpu_time(&self) -> Option<std::time::Duration> {
         self.gpu_time
+    }
+
+    /// Whether to read the GPU time of each frame once the GPU finishes it,
+    /// for [`Self::completed_gpu_time`]. Off by default.
+    pub fn set_time_completed_frames(&mut self, on: bool) {
+        self.time_completed_frames = on;
+        if !on {
+            self.completed_gpu_time = None;
+        }
+    }
+
+    /// GPU time of the latest frame the GPU finished, while
+    /// [`Self::set_time_completed_frames`] is on. Frames are found finished when
+    /// a later one begins, so this is a frame or more behind.
+    pub fn completed_gpu_time(&self) -> Option<std::time::Duration> {
+        self.completed_gpu_time
     }
 
     /// How many paths are drawn from the atlas.
@@ -650,12 +671,22 @@ impl MetalRenderer {
         self.image_cache.begin_frame();
         self.text_cache.begin_frame();
         // Atlas pages only finished frames drew from may be evicted.
+        let time_completed = self.time_completed_frames;
+        let mut completed_gpu_time = None;
         self.frames_in_flight.retain(|(_, command_buffer)| {
+            let status = command_buffer.status();
+            if time_completed && status == MTLCommandBufferStatus::Completed {
+                // Oldest first, so the newest finished frame is kept.
+                completed_gpu_time = Some(gpu_time(command_buffer));
+            }
             !matches!(
-                command_buffer.status(),
+                status,
                 MTLCommandBufferStatus::Completed | MTLCommandBufferStatus::Error
             )
         });
+        if completed_gpu_time.is_some() {
+            self.completed_gpu_time = completed_gpu_time;
+        }
         let oldest_in_flight = self.frames_in_flight.iter().map(|(frame, _)| *frame).min();
         self.text_cache.set_completed_frame(
             oldest_in_flight.map_or(self.text_cache.frame() - 1, |frame| frame - 1),
