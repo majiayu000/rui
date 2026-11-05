@@ -18,9 +18,9 @@
 use rui::core::frame_pipeline::FramePipeline;
 use rui::elements::element::{Element, LayoutNodes};
 use rui::elements::{VirtualListHandle, canvas, virtual_list};
-use rui::renderer::Scene;
 use rui::renderer::metal::MetalRenderer;
 use rui::renderer::text::TextMeasureCache;
+use rui::renderer::{RendererResourceLimits, Scene};
 use rui::{Bounds, Color, ElementId, Size, div, text};
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -331,15 +331,34 @@ fn run(case: &str) -> Result<(), Box<dyn std::error::Error>> {
     };
     match case {
         // From before the renderer exists to the first long-list frame submitted.
+        // As the native runner starts: the renderer is created on another thread
+        // while the first frame is built, laid out and painted, and the first
+        // present waits for it. `renderer_wait_ms` is what that wait still took.
         "startup" => {
             let to_fixture = ms_since_process_start();
             let t0 = Instant::now();
-            let mut harness = Harness::new()?;
-            let renderer = t0.elapsed().as_secs_f64() * 1e3;
-            harness.frame(list(0), viewport)?;
+            let pending = MetalRenderer::spawn(RendererResourceLimits::default());
+            let (mut taffy, mut nodes, mut scene) =
+                (TaffyTree::new(), LayoutNodes::new(), Scene::new());
+            let mut measurer = TextMeasureCache::new();
+            let mut root = list(0);
+            let bounds = FramePipeline::layout_root_retained(
+                &mut root,
+                &mut taffy,
+                &mut nodes,
+                &mut measurer,
+                viewport,
+            )?;
+            FramePipeline::paint_root(&mut root, &taffy, &mut scene, bounds);
+            let laid_out = Instant::now();
+            let mut renderer = pending.wait()?;
+            let renderer_wait = laid_out.elapsed().as_secs_f64() * 1e3;
+            objc2::rc::autoreleasepool(|_| {
+                renderer.render_offscreen(&scene, viewport, SCALE_FACTOR)
+            })?;
             let first_frame = t0.elapsed().as_secs_f64() * 1e3;
             println!(
-                "rui startup process_to_fixture_ms={to_fixture:.1} first_frame_ms={first_frame:.1} process_to_first_frame_ms={:.1} footprint_mb={:.1} renderer_ms={renderer:.1}",
+                "rui startup process_to_fixture_ms={to_fixture:.1} first_frame_ms={first_frame:.1} process_to_first_frame_ms={:.1} footprint_mb={:.1} renderer_wait_ms={renderer_wait:.1}",
                 ms_since_process_start(),
                 footprint_mb()
             );

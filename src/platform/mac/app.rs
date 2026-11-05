@@ -26,9 +26,10 @@ use crate::platform::window::{
     PlatformImeEvent, PlatformInputEvent, PlatformMouseEvent, PlatformMouseEventKind,
     PlatformRendererTarget, PlatformWindow, PlatformWindowError, PlatformWindowEvent,
 };
-use crate::renderer::metal::MetalRenderer;
+use crate::renderer::metal::{MetalRenderer, PendingMetalRenderer};
 use crate::renderer::{
-    RendererBatchDiagnostics, RendererError, RendererFramePhaseDurations, RendererTelemetryRecorder,
+    RendererBatchDiagnostics, RendererFramePhaseDurations, RendererResourceLimits,
+    RendererTelemetryRecorder,
 };
 use objc2::MainThreadMarker;
 use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
@@ -51,14 +52,17 @@ where
     F: FnMut(&mut AppContext) -> E + 'static,
     E: Element + 'static,
 {
-    run_app_with_renderer_factory(context, build_root, options, MetalRenderer::new);
+    // The renderer is created on another thread while the window opens and the
+    // first frame is built and laid out; the first present waits for it.
+    let renderer = MetalRenderer::spawn(RendererResourceLimits::default());
+    run_app_with_renderer(context, build_root, options, renderer);
 }
 
-pub(crate) fn run_app_with_renderer_factory<F, E>(
+pub(crate) fn run_app_with_renderer<F, E>(
     context: AppContext,
     mut build_root: F,
     options: WindowOptions,
-    create_renderer: impl FnOnce() -> Result<MetalRenderer, RendererError>,
+    pending_renderer: PendingMetalRenderer,
 ) where
     F: FnMut(&mut AppContext) -> E + 'static,
     E: Element + 'static,
@@ -74,14 +78,11 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
         let app = NSApplication::sharedApplication(mtm);
         app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
 
-        // Create the renderer
-        let mut renderer = match create_renderer() {
-            Ok(renderer) => renderer,
-            Err(err) => panic!("failed to create renderer: {}", err),
-        };
+        let mut pending_renderer = Some(pending_renderer);
+        let mut renderer: Option<MetalRenderer> = None;
 
         // Create the window with Metal layer
-        let mut window = match create_window(&options, renderer.device(), mtm) {
+        let mut window = match create_window(&options, mtm) {
             Ok(window) => window,
             Err(err) => panic!("failed to create platform window: {}", err),
         };
@@ -240,6 +241,18 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
                     Ok(())
                 },
                 |presenter, _context| {
+                    let renderer = match (&mut renderer, pending_renderer.take()) {
+                        (Some(renderer), _) => renderer,
+                        (slot @ None, Some(pending)) => {
+                            let created = match pending.wait() {
+                                Ok(renderer) => renderer,
+                                Err(err) => panic!("failed to create renderer: {}", err),
+                            };
+                            window.set_device(created.device());
+                            slot.insert(created)
+                        }
+                        (None, None) => unreachable!("the renderer is created before it is taken"),
+                    };
                     let drawable_wait_started_at = Instant::now();
                     let metal_drawable = window.next_drawable();
                     phases.drawable_wait_ns = drawable_wait_started_at.elapsed().as_nanos();
@@ -352,9 +365,7 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
                     match announcement.kind() {
                         AccessibilityAnnouncementKind::ActionFeedback => {
                             if let Err(err) = accessibility_bridge.announce(&announcement) {
-                                log::error!(
-                                    "failed to publish accessibility announcement: {err}"
-                                );
+                                log::error!("failed to publish accessibility announcement: {err}");
                             }
                         }
                         AccessibilityAnnouncementKind::FocusChanged => {

@@ -146,6 +146,23 @@ fn union(a: Rect, b: Rect) -> Rect {
     ]
 }
 
+/// A [`MetalRenderer`] being created on another thread; see
+/// [`MetalRenderer::spawn`].
+pub struct PendingMetalRenderer {
+    creation: Result<std::thread::JoinHandle<Result<MetalRenderer, RendererError>>, RendererError>,
+}
+
+impl PendingMetalRenderer {
+    /// Waits for the renderer, or for the error that stopped its creation.
+    pub fn wait(self) -> Result<MetalRenderer, RendererError> {
+        self.creation?.join().unwrap_or_else(|_| {
+            Err(RendererError::render_failed(
+                "creating the Metal renderer panicked",
+            ))
+        })
+    }
+}
+
 /// Metal-based renderer
 pub struct MetalRenderer {
     device: Device,
@@ -211,23 +228,52 @@ impl MetalRenderer {
         Self::with_resource_limits(RendererResourceLimits::default())
     }
 
+    /// Starts creating a renderer on another thread and returns at once, so the
+    /// caller can load fonts and lay out its first frame meanwhile. Opening the
+    /// Metal device and building pipelines is most of what a renderer costs to
+    /// create.
+    pub fn spawn(limits: RendererResourceLimits) -> PendingMetalRenderer {
+        let creation = std::thread::Builder::new()
+            .name(String::from("rui-renderer-init"))
+            .spawn(move || Self::with_resource_limits(limits))
+            .map_err(|err| {
+                RendererError::render_failed(format!(
+                    "failed to start the renderer creation thread: {err}"
+                ))
+            });
+        PendingMetalRenderer { creation }
+    }
+
     pub fn with_resource_limits(limits: RendererResourceLimits) -> Result<Self, RendererError> {
         let device = Device::system_default()
             .ok_or_else(|| RendererError::backend_unavailable("Metal device is unavailable"))?;
         let command_queue = device.new_command_queue();
 
-        let sprite_pipeline = blended_pipeline(
-            &device,
-            super::shaders::SPRITE_SHADER,
-            "sprite_vertex",
-            "sprite_fragment",
-        )?;
-        let image_pipeline = blended_pipeline(
-            &device,
-            super::shaders::IMAGE_SHADER,
-            "image_vertex",
-            "image_fragment",
-        )?;
+        // The shaders compile at the same time: on a first launch, before the
+        // system's shader cache holds them, each takes tens of milliseconds.
+        let (sprite_pipeline, image_pipeline) = std::thread::scope(|scope| {
+            let sprite = scope.spawn(|| {
+                blended_pipeline(
+                    &device,
+                    super::shaders::SPRITE_SHADER,
+                    "sprite_vertex",
+                    "sprite_fragment",
+                )
+            });
+            let image = blended_pipeline(
+                &device,
+                super::shaders::IMAGE_SHADER,
+                "image_vertex",
+                "image_fragment",
+            );
+            let sprite = sprite.join().unwrap_or_else(|_| {
+                Err(RendererError::render_failed(
+                    "compiling the sprite shader panicked",
+                ))
+            });
+            (sprite, image)
+        });
+        let (sprite_pipeline, image_pipeline) = (sprite_pipeline?, image_pipeline?);
 
         // Sampler for images/text
         let sampler_desc = SamplerDescriptor::new();

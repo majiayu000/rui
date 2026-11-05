@@ -140,6 +140,15 @@ impl MacWindow {
         scale_factor as f32
     }
 
+    /// Sets the Metal device the layer's drawables come from.
+    pub fn set_device(&self, device: &Device) {
+        let device_ptr = device.as_ptr() as *mut objc2::runtime::AnyObject;
+        // SAFETY: `device_ptr` is a live MTLDevice, which `setDevice:` retains.
+        unsafe {
+            let _: () = msg_send![&*self.metal_layer, setDevice: device_ptr];
+        }
+    }
+
     fn update_metal_layer_size(&self, content_size: Size, scale_factor: f32) {
         let drawable_size = NSSize::new(
             content_size.width as f64 * scale_factor as f64,
@@ -707,10 +716,10 @@ fn keycode_from_char(ch: char) -> KeyCode {
     }
 }
 
-/// Create a macOS window with a Metal layer
+/// Create a macOS window with a Metal layer. The layer gives no drawables until
+/// [`MacWindow::set_device`] sets its device.
 pub unsafe fn create_window(
     options: &WindowOptions,
-    device: &Device,
     mtm: MainThreadMarker,
 ) -> Result<MacWindow, PlatformWindowError> {
     validate_window_options(options)?;
@@ -752,10 +761,6 @@ pub unsafe fn create_window(
 
     // Create Metal layer
     let metal_layer = CAMetalLayer::new();
-
-    // Set the Metal device on the layer
-    let device_ptr = device.as_ptr() as *mut objc2::runtime::AnyObject;
-    let _: () = msg_send![&*metal_layer, setDevice: device_ptr];
 
     // Configure layer
     // The layer's drawables are the renderer's render targets.

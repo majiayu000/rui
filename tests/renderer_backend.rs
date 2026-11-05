@@ -278,3 +278,31 @@ fn metal_quad_runs_keep_paint_order_around_images_and_clips() {
         "quad after the clip is whole",
     );
 }
+
+#[test]
+fn a_renderer_created_on_another_thread_draws_what_one_created_here_draws() {
+    use rui::renderer::RendererResourceLimits;
+    use rui::renderer::metal::MetalRenderer;
+
+    let pending = MetalRenderer::spawn(RendererResourceLimits::default());
+    let mut here = match MetalRenderer::new() {
+        Ok(renderer) => renderer,
+        Err(RendererError::BackendUnavailable(_)) => return,
+        Err(err) => panic!("metal renderer should initialize: {err}"),
+    };
+    let mut spawned = pending
+        .wait()
+        .expect("the spawned renderer should initialize");
+    let scene = representative_scene();
+    let viewport = Size::new(100.0, 60.0);
+    let expected = here
+        .capture_frame_pixels(&scene, viewport)
+        .expect("capture");
+    let actual = spawned
+        .capture_frame_pixels(&scene, viewport)
+        .expect("capture");
+    assert!(
+        expected == actual,
+        "the spawned renderer drew different pixels"
+    );
+}
