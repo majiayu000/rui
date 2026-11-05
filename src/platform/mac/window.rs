@@ -151,6 +151,34 @@ impl MacWindow {
         }
     }
 
+    /// Whether an event this window handles is waiting, without taking it.
+    pub(crate) fn has_pending_event(&self, app: &NSApplication) -> bool {
+        app.nextEventMatchingMask_untilDate_inMode_dequeue(
+            platform_event_mask(),
+            Some(&NSDate::distantPast()),
+            unsafe { NSDefaultRunLoopMode },
+            false,
+        )
+        .is_some()
+    }
+
+    /// The CoreGraphics display id of the screen the window is on.
+    pub(crate) fn display_id(&self) -> Option<u32> {
+        let screen: *mut objc2::runtime::AnyObject = unsafe { msg_send![&*self.window, screen] };
+        if screen.is_null() {
+            return None;
+        }
+        let description: *mut objc2::runtime::AnyObject =
+            unsafe { msg_send![screen, deviceDescription] };
+        let key = NSString::from_str("NSScreenNumber");
+        let number: *mut objc2::runtime::AnyObject =
+            unsafe { msg_send![description, objectForKey: &*key] };
+        if number.is_null() {
+            return None;
+        }
+        Some(unsafe { msg_send![number, unsignedIntValue] })
+    }
+
     pub(crate) fn poll_events_for_app(
         &mut self,
         app: &NSApplication,
@@ -195,6 +223,10 @@ impl MacWindow {
                         events.push(MacWindowEvent::Platform(
                             PlatformWindowEvent::RedrawRequested,
                         ));
+                        break;
+                    }
+                    Some(MacApplicationEvent::DisplayTick) => {
+                        events.push(MacWindowEvent::DisplayTick);
                         break;
                     }
                     Some(MacApplicationEvent::Accessibility) => {

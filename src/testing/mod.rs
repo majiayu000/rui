@@ -193,6 +193,23 @@ where
         }
     }
 
+    /// Draw the frame the display would drive next for the animations that asked.
+    ///
+    /// Returns `None` without drawing when no animation asked, which is when a
+    /// native window goes idle.
+    pub fn animation_frame(&mut self) -> Result<Option<&HeadlessFrame>, HeadlessError> {
+        if !self.context.begin_animation_frame() {
+            return Ok(None);
+        }
+        self.frame().map(Some)
+    }
+
+    /// Run all queued idle work, as the native runner does between frames once
+    /// input and frame work are done. Returns how many tasks ran.
+    pub fn run_idle_work(&mut self) -> usize {
+        self.context.run_idle_tasks(|| true)
+    }
+
     fn dispatch_frame<R>(
         &mut self,
         dispatch: impl FnOnce(&mut Presenter<E>, &mut AppContext) -> R,
