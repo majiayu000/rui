@@ -13,8 +13,9 @@ use std::sync::{Arc, Mutex};
 /// Maximum number of faces probed inside a single font collection file.
 const MAX_FACES_PER_FILE: u32 = 16;
 
-const FONT_CANDIDATES: [(&str, &str); 21] = [
+const FONT_CANDIDATES: [(&str, &str); 22] = [
     ("Arial", "/System/Library/Fonts/Supplemental/Arial.ttf"),
+    ("Arial", "/System/Library/Fonts/Supplemental/Arial Bold.ttf"),
     ("Arial", "/Library/Fonts/Arial.ttf"),
     (
         "Arial Unicode",

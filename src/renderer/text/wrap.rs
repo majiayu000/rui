@@ -11,10 +11,10 @@ use crate::renderer::text_shaping::{ClusterDraft, TextScript};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-const ELLIPSIS: &str = "\u{2026}";
+pub(super) const ELLIPSIS: &str = "\u{2026}";
 /// Wrap results kept per paragraph. Taffy asks one text for its min-content,
 /// max-content and definite widths in the same pass, so a few are live at once.
-const KEPT_RESULTS: usize = 4;
+pub(super) const KEPT_RESULTS: usize = 4;
 
 /// One line of a wrapped paragraph, ready to be drawn on its own.
 #[derive(Debug, Clone, PartialEq)]
@@ -49,11 +49,11 @@ struct TextWrapKey {
 
 /// The part of a shaped cluster line breaking reads.
 #[derive(Debug, Clone, Copy)]
-struct BreakCluster {
-    byte_start: usize,
-    byte_end: usize,
-    script: TextScript,
-    advance_width: f32,
+pub(super) struct BreakCluster {
+    pub(super) byte_start: usize,
+    pub(super) byte_end: usize,
+    pub(super) script: TextScript,
+    pub(super) advance_width: f32,
 }
 
 impl From<&ClusterDraft<'_>> for BreakCluster {
@@ -69,13 +69,13 @@ impl From<&ClusterDraft<'_>> for BreakCluster {
 
 /// Widths `w` with `min <= w < max`; `max` infinite also takes `w` infinite.
 #[derive(Debug, Clone, Copy, PartialEq)]
-struct WidthRange {
+pub(super) struct WidthRange {
     min: f32,
     max: f32,
 }
 
 impl WidthRange {
-    const ANY: Self = Self {
+    pub(super) const ANY: Self = Self {
         min: f32::NEG_INFINITY,
         max: f32::INFINITY,
     };
@@ -85,7 +85,7 @@ impl WidthRange {
     }
 
     /// Record that `needed > width` decided a break the way it did at `width`.
-    fn split(&mut self, needed: f32, width: f32) -> bool {
+    pub(super) fn split(&mut self, needed: f32, width: f32) -> bool {
         if needed > width {
             self.max = self.max.min(needed);
             true
@@ -99,16 +99,16 @@ impl WidthRange {
 /// A wrap, and every width it is also the answer for: the widths at which each
 /// fit test the greedy breaker made comes out the same.
 #[derive(Debug, Clone)]
-struct WrapResult {
-    fits: WidthRange,
+pub(super) struct WrapResult<T> {
+    pub(super) fits: WidthRange,
     /// For a cut off result, the same for the room left beside the ellipsis,
     /// and the ellipsis width that room is measured without.
-    ellipsis: Option<(WidthRange, f32)>,
-    wrapped: Arc<WrappedText>,
+    pub(super) ellipsis: Option<(WidthRange, f32)>,
+    pub(super) wrapped: Arc<T>,
 }
 
-impl WrapResult {
-    fn holds(&self, width: f32) -> bool {
+impl<T> WrapResult<T> {
+    pub(super) fn holds(&self, width: f32) -> bool {
         self.fits.contains(width)
             && self
                 .ellipsis
@@ -120,7 +120,7 @@ impl WrapResult {
 /// wrap first reaches them, and its most recent results.
 struct WrapEntry {
     paragraphs: Vec<Option<BreakParagraph>>,
-    results: Vec<WrapResult>,
+    results: Vec<WrapResult<WrappedText>>,
 }
 
 impl WrapEntry {
@@ -168,11 +168,11 @@ impl WrapCache {
 }
 
 /// A line as byte offsets into its paragraph.
-struct LineSpan {
-    paragraph: usize,
-    start: usize,
-    end: usize,
-    width: f32,
+pub(super) struct LineSpan {
+    pub(super) paragraph: usize,
+    pub(super) start: usize,
+    pub(super) end: usize,
+    pub(super) width: f32,
 }
 
 impl TextMeasureCache {
@@ -225,7 +225,7 @@ impl TextMeasureCache {
         if request.content.is_empty() || request.font_size <= 0.0 || request.line_height <= 0.0 {
             return Ok(read(&Arc::new(WrappedText::empty())));
         }
-        let primary_index = self.primary_font_index(request.font_family)?;
+        let primary_index = self.primary_font_index(request.font_family, request.font_weight)?;
         let family = self.fonts[primary_index].family.as_str();
         let mut hasher = request_hasher(&request, family);
         max_lines.hash(&mut hasher);
@@ -273,7 +273,7 @@ impl TextMeasureCache {
         max_width: f32,
         max_lines: Option<usize>,
         entry: &mut WrapEntry,
-    ) -> WrapResult {
+    ) -> WrapResult<WrappedText> {
         let line_limit = max_lines.unwrap_or(usize::MAX);
         let paragraphs: Vec<&str> = request.content.split('\n').collect();
         let mut fits = WidthRange::ANY;
@@ -391,8 +391,8 @@ impl TextMeasureCache {
 
 /// A paragraph's clusters grouped at the places a line may break, with prefix
 /// sums of their advances, so the width of any run of clusters is a subtraction.
-struct BreakParagraph {
-    clusters: Vec<BreakCluster>,
+pub(super) struct BreakParagraph {
+    pub(super) clusters: Vec<BreakCluster>,
     /// `prefix[i]` is the advance of the clusters before `i`.
     prefix: Vec<f32>,
     segments: Vec<Segment>,
@@ -410,7 +410,7 @@ struct Segment {
 
 impl BreakParagraph {
     /// Lines break after whitespace and before or after a CJK cluster.
-    fn new(clusters: Vec<BreakCluster>) -> Self {
+    pub(super) fn new(clusters: Vec<BreakCluster>) -> Self {
         let mut prefix = Vec::with_capacity(clusters.len() + 1);
         let mut total = 0.0;
         prefix.push(total);
@@ -452,7 +452,7 @@ impl BreakParagraph {
         }
     }
 
-    fn width(&self, from: usize, to: usize) -> f32 {
+    pub(super) fn width(&self, from: usize, to: usize) -> f32 {
         self.prefix[to] - self.prefix[from]
     }
 
@@ -478,7 +478,7 @@ impl BreakParagraph {
         }
     }
 
-    fn retained_bytes(&self) -> usize {
+    pub(super) fn retained_bytes(&self) -> usize {
         self.clusters.len() * (size_of::<BreakCluster>() + size_of::<f32>())
             + self.segments.len() * size_of::<Segment>()
     }
@@ -490,7 +490,7 @@ impl BreakParagraph {
 ///
 /// `fits` narrows to the widths at which every fit test here comes out as it
 /// did at `max_width`; the lines are the same anywhere in it.
-fn break_paragraph(
+pub(super) fn break_paragraph(
     paragraph: usize,
     layout: &BreakParagraph,
     max_width: f32,

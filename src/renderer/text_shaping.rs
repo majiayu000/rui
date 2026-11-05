@@ -29,6 +29,23 @@ impl FontBytes {
     }
 }
 
+/// The face of `family` best for `weight`, as [`faces_for_weight`] orders them.
+pub(crate) fn best_face(fonts: &[TextShapingFont], family: &str, weight: u16) -> Option<usize> {
+    (0..fonts.len())
+        .filter(|&index| fonts[index].family.eq_ignore_ascii_case(family))
+        .min_by_key(|&index| (fonts[index].italic, fonts[index].weight.abs_diff(weight)))
+}
+
+/// Faces of `family`, best first for `weight`: upright before italic, then the
+/// closest weight, then load order.
+pub(crate) fn faces_for_weight(fonts: &[TextShapingFont], family: &str, weight: u16) -> Vec<usize> {
+    let mut faces: Vec<usize> = (0..fonts.len())
+        .filter(|&index| fonts[index].family.eq_ignore_ascii_case(family))
+        .collect();
+    faces.sort_by_key(|&index| (fonts[index].italic, fonts[index].weight.abs_diff(weight)));
+    faces
+}
+
 /// A shaping plan and the buffer properties it was built for.
 type CachedPlan = (HbDirection, Script, Option<Language>, Arc<ShapePlan>);
 
@@ -36,6 +53,9 @@ type CachedPlan = (HbDirection, Script, Option<Language>, Arc<ShapePlan>);
 pub(crate) struct TextShapingFont {
     pub family: String,
     pub index: u32,
+    /// OS/2 weight class: 400 regular, 700 bold.
+    pub(crate) weight: u16,
+    pub(crate) italic: bool,
     // Both borrow from `data`. Declared first so they are dropped first, and private
     // so no `Font<'static>`, `Face<'static>` or glyph outlives the bytes it reads.
     font: Font<'static>,
@@ -72,6 +92,8 @@ impl TextShapingFont {
         Some(Self {
             family: family.into(),
             index,
+            weight: face.weight().to_number(),
+            italic: face.is_italic() || face.is_oblique(),
             font,
             face,
             plans: Arc::new(Mutex::new(Vec::new())),
@@ -434,6 +456,7 @@ pub(crate) fn shape_parts<'a>(
             fonts,
             primary_index,
             run.script,
+            request.font_weight,
             &mut clusters[run.clusters.clone()],
         );
     }
