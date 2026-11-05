@@ -10,7 +10,7 @@ mod random_tree;
 
 use random_tree::{Incremental, Node, Rng};
 use rui::core::frame_pipeline::FramePipeline;
-use rui::elements::{Div, canvas, div, text};
+use rui::elements::{Div, canvas, div, span, styled_text, text};
 use rui::renderer::text::TextMeasureCache;
 use rui::renderer::{Primitive, Scene};
 use rui::{Bounds, Color, ElementId, Size};
@@ -148,6 +148,36 @@ fn a_changed_inherited_text_style_repaints_kept_text() {
         let kept = describe(incremental.scene.primitives(), viewport);
         let full = full_frame(tree(color), &mut measurer, viewport);
         assert_same(&kept, &full, &format!("color {color:06x}"));
+    }
+}
+
+#[test]
+fn a_changed_inherited_text_style_repaints_kept_styled_text() {
+    let mut measurer = TextMeasureCache::new();
+    let tree = |color: u32, size: f32| {
+        div()
+            .w(120.0)
+            .text_color(Color::hex(color))
+            .text_size(size)
+            .child(styled_text([
+                span("same styled "),
+                span("text that wraps").bold(),
+            ]))
+    };
+    let viewport = Size::new(320.0, 240.0);
+    let mut incremental = Incremental::new();
+    for (color, size) in [
+        (0x112233, 14.0),
+        (0x112233, 14.0),
+        (0x445566, 14.0),
+        (0x445566, 18.0),
+        (0x445566, 18.0),
+    ] {
+        incremental.rebuild(tree(color, size));
+        incremental.frame(&mut measurer, viewport);
+        let kept = describe(incremental.scene.primitives(), viewport);
+        let full = full_frame(tree(color, size), &mut measurer, viewport);
+        assert_same(&kept, &full, &format!("color {color:06x}, size {size}"));
     }
 }
 

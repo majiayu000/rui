@@ -18,8 +18,7 @@ use crate::renderer::resources::{
 };
 use rusttype::{GlyphId, Scale, point};
 use std::collections::HashMap;
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
+use std::hash::{BuildHasherDefault, Hash, Hasher};
 use std::sync::Arc;
 
 /// Side of a new atlas page in pixels. A glyph larger than this gets a page of its own.
@@ -328,9 +327,62 @@ impl ShapedEntry {
     }
 }
 
+/// A multiply-rotate hash, as rustc's FxHash: far cheaper than the default
+/// SipHash for the small keys looked up for every glyph drawn. Not resistant to
+/// chosen collisions, which only cost time here: entries are compared in full.
+#[derive(Default, Clone, Copy)]
+struct FastHasher(u64);
+
+impl FastHasher {
+    fn add(&mut self, word: u64) {
+        self.0 = (self.0.rotate_left(5) ^ word).wrapping_mul(0x51_7c_c1_b7_27_22_0a_95);
+    }
+}
+
+impl Hasher for FastHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        let mut chunks = bytes.chunks_exact(8);
+        for chunk in &mut chunks {
+            self.add(u64::from_le_bytes(chunk.try_into().expect("eight bytes")));
+        }
+        let rest = chunks.remainder();
+        if !rest.is_empty() {
+            let mut word = [0u8; 8];
+            word[..rest.len()].copy_from_slice(rest);
+            self.add(u64::from_le_bytes(word));
+        }
+    }
+
+    fn write_u8(&mut self, value: u8) {
+        self.add(u64::from(value));
+    }
+
+    fn write_u16(&mut self, value: u16) {
+        self.add(u64::from(value));
+    }
+
+    fn write_u32(&mut self, value: u32) {
+        self.add(u64::from(value));
+    }
+
+    fn write_u64(&mut self, value: u64) {
+        self.add(value);
+    }
+
+    fn write_usize(&mut self, value: usize) {
+        self.add(value as u64);
+    }
+}
+
+type FastMap<K, V> = HashMap<K, V, BuildHasherDefault<FastHasher>>;
+
 /// Hashes a request without copying its text, so a hit allocates nothing.
 fn shape_hash(request: &TextRequest<'_>) -> u64 {
-    let mut hasher = DefaultHasher::new();
+    let mut hasher = FastHasher::default();
     request.content.hash(&mut hasher);
     request.font_size.to_bits().hash(&mut hasher);
     request.font_weight.hash(&mut hasher);
@@ -343,8 +395,8 @@ pub struct TextGlyphCache {
     measurer: TextMeasureCache,
     font_generation: usize,
     frame: u64,
-    shapes: HashMap<u64, ShapedEntry>,
-    glyphs: HashMap<GlyphKey, Option<AtlasGlyph>>,
+    shapes: FastMap<u64, ShapedEntry>,
+    glyphs: FastMap<GlyphKey, Option<AtlasGlyph>>,
     max_glyphs: usize,
     atlas: GlyphAtlas,
     uploads: Vec<GlyphUpload>,
@@ -380,8 +432,8 @@ impl TextGlyphCache {
             measurer,
             font_generation,
             frame: 0,
-            shapes: HashMap::new(),
-            glyphs: HashMap::new(),
+            shapes: FastMap::default(),
+            glyphs: FastMap::default(),
             max_glyphs,
             atlas,
             uploads: Vec::new(),
@@ -511,7 +563,7 @@ impl TextGlyphCache {
         prepared?;
         let primary_index = self
             .measurer
-            .primary_font_index_prepared(request.font_family)?;
+            .primary_font_index_prepared(request.font_family, request.font_weight)?;
         let parts = self
             .measurer
             .shape_parts_with_primary(request, primary_index);

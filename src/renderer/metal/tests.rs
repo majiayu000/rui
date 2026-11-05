@@ -356,3 +356,66 @@ fn paths_match_a_reference_raster_drawn_as_tiles_and_from_the_atlas() {
         }
     }
 }
+
+#[test]
+fn a_kept_offscreen_texture_draws_smaller_frames_as_an_exact_one_does() {
+    use metal::foreign_types::ForeignType;
+
+    let mut renderer = match MetalRenderer::new() {
+        Ok(renderer) => renderer,
+        Err(RendererError::BackendUnavailable(_)) => return,
+        Err(err) => panic!("metal renderer should initialize: {err}"),
+    };
+    let large = random_scene(7);
+    renderer
+        .render_offscreen_gpu_time(&large, Size::new(WIDTH, HEIGHT), 2.0)
+        .expect("large frame");
+    let kept = renderer.offscreen_target().expect("kept texture");
+
+    // A smaller frame, at another aspect, in the same texture.
+    let small = Size::new(WIDTH * 0.6, HEIGHT * 0.8);
+    let scene = random_scene(8);
+    renderer
+        .render_offscreen_gpu_time(&scene, small, 2.0)
+        .expect("small frame");
+    let texture = renderer.offscreen_target().expect("kept texture");
+    assert_eq!(texture.as_ptr(), kept.as_ptr(), "the texture is reused");
+    let (width, height) = ((small.width * 2.0) as u64, (small.height * 2.0) as u64);
+    let drawn = super::capture::read_texture_rgba(&texture, width, height);
+    let expected = renderer
+        .capture_frame_pixels_at_scale(&scene, small, 2.0)
+        .expect("exact capture");
+    assert!(drawn == expected, "the kept texture drew different pixels");
+}
+
+#[test]
+fn a_retained_frame_copied_into_a_kept_larger_texture_matches_an_exact_capture() {
+    use super::RetainedTarget;
+
+    let mut renderer = match MetalRenderer::new() {
+        Ok(renderer) => renderer,
+        Err(RendererError::BackendUnavailable(_)) => return,
+        Err(err) => panic!("metal renderer should initialize: {err}"),
+    };
+    renderer
+        .render_offscreen_gpu_time(&random_scene(9), Size::new(WIDTH, HEIGHT), 2.0)
+        .expect("large frame");
+
+    let small = Size::new(WIDTH * 0.7, HEIGHT * 0.5);
+    let scene = random_scene(10);
+    let mut target = RetainedTarget::default();
+    renderer
+        .render_retained_offscreen_gpu_time(&scene, &mut target, small, 2.0)
+        .expect("retained frame");
+    let texture = renderer.offscreen_target().expect("kept texture");
+    assert!(
+        texture.width() > (small.width * 2.0) as u64,
+        "the kept texture is larger"
+    );
+    let (width, height) = ((small.width * 2.0) as u64, (small.height * 2.0) as u64);
+    let drawn = super::capture::read_texture_rgba(&texture, width, height);
+    let expected = renderer
+        .capture_frame_pixels_at_scale(&scene, small, 2.0)
+        .expect("exact capture");
+    assert!(drawn == expected, "the retained copy drew different pixels");
+}

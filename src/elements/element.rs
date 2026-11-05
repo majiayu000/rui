@@ -11,7 +11,7 @@ use crate::core::geometry::{Bounds, Point, Size};
 use crate::core::style::{Dimension as StyleDimension, Style};
 use crate::core::text_editing::{TextInputCommand, TextInputEvent, TextInputSnapshot};
 use crate::elements::text::{TextStyle, TextStyleRefinement};
-use crate::renderer::text::{TextMeasureCache, TextRequest, WrappedText};
+use crate::renderer::text::{RichSpan, RichWrapped, TextMeasureCache, TextRequest, WrappedText};
 use crate::renderer::{PaintRecord, Primitive, Scene};
 use std::any::{Any, TypeId};
 use std::cell::{Cell, RefCell};
@@ -89,10 +89,69 @@ impl TextWrapRequest {
     }
 }
 
+/// Lines of a rich text, filled in once layout has given it a width.
+pub(crate) type RichLines = Rc<RefCell<Option<Arc<RichWrapped>>>>;
+
+/// What a rich text leaf needs to be measured at any width.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct RichWrapRequest {
+    pub(crate) content: String,
+    pub(crate) spans: Vec<RichSpan>,
+    pub(crate) max_lines: Option<usize>,
+}
+
 #[derive(Debug)]
-struct MeasuredText {
-    request: TextWrapRequest,
-    lines: WrappedLines,
+enum MeasuredText {
+    Plain {
+        request: TextWrapRequest,
+        lines: WrappedLines,
+    },
+    Rich {
+        request: RichWrapRequest,
+        lines: RichLines,
+    },
+}
+
+impl MeasuredText {
+    fn size(&self, measurer: &mut TextMeasureCache, width: f32) -> Size {
+        match self {
+            Self::Plain { request, .. } => request.wrapped_size(measurer, width),
+            Self::Rich { request, .. } => match measurer.wrapped_rich_size(
+                &request.content,
+                &request.spans,
+                width,
+                request.max_lines,
+            ) {
+                Ok(size) => size,
+                Err(err) => panic!("rich text layout failed: {:?}", err),
+            },
+        }
+    }
+
+    /// Break the text at its final `width` and hand the lines to its element.
+    fn break_lines(&self, measurer: &mut TextMeasureCache, width: f32) {
+        match self {
+            Self::Plain { request, lines } => {
+                *lines.borrow_mut() = Some(request.wrap(measurer, width));
+            }
+            Self::Rich { request, lines } => {
+                let wrapped =
+                    measurer.wrap_rich(&request.content, &request.spans, width, request.max_lines);
+                match wrapped {
+                    Ok(wrapped) => *lines.borrow_mut() = Some(wrapped),
+                    Err(err) => panic!("rich text layout failed: {:?}", err),
+                }
+            }
+        }
+    }
+
+    fn same_request(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Plain { request: a, .. }, Self::Plain { request: b, .. }) => a == b,
+            (Self::Rich { request: a, .. }, Self::Rich { request: b, .. }) => a == b,
+            _ => false,
+        }
+    }
 }
 
 /// Layout nodes kept from one frame to the next.
@@ -257,7 +316,7 @@ impl<'a> LayoutContext<'a> {
                         AvailableSpace::MinContent => 0.0,
                         AvailableSpace::MaxContent => f32::INFINITY,
                     });
-                    let wrapped = text.request.wrapped_size(measurer, width);
+                    let wrapped = text.size(measurer, width);
                     taffy::Size {
                         width: known.width.unwrap_or(wrapped.width),
                         height: known.height.unwrap_or(wrapped.height),
@@ -268,7 +327,7 @@ impl<'a> LayoutContext<'a> {
             // the measure above saw.
             for (node, text) in measured {
                 let width = self.taffy.unrounded_layout(*node).size.width;
-                *text.lines.borrow_mut() = Some(text.request.wrap(measurer, width));
+                text.break_lines(measurer, width);
             }
         }
         if let Some(kept) = kept {
@@ -318,14 +377,33 @@ impl<'a> LayoutContext<'a> {
         request: TextWrapRequest,
         lines: WrappedLines,
     ) -> taffy::TaffyResult<NodeId> {
+        *lines.borrow_mut() = None;
+        self.new_measured_text_leaf(style, MeasuredText::Plain { request, lines })
+    }
+
+    /// A leaf measured by taffy as rich text wrapped to the width it is
+    /// offered. `lines` receives the final lines in [`Self::compute_layout`].
+    pub(crate) fn new_rich_text_leaf(
+        &mut self,
+        style: taffy::Style,
+        request: RichWrapRequest,
+        lines: RichLines,
+    ) -> taffy::TaffyResult<NodeId> {
+        *lines.borrow_mut() = None;
+        self.new_measured_text_leaf(style, MeasuredText::Rich { request, lines })
+    }
+
+    fn new_measured_text_leaf(
+        &mut self,
+        style: taffy::Style,
+        text: MeasuredText,
+    ) -> taffy::TaffyResult<NodeId> {
         let node = self.reuse_or_create(style, &[])?;
         let previous = self.previous_measured_text.remove(&node);
-        if previous.is_none_or(|previous| previous.request != request) {
+        if previous.is_none_or(|previous| !previous.same_request(&text)) {
             self.taffy.mark_dirty(node)?;
         }
-        *lines.borrow_mut() = None;
-        self.measured_text
-            .insert(node, MeasuredText { request, lines });
+        self.measured_text.insert(node, text);
         Ok(node)
     }
 
