@@ -859,6 +859,10 @@ pub unsafe fn create_window(
     let pixel_format = crate::renderer::metal::TARGET_PIXEL_FORMAT as u64;
     let _: () = msg_send![&*metal_layer, setPixelFormat: pixel_format];
     let _: () = msg_send![&*metal_layer, setFramebufferOnly: true];
+    // Show each drawable with the Core Animation transaction it was presented
+    // in, not through the layer's own queue: queued presents reach the screen
+    // about four refreshes after rendering, transactions about two and a half.
+    let _: () = msg_send![&*metal_layer, setPresentsWithTransaction: true];
 
     let scale_factor: f64 = unsafe { msg_send![&*window, backingScaleFactor] };
 

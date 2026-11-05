@@ -9,6 +9,7 @@ mod frame_ticker;
 mod ime_state;
 mod key_suppression;
 mod lifecycle;
+mod present_latency;
 mod text_input;
 mod window;
 
