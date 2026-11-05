@@ -4,6 +4,13 @@
 //! The cache is backend independent: it hands out atlas positions and queues the
 //! pixels of newly rasterized glyphs, which a renderer copies into its own page
 //! textures with [`TextGlyphCache::take_uploads`].
+//!
+//! Pages are evicted whole, least recently drawn first, and only once the GPU is
+//! done with every frame that drew from them: the renderer reports finished
+//! frames with [`TextGlyphCache::set_completed_frame`]. Eviction happens when the
+//! atlas would grow past [`SOFT_ATLAS_PAGES`] or past its byte or glyph limit. An
+//! evicted page is emptied and reused; its glyphs are rasterized again when next
+//! drawn, and the renderer clears its texture ([`TextGlyphCache::take_cleared_pages`]).
 
 use super::{TextError, TextMeasureCache, TextMetrics, TextRequest, font_io_text_error};
 use crate::renderer::resources::{
@@ -21,6 +28,8 @@ pub const ATLAS_PAGE_SIZE: u32 = 1024;
 pub const SUBPIXEL_VARIANTS: u8 = 4;
 /// Empty pixels kept between packed glyphs so linear sampling never reads a neighbour.
 const ATLAS_PADDING: u32 = 1;
+/// Pages the atlas grows to before it reuses idle ones.
+pub const SOFT_ATLAS_PAGES: usize = 8;
 /// Shaped strings kept across frames. Past this, `begin_frame` drops the least
 /// recently drawn strings down to three quarters of it, never one the previous
 /// frame drew, so a frame never evicts what it is still drawing.
@@ -53,6 +62,10 @@ struct AtlasPage {
     height: u32,
     shelves: Vec<Shelf>,
     next_y: u32,
+    /// The last frame that drew from this page.
+    last_used: u64,
+    /// Times this page was emptied; slots from before are gone.
+    generation: u64,
 }
 
 impl AtlasPage {
@@ -62,6 +75,8 @@ impl AtlasPage {
             height,
             shelves: Vec::new(),
             next_y: 0,
+            last_used: 0,
+            generation: 0,
         }
     }
 
@@ -117,6 +132,8 @@ pub struct GlyphAtlas {
     page_size: u32,
     max_bytes: usize,
     pages: Vec<AtlasPage>,
+    /// Pages emptied since the renderer last took them.
+    cleared: Vec<usize>,
     pressure_events: usize,
 }
 
@@ -126,8 +143,15 @@ impl GlyphAtlas {
             page_size,
             max_bytes,
             pages: Vec::new(),
+            cleared: Vec::new(),
             pressure_events: 0,
         }
+    }
+
+    /// How many times `page` was emptied; a slot placed in an earlier
+    /// generation no longer holds what was put there.
+    pub fn page_generation(&self, page: usize) -> Option<u64> {
+        self.pages.get(page).map(|page| page.generation)
     }
 
     pub fn page_count(&self) -> usize {
@@ -149,18 +173,38 @@ impl GlyphAtlas {
         width: u32,
         height: u32,
     ) -> Result<AtlasSlot, RendererResourceError> {
+        Self::check_size(width, height)?;
+        match self.allocate_in_pages(width, height) {
+            Some(slot) => Ok(slot),
+            None => self.add_page(width, height),
+        }
+    }
+
+    fn check_size(width: u32, height: u32) -> Result<(), RendererResourceError> {
         if width == 0 || height == 0 {
             return Err(RendererResourceError::invalid(
                 RendererResourceKind::Glyph,
                 "atlas allocations must have a positive size",
             ));
         }
-        for (page, atlas_page) in self.pages.iter_mut().enumerate() {
-            if let Some(rect) = atlas_page.allocate(width, height) {
-                return Ok(AtlasSlot { page, rect });
-            }
-        }
+        Ok(())
+    }
 
+    /// Room in a page there already is.
+    fn allocate_in_pages(&mut self, width: u32, height: u32) -> Option<AtlasSlot> {
+        self.pages
+            .iter_mut()
+            .enumerate()
+            .find_map(|(page, atlas_page)| {
+                Some(AtlasSlot {
+                    page,
+                    rect: atlas_page.allocate(width, height)?,
+                })
+            })
+    }
+
+    /// A new page sized for the allocation, within the byte budget.
+    fn add_page(&mut self, width: u32, height: u32) -> Result<AtlasSlot, RendererResourceError> {
         let page_width = self.page_size.max(width + ATLAS_PADDING);
         let page_height = self.page_size.max(height + ATLAS_PADDING);
         let requested_bytes = page_width as usize * page_height as usize;
@@ -192,8 +236,31 @@ impl GlyphAtlas {
         })
     }
 
+    fn touch(&mut self, page: usize, frame: u64) {
+        if let Some(page) = self.pages.get_mut(page) {
+            page.last_used = page.last_used.max(frame);
+        }
+    }
+
+    /// The least recently drawn page that no frame after `completed`, nor the
+    /// current `frame`, drew from, emptied for reuse.
+    fn evict(&mut self, completed: u64, frame: u64) -> Option<usize> {
+        let (index, page) = self
+            .pages
+            .iter_mut()
+            .enumerate()
+            .filter(|(_, page)| page.last_used <= completed && page.last_used < frame)
+            .min_by_key(|(_, page)| page.last_used)?;
+        page.shelves.clear();
+        page.next_y = 0;
+        page.generation += 1;
+        self.cleared.push(index);
+        Some(index)
+    }
+
     fn clear(&mut self) {
         self.pages.clear();
+        self.cleared.clear();
     }
 }
 
@@ -282,10 +349,13 @@ pub struct TextGlyphCache {
     atlas: GlyphAtlas,
     uploads: Vec<GlyphUpload>,
     epoch: u64,
+    /// The newest frame the GPU is done with.
+    completed_frame: u64,
     shape_misses: usize,
     glyph_hits: usize,
     glyph_misses: usize,
     evicted_shapes: usize,
+    evicted_glyphs: usize,
     glyph_pressure_events: usize,
 }
 
@@ -316,10 +386,12 @@ impl TextGlyphCache {
             atlas,
             uploads: Vec::new(),
             epoch: 0,
+            completed_frame: 0,
             shape_misses: 0,
             glyph_hits: 0,
             glyph_misses: 0,
             evicted_shapes: 0,
+            evicted_glyphs: 0,
             glyph_pressure_events: 0,
         }
     }
@@ -349,6 +421,35 @@ impl TextGlyphCache {
         &self.atlas
     }
 
+    /// The frame being drawn, counted by `begin_frame`.
+    pub fn frame(&self) -> u64 {
+        self.frame
+    }
+
+    /// Reports that the GPU is done with every frame up to `frame`, so pages
+    /// only those frames drew from may be evicted. Without reports, none are.
+    pub fn set_completed_frame(&mut self, frame: u64) {
+        self.completed_frame = self
+            .completed_frame
+            .max(frame.min(self.frame.saturating_sub(1)));
+    }
+
+    /// Pages emptied since the last call, whose textures must be cleared before
+    /// this frame's uploads.
+    pub fn take_cleared_pages(&mut self) -> Vec<usize> {
+        std::mem::take(&mut self.atlas.cleared)
+    }
+
+    /// Whether a slot placed in `generation` still holds its pixels; marks its
+    /// page drawn this frame if so.
+    pub(crate) fn use_sprite(&mut self, slot: AtlasSlot, generation: u64) -> bool {
+        let live = self.atlas.page_generation(slot.page) == Some(generation);
+        if live {
+            self.atlas.touch(slot.page, self.frame);
+        }
+        live
+    }
+
     /// Changes whenever the atlas is emptied (after a font change); page textures
     /// built before then no longer match it.
     pub fn epoch(&self) -> u64 {
@@ -374,7 +475,7 @@ impl TextGlyphCache {
             live_entries: self.glyphs.len(),
             live_bytes: self.atlas.byte_size(),
             disposed_entries: 0,
-            evicted_entries: self.evicted_shapes,
+            evicted_entries: self.evicted_shapes + self.evicted_glyphs,
             cache_hits: self.glyph_hits,
             cache_misses: self.glyph_misses,
             pressure_events: self.glyph_pressure_events + self.atlas.pressure_events,
@@ -475,6 +576,9 @@ impl TextGlyphCache {
         };
         if let Some(entry) = self.glyphs.get(&key) {
             self.glyph_hits += 1;
+            if let Some(glyph) = entry {
+                self.atlas.touch(glyph.slot.page, self.frame);
+            }
             return Ok(*entry);
         }
         self.glyph_misses += 1;
@@ -496,19 +600,6 @@ impl TextGlyphCache {
             self.glyphs.insert(key, None);
             return Ok(None);
         };
-
-        if self.glyphs.len() >= self.max_glyphs {
-            self.glyph_pressure_events += 1;
-            return Err(TextError::Resource(
-                RendererResourceError::ResourcePressure {
-                    kind: RendererResourceKind::Glyph,
-                    requested_bytes: (bounds.width() * bounds.height()) as usize,
-                    max_bytes: self.atlas.max_bytes,
-                    active_bytes: self.atlas.byte_size(),
-                },
-            ));
-        }
-
         let width = bounds.width() as u32;
         let height = bounds.height() as u32;
         let mut pixels = vec![0u8; width as usize * height as usize];
@@ -518,7 +609,19 @@ impl TextGlyphCache {
             }
         });
 
-        let slot = self.atlas.allocate(width, height)?;
+        if self.glyphs.len() >= self.max_glyphs && !self.evict_page() {
+            self.glyph_pressure_events += 1;
+            return Err(TextError::Resource(
+                RendererResourceError::ResourcePressure {
+                    kind: RendererResourceKind::Glyph,
+                    requested_bytes: pixels.len(),
+                    max_bytes: self.atlas.max_bytes,
+                    active_bytes: self.atlas.byte_size(),
+                },
+            ));
+        }
+
+        let slot = self.place(width, height)?;
         let entry = AtlasGlyph {
             slot,
             left: bounds.min.x,
@@ -530,16 +633,58 @@ impl TextGlyphCache {
     }
 
     /// Places a coverage bitmap that is not a glyph, such as a rasterized path,
-    /// in the atlas and queues its upload. Its slot lives until `epoch` changes.
+    /// in the atlas and queues its upload. Returns its slot and the page's
+    /// generation: [`Self::use_sprite`] says whether it still holds the bitmap.
     pub(crate) fn place_sprite(
         &mut self,
         width: u32,
         height: u32,
         pixels: Vec<u8>,
-    ) -> Result<AtlasSlot, RendererResourceError> {
-        let slot = self.atlas.allocate(width, height)?;
+    ) -> Result<(AtlasSlot, u64), RendererResourceError> {
+        let slot = self.place(width, height)?;
         self.uploads.push(GlyphUpload { slot, pixels });
+        let generation = self.atlas.page_generation(slot.page).unwrap_or_default();
+        Ok((slot, generation))
+    }
+
+    /// Room for a bitmap drawn this frame: in a page there is, else in an idle
+    /// page once the atlas has [`SOFT_ATLAS_PAGES`], else in a new page, else in
+    /// an idle page when a new one is over budget.
+    fn place(&mut self, width: u32, height: u32) -> Result<AtlasSlot, RendererResourceError> {
+        GlyphAtlas::check_size(width, height)?;
+        let mut slot = self.atlas.allocate_in_pages(width, height);
+        if slot.is_none() && self.atlas.page_count() >= SOFT_ATLAS_PAGES && self.evict_page() {
+            slot = self.atlas.allocate_in_pages(width, height);
+        }
+        let slot = match slot {
+            Some(slot) => slot,
+            None => match self.atlas.add_page(width, height) {
+                Ok(slot) => slot,
+                Err(err) if err.is_pressure() && self.evict_page() => {
+                    match self.atlas.allocate_in_pages(width, height) {
+                        Some(slot) => slot,
+                        None => self.atlas.add_page(width, height)?,
+                    }
+                }
+                Err(err) => return Err(err),
+            },
+        };
+        self.atlas.touch(slot.page, self.frame);
         Ok(slot)
+    }
+
+    /// Empties the least recently drawn page the GPU is done with, forgetting
+    /// its glyphs. False when every page is still in use.
+    fn evict_page(&mut self) -> bool {
+        let Some(page) = self.atlas.evict(self.completed_frame, self.frame) else {
+            return false;
+        };
+        let before = self.glyphs.len();
+        self.glyphs
+            .retain(|_, entry| entry.is_none_or(|glyph| glyph.slot.page != page));
+        self.evicted_glyphs += before - self.glyphs.len();
+        self.uploads.retain(|upload| upload.slot.page != page);
+        true
     }
 
     fn invalidate_for_font_generation_change(&mut self) {
@@ -697,6 +842,122 @@ mod tests {
             "string from the last frame is kept"
         );
         assert_eq!(kept, again);
+    }
+
+    /// A cache over an atlas of `pages` pages of 32 x 32, each holding four
+    /// 15 x 15 sprites.
+    fn small_cache(pages: usize) -> TextGlyphCache {
+        TextGlyphCache::with_measurer(
+            TextMeasureCache::new(),
+            GlyphAtlas::new(32, pages * 32 * 32),
+            usize::MAX,
+        )
+    }
+
+    fn sprite(cache: &mut TextGlyphCache) -> Result<(AtlasSlot, u64), RendererResourceError> {
+        cache.place_sprite(15, 15, vec![255; 15 * 15])
+    }
+
+    #[test]
+    fn pages_unfinished_frames_drew_from_are_kept_until_they_finish() {
+        let mut cache = small_cache(1);
+        cache.begin_frame();
+        let first = sprite(&mut cache).expect("room");
+        for _ in 0..3 {
+            sprite(&mut cache).expect("room");
+        }
+        cache.take_cleared_pages();
+        assert!(cache.use_sprite(first.0, first.1));
+
+        // The next frame needs room while the GPU may still sample the page.
+        cache.begin_frame();
+        let err = sprite(&mut cache).expect_err("the only page is in flight");
+        assert!(err.is_pressure());
+
+        // Once that frame is done, its page is emptied and reused.
+        cache.begin_frame();
+        cache.set_completed_frame(cache.frame() - 1);
+        let reused = sprite(&mut cache).expect("an idle page");
+        assert_eq!(reused.0.page, 0);
+        assert_ne!(reused.1, first.1, "the page's generation moved");
+        assert_eq!(cache.take_cleared_pages(), [0]);
+        assert!(!cache.use_sprite(first.0, first.1), "the old slot is gone");
+        assert!(cache.use_sprite(reused.0, reused.1));
+    }
+
+    #[test]
+    fn the_frame_being_drawn_never_loses_a_page() {
+        let mut cache = small_cache(1);
+        cache.begin_frame();
+        cache.begin_frame();
+        cache.set_completed_frame(cache.frame() - 1);
+        for _ in 0..4 {
+            sprite(&mut cache).expect("room");
+        }
+        let err = sprite(&mut cache).expect_err("the page holds this frame's sprites");
+        assert!(err.is_pressure());
+        assert!(cache.take_cleared_pages().is_empty());
+    }
+
+    #[test]
+    fn glyphs_on_an_evicted_page_are_rasterized_again() {
+        let mut cache = TextGlyphCache::with_measurer(
+            TextMeasureCache::new(),
+            GlyphAtlas::new(64, 64 * 64),
+            usize::MAX,
+        );
+        let shaped = cache.shape(request("ab")).expect("shape").expect("ink");
+        // One frame draws the glyph and fills the rest of the only page.
+        cache.begin_frame();
+        let a = cache
+            .glyph(&shaped.glyphs[0], 28.0, 0)
+            .expect("glyph")
+            .expect("ink");
+        while cache.place(15, 15).is_ok() {}
+        cache.take_uploads();
+        cache.take_cleared_pages();
+
+        // Once it is done, the next frame's sprite empties the page.
+        cache.begin_frame();
+        cache.set_completed_frame(cache.frame() - 1);
+        sprite(&mut cache).expect("an idle page");
+        assert_eq!(cache.take_cleared_pages(), [0]);
+        assert_eq!(
+            cache.resource_stats().evicted_entries,
+            1,
+            "the glyph was evicted"
+        );
+
+        cache.take_uploads();
+        let again = cache
+            .glyph(&shaped.glyphs[0], 28.0, 0)
+            .expect("glyph")
+            .expect("ink");
+        assert_eq!((again.left, again.top), (a.left, a.top));
+        assert_eq!(cache.take_uploads().len(), 1, "rasterized again");
+    }
+
+    #[test]
+    fn past_the_soft_page_count_idle_pages_are_reused_before_growing() {
+        let mut cache = small_cache(usize::MAX / (32 * 32));
+        cache.begin_frame();
+        for _ in 0..SOFT_ATLAS_PAGES * 4 {
+            sprite(&mut cache).expect("room");
+        }
+        assert_eq!(cache.atlas().page_count(), SOFT_ATLAS_PAGES);
+        cache.take_cleared_pages();
+
+        // The next frame reuses every idle page before adding one.
+        cache.begin_frame();
+        cache.set_completed_frame(cache.frame() - 1);
+        for _ in 0..SOFT_ATLAS_PAGES * 4 {
+            sprite(&mut cache).expect("an idle page");
+        }
+        assert_eq!(cache.atlas().page_count(), SOFT_ATLAS_PAGES, "no new page");
+        assert_eq!(cache.take_cleared_pages().len(), SOFT_ATLAS_PAGES);
+        // With none idle, the atlas grows.
+        sprite(&mut cache).expect("a new page");
+        assert_eq!(cache.atlas().page_count(), SOFT_ATLAS_PAGES + 1);
     }
 
     #[test]
