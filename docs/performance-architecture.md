@@ -101,7 +101,12 @@ input/effects -> build -> layout -> paint -> hit index -> render -> present
   paint copies the range and adds the new origin. GPUI replays absolute
   coordinates, so any move invalidates the cache; RUI's relative ranges survive a
   resized sidebar or a scroll.
-- **Clip culling.** A child entirely outside the active clip is not painted.
+- **Clip culling (done: #174).** A memoizable subtree that is unchanged since
+  it was last painted, and whose recorded reach, moved to its new origin, misses
+  the window and the active clip, is not painted at all. A subtree is painted
+  once before it can be left out, because only painting it gives its reach.
+  Damage counts only what the window can show, so content leaving the view
+  costs nothing.
 - **Scene storage.** Primitives go into one `Vec` reused across frames. Ranges are
   index pairs and replay is a `memcpy` plus an offset pass, so a frame allocates
   nothing proportional to the tree.
@@ -114,6 +119,12 @@ input/effects -> build -> layout -> paint -> hit index -> render -> present
   built only after 32 queries in a frame with at least 64 regions. That is the
   break-even point, so frames with a few queries pay nothing extra, and frames
   with many get queries of about 35 ns regardless of size.
+- **Pointer dispatch (#190 remainder).** Layout marks memoizable subtrees with
+  no pointer handlers. Moves, releases and scrolls pass them by without
+  computing their bounds, so a move over the 2000-row list costs 0.03 M
+  instructions instead of 1.56 M. Presses still walk the tree, because a press
+  clears focus in any div it misses. Routing handlers through the hit index
+  instead would need every div with a handler to register a region.
 - **Future:** with replay, a replayed subtree's regions can be reused with an
   offset too.
 

@@ -12,13 +12,14 @@
 //! `PERF_GATE_PIXELS=1` also compares the long list's rendered pixels with the
 //! committed checksum. Different GPUs antialias differently, so that is for local
 //! runs before and after a renderer change, not for CI.
+use rui::core::event::MouseButton;
 use rui::core::frame_pipeline::FramePipeline;
-use rui::elements::element::{Element, LayoutNodes};
+use rui::elements::element::{Element, LayoutNodes, PointerEvent, PointerEventKind};
 use rui::elements::{VirtualListHandle, virtual_list};
 use rui::renderer::Scene;
 use rui::renderer::metal::{MetalRenderer, RetainedTarget};
 use rui::renderer::text::TextMeasureCache;
-use rui::{Color, Div, ElementId, Size, div, text};
+use rui::{Color, Div, ElementId, Point, Presenter, Size, div, text};
 use serde::Deserialize;
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::collections::BTreeMap;
@@ -219,7 +220,7 @@ impl Surfaces {
             viewport,
         )
         .expect("layout");
-        FramePipeline::paint_root(root, &self.taffy, &mut self.scene, bounds);
+        FramePipeline::paint_root_in_viewport(root, &self.taffy, &mut self.scene, bounds, viewport);
     }
 }
 
@@ -390,6 +391,25 @@ fn main() -> ExitCode {
             budgets.footprint_mb_max
         ));
     }
+
+    // A pointer move over the long list, whose rows have no handlers.
+    let viewport = Size::new(VIEWPORT.0, VIEWPORT.1);
+    let mut presenter = Presenter::with_root(viewport, list(2_000, 0));
+    for _ in 0..2 {
+        presenter.layout(viewport).expect("layout");
+        presenter.paint();
+    }
+    costs.insert(
+        "list.pointer_move",
+        measure(|round| {
+            presenter.dispatch_pointer_event(&PointerEvent {
+                kind: PointerEventKind::Move,
+                position: Point::new(200.0, 10.0 + round as f32 * 13.0),
+                button: None::<MouseButton>,
+            });
+        }),
+    );
+    drop(presenter);
 
     // One row's text changes per frame. #173's target is under 10% of a full
     // frame: the same list laid out from an empty layout tree, with warm caches.

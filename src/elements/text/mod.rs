@@ -325,6 +325,10 @@ impl Element for Text {
         true
     }
 
+    fn ignores_pointer(&self) -> bool {
+        true
+    }
+
     fn reconcile(&mut self, previous: &mut dyn Element) -> bool {
         let Some(previous) = (previous as &mut dyn Any).downcast_ref::<Text>() else {
             return false;

@@ -470,6 +470,12 @@ impl Element for Div {
         true
     }
 
+    fn ignores_pointer(&self) -> bool {
+        // Without handlers, its hover state is seen by nothing; a press still
+        // clears focus, so presses are always delivered.
+        self.on_click.is_none() && self.on_hover.is_none()
+    }
+
     fn reconcile(&mut self, previous: &mut dyn Element) -> bool {
         let Some(previous) = (previous as &mut dyn Any).downcast_mut::<Div>() else {
             return false;
@@ -588,6 +594,7 @@ impl Element for Div {
 
     fn handle_pointer_event(&mut self, cx: &mut EventContext, event: &PointerEvent) -> bool {
         let is_move = matches!(event.kind, PointerEventKind::Move);
+        let is_press = matches!(event.kind, PointerEventKind::Down);
         let mut handled = false;
 
         for (child, node) in self
@@ -596,6 +603,10 @@ impl Element for Div {
             .zip(self.child_nodes.iter().copied())
             .rev()
         {
+            // As `AnyElement::handle_pointer_event` would, without the bounds.
+            if !is_press && child.pointer_inert() {
+                continue;
+            }
             let child_bounds = cx.child_bounds(node).unwrap_or(cx.bounds());
             let mut child_cx = cx.with_bounds(child_bounds);
             let child_handled = child.handle_pointer_event(&mut child_cx, event);

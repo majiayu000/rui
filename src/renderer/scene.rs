@@ -1,7 +1,7 @@
 //! Scene graph - collects primitives for rendering
 
 use crate::core::ElementId;
-use crate::core::geometry::{Bounds, Point};
+use crate::core::geometry::{Bounds, Point, Size};
 use crate::renderer::primitives::{Primitive, Reach};
 use smallvec::SmallVec;
 use std::cell::{Cell, RefCell};
@@ -243,6 +243,12 @@ pub struct Scene {
     /// Primitives of the frame before, which [`Scene::replay`] moves ranges out of.
     previous_primitives: Vec<Primitive>,
 
+    /// What memoizable subtrees painted this frame and the one before, kept
+    /// here rather than in each element so elements stay small and painting
+    /// allocates nothing per element.
+    records: Vec<PaintRecord>,
+    previous_records: Vec<PaintRecord>,
+
     /// Id of the frame being painted, and of the one in `previous_primitives`.
     frame: u64,
     previous_frame: u64,
@@ -284,6 +290,8 @@ impl Scene {
         Self {
             primitives: Vec::new(),
             previous_primitives: Vec::new(),
+            records: Vec::new(),
+            previous_records: Vec::new(),
             frame: NEXT_SCENE_FRAME.fetch_add(1, Ordering::Relaxed),
             previous_frame: 0,
             replayed: 0,
@@ -305,6 +313,8 @@ impl Scene {
         // The frame just painted becomes the one later paints replay from.
         std::mem::swap(&mut self.primitives, &mut self.previous_primitives);
         self.primitives.clear();
+        std::mem::swap(&mut self.records, &mut self.previous_records);
+        self.records.clear();
         self.previous_frame = self.frame;
         self.frame = NEXT_SCENE_FRAME.fetch_add(1, Ordering::Relaxed);
         self.replayed = 0;
@@ -330,6 +340,24 @@ impl Scene {
         if let Some(layer) = self.active_layer_mut() {
             layer.primitive_indices.push(primitive_index);
         }
+    }
+
+    /// Keep `record` for the next frame and return its index in this one.
+    pub(crate) fn record(&mut self, record: PaintRecord) -> u32 {
+        self.records.push(record);
+        (self.records.len() - 1) as u32
+    }
+
+    /// Record `index` of this frame, or of the previous one.
+    pub(crate) fn paint_record(&self, frame: u64, index: u32) -> Option<PaintRecord> {
+        let records = if frame == self.frame {
+            &self.records
+        } else if frame == self.previous_frame {
+            &self.previous_records
+        } else {
+            return None;
+        };
+        records.get(index as usize).copied()
     }
 
     /// Id of the frame being painted. Ranges recorded now can be replayed in
@@ -399,8 +427,17 @@ impl Scene {
     ///
     /// Only meaningful for a target that shows the previous frame
     /// ([`Self::previous_frame`]); anything else needs a full redraw.
-    pub fn damage(&self) -> Reach {
-        let mut damage = self.moved;
+    ///
+    /// Only what can be seen in `visible` counts, so content that left the
+    /// view or was not painted for being out of it does not.
+    pub fn damage(&self, visible: Bounds) -> Reach {
+        let seen = |reach: Reach| match reach {
+            Reach::Within(bounds) => bounds
+                .intersection(&visible)
+                .map_or(Reach::Nothing, Reach::Within),
+            other => other,
+        };
+        let mut damage = seen(self.moved);
         let mut unchanged = self.unchanged.iter().peekable();
         let mut index = 0;
         while index < self.primitives.len() {
@@ -411,7 +448,7 @@ impl Scene {
                 unchanged.next();
                 continue;
             }
-            damage = union(damage, damage_reach(&self.primitives[index]));
+            damage = union(damage, seen(damage_reach(&self.primitives[index])));
             if damage == Reach::Unbounded {
                 return damage;
             }
@@ -419,12 +456,36 @@ impl Scene {
         }
         // Replayed primitives were moved out, leaving clip pops that draw nothing.
         for primitive in &self.previous_primitives {
-            damage = union(damage, damage_reach(primitive));
+            damage = union(damage, seen(damage_reach(primitive)));
             if damage == Reach::Unbounded {
                 return damage;
             }
         }
         damage
+    }
+
+    /// Bounds of everything the primitives in `range` can draw on; covering
+    /// everything when that has no bound.
+    pub(crate) fn reach_of(&self, range: Range<usize>) -> Bounds {
+        let mut reach: Option<Bounds> = None;
+        for primitive in &self.primitives[range] {
+            match primitive.reach() {
+                Reach::Nothing => {}
+                Reach::Within(bounds) => {
+                    reach = Some(reach.map_or(bounds, |reach| reach.union(&bounds)));
+                }
+                Reach::Unbounded => {
+                    // Finite, so moving it and testing it stay well defined.
+                    return Bounds::from_xywh(
+                        f32::MIN / 4.0,
+                        f32::MIN / 4.0,
+                        f32::MAX / 2.0,
+                        f32::MAX / 2.0,
+                    );
+                }
+            }
+        }
+        reach.unwrap_or(Bounds::from_xywh(0.0, 0.0, 0.0, 0.0))
     }
 
     /// Primitives this frame replayed from the previous one instead of painting.
@@ -620,6 +681,24 @@ impl Scene {
 
         Some(visible)
     }
+}
+
+/// What a memoizable subtree painted in a frame, for the next one to replay
+/// moved by its change of origin, or to leave out while it cannot be seen.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PaintRecord {
+    /// The primitives are in the frame's range `start..end`; false when the
+    /// subtree was left out.
+    pub(crate) painted: bool,
+    pub(crate) start: u32,
+    pub(crate) end: u32,
+    pub(crate) origin: Point,
+    /// Unrounded layout, with its origin summed from the root as taffy sums it.
+    pub(crate) unrounded_origin: Point,
+    pub(crate) unrounded_size: Size,
+    /// What the primitives can draw on at `origin`; everything when that has
+    /// no bound.
+    pub(crate) reach: Bounds,
 }
 
 /// What a primitive's appearing or going away can change on screen.
