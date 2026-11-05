@@ -140,3 +140,60 @@ fn text_sits_on_one_baseline_whatever_its_ink() {
         "capital should reach higher: {short:?} vs {tall:?}"
     );
 }
+
+/// Large glyphs at six sizes from `first`: most of an atlas page at scale 2.
+fn glyph_page_scene(first: usize) -> Scene {
+    let mut scene = Scene::new();
+    for (index, size) in (first..first + 6).enumerate() {
+        scene.insert(Primitive::Text {
+            bounds: Bounds::from_xywh(0.0, index as f32 * 10.0, 400.0, 10.0),
+            content: "WgQ@#&".to_string(),
+            color: Rgba::new(1.0, 1.0, 1.0, 1.0),
+            font_size: 60.0 + size as f32,
+            font_weight: 400,
+            font_family: None,
+            line_height: 1.2,
+            align: TextAlign::Left,
+        });
+    }
+    scene
+}
+
+#[test]
+fn evicted_atlas_pages_draw_what_a_fresh_atlas_draws() {
+    use rui::renderer::{RendererResourceKind, RendererResourceLimits};
+
+    let limits = RendererResourceLimits {
+        glyph_max_bytes: 3 * 1024 * 1024,
+        ..RendererResourceLimits::default()
+    };
+    let mut renderer = match MetalRenderer::with_resource_limits(limits) {
+        Ok(renderer) => renderer,
+        Err(RendererError::BackendUnavailable(_)) => return,
+        Err(err) => panic!("metal renderer should initialize: {err}"),
+    };
+    let viewport = Size::new(400.0, 60.0);
+    // Each scene needs most of a page, so with room for three, frames soon
+    // empty pages earlier frames drew from, and draw again what they held.
+    for (frame, first) in [0, 8, 16, 0, 24, 8, 0, 32, 16].into_iter().enumerate() {
+        let scene = glyph_page_scene(first);
+        let pixels = renderer
+            .capture_frame_pixels_at_scale(&scene, viewport, 2.0)
+            .unwrap_or_else(|err| panic!("frame {frame}: {err}"));
+        let mut fresh = MetalRenderer::new().expect("renderer");
+        let expected = fresh
+            .capture_frame_pixels_at_scale(&scene, viewport, 2.0)
+            .expect("capture");
+        assert!(
+            pixels == expected,
+            "frame {frame} (sizes from {first}) differs from a fresh atlas"
+        );
+    }
+    let glyphs = renderer
+        .diagnostics()
+        .resource(RendererResourceKind::Glyph)
+        .cloned()
+        .expect("glyph stats");
+    assert!(glyphs.evicted_entries > 0, "{glyphs:?}");
+    assert!(glyphs.live_bytes <= 3 * 1024 * 1024, "{glyphs:?}");
+}
