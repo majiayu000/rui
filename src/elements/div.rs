@@ -750,6 +750,10 @@ impl Element for Div {
     fn children(&self) -> &[AnyElement] {
         &self.children
     }
+
+    fn children_mut(&mut self) -> &mut [AnyElement] {
+        &mut self.children
+    }
 }
 
 /// Create a new Div element

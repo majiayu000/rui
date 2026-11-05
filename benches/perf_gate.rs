@@ -12,14 +12,18 @@
 //! `PERF_GATE_PIXELS=1` also compares the long list's rendered pixels with the
 //! committed checksum. Different GPUs antialias differently, so that is for local
 //! runs before and after a renderer change, not for CI.
+use rui::core::entity::Entity;
 use rui::core::event::MouseButton;
 use rui::core::frame_pipeline::FramePipeline;
 use rui::elements::element::{Element, LayoutNodes, PointerEvent, PointerEventKind};
+use rui::elements::view;
 use rui::elements::{VirtualListHandle, virtual_list};
 use rui::renderer::Scene;
 use rui::renderer::metal::{MetalRenderer, RetainedTarget};
 use rui::renderer::text::TextMeasureCache;
-use rui::{Color, Div, ElementId, Point, Presenter, Size, div, text};
+use rui::{
+    AppContext, Color, Div, ElementId, Point, Presenter, Size, View, ViewContext, div, text,
+};
 use serde::Deserialize;
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::collections::BTreeMap;
@@ -133,6 +137,21 @@ fn row(index: usize, selected: usize) -> Div {
         .bg(background)
         .child(text(format!("task {index}: fix the failing check")))
         .child(text(format!("{} min", index % 60)))
+}
+
+/// A row of the long list as a view, showing its own label entity.
+struct ListRow {
+    index: usize,
+    label: Entity<String>,
+}
+
+impl View for ListRow {
+    type Element = Div;
+
+    fn render(&mut self, cx: &mut ViewContext<Self>) -> Div {
+        let label = cx.app().get(self.label).map(|label| label.clone());
+        row(self.index, usize::MAX).child(text(label.expect("row label")))
+    }
 }
 
 fn list(rows: usize, selected: usize) -> Div {
@@ -430,6 +449,56 @@ fn main() -> ExitCode {
         measure(|round| edited.frame(list_with_edit(2_000, EDITED_ROW, round), &mut measurer)),
     );
 
+    // The same list with its rows as views: only the edited row renders again,
+    // and the list around it is not rebuilt.
+    let mut context = AppContext::new();
+    let labels: Vec<Entity<String>> = (0..2_000)
+        .map(|_| context.create(String::from("edit")))
+        .collect();
+    let rows: Vec<Entity<ListRow>> = labels
+        .iter()
+        .enumerate()
+        .map(|(index, label)| {
+            context.new_view(ListRow {
+                index,
+                label: *label,
+            })
+        })
+        .collect();
+    let mut build_list = move |_: &mut AppContext| {
+        div()
+            .w_full()
+            .flex_col()
+            .children(rows.iter().map(|row| view(*row)))
+    };
+    let mut viewed = Surfaces::new();
+    let mut viewed_root = div();
+    let mut view_frame =
+        |context: &mut AppContext, root: &mut Div, measurer: &mut TextMeasureCache| {
+            FramePipeline::build_frame_retained(
+                context,
+                root,
+                &mut build_list,
+                &mut viewed.taffy,
+                &mut viewed.nodes,
+                &mut viewed.scene,
+                measurer,
+                Size::new(VIEWPORT.0, VIEWPORT.1),
+            )
+            .expect("view frame");
+        };
+    view_frame(&mut context, &mut viewed_root, &mut measurer);
+    let edited_label = labels[EDITED_ROW];
+    costs.insert(
+        "list.one_row_changed_views",
+        measure(|round| {
+            *context.get_mut(edited_label).expect("edited label") = format!("edit {round}");
+            context.notify(edited_label.id());
+            view_frame(&mut context, &mut viewed_root, &mut measurer);
+        }),
+    );
+    drop(viewed_root);
+
     // #175: how much of the window one change in view draws again, and the GPU
     // time of that frame against a full redraw.
     let damage = match MetalRenderer::new() {
@@ -513,12 +582,18 @@ fn main() -> ExitCode {
         None => println!("no Metal device: damage not measured"),
     }
 
-    let (full, changed) = (costs["list.full_frame"], costs["list.one_row_changed"]);
-    println!(
-        "list one row changed / full frame: {:.2} by instructions, {:.2} by allocations (#173 target 0.10)",
-        changed.instructions_m / full.instructions_m,
-        changed.allocations / full.allocations
-    );
+    let full = costs["list.full_frame"];
+    for (name, case) in [
+        ("rebuilt list", "list.one_row_changed"),
+        ("rows as views", "list.one_row_changed_views"),
+    ] {
+        let changed = costs[case];
+        println!(
+            "one row changed, {name} / full frame: {:.3} by instructions, {:.3} by allocations (#173 target 0.10)",
+            changed.instructions_m / full.instructions_m,
+            changed.allocations / full.allocations
+        );
+    }
 
     let (small, large) = (costs["virtual_list.1k"], costs["virtual_list.100k"]);
     let scaling = if counters {

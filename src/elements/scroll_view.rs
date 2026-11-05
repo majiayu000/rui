@@ -579,6 +579,10 @@ impl Element for ScrollView {
         Ok(Some(node))
     }
 
+    fn children_mut(&mut self) -> &mut [AnyElement] {
+        &mut self.children
+    }
+
     fn refresh_text_geometry(&mut self, text_measurer: &mut TextMeasureCache) {
         for child in &mut self.children {
             child.refresh_text_geometry(text_measurer);

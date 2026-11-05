@@ -283,6 +283,11 @@ impl Element for Popover {
         &self.children[..self.visible_child_count()]
     }
 
+    fn children_mut(&mut self) -> &mut [AnyElement] {
+        // Hidden ones too: a view among them must have rendered when it shows.
+        &mut self.children
+    }
+
     fn contains_id(&self, id: ElementId) -> bool {
         self.id == id
             || self.children[..self.visible_child_count()]
@@ -561,6 +566,11 @@ impl Element for Dialog {
 
     fn children(&self) -> &[AnyElement] {
         if self.open { &self.content } else { &[] }
+    }
+
+    fn children_mut(&mut self) -> &mut [AnyElement] {
+        // Closed content too: a view in it must have rendered when it opens.
+        &mut self.content
     }
 
     fn contains_id(&self, id: ElementId) -> bool {

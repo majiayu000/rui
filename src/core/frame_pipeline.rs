@@ -1,5 +1,6 @@
 use crate::core::ElementId;
 use crate::core::app::AppContext;
+use crate::core::entity::EntityId;
 use crate::core::geometry::{Bounds, Size};
 use crate::core::presenter::Presenter;
 use crate::elements::Element;
@@ -7,6 +8,7 @@ use crate::elements::element::{LayoutContext, LayoutNodes, PaintContext};
 use crate::renderer::RendererDiagnostics;
 use crate::renderer::Scene;
 use crate::renderer::text::TextMeasureCache;
+use std::collections::HashSet;
 use std::error::Error;
 use std::fmt;
 use std::sync::OnceLock;
@@ -55,6 +57,7 @@ impl FramePipeline {
         context.poll_foreground_tasks();
         context.run_frame_tasks();
         context.flush_effects();
+        context.notify_queued_views();
         if context.consume_runtime_view_notification() {
             context.mark_redraw_from(crate::core::app::RedrawSource::ViewNotification);
         }
@@ -65,18 +68,37 @@ impl FramePipeline {
         E: Element,
         F: FnMut(&mut AppContext) -> E,
     {
-        if context.frame.needs_rebuild || !context.frame.pending_updates.is_empty() {
-            context.frame.pending_updates.clear();
-            context.frame.needs_rebuild = false;
-            let mut next = build_root(context);
+        if !context.frame.needs_rebuild && context.frame.pending_updates.is_empty() {
+            return;
+        }
+        context.frame.needs_rebuild = false;
+        let notified: Vec<EntityId> = context.frame.pending_updates.drain().collect();
+        // Views render again for what they read. The root is built again only
+        // when asked to, or for an entity it read or no view read.
+        let mut full = std::mem::take(&mut context.frame.explicit_rebuild) || notified.is_empty();
+        let mut dirty = HashSet::new();
+        for entity in notified {
+            match context.views_notified_by(entity) {
+                Some(views) => dirty.extend(views.iter().copied()),
+                None => {
+                    full = true;
+                    dirty.extend(context.views_reading(entity));
+                }
+            }
+        }
+        if full {
+            let (mut next, reads) = context.recording_reads(|context| build_root(context));
+            context.frame.root_reads = reads.into_iter().collect();
             // Unchanged parts of the previous tree are kept, with their layout
             // and paint; see `Element::reconcile`.
             if !next.reconcile(root) {
                 *root = next;
             }
-            if !context.frame.pending_updates.is_empty() {
-                context.frame.needs_rebuild = true;
-            }
+        }
+        // Views new to the tree render, and so do the ones notified.
+        root.refresh_views(context, &dirty);
+        if !context.frame.pending_updates.is_empty() {
+            context.frame.needs_rebuild = true;
         }
     }
 

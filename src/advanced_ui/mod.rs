@@ -135,6 +135,10 @@ macro_rules! impl_div_wrapper_element {
             fn children(&self) -> &[AnyElement] {
                 Element::children(&self.inner)
             }
+
+            fn children_mut(&mut self) -> &mut [AnyElement] {
+                Element::children_mut(&mut self.inner)
+            }
         }
     };
 }

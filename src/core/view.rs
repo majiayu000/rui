@@ -1,26 +1,44 @@
 //! View system - declarative UI components
 
 use crate::core::app::AppContext;
-use crate::core::entity::Entity;
+use crate::core::entity::{Entity, EntityId};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+
+/// Views notified from event handlers, which have no context to notify with;
+/// the next frame notifies them.
+pub(crate) type NotifiedViews = Rc<RefCell<Vec<EntityId>>>;
 
 /// Cloneable rebuild signal for callbacks created while rendering a view.
 #[derive(Clone, Debug)]
 pub struct ViewNotifier {
     notified: Rc<Cell<bool>>,
+    /// Where a view inside another view's tree reports itself.
+    queue: Option<(EntityId, NotifiedViews)>,
 }
 
 impl ViewNotifier {
     pub(crate) fn new() -> Self {
         Self {
             notified: Rc::new(Cell::new(false)),
+            queue: None,
+        }
+    }
+
+    /// A notifier for the view `entity`, which reports to `queue`.
+    pub(crate) fn queued(entity: EntityId, queue: NotifiedViews) -> Self {
+        Self {
+            queue: Some((entity, queue)),
+            ..Self::new()
         }
     }
 
     /// Schedule the owning view to render again on the next runtime pass.
     pub fn notify(&self) {
         self.notified.set(true);
+        if let Some((entity, queue)) = &self.queue {
+            queue.borrow_mut().push(*entity);
+        }
     }
 
     pub(crate) fn take_notified(&self) -> bool {
@@ -159,6 +177,18 @@ impl<'a, T: 'static> ViewContext<'a, T> {
     /// frames once no render asks.
     pub fn request_animation_frame(&mut self) {
         self.app.request_animation_frame_for(self.view.id());
+    }
+}
+
+/// A view rendered inside other views' trees, kept between renders.
+pub(crate) trait ChildView {
+    /// Apply queued listener updates and render.
+    fn render_any(&mut self, app: &mut AppContext) -> crate::elements::AnyElement;
+}
+
+impl<V: View> ChildView for crate::core::app::RuntimeView<V> {
+    fn render_any(&mut self, app: &mut AppContext) -> crate::elements::AnyElement {
+        crate::elements::AnyElement::new(self.render(app))
     }
 }
 

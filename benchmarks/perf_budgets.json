@@ -1,5 +1,5 @@
 {
-  "calibration": "M2 Max, macOS 26.5.2, main 78da070 plus memoized subtrees (#173 step 2), two runs: list.frame_cpu 13.8 M / 10019 allocs, list.layout_retained 10.6 M / 2002, list.full_frame 65.6 M / 36094, list.one_row_changed 17.9 M / 14017 (0.27 of a full frame; #173's target is 0.10), text.paragraphs 6.3 M / 901 with shaping that keeps no per-cluster strings, virtual_list 0.4 M / 298 at 1k and 100k, footprint 50 MB with the previous frame's primitives kept for replay. The list, edit and paragraph cases rebuild through Element::reconcile as the frame pipeline does. Damage (#175): one changed row in view draws 0.087 of the window again (one_row_damage_max 0.12, exact and machine independent; one paragraph 0.130), GPU 0.18 ms against 0.50 ms for a full redraw, not gated. Instruction budgets carry 25% headroom for other CPUs and compilers, allocation budgets 10%. Recalibrate with the same run after an intended cost change. Step 4 (#174, #190), two runs on 7384732 plus this branch: frames paint only what the window can show (list.frame_cpu 13.3 M / 10013, list.one_row_changed 17.1 M / 14012, list.full_frame 66.8 M / 36069, footprint 50 MB), and list.pointer_move, a move over the 2000 rows without handlers, costs 0.03 M / 3 (1.56 M before).",
+  "calibration": "M2 Max, macOS 26.5.2, main 78da070 plus memoized subtrees (#173 step 2), two runs: list.frame_cpu 13.8 M / 10019 allocs, list.layout_retained 10.6 M / 2002, list.full_frame 65.6 M / 36094, list.one_row_changed 17.9 M / 14017 (0.27 of a full frame; #173's target is 0.10), text.paragraphs 6.3 M / 901 with shaping that keeps no per-cluster strings, virtual_list 0.4 M / 298 at 1k and 100k, footprint 50 MB with the previous frame's primitives kept for replay. The list, edit and paragraph cases rebuild through Element::reconcile as the frame pipeline does. Damage (#175): one changed row in view draws 0.087 of the window again (one_row_damage_max 0.12, exact and machine independent; one paragraph 0.130), GPU 0.18 ms against 0.50 ms for a full redraw, not gated. Instruction budgets carry 25% headroom for other CPUs and compilers, allocation budgets 10%. Recalibrate with the same run after an intended cost change. Step 4 (#174, #190), two runs on 7384732 plus this branch: frames paint only what the window can show (list.frame_cpu 13.3 M / 10013, list.one_row_changed 17.1 M / 14012, list.full_frame 66.8 M / 36069, footprint 50 MB), and list.pointer_move, a move over the 2000 rows without handlers, costs 0.03 M / 3 (1.56 M before). Views (#186): list.one_row_changed_views, the same list with its rows as views and one row's label entity notified per frame, costs 2.0 M / 23 on 956fb2b plus this branch: 0.029 of list.full_frame, under #173's 0.10. The other cases are unchanged by it.",
   "instructions_m": {
     "list.frame_cpu": 16.6,
     "list.layout_retained": 13.3,
@@ -8,7 +8,8 @@
     "text.paragraphs": 7.9,
     "virtual_list.1k": 0.5,
     "virtual_list.100k": 0.5,
-    "list.pointer_move": 0.05
+    "list.pointer_move": 0.05,
+    "list.one_row_changed_views": 2.5
   },
   "allocations": {
     "list.frame_cpu": 11000,
@@ -18,7 +19,8 @@
     "text.paragraphs": 990,
     "virtual_list.1k": 330,
     "virtual_list.100k": 330,
-    "list.pointer_move": 5
+    "list.pointer_move": 5,
+    "list.one_row_changed_views": 26
   },
   "virtual_list_scaling_max": 1.2,
   "footprint_mb_max": 64.0,

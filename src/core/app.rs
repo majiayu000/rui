@@ -7,13 +7,14 @@ use crate::core::entity::{Entity, EntityId, EntityStore};
 use crate::core::executor::{BackgroundExecutor, ForegroundExecutor};
 use crate::core::foreground::{AnimationFrameRequests, ForegroundQueue, FrameTiming};
 use crate::core::geometry::Size;
-use crate::core::view::{View, ViewContext, ViewNotifier, ViewUpdates};
+use crate::core::view::{ChildView, NotifiedViews, View, ViewContext, ViewNotifier, ViewUpdates};
 #[cfg(all(target_os = "macos", feature = "metal"))]
 use crate::core::window::WindowId;
 use crate::core::window::WindowOptions;
 use crate::core::windows::Windows;
 use crate::elements::Element;
-use std::collections::HashSet;
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 /// The main application context - owns all state
@@ -33,6 +34,16 @@ pub struct AppContext {
     pub(crate) foreground: ForegroundQueue,
     pub(crate) animation_frames: AnimationFrameRequests,
     pub(crate) frame_timing: FrameTiming,
+    /// Views placed in trees with [`crate::elements::view`], by entity.
+    child_views: HashMap<EntityId, Box<dyn ChildView>>,
+    /// Child views their listeners notified since the last frame.
+    notified_views: NotifiedViews,
+    /// Entities read by the renders in progress, innermost last.
+    reads: RefCell<Vec<Vec<EntityId>>>,
+    /// The child views that read each entity in their last render, or are it.
+    observers: HashMap<EntityId, HashSet<EntityId>>,
+    /// What each child view read in its last render.
+    view_reads: HashMap<EntityId, Vec<EntityId>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -88,12 +99,18 @@ pub(crate) struct WindowFrameState {
     redraw_scheduler: RedrawScheduler,
     pub(crate) viewport_size: Size,
     pub(crate) runtime_view_notifier: Option<(EntityId, ViewNotifier)>,
+    /// A rebuild of the whole tree was asked for, not just notified entities.
+    pub(crate) explicit_rebuild: bool,
+    /// Entities the last build of the root read.
+    pub(crate) root_reads: HashSet<EntityId>,
 }
 
 impl WindowFrameState {
     pub(crate) fn new(viewport_size: Size) -> Self {
         Self {
             pending_updates: HashSet::new(),
+            explicit_rebuild: true,
+            root_reads: HashSet::new(),
             needs_rebuild: true,
             dirty: true,
             redraw_scheduler: RedrawScheduler::default(),
@@ -110,6 +127,7 @@ impl WindowFrameState {
 
     pub(crate) fn request_rebuild(&mut self) {
         self.needs_rebuild = true;
+        self.explicit_rebuild = true;
         self.mark_redraw(RedrawSource::Explicit);
     }
 
@@ -169,6 +187,11 @@ impl AppContext {
             foreground: ForegroundQueue::default(),
             animation_frames: AnimationFrameRequests::default(),
             frame_timing: FrameTiming::default(),
+            child_views: HashMap::new(),
+            notified_views: NotifiedViews::default(),
+            reads: RefCell::default(),
+            observers: HashMap::new(),
+            view_reads: HashMap::new(),
         }
     }
 
@@ -200,14 +223,101 @@ impl AppContext {
         Entity::new(id)
     }
 
-    /// Get an entity by ID
+    /// Get an entity by ID. A view rendering now renders again when it is
+    /// notified.
     pub fn get<T: 'static>(&self, entity: Entity<T>) -> Option<std::cell::Ref<'_, T>> {
+        self.record_read(entity.id());
         self.entities.get::<T>(entity.id())
     }
 
-    /// Get a mutable reference to an entity
+    /// Get a mutable reference to an entity. Counts as a read, as [`Self::get`].
     pub fn get_mut<T: 'static>(&self, entity: Entity<T>) -> Option<std::cell::RefMut<'_, T>> {
+        self.record_read(entity.id());
         self.entities.get_mut::<T>(entity.id())
+    }
+
+    fn record_read(&self, id: EntityId) {
+        if let Some(reads) = self.reads.borrow_mut().last_mut() {
+            reads.push(id);
+        }
+    }
+
+    /// Run `render`, returning what it produced and the entities it read.
+    pub(crate) fn recording_reads<R>(
+        &mut self,
+        render: impl FnOnce(&mut Self) -> R,
+    ) -> (R, Vec<EntityId>) {
+        self.reads.borrow_mut().push(Vec::new());
+        let result = render(self);
+        let reads = self.reads.borrow_mut().pop().unwrap_or_default();
+        (result, reads)
+    }
+
+    /// Keep `view` to be placed in trees with [`crate::elements::view`]. It
+    /// renders where it is placed, and again only when it or an entity its
+    /// last render read is notified; the tree around it is not rebuilt then.
+    pub fn new_view<V: View>(&mut self, view: V) -> Entity<V> {
+        let marker = self.create(());
+        let entity = Entity::<V>::new(marker.id());
+        let notifier = ViewNotifier::queued(entity.id(), self.notified_views.clone());
+        self.child_views.insert(
+            entity.id(),
+            Box::new(RuntimeView::new(entity, notifier, view)),
+        );
+        self.observers
+            .entry(entity.id())
+            .or_default()
+            .insert(entity.id());
+        entity
+    }
+
+    /// Render the child view `id`, recording what it reads.
+    pub(crate) fn render_child_view(&mut self, id: EntityId) -> crate::elements::AnyElement {
+        let Some(mut view) = self.child_views.remove(&id) else {
+            panic!("view {id:?} is placed in a tree but was never created with new_view");
+        };
+        let (element, reads) = self.recording_reads(|app| view.render_any(app));
+        self.child_views.insert(id, view);
+        for old in self.view_reads.remove(&id).unwrap_or_default() {
+            if old != id
+                && let Some(views) = self.observers.get_mut(&old)
+            {
+                views.remove(&id);
+            }
+        }
+        for read in &reads {
+            self.observers.entry(*read).or_default().insert(id);
+        }
+        self.view_reads.insert(id, reads);
+        element
+    }
+
+    /// The child views that render again because `notified` changed, or
+    /// `None` when the window's root has to be rebuilt for it: the root read
+    /// it, or no child view did.
+    pub(crate) fn views_notified_by(&self, notified: EntityId) -> Option<&HashSet<EntityId>> {
+        if self.frame.root_reads.contains(&notified) {
+            return None;
+        }
+        self.observers
+            .get(&notified)
+            .filter(|views| !views.is_empty())
+    }
+
+    /// The child views whose last render read `entity`, or that are it.
+    pub(crate) fn views_reading(&self, entity: EntityId) -> Vec<EntityId> {
+        self.observers
+            .get(&entity)
+            .map(|views| views.iter().copied().collect())
+            .unwrap_or_default()
+    }
+
+    /// Notify the child views whose listeners fired since the last frame.
+    pub(crate) fn notify_queued_views(&mut self) {
+        let notified = std::mem::take(&mut *self.notified_views.borrow_mut());
+        for id in notified {
+            self.notify(id);
+        }
     }
 
     /// Mark an entity as needing re-render.
