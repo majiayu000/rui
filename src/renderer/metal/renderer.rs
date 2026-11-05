@@ -21,6 +21,12 @@ use crate::{ImageFit, ImageSource};
 use metal::*;
 use std::collections::HashMap;
 
+/// Offscreen frames the GPU may be behind by, as a window's drawables allow.
+const MAX_OFFSCREEN_FRAMES_IN_FLIGHT: usize = 3;
+
+/// Steps, in pixels, the kept offscreen texture grows by.
+const OFFSCREEN_GROWTH: u64 = 256;
+
 /// Pixel format of every render target: drawables, captures and offscreen
 /// textures. Blending happens in linear light and stores sRGB-encoded bytes.
 pub(crate) const TARGET_PIXEL_FORMAT: MTLPixelFormat = MTLPixelFormat::BGRA8Unorm_sRGB;
@@ -346,6 +352,12 @@ impl MetalRenderer {
         self.path_sprites.placed()
     }
 
+    /// The kept offscreen texture.
+    #[cfg(test)]
+    pub(super) fn offscreen_target(&self) -> Option<Texture> {
+        self.offscreen_target.clone()
+    }
+
     /// Plan draws in scene order rather than overlap order.
     #[cfg(test)]
     pub(super) fn set_scene_order(&mut self, scene_order: bool) {
@@ -372,7 +384,7 @@ impl MetalRenderer {
         let height = texture_extent(viewport_size.height * scale_factor, "height")?;
         let texture = create_capture_texture(&self.device, width, height);
 
-        self.render_to_texture(scene, &texture, viewport_size, None, true)?;
+        self.render_to_texture(scene, &texture, (width, height), viewport_size, None, true)?;
         Ok(read_texture_rgba(&texture, width, height))
     }
 
@@ -387,7 +399,13 @@ impl MetalRenderer {
         let width = texture_extent(viewport_size.width * scale_factor, "width")?;
         let height = texture_extent(viewport_size.height * scale_factor, "height")?;
         let texture = self.offscreen_texture(width, height);
-        self.render_to_texture(scene, &texture, viewport_size, None, false)
+        // A window has a few drawables and waits for one when the GPU is behind;
+        // offscreen frames wait the same way, rather than piling up in flight.
+        while self.frames_in_flight.len() >= MAX_OFFSCREEN_FRAMES_IN_FLIGHT {
+            let (_, oldest) = self.frames_in_flight.remove(0);
+            oldest.wait_until_completed();
+        }
+        self.render_to_texture(scene, &texture, (width, height), viewport_size, None, false)
     }
 
     /// [`Self::render_offscreen`], then wait for the GPU and return the command
@@ -401,18 +419,28 @@ impl MetalRenderer {
         let width = texture_extent(viewport_size.width * scale_factor, "width")?;
         let height = texture_extent(viewport_size.height * scale_factor, "height")?;
         let texture = self.offscreen_texture(width, height);
-        self.render_to_texture(scene, &texture, viewport_size, None, true)?;
+        self.render_to_texture(scene, &texture, (width, height), viewport_size, None, true)?;
         self.gpu_time
             .ok_or_else(|| RendererError::render_failed("the frame reported no GPU time"))
     }
 
+    /// The kept offscreen texture, at least `width` by `height`. It only grows,
+    /// in steps of [`OFFSCREEN_GROWTH`] pixels, and frames draw into its top
+    /// left, so resizing back and forth reuses one texture.
     fn offscreen_texture(&mut self, width: u64, height: u64) -> Texture {
         match &self.offscreen_target {
-            Some(texture) if texture.width() == width && texture.height() == height => {
+            Some(texture) if texture.width() >= width && texture.height() >= height => {
                 texture.clone()
             }
-            _ => {
-                let texture = create_capture_texture(&self.device, width, height);
+            kept => {
+                let (kept_width, kept_height) = kept
+                    .as_ref()
+                    .map_or((0, 0), |texture| (texture.width(), texture.height()));
+                let texture = create_capture_texture(
+                    &self.device,
+                    width.max(kept_width).next_multiple_of(OFFSCREEN_GROWTH),
+                    height.max(kept_height).next_multiple_of(OFFSCREEN_GROWTH),
+                );
                 self.offscreen_target = Some(texture.clone());
                 texture
             }
@@ -426,19 +454,23 @@ impl MetalRenderer {
         drawable: &MetalDrawableRef,
         viewport_size: Size,
     ) -> Result<(), RendererError> {
+        let texture = drawable.texture();
         self.render_to_texture(
             scene,
-            drawable.texture(),
+            texture,
+            (texture.width(), texture.height()),
             viewport_size,
             Some(drawable),
             false,
         )
     }
 
+    /// Draws `scene` into the top left `extent` device pixels of `texture`.
     fn render_to_texture(
         &mut self,
         scene: &Scene,
         texture: &TextureRef,
+        extent: (u64, u64),
         viewport_size: Size,
         present_drawable: Option<&MetalDrawableRef>,
         wait_until_completed: bool,
@@ -464,8 +496,8 @@ impl MetalRenderer {
         self.frame_stats = MetalFrameStats::default();
         self.gpu_time = None;
 
-        let scale_factor = texture.width() as f32 / viewport_size.width.max(1.0);
-        let drawable_size = Size::new(texture.width() as f32, texture.height() as f32);
+        let scale_factor = extent.0 as f32 / viewport_size.width.max(1.0);
+        let drawable_size = Size::new(extent.0 as f32, extent.1 as f32);
 
         let mut frame = std::mem::take(&mut self.frame);
         let epoch = self.text_cache.epoch();
@@ -498,6 +530,7 @@ impl MetalRenderer {
             self.encode_frame(
                 &mut frame,
                 texture,
+                drawable_size,
                 viewport_size,
                 present_drawable,
                 wait_until_completed,
@@ -712,6 +745,7 @@ impl MetalRenderer {
         &mut self,
         frame: &mut FrameData,
         texture: &TextureRef,
+        drawable_size: Size,
         viewport_size: Size,
         present_drawable: Option<&MetalDrawableRef>,
         wait_until_completed: bool,
@@ -738,6 +772,15 @@ impl MetalRenderer {
         color_attachment.set_clear_color(MTLClearColor::new(clear, clear, clear, 1.0));
 
         let encoder = command_buffer.new_render_command_encoder(render_pass_desc);
+        // Clip space maps onto the drawn extent, which a kept texture may exceed.
+        encoder.set_viewport(MTLViewport {
+            originX: 0.0,
+            originY: 0.0,
+            width: f64::from(drawable_size.width),
+            height: f64::from(drawable_size.height),
+            znear: 0.0,
+            zfar: 1.0,
+        });
 
         let uniforms = Uniforms {
             viewport_size: [viewport_size.width, viewport_size.height],
