@@ -61,7 +61,7 @@ fn cluster_script(buffer: &mut UnicodeBuffer, cluster: &ClusterDraft) -> RunScri
         return RunScript::Emoji;
     }
     buffer.clear();
-    buffer.push_str(&cluster.text);
+    buffer.push_str(cluster.text);
     buffer.guess_segment_properties();
     match buffer.script() {
         script::COMMON | script::INHERITED | script::UNKNOWN => RunScript::Common,
@@ -198,7 +198,7 @@ pub(crate) fn assign_fonts(
     let mut chain: Option<Vec<usize>> = None;
     let mut previous: Option<usize> = None;
     for cluster in clusters {
-        let supports = |font: usize| fonts[font].supports_cluster(&cluster.text);
+        let supports = |font: usize| fonts[font].supports_cluster(cluster.text);
         let font = if let Some(font) =
             previous.filter(|&font| cluster.script == TextScript::Whitespace && supports(font))
         {

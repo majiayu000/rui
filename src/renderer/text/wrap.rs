@@ -7,8 +7,9 @@ use super::{
     request_hasher,
 };
 use crate::core::geometry::Size;
-use crate::renderer::text_shaping::{TextCluster, TextScript};
+use crate::renderer::text_shaping::{ClusterDraft, TextScript};
 use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 
 const ELLIPSIS: &str = "\u{2026}";
 /// Wrap results kept per paragraph. Taffy asks one text for its min-content,
@@ -55,8 +56,8 @@ struct BreakCluster {
     advance_width: f32,
 }
 
-impl From<&TextCluster> for BreakCluster {
-    fn from(cluster: &TextCluster) -> Self {
+impl From<&ClusterDraft<'_>> for BreakCluster {
+    fn from(cluster: &ClusterDraft<'_>) -> Self {
         Self {
             byte_start: cluster.byte_start,
             byte_end: cluster.byte_end,
@@ -103,7 +104,7 @@ struct WrapResult {
     /// For a cut off result, the same for the room left beside the ellipsis,
     /// and the ellipsis width that room is measured without.
     ellipsis: Option<(WidthRange, f32)>,
-    wrapped: WrappedText,
+    wrapped: Arc<WrappedText>,
 }
 
 impl WrapResult {
@@ -191,7 +192,17 @@ impl TextMeasureCache {
         max_width: f32,
         max_lines: Option<usize>,
     ) -> Result<WrappedText, TextError> {
-        self.with_wrapped(request, max_width, max_lines, WrappedText::clone)
+        self.with_wrapped(request, max_width, max_lines, |wrapped| (**wrapped).clone())
+    }
+
+    /// [`Self::wrap`] sharing the kept result instead of copying its lines.
+    pub fn wrap_shared(
+        &mut self,
+        request: TextRequest<'_>,
+        max_width: f32,
+        max_lines: Option<usize>,
+    ) -> Result<Arc<WrappedText>, TextError> {
+        self.with_wrapped(request, max_width, max_lines, Arc::clone)
     }
 
     /// The size [`Self::wrap`] would report, without copying its lines.
@@ -209,10 +220,10 @@ impl TextMeasureCache {
         request: TextRequest<'_>,
         max_width: f32,
         max_lines: Option<usize>,
-        read: impl FnOnce(&WrappedText) -> R,
+        read: impl FnOnce(&Arc<WrappedText>) -> R,
     ) -> Result<R, TextError> {
         if request.content.is_empty() || request.font_size <= 0.0 || request.line_height <= 0.0 {
-            return Ok(read(&WrappedText::empty()));
+            return Ok(read(&Arc::new(WrappedText::empty())));
         }
         let primary_index = self.primary_font_index(request.font_family)?;
         let family = self.fonts[primary_index].family.as_str();
@@ -272,7 +283,7 @@ impl TextMeasureCache {
                 break;
             }
             if entry.paragraphs[index].is_none() {
-                let plan = self.shape_counted(
+                let parts = self.shape_counted(
                     TextRequest {
                         content: paragraph,
                         ..request
@@ -280,7 +291,7 @@ impl TextMeasureCache {
                     primary_index,
                 );
                 entry.paragraphs[index] = Some(BreakParagraph::new(
-                    plan.clusters().iter().map(Into::into).collect(),
+                    parts.clusters.iter().map(Into::into).collect(),
                 ));
             }
             let layout = entry.paragraphs[index]
@@ -321,10 +332,10 @@ impl TextMeasureCache {
         WrapResult {
             fits,
             ellipsis,
-            wrapped: WrappedText {
+            wrapped: Arc::new(WrappedText {
                 lines,
                 size: Size::new(width, height),
-            },
+            }),
         }
     }
 
