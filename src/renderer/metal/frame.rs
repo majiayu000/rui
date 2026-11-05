@@ -1,9 +1,9 @@
 //! A frame's draws, planned before any is encoded.
 //!
-//! Primitives become items: a run of sprite instances (quads, shadows, glyphs),
-//! an image or a path, each with the device area it can paint. Sprites of every
-//! kind share one pipeline, so a run of them is one draw unless glyphs on another
-//! atlas page, an image or a path comes between. When one does, items are drawn
+//! Primitives become items: a run of sprite instances (quads, shadows, glyphs,
+//! paths) or an image, each with the area it can paint. Sprites of every kind
+//! share one pipeline, so a run of them is one draw unless glyphs on another
+//! atlas page or an image comes between. When one does, items are drawn
 //! by overlap order instead of scene order: everything that overlaps nothing
 //! earlier goes first, then what overlaps only those, and so on, and sprites of a
 //! level join the open sprite draw. Items of one level never overlap, so any
@@ -14,8 +14,10 @@ use super::order::{OverlapOrder, Rect};
 pub(super) const KIND_QUAD: u32 = 0;
 pub(super) const KIND_SHADOW: u32 = 1;
 pub(super) const KIND_GLYPH: u32 = 2;
+pub(super) const KIND_PATH: u32 = 3;
+pub(super) const KIND_PATH_SPRITE: u32 = 4;
 
-/// One sprite instance as the shader reads it: `kind << 30 | index` into that
+/// One sprite instance as the shader reads it: `kind << 29 | index` into that
 /// kind's buffer, and the clip rectangle to apply.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -33,9 +35,8 @@ pub(super) enum ItemKind {
         count: u32,
         page: Option<u32>,
     },
-    /// The renderer's image or path draw at this index.
+    /// The renderer's image draw at this index.
     Image(u32),
-    Path(u32),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -54,7 +55,6 @@ pub(super) enum Draw {
         count: u32,
     },
     Image(u32),
-    Path(u32),
 }
 
 #[derive(Default)]
@@ -94,7 +94,7 @@ impl FramePlan {
                 _ => self.page = Some(page),
             },
             ItemKind::Sprites { page: None, .. } => {}
-            ItemKind::Image(_) | ItemKind::Path(_) => self.mixed = true,
+            ItemKind::Image(_) => self.mixed = true,
         }
         self.items.push(Item { kind, clip, rect });
     }
@@ -194,7 +194,7 @@ impl FramePlan {
                 let refs = self.refs.len() as u32;
                 self.refs
                     .extend((start..start + count).map(|index| SpriteRef {
-                        index: kind << 30 | index,
+                        index: kind << 29 | index,
                         clip: item.clip,
                     }));
                 match self.draws.last_mut() {
@@ -214,7 +214,6 @@ impl FramePlan {
                 }
             }
             ItemKind::Image(image) => self.draws.push(Draw::Image(image)),
-            ItemKind::Path(path) => self.draws.push(Draw::Path(path)),
         }
     }
 }
@@ -270,9 +269,9 @@ mod tests {
                 count: 440
             }]
         );
-        assert_eq!(plan.refs[0].index, KIND_QUAD << 30);
-        assert_eq!(plan.refs[1].index, KIND_GLYPH << 30);
-        assert_eq!(plan.refs[11].index, KIND_QUAD << 30 | 1);
+        assert_eq!(plan.refs[0].index, KIND_QUAD << 29);
+        assert_eq!(plan.refs[1].index, KIND_GLYPH << 29);
+        assert_eq!(plan.refs[11].index, KIND_QUAD << 29 | 1);
     }
 
     #[test]
@@ -337,14 +336,14 @@ mod tests {
                 },
             ]
         );
-        let order: Vec<u32> = plan.refs.iter().map(|r| r.index & 0x3fff_ffff).collect();
+        let order: Vec<u32> = plan.refs.iter().map(|r| r.index & 0x1fff_ffff).collect();
         assert_eq!(order, [0, 3, 1, 2]);
     }
 
     #[test]
     fn clear_starts_a_new_frame() {
         let mut plan = FramePlan::default();
-        plan.push(ItemKind::Path(0), 0, Some(rect(0.0, 0.0, 10.0, 10.0)));
+        plan.push(ItemKind::Image(0), 0, Some(rect(0.0, 0.0, 10.0, 10.0)));
         plan.plan(100.0, 100.0, |_, _| None);
         plan.clear();
         assert!(plan.draws.is_empty() && plan.refs.is_empty());
