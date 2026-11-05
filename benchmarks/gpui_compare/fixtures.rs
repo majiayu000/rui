@@ -14,13 +14,19 @@
 //! - `quad_grid`: a 200x60 grid of 7x15 cells painted by one `canvas`; one cell changes.
 //! - `resize_*`: the window width alternates between 1440 and 1280 each frame.
 //! - `startup`: process start to the first long-list frame submitted.
+//!
+//! The benches are registered as `#[gpui::bench(fps = 120)]` registers them, but with
+//! the headless renderer wrapped by [`CountingRenderer`], which counts draw calls.
+//! GPU time is not reported: the headless renderer commits its command buffer
+//! inside `render_scene` and does not expose it.
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use gpui::{
-    AnyView, AppContext as _, BenchAppContext, Bounds, Context, Entity, IntoElement, ParentElement,
-    Render, ScrollStrategy, Styled, UniformListScrollHandle, Window, canvas, div, fill, point, px,
+    AnyView, AppContext as _, BenchAppContext, Bounds, Context, DevicePixels, Entity, IntoElement,
+    ParentElement, PlatformAtlas, PlatformHeadlessRenderer, PrimitiveBatch, Render, Scene,
+    ScrollStrategy, Styled, UniformListScrollHandle, Window, canvas, div, fill, point, px,
     relative, rgb, size, uniform_list,
 };
 
@@ -278,7 +284,6 @@ fn alternate_width(turn: &mut usize, window: &mut Window, cx: &mut gpui::App) {
     window.bounds_changed(cx);
 }
 
-#[gpui::bench(fps = 120)]
 fn startup(cx: &mut BenchAppContext) {
     static MEASURED: AtomicBool = AtomicBool::new(false);
     let to_fixture = ms_since_process_start();
@@ -303,7 +308,6 @@ fn startup(cx: &mut BenchAppContext) {
     cx.run_until_idle();
 }
 
-#[gpui::bench(fps = 120)]
 fn list_full(cx: &mut BenchAppContext) {
     bench_view(
         cx,
@@ -316,7 +320,6 @@ fn list_full(cx: &mut BenchAppContext) {
     );
 }
 
-#[gpui::bench(fps = 120)]
 fn list_full_one_row(cx: &mut BenchAppContext) {
     bench_view(
         cx,
@@ -356,17 +359,14 @@ fn virtual_list(cx: &mut BenchAppContext, case: &str, count: usize) {
     );
 }
 
-#[gpui::bench(fps = 120)]
 fn list_virtual_1k(cx: &mut BenchAppContext) {
     virtual_list(cx, "list_virtual_1k", 1_000);
 }
 
-#[gpui::bench(fps = 120)]
 fn list_virtual_100k(cx: &mut BenchAppContext) {
     virtual_list(cx, "list_virtual_100k", 100_000);
 }
 
-#[gpui::bench(fps = 120)]
 fn text_paragraphs(cx: &mut BenchAppContext) {
     bench_view(
         cx,
@@ -379,7 +379,6 @@ fn text_paragraphs(cx: &mut BenchAppContext) {
     );
 }
 
-#[gpui::bench(fps = 120)]
 fn quad_grid(cx: &mut BenchAppContext) {
     bench_view(
         cx,
@@ -392,7 +391,6 @@ fn quad_grid(cx: &mut BenchAppContext) {
     );
 }
 
-#[gpui::bench(fps = 120)]
 fn resize_full(cx: &mut BenchAppContext) {
     let mut turn = 0;
     bench_view(
@@ -403,7 +401,6 @@ fn resize_full(cx: &mut BenchAppContext) {
     );
 }
 
-#[gpui::bench(fps = 120)]
 fn resize_virtual(cx: &mut BenchAppContext) {
     let mut turn = 0;
     bench_view(
@@ -414,13 +411,150 @@ fn resize_virtual(cx: &mut BenchAppContext) {
     );
 }
 
+/// Batches and instances of each scene rendered since the last [`take_draws`].
+static SCENES: std::sync::Mutex<Vec<(u64, u64)>> = std::sync::Mutex::new(Vec::new());
+/// Scenes with at least one glyph since the last check in [`counted`].
+static FRAMES_WITH_GLYPHS: AtomicUsize = AtomicUsize::new(0);
+
+/// GPUI's headless Metal renderer, counting what each scene asks of the GPU. Its Metal
+/// renderer issues one instanced draw per `Scene::batches()` entry; paths and surfaces
+/// would add more, but no fixture draws them.
+struct CountingRenderer(Box<dyn PlatformHeadlessRenderer>);
+
+impl CountingRenderer {
+    fn count(scene: &Scene) {
+        let (mut batches, mut instances) = (0, 0);
+        for batch in scene.batches() {
+            batches += 1;
+            instances += match batch {
+                PrimitiveBatch::Shadows(range)
+                | PrimitiveBatch::Quads(range)
+                | PrimitiveBatch::Paths(range)
+                | PrimitiveBatch::Underlines(range)
+                | PrimitiveBatch::Surfaces(range)
+                | PrimitiveBatch::MonochromeSprites { range, .. }
+                | PrimitiveBatch::SubpixelSprites { range, .. }
+                | PrimitiveBatch::PolychromeSprites { range, .. } => range.len() as u64,
+            };
+        }
+        SCENES.lock().unwrap().push((batches, instances));
+        if !scene.monochrome_sprites.is_empty() || !scene.subpixel_sprites.is_empty() {
+            FRAMES_WITH_GLYPHS.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+}
+
+impl PlatformHeadlessRenderer for CountingRenderer {
+    fn render_scene_to_image(
+        &mut self,
+        scene: &Scene,
+        size: gpui::Size<DevicePixels>,
+    ) -> anyhow::Result<image::RgbaImage> {
+        Self::count(scene);
+        self.0.render_scene_to_image(scene, size)
+    }
+
+    fn render_scene(
+        &mut self,
+        scene: &Scene,
+        size: gpui::Size<DevicePixels>,
+    ) -> anyhow::Result<()> {
+        Self::count(scene);
+        self.0.render_scene(scene, size)
+    }
+
+    fn sprite_atlas(&self) -> std::sync::Arc<dyn PlatformAtlas> {
+        self.0.sprite_atlas()
+    }
+}
+
+/// Median draw calls and instances per scene since the last call. The median skips
+/// the empty first scene of each new window.
+fn take_draws() -> (u64, u64) {
+    let mut scenes = std::mem::take(&mut *SCENES.lock().unwrap());
+    if scenes.is_empty() {
+        return (0, 0);
+    }
+    let middle = scenes.len() / 2;
+    let batches = *scenes.select_nth_unstable_by_key(middle, |scene| scene.0).1;
+    let instances = *scenes.select_nth_unstable_by_key(middle, |scene| scene.1).1;
+    (batches.0, instances.1)
+}
+
+/// What `#[gpui::bench(fps = 120)]` generates for `body`, with [`CountingRenderer`].
+fn counted(
+    criterion: &mut criterion::Criterion<gpui::BenchMeasurement>,
+    name: &'static str,
+    body: fn(&mut BenchAppContext),
+) {
+    let report = gpui::BenchReport::with_fps(120);
+    take_draws();
+    FRAMES_WITH_GLYPHS.store(0, Ordering::Relaxed);
+    criterion.bench_function(name, {
+        let report = report.clone();
+        move |bencher| {
+            let mut cx = BenchAppContext::new_with_platform_and_report(
+                gpui::bench_platform(
+                    Some(Box::new(|| {
+                        Ok(gpui_platform::current_headless_renderer()?.map(|renderer| {
+                            Box::new(CountingRenderer(renderer))
+                                as Box<dyn PlatformHeadlessRenderer>
+                        }))
+                    })),
+                    gpui_platform::bench_text_system(),
+                ),
+                Some(name),
+                bencher,
+                report.clone(),
+            );
+            body(&mut cx);
+            cx.teardown();
+        }
+    });
+    report.print(name);
+    // Criterion skips benches its filter does not select; they render nothing.
+    if SCENES.lock().unwrap().is_empty() {
+        return;
+    }
+    let (draw_calls, instances) = take_draws();
+    // Every fixture but the grid draws text, which must reach the scene as glyphs.
+    // Built without `font-kit`, GPUI uses `NoopTextSystem` and draws none.
+    if name != "quad_grid" && FRAMES_WITH_GLYPHS.load(Ordering::Relaxed) == 0 {
+        panic!("{name}: GPUI drew no glyphs; build gpui_platform with the font-kit feature");
+    }
+    eprintln!("gpui {name} draw_calls={draw_calls} instances={instances}");
+}
+
+macro_rules! counted_benches {
+    ($($target:ident => $body:ident),* $(,)?) => {
+        $(
+            fn $target(criterion: &mut criterion::Criterion<gpui::BenchMeasurement>) {
+                counted(criterion, stringify!($body), $body);
+            }
+        )*
+    };
+}
+
+counted_benches!(
+    bench_startup => startup,
+    bench_list_full => list_full,
+    bench_list_full_one_row => list_full_one_row,
+    bench_list_virtual_1k => list_virtual_1k,
+    bench_list_virtual_100k => list_virtual_100k,
+    bench_text_paragraphs => text_paragraphs,
+    bench_quad_grid => quad_grid,
+    bench_resize_full => resize_full,
+    bench_resize_virtual => resize_virtual,
+);
+
 gpui::bench_group!(
     name = benches;
     config = criterion::Criterion::default()
         .warm_up_time(Duration::from_millis(500))
         .measurement_time(Duration::from_secs(2))
         .sample_size(20);
-    targets = startup, list_full, list_full_one_row, list_virtual_1k, list_virtual_100k,
-        text_paragraphs, quad_grid, resize_full, resize_virtual
+    targets = bench_startup, bench_list_full, bench_list_full_one_row, bench_list_virtual_1k,
+        bench_list_virtual_100k, bench_text_paragraphs, bench_quad_grid, bench_resize_full,
+        bench_resize_virtual
 );
 gpui::bench_main!(benches);

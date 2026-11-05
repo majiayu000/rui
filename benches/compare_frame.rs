@@ -10,6 +10,11 @@
 //! headless renderer does. Instructions are the whole process's retired instructions,
 //! as GPUI's `BENCH_MEASUREMENT=instructions` counts; allocations are counted by this
 //! binary's allocator, as `gpui::bench_main!` installs one.
+//!
+//! Draw calls and instances come from `MetalRenderer::last_frame_stats`. GPU time is
+//! read in a separate pass after the CPU samples, whose frames wait for the command
+//! buffer to finish and report `GPUEndTime - GPUStartTime`, so waiting never shows in
+//! the CPU numbers.
 use rui::core::frame_pipeline::FramePipeline;
 use rui::elements::element::{Element, LayoutNodes};
 use rui::elements::{VirtualListHandle, canvas, virtual_list};
@@ -35,6 +40,8 @@ const CASES: [&str; 9] = [
 ];
 const WARMUP: usize = 10;
 const SAMPLES: usize = 60;
+/// Frames of the separate pass that waits for the GPU to read its time.
+const GPU_SAMPLES: usize = 30;
 const VIEWPORT: (f32, f32) = (1440.0, 900.0);
 /// The second width of the resize cases; the height stays.
 const RESIZED_WIDTH: f32 = 1280.0;
@@ -209,6 +216,9 @@ struct Harness {
     scene: Scene,
     measurer: TextMeasureCache,
     renderer: MetalRenderer,
+    /// Wait for each frame's GPU work and keep its GPU time in `gpu_ms`.
+    wait_for_gpu: bool,
+    gpu_ms: f64,
 }
 
 impl Harness {
@@ -219,6 +229,8 @@ impl Harness {
             scene: Scene::new(),
             measurer: TextMeasureCache::new(),
             renderer: MetalRenderer::new()?,
+            wait_for_gpu: false,
+            gpu_ms: 0.0,
         })
     }
 
@@ -245,8 +257,15 @@ impl Harness {
             viewport,
         )?;
         FramePipeline::paint_root(root, &self.taffy, &mut self.scene, bounds);
-        self.renderer
-            .render_offscreen(&self.scene, viewport, SCALE_FACTOR)?;
+        if self.wait_for_gpu {
+            let gpu =
+                self.renderer
+                    .render_offscreen_gpu_time(&self.scene, viewport, SCALE_FACTOR)?;
+            self.gpu_ms = gpu.as_secs_f64() * 1e3;
+        } else {
+            self.renderer
+                .render_offscreen(&self.scene, viewport, SCALE_FACTOR)?;
+        }
         Ok(())
     }
 }
@@ -256,30 +275,47 @@ fn percentile(values: &mut [f64], fraction: f64) -> f64 {
     values[((values.len() - 1) as f64 * fraction).round() as usize]
 }
 
-/// Runs `frame(turn)` after warm-up and prints the per-frame costs.
+/// Runs `frame(harness, turn)` after warm-up and prints the per-frame costs. CPU
+/// costs come from frames that do not wait; GPU time from a later pass that does.
 fn measure(
     case: &str,
-    mut frame: impl FnMut(usize) -> Result<(), Box<dyn std::error::Error>>,
+    harness: &mut Harness,
+    mut frame: impl FnMut(&mut Harness, usize) -> Result<(), Box<dyn std::error::Error>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     for turn in 0..WARMUP {
-        frame(turn)?;
+        frame(harness, turn)?;
     }
     let (mut ms, mut instructions, mut allocations) = (Vec::new(), Vec::new(), Vec::new());
+    let (mut draw_calls, mut instances) = (Vec::new(), Vec::new());
     for turn in WARMUP..WARMUP + SAMPLES {
         let (i0, a0) = (rusage()[31], ALLOCATIONS.load(Ordering::Relaxed));
         let t0 = Instant::now();
-        frame(turn)?;
+        frame(harness, turn)?;
         ms.push(t0.elapsed().as_secs_f64() * 1e3);
         instructions.push(rusage()[31].saturating_sub(i0) as f64 / 1e6);
         allocations.push(ALLOCATIONS.load(Ordering::Relaxed).saturating_sub(a0) as f64);
+        let stats = harness.renderer.last_frame_stats();
+        draw_calls.push(f64::from(stats.draw_calls));
+        instances.push(f64::from(stats.instances));
     }
+    let footprint = footprint_mb();
+    harness.wait_for_gpu = true;
+    let mut gpu_ms = Vec::new();
+    for turn in WARMUP + SAMPLES..WARMUP + SAMPLES + GPU_SAMPLES {
+        frame(harness, turn)?;
+        gpu_ms.push(harness.gpu_ms);
+    }
+    harness.wait_for_gpu = false;
     println!(
-        "rui {case} instructions_m={:.2} ms_p50={:.3} ms_p95={:.3} allocations={:.0} footprint_mb={:.1}",
+        "rui {case} instructions_m={:.2} ms_p50={:.3} ms_p95={:.3} allocations={:.0} footprint_mb={footprint:.1} draw_calls={:.0} instances={:.0} gpu_ms_p50={:.3} gpu_ms_p95={:.3}",
         percentile(&mut instructions, 0.5),
         percentile(&mut ms, 0.5),
         percentile(&mut ms, 0.95),
         percentile(&mut allocations, 0.5),
-        footprint_mb(),
+        percentile(&mut draw_calls, 0.5),
+        percentile(&mut instances, 0.5),
+        percentile(&mut gpu_ms, 0.5),
+        percentile(&mut gpu_ms, 0.95),
     );
     Ok(())
 }
@@ -312,7 +348,9 @@ fn run(case: &str) -> Result<(), Box<dyn std::error::Error>> {
             // RUI has no per-view cache like GPUI's `.cached()`: one changed row still
             // rebuilds the list, so both cases are this one.
             let mut harness = Harness::new()?;
-            measure(case, |turn| harness.frame(list(turn % LIST_ROWS), viewport))?;
+            measure(case, &mut harness, |harness, turn| {
+                harness.frame(list(turn % LIST_ROWS), viewport)
+            })?;
         }
         "list_virtual_1k" | "list_virtual_100k" => {
             let count = if case == "list_virtual_1k" {
@@ -323,30 +361,34 @@ fn run(case: &str) -> Result<(), Box<dyn std::error::Error>> {
             let mut harness = Harness::new()?;
             let handle = VirtualListHandle::new();
             handle.scroll_to(count as f32 / 2.0 * ROW_HEIGHT);
-            measure(case, |turn| {
+            measure(case, &mut harness, |harness, turn| {
                 let selected = count / 2 + turn % VISIBLE_ROWS;
                 harness.frame(virtual_rows(&handle, count, selected), viewport)
             })?;
         }
         "text_paragraphs" => {
             let mut harness = Harness::new()?;
-            measure(case, |turn| harness.frame(paragraphs(turn), viewport))?;
+            measure(case, &mut harness, |harness, turn| {
+                harness.frame(paragraphs(turn), viewport)
+            })?;
         }
         "quad_grid" => {
             let mut harness = Harness::new()?;
-            measure(case, |turn| {
+            measure(case, &mut harness, |harness, turn| {
                 harness.frame(quad_grid(turn % (GRID.0 * GRID.1)), viewport)
             })?;
         }
         "resize_full" => {
             let mut harness = Harness::new()?;
-            measure(case, |turn| harness.frame(list(0), resized(turn)))?;
+            measure(case, &mut harness, |harness, turn| {
+                harness.frame(list(0), resized(turn))
+            })?;
         }
         "resize_virtual" => {
             let mut harness = Harness::new()?;
             let handle = VirtualListHandle::new();
             handle.scroll_to(500.0 * ROW_HEIGHT);
-            measure(case, |turn| {
+            measure(case, &mut harness, |harness, turn| {
                 harness.frame(virtual_rows(&handle, 1_000, 500), resized(turn))
             })?;
         }
