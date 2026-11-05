@@ -105,6 +105,17 @@ impl TextShapingFont {
         &self.font
     }
 
+    /// The glyph's bitmap from the strike closest above `pixels_per_em`, for
+    /// bitmap color fonts such as Apple Color Emoji (`sbix`).
+    pub(crate) fn raster_image(
+        &self,
+        glyph_id: u16,
+        pixels_per_em: u16,
+    ) -> Option<rustybuzz::ttf_parser::RasterGlyphImage<'_>> {
+        self.face
+            .glyph_raster_image(rustybuzz::ttf_parser::GlyphId(glyph_id), pixels_per_em)
+    }
+
     fn face(&self) -> &Face<'_> {
         &self.face
     }

@@ -1,7 +1,7 @@
 //! Glyph sprites and the atlas page textures they sample.
 
 use super::batch::InstancePool;
-use crate::renderer::text::TextGlyphCache;
+use crate::renderer::text::{GlyphAtlas, GlyphUpload};
 use metal::{
     Buffer, CommandBufferRef, DeviceRef, MTLBlitOption, MTLOrigin, MTLPixelFormat, MTLSize,
     MTLStorageMode, MTLTextureType, MTLTextureUsage, Texture, TextureDescriptor,
@@ -18,14 +18,33 @@ pub(super) struct GpuGlyph {
 /// Rows in the staging buffer start on this many bytes.
 const ROW_ALIGNMENT: usize = 4;
 
-/// One R8 texture per atlas page, kept in step with the text cache's atlas.
-#[derive(Default)]
+/// One texture per atlas page, kept in step with one of the text cache's
+/// atlases: R8 coverage, or sRGB RGBA color glyphs.
 pub(super) struct GlyphPages {
+    format: MTLPixelFormat,
+    bytes_per_pixel: usize,
     epoch: u64,
     textures: Vec<Texture>,
 }
 
 impl GlyphPages {
+    pub(super) fn coverage() -> Self {
+        Self::new(MTLPixelFormat::R8Unorm, 1)
+    }
+
+    pub(super) fn color() -> Self {
+        Self::new(MTLPixelFormat::RGBA8Unorm_sRGB, 4)
+    }
+
+    fn new(format: MTLPixelFormat, bytes_per_pixel: usize) -> Self {
+        Self {
+            format,
+            bytes_per_pixel,
+            epoch: 0,
+            textures: Vec::new(),
+        }
+    }
+
     /// Creates textures for new pages, clears new and evicted pages, and copies
     /// newly rasterized glyphs in, all through a staging buffer and a blit in
     /// `command_buffer`. The blit runs on the GPU before this frame's drawing and
@@ -33,27 +52,28 @@ impl GlyphPages {
     /// frame in flight still samples is never written under it. Returns the
     /// staging buffer, to retire with the command buffer, if there was anything
     /// to copy.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn sync(
         &mut self,
         device: &DeviceRef,
-        cache: &mut TextGlyphCache,
+        epoch: u64,
+        atlas: &GlyphAtlas,
+        mut cleared: Vec<usize>,
+        uploads: Vec<GlyphUpload>,
         command_buffer: &CommandBufferRef,
         staging: &mut InstancePool,
     ) -> Option<Buffer> {
-        if cache.epoch() != self.epoch {
+        if epoch != self.epoch {
             self.textures.clear();
-            self.epoch = cache.epoch();
+            self.epoch = epoch;
         }
-        let mut cleared = cache.take_cleared_pages();
-        let uploads = cache.take_uploads();
-        let atlas = cache.atlas();
         for page in self.textures.len()..atlas.page_count() {
             let Some((width, height)) = atlas.page_extent(page) else {
                 break;
             };
             let desc = TextureDescriptor::new();
             desc.set_texture_type(MTLTextureType::D2);
-            desc.set_pixel_format(MTLPixelFormat::R8Unorm);
+            desc.set_pixel_format(self.format);
             desc.set_width(u64::from(width));
             desc.set_height(u64::from(height));
             desc.set_storage_mode(MTLStorageMode::Private);
@@ -72,7 +92,9 @@ impl GlyphPages {
 
         // Staging layout: one zeroed page for every clear to copy from, then each
         // upload's rows.
-        let row_bytes = |width: u32| (width as usize).next_multiple_of(ROW_ALIGNMENT);
+        let bytes_per_pixel = self.bytes_per_pixel;
+        let row_bytes =
+            |width: u32| (width as usize * bytes_per_pixel).next_multiple_of(ROW_ALIGNMENT);
         let zero_bytes = cleared
             .iter()
             .filter_map(|&page| atlas.page_extent(page))
@@ -92,7 +114,7 @@ impl GlyphPages {
             std::ptr::write_bytes(contents, 0, zero_bytes);
             let mut offset = zero_bytes;
             for upload in &uploads {
-                let width = upload.slot.rect.width as usize;
+                let width = upload.slot.rect.width as usize * bytes_per_pixel;
                 for row in upload.pixels.chunks_exact(width) {
                     std::ptr::copy_nonoverlapping(row.as_ptr(), contents.add(offset), width);
                     offset += row_bytes(upload.slot.rect.width);

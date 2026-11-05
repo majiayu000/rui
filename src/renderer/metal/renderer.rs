@@ -3,7 +3,8 @@
 use super::batch::{BufferLayout, InstancePool, bind_vertex_value, write_slice};
 use super::capture::{create_capture_texture, read_texture_rgba, texture_extent};
 use super::frame::{
-    Draw, FramePlan, ItemKind, KIND_GLYPH, KIND_PATH, KIND_PATH_SPRITE, KIND_QUAD, KIND_SHADOW,
+    Draw, FramePlan, ItemKind, KIND_COLOR_GLYPH, KIND_GLYPH, KIND_PATH, KIND_PATH_SPRITE,
+    KIND_QUAD, KIND_SHADOW, Pages,
 };
 use super::glyph::{GlyphPages, GpuGlyph};
 use super::image_primitive::{GpuImage, calculate_fit_bounds};
@@ -126,7 +127,7 @@ impl FrameData {
             kind: KIND_QUAD,
             start: self.quads.len() as u32,
             count: 1,
-            page: None,
+            pages: Pages::default(),
         };
         self.quads.push(quad);
         self.push_item(kind, clip, rect, scale_factor);
@@ -196,11 +197,14 @@ pub struct MetalRenderer {
     sampler: SamplerState,
     /// Bound for sprite draws that sample no atlas page.
     empty_page: Texture,
+    /// Bound for sprite draws that sample no color atlas page.
+    empty_color_page: Texture,
     textures: HashMap<u32, Texture>,
     texture_resources: RendererResourceCache<u32>,
     image_cache: RendererImageCache,
     text_cache: TextGlyphCache,
     glyph_pages: GlyphPages,
+    color_pages: GlyphPages,
     path_sprites: PathSprites,
     path_tiles: PathTiles,
     offscreen_target: Option<Texture>,
@@ -323,6 +327,8 @@ impl MetalRenderer {
         page_desc.set_height(1);
         page_desc.set_usage(MTLTextureUsage::ShaderRead);
         let empty_page = device.new_texture(&page_desc);
+        page_desc.set_pixel_format(MTLPixelFormat::RGBA8Unorm_sRGB);
+        let empty_color_page = device.new_texture(&page_desc);
 
         Ok(Self {
             device,
@@ -332,6 +338,7 @@ impl MetalRenderer {
             retained_pipelines,
             sampler,
             empty_page,
+            empty_color_page,
             textures: HashMap::new(),
             texture_resources: RendererResourceCache::new(
                 RendererResourceKind::Texture,
@@ -347,7 +354,8 @@ impl MetalRenderer {
                 limits.glyph_max_entries,
                 limits.glyph_max_bytes,
             ),
-            glyph_pages: GlyphPages::default(),
+            glyph_pages: GlyphPages::coverage(),
+            color_pages: GlyphPages::color(),
             path_sprites: PathSprites::default(),
             path_tiles: PathTiles::default(),
             frame: FrameData::default(),
@@ -759,7 +767,7 @@ impl MetalRenderer {
                         kind: KIND_SHADOW,
                         start: frame.shadows.len() as u32,
                         count: 1,
-                        page: None,
+                        pages: Pages::default(),
                     };
                     frame.shadows.push(shadow);
                     let rect = outset(bounds_rect(shadow.bounds), margin);
@@ -940,9 +948,30 @@ impl MetalRenderer {
 
         let command_queue = self.command_queue.to_owned();
         let command_buffer = command_queue.new_command_buffer();
+        let epoch = self.text_cache.epoch();
+        let (cleared, uploads) = (
+            self.text_cache.take_cleared_pages(),
+            self.text_cache.take_uploads(),
+        );
         let staging = self.glyph_pages.sync(
             &self.device,
-            &mut self.text_cache,
+            epoch,
+            self.text_cache.atlas(),
+            cleared,
+            uploads,
+            command_buffer,
+            &mut self.instances,
+        );
+        let (cleared, uploads) = (
+            self.text_cache.take_cleared_color_pages(),
+            self.text_cache.take_color_uploads(),
+        );
+        let color_staging = self.color_pages.sync(
+            &self.device,
+            epoch,
+            self.text_cache.color_atlas(),
+            cleared,
+            uploads,
             command_buffer,
             &mut self.instances,
         );
@@ -1023,7 +1052,11 @@ impl MetalRenderer {
 
         for &draw in &frame.plan.draws {
             match draw {
-                Draw::Sprites { page, start, count } => {
+                Draw::Sprites {
+                    pages,
+                    start,
+                    count,
+                } => {
                     if !sprites_bound {
                         encoder.set_render_pipeline_state(&self.sprite_pipeline);
                         encoder.set_vertex_buffer(0, Some(&instances), refs_at as u64);
@@ -1035,13 +1068,20 @@ impl MetalRenderer {
                         encoder.set_scissor_rect(full);
                         scissor = 0;
                     }
-                    let page_texture = match page {
+                    let page_texture = match pages.coverage {
                         Some(page) => self.glyph_pages.page(page as usize).ok_or_else(|| {
                             RendererResourceError::missing(RendererResourceKind::Glyph, page)
                         })?,
                         None => &self.empty_page,
                     };
+                    let color_texture = match pages.color {
+                        Some(page) => self.color_pages.page(page as usize).ok_or_else(|| {
+                            RendererResourceError::missing(RendererResourceKind::Glyph, page)
+                        })?,
+                        None => &self.empty_color_page,
+                    };
                     encoder.set_fragment_texture(0, Some(page_texture));
+                    encoder.set_fragment_texture(1, Some(color_texture));
                     encoder.draw_primitives_instanced_base_instance(
                         MTLPrimitiveType::Triangle,
                         0,
@@ -1106,7 +1146,7 @@ impl MetalRenderer {
         }
         command_buffer.commit();
         self.instances.retire(command_buffer, instances);
-        if let Some(staging) = staging {
+        for staging in [staging, color_staging].into_iter().flatten() {
             self.instances.retire(command_buffer, staging);
         }
         self.frames_in_flight
@@ -1200,7 +1240,7 @@ impl MetalRenderer {
                 kind: KIND_PATH_SPRITE,
                 start: frame.glyphs.len() as u32,
                 count: 1,
-                page: Some(slot.page as u32),
+                pages: Pages::coverage(slot.page as u32),
             };
             frame.glyphs.push(sprite);
             frame.push_item(kind, clip, bounds_rect(sprite.bounds), scale_factor);
@@ -1221,7 +1261,7 @@ impl MetalRenderer {
                 kind: KIND_PATH,
                 start,
                 count: frame.path_tiles.len() as u32 - start,
-                page: None,
+                pages: Pages::default(),
             };
             frame.push_item(kind, clip, rect, scale_factor);
         }
@@ -1343,16 +1383,22 @@ impl MetalRenderer {
         let variants = f32::from(SUBPIXEL_VARIANTS);
         let color = color.to_array();
 
-        // Glyphs on one atlas page form one item; a glyph on another page starts
-        // the next, ordered after it where they overlap.
-        let mut run: Option<(u32, u32)> = None;
-        let flush = |frame: &mut FrameData, run: Option<(u32, u32)>| {
-            if let Some((page, start)) = run {
+        // Glyphs of one kind on one atlas page form one item; a color glyph, or
+        // a glyph on another page, starts the next, ordered after it where they
+        // overlap.
+        let mut run: Option<(bool, u32, u32)> = None;
+        let flush = |frame: &mut FrameData, run: Option<(bool, u32, u32)>| {
+            if let Some((color, page, start)) = run {
+                let (kind, pages) = if color {
+                    (KIND_COLOR_GLYPH, Pages::color(page))
+                } else {
+                    (KIND_GLYPH, Pages::coverage(page))
+                };
                 let kind = ItemKind::Sprites {
-                    kind: KIND_GLYPH,
+                    kind,
                     start,
                     count: frame.glyphs.len() as u32 - start,
-                    page: Some(page),
+                    pages,
                 };
                 frame.plan.push(kind, clip, None);
             }
@@ -1373,13 +1419,14 @@ impl MetalRenderer {
 
             let slot = atlas_glyph.slot;
             let page = slot.page as u32;
-            let (page_width, page_height) = self
-                .text_cache
-                .atlas()
-                .page_extent(slot.page)
-                .ok_or_else(|| {
-                    RendererResourceError::missing(RendererResourceKind::Glyph, slot.page as u32)
-                })?;
+            let atlas = if atlas_glyph.color {
+                self.text_cache.color_atlas()
+            } else {
+                self.text_cache.atlas()
+            };
+            let (page_width, page_height) = atlas.page_extent(slot.page).ok_or_else(|| {
+                RendererResourceError::missing(RendererResourceKind::Glyph, slot.page as u32)
+            })?;
             let rect = slot.rect;
             let sprite = GpuGlyph {
                 bounds: [
@@ -1396,9 +1443,10 @@ impl MetalRenderer {
                 ],
                 color,
             };
-            if run.is_none_or(|(open, _)| open != page) {
+            let key = (atlas_glyph.color, page);
+            if run.is_none_or(|(color, open, _)| (color, open) != key) {
                 flush(frame, run);
-                run = Some((page, frame.glyphs.len() as u32));
+                run = Some((key.0, key.1, frame.glyphs.len() as u32));
             }
             frame.glyphs.push(sprite);
         }
