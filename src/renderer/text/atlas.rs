@@ -527,6 +527,19 @@ impl TextGlyphCache {
         Ok(Some(entry))
     }
 
+    /// Places a coverage bitmap that is not a glyph, such as a rasterized path,
+    /// in the atlas and queues its upload. Its slot lives until `epoch` changes.
+    pub(crate) fn place_sprite(
+        &mut self,
+        width: u32,
+        height: u32,
+        pixels: Vec<u8>,
+    ) -> Result<AtlasSlot, RendererResourceError> {
+        let slot = self.atlas.allocate(width, height)?;
+        self.uploads.push(GlyphUpload { slot, pixels });
+        Ok(slot)
+    }
+
     fn invalidate_for_font_generation_change(&mut self) {
         if self.measurer.font_generation != self.font_generation {
             self.shapes.clear();

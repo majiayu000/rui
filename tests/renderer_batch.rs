@@ -1,14 +1,14 @@
 #![cfg(target_os = "macos")]
 
-//! Captures for draw batching: quads, shadows and text share one draw, images
-//! split only what they overlap, and clips hold inside a shared draw.
+//! Captures for draw batching: quads, shadows, text and paths share one draw,
+//! images split only what they overlap, and clips hold inside a shared draw.
 
 use rui::core::color::Rgba;
 use rui::core::geometry::{Bounds, Edges, Size};
 use rui::core::style::Corners;
 use rui::elements::text::TextAlign;
 use rui::renderer::metal::MetalRenderer;
-use rui::renderer::{Primitive, RendererError, Scene};
+use rui::renderer::{PathVertex, Primitive, RendererError, Scene};
 use rui::{ImageFit, ImageSource};
 
 const WIDTH: usize = 120;
@@ -188,5 +188,40 @@ fn clips_hold_inside_a_shared_draw() {
     ] {
         let expected = if inside { [255; 3] } else { [0; 3] };
         assert_eq!(pixel(&pixels, x, y), expected, "pixel ({x}, {y})");
+    }
+}
+
+#[test]
+fn icons_and_paths_draw_with_text_in_one_call() {
+    let Some(mut renderer) = renderer() else {
+        return;
+    };
+    let mut primitives = vec![Primitive::Path {
+        // A concave fill behind everything.
+        vertices: [(5.0, 5.0), (115.0, 40.0), (5.0, 75.0), (40.0, 40.0)]
+            .iter()
+            .map(|&(x, y)| PathVertex::new(x, y))
+            .collect(),
+        color: Rgba::new(0.2, 0.3, 0.5, 1.0),
+        stroke_width: None,
+    }];
+    for row in 0..8 {
+        let y = row as f32 * 10.0;
+        primitives.push(Primitive::Path {
+            vertices: vec![
+                PathVertex::new(2.0, y + 5.0),
+                PathVertex::new(4.0, y + 8.0),
+                PathVertex::new(8.0, y + 2.0),
+            ],
+            color: Rgba::new(0.3, 0.8, 0.4, 1.0),
+            stroke_width: Some(1.5),
+        });
+        primitives.push(label(12.0, y - 3.0, &format!("item {row}")));
+    }
+    let frame = scene(primitives);
+    // The first frame draws the icons analytically; later ones from the atlas.
+    for round in 0..3 {
+        capture(&mut renderer, &frame);
+        assert_eq!(renderer.last_frame_stats().draw_calls, 1, "frame {round}");
     }
 }
