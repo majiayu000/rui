@@ -8,6 +8,7 @@ mod system_fonts;
 mod telemetry;
 pub mod text;
 mod text_cluster_position;
+mod text_fallback;
 mod text_shaping;
 
 #[cfg(all(target_os = "macos", feature = "metal"))]

@@ -8,25 +8,36 @@ pub(crate) fn apply_exact_cluster_positions(
         return true;
     }
 
+    // Each glyph's byte start and horizontal extent, ordered by byte start so
+    // the glyphs of a cluster are one binary-searched range.
+    let mut extents: Vec<(usize, f32, f32)> = glyphs
+        .iter()
+        .map(|glyph| {
+            (
+                glyph.byte_start,
+                glyph.x_offset,
+                glyph.x_offset + glyph.advance_width,
+            )
+        })
+        .collect();
+    extents.sort_by_key(|&(byte_start, ..)| byte_start);
+
     let mut positions = Vec::with_capacity(clusters.len());
     for (index, cluster) in clusters.iter().enumerate() {
-        let matching = glyphs
-            .iter()
-            .filter(|glyph| {
-                glyph.byte_start >= cluster.byte_start && glyph.byte_start < cluster.byte_end
-            })
-            .collect::<Vec<_>>();
+        let first = extents.partition_point(|&(start, ..)| start < cluster.byte_start);
+        let last = extents.partition_point(|&(start, ..)| start < cluster.byte_end);
+        let matching = &extents[first..last];
         if matching.is_empty() {
             return false;
         }
 
         let start = matching
             .iter()
-            .map(|glyph| glyph.x_offset)
+            .map(|&(_, start, _)| start)
             .fold(f32::INFINITY, f32::min);
         let end = matching
             .iter()
-            .map(|glyph| glyph.x_offset + glyph.advance_width)
+            .map(|&(.., end)| end)
             .fold(f32::NEG_INFINITY, f32::max);
         positions.push(ClusterPosition { index, start, end });
     }

@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 /// Maximum number of faces probed inside a single font collection file.
 const MAX_FACES_PER_FILE: u32 = 16;
 
-const FONT_CANDIDATES: [(&str, &str); 19] = [
+const FONT_CANDIDATES: [(&str, &str); 21] = [
     ("Arial", "/System/Library/Fonts/Supplemental/Arial.ttf"),
     ("Arial", "/Library/Fonts/Arial.ttf"),
     (
@@ -50,6 +50,14 @@ const FONT_CANDIDATES: [(&str, &str); 19] = [
     (
         "Noto Sans CJK",
         "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+    ),
+    (
+        "Noto Sans Arabic",
+        "/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf",
+    ),
+    (
+        "Noto Color Emoji",
+        "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf",
     ),
 ];
 
