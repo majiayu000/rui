@@ -659,3 +659,86 @@ fn text_scrolled_out_and_back_is_shaped_once() {
     assert_eq!(cache.stats().shapes, lines.len());
     assert_eq!(cache.stats().measure_misses, lines.len());
 }
+
+/// Mixed Latin, CJK, Arabic, Hebrew, Korean and emoji.
+const MIXED: &str = "Text 中文かな 한국어 مرحبا بالعالم שלום 👋🏽 🧑‍💻 ❤️ done";
+
+#[cfg(target_os = "macos")]
+#[test]
+fn mixed_scripts_shape_without_missing_glyphs() {
+    let mut cache = TextMeasureCache::new();
+    let plan = shape(&mut cache, request(MIXED));
+
+    let missing: Vec<_> = plan
+        .glyphs()
+        .iter()
+        .filter(|glyph| glyph.glyph_id == 0)
+        .map(|glyph| &MIXED[glyph.byte_start..glyph.byte_end])
+        .collect();
+    assert!(missing.is_empty(), ".notdef for {missing:?}");
+    assert!(
+        !plan.diagnostics().iter().any(|diagnostic| matches!(
+            diagnostic,
+            TextShapeDiagnostic::MissingGlyph { .. } | TextShapeDiagnostic::FallbackFailed { .. }
+        )),
+        "{:?}",
+        plan.diagnostics()
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn fallback_follows_the_chain_for_each_script() {
+    let mut cache = TextMeasureCache::new();
+    let plan = shape(&mut cache, request(MIXED));
+    let family_of = |text: &str| {
+        plan.clusters()
+            .iter()
+            .find(|cluster| cluster.text == text)
+            .map(|cluster| cluster.font_family.as_str())
+            .unwrap_or_else(|| panic!("no cluster {text:?}"))
+    };
+
+    // The requested font first, while it has the text.
+    let primary = cache.fonts[0].family.clone();
+    assert_eq!(family_of("T"), primary);
+    assert_eq!(family_of("ب"), primary, "Arial has Arabic");
+    // Then the fonts preferred for the script, ahead of the order fonts load in.
+    assert_eq!(family_of("中"), "Hiragino Sans GB");
+    assert_eq!(family_of("か"), "Hiragino Sans GB");
+    // Emoji try the emoji font before the requested one, which has a plain heart.
+    assert_eq!(family_of("👋🏽"), "Apple Color Emoji");
+    assert_eq!(family_of("❤️"), "Apple Color Emoji");
+    // A space inside a fallback run stays in that run's font.
+    let space_after_cjk = plan
+        .clusters()
+        .iter()
+        .find(|cluster| cluster.byte_start == MIXED.find("かな ").unwrap() + "かな".len())
+        .expect("space after kana");
+    assert_eq!(space_after_cjk.font_family, "Hiragino Sans GB");
+
+    let sf_arabic = TextRequest::new("مرحبا", 20.0, 400, Some("SF Arabic"), 1.2);
+    let plan = shape(&mut cache, sf_arabic);
+    assert!(
+        plan.clusters()
+            .iter()
+            .all(|cluster| cluster.font_family == "SF Arabic")
+    );
+}
+
+#[test]
+fn each_script_run_is_shaped_once_with_its_spaces() {
+    let mut cache = TextMeasureCache::new();
+    let plan = shape(&mut cache, request("hello brave new world"));
+    assert_eq!(plan.runs().len(), 1, "{:?}", plan.runs());
+    assert_eq!(&plan.runs()[0].script_tag, b"Latn");
+
+    let plan = shape(&mut cache, request("مرحبا بالعالم"));
+    let arabic: Vec<_> = plan
+        .runs()
+        .iter()
+        .filter(|run| &run.script_tag == b"Arab")
+        .collect();
+    assert_eq!(arabic.len(), 1, "{:?}", plan.runs());
+    assert_eq!(arabic[0].direction, TextDirection::RightToLeft);
+}
