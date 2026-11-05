@@ -7,11 +7,16 @@ use crate::core::entity::{Entity, EntityId, EntityStore};
 use crate::core::executor::{BackgroundExecutor, ForegroundExecutor};
 use crate::core::foreground::{AnimationFrameRequests, ForegroundQueue, FrameTiming};
 use crate::core::geometry::Size;
+use crate::core::text_editing::MemoryClipboard;
 use crate::core::view::{
     ChildView, NotifiedViews, View, ViewContext, ViewNotifier, ViewPlacement, ViewUpdates,
 };
 
+mod clipboard;
 mod release;
+
+pub(crate) use clipboard::SharedClipboard;
+
 #[cfg(all(target_os = "macos", feature = "metal"))]
 use crate::core::window::WindowId;
 use crate::core::window::WindowOptions;
@@ -20,7 +25,7 @@ use crate::devtools::DevtoolsFlags;
 use crate::elements::Element;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
-use std::rc::Weak;
+use std::rc::{Rc, Weak};
 use std::sync::Arc;
 
 /// The main application context - owns all state
@@ -32,6 +37,8 @@ pub struct AppContext {
     pub(crate) windows: Windows,
     pub(crate) running: bool,
     keymap: Keymap,
+    /// In memory until a native runner installs the system clipboard.
+    clipboard: SharedClipboard,
     app_action_handlers: Vec<Box<dyn ActionHandler>>,
     update_queue: Arc<AppUpdateQueue>,
     pub(crate) effects: Effects,
@@ -190,6 +197,7 @@ impl AppContext {
             windows: Windows::default(),
             running: false,
             keymap,
+            clipboard: Rc::new(RefCell::new(MemoryClipboard::new())),
             app_action_handlers: Vec::new(),
             update_queue: Arc::default(),
             effects: Effects::default(),

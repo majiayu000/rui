@@ -7,7 +7,7 @@ mod layout;
 mod types;
 
 pub use buffer::TextEditBuffer;
-pub use clipboard::{Clipboard, MemoryClipboard};
+pub use clipboard::{Clipboard, ClipboardItem, MemoryClipboard};
 pub use error::{ClipboardError, TextEditError, Utf16TextRangeError};
 pub(crate) use layout::VisualCaret;
 pub use layout::{
