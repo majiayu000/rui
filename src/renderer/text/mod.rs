@@ -9,7 +9,9 @@ use crate::renderer::system_fonts::{
     FontLoadError, ResourceSnapshot, load_system_fonts, reload_system_fonts_for_family,
     system_font_generation,
 };
-use crate::renderer::text_shaping::{TextShapingFont, rasterize_with_plan, shape_with_fonts};
+use crate::renderer::text_shaping::{
+    ShapedParts, TextShapingFont, rasterize_with_plan, shape_parts, shape_with_fonts,
+};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
@@ -308,16 +310,20 @@ impl TextMeasureCache {
         }
 
         self.stats.measure_misses += 1;
-        let metrics = self.shape_counted(request, primary_index).metrics();
+        let metrics = self.shape_counted(request, primary_index).metrics;
         let key = TextMeasureKey::from_request(request, &self.fonts[primary_index].family);
         self.retain_metrics(key, metrics);
         metrics
     }
 
     /// Shape, counting it in [`TextCacheStats::shapes`].
-    fn shape_counted(&mut self, request: TextRequest<'_>, primary_index: usize) -> TextShapePlan {
+    fn shape_counted<'a>(
+        &mut self,
+        request: TextRequest<'a>,
+        primary_index: usize,
+    ) -> ShapedParts<'a> {
         self.stats.shapes += 1;
-        self.shape_with_primary(request, primary_index)
+        self.shape_parts_with_primary(request, primary_index)
     }
 
     pub fn shape_single_line(
@@ -334,6 +340,15 @@ impl TextMeasureCache {
 
     fn shape_with_primary(&self, request: TextRequest<'_>, primary_index: usize) -> TextShapePlan {
         shape_with_fonts(self.fonts.as_slice(), primary_index, request)
+    }
+
+    /// Shaping without the plan's copied strings and diagnostics.
+    fn shape_parts_with_primary<'a>(
+        &self,
+        request: TextRequest<'a>,
+        primary_index: usize,
+    ) -> ShapedParts<'a> {
+        shape_parts(self.fonts.as_slice(), primary_index, request)
     }
 
     fn primary_font_index(&mut self, font_family: Option<&str>) -> Result<usize, TextError> {

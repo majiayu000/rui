@@ -11,12 +11,13 @@ use crate::core::geometry::{Bounds, Point, Size};
 use crate::core::style::{Dimension as StyleDimension, Style};
 use crate::core::text_editing::{TextInputCommand, TextInputEvent, TextInputSnapshot};
 use crate::elements::text::{TextStyle, TextStyleRefinement};
-use crate::renderer::text::{TextLine, TextMeasureCache, TextRequest, WrappedText};
+use crate::renderer::text::{TextMeasureCache, TextRequest, WrappedText};
 use crate::renderer::{Primitive, Scene};
 use std::any::{Any, TypeId};
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use taffy::prelude::*;
 
@@ -49,7 +50,7 @@ pub struct LayoutContext<'a> {
 }
 
 /// Lines of a wrapped text, filled in once layout has given it a width.
-pub(crate) type WrappedLines = Rc<RefCell<Option<Vec<TextLine>>>>;
+pub(crate) type WrappedLines = Rc<RefCell<Option<Arc<WrappedText>>>>;
 
 /// What a wrapped text leaf needs to be measured at any width.
 #[derive(Debug, Clone, PartialEq)]
@@ -73,8 +74,8 @@ impl TextWrapRequest {
         )
     }
 
-    fn wrap(&self, measurer: &mut TextMeasureCache, width: f32) -> WrappedText {
-        match measurer.wrap(self.request(), width, self.max_lines) {
+    fn wrap(&self, measurer: &mut TextMeasureCache, width: f32) -> Arc<WrappedText> {
+        match measurer.wrap_shared(self.request(), width, self.max_lines) {
             Ok(wrapped) => wrapped,
             Err(err) => panic!("text layout failed: {:?}", err),
         }
@@ -267,7 +268,7 @@ impl<'a> LayoutContext<'a> {
             // the measure above saw.
             for (node, text) in measured {
                 let width = self.taffy.unrounded_layout(*node).size.width;
-                *text.lines.borrow_mut() = Some(text.request.wrap(measurer, width).lines);
+                *text.lines.borrow_mut() = Some(text.request.wrap(measurer, width));
             }
         }
         if let Some(kept) = kept {
