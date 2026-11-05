@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 /// Maximum number of faces probed inside a single font collection file.
 const MAX_FACES_PER_FILE: u32 = 16;
 
-const FONT_CANDIDATES: [(&str, &str); 19] = [
+const FONT_CANDIDATES: [(&str, &str); 21] = [
     ("Arial", "/System/Library/Fonts/Supplemental/Arial.ttf"),
     ("Arial", "/Library/Fonts/Arial.ttf"),
     (
@@ -50,6 +50,14 @@ const FONT_CANDIDATES: [(&str, &str); 19] = [
     (
         "Noto Sans CJK",
         "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+    ),
+    (
+        "Noto Sans Arabic",
+        "/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf",
+    ),
+    (
+        "Noto Color Emoji",
+        "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf",
     ),
 ];
 
@@ -382,23 +390,19 @@ fn load_font_faces_with(
     let face_count = font_face_count(path, data.as_slice())?;
 
     for index in 0..face_count {
-        let rusttype_font = TextShapingFont::new(family, index, Arc::clone(&data));
-        let rustybuzz_font = rustybuzz::Face::from_slice(data.as_slice(), index);
-        match (rusttype_font, rustybuzz_font) {
-            (Some(font), Some(_)) => fonts.push(font),
-            (None, None) => {
-                return Err(FontLoadError::invalid_data(
-                    path,
-                    format!("font face {index} cannot be parsed"),
-                ));
-            }
-            _ => {
-                return Err(FontLoadError::invalid_data(
-                    path,
-                    format!("font face {index} is not supported by both text engines"),
-                ));
-            }
+        if let Some(font) = TextShapingFont::new(family, index, Arc::clone(&data)) {
+            fonts.push(font);
+            continue;
         }
+        let rusttype_parses =
+            rusttype::Font::try_from_bytes_and_index(data.as_slice(), index).is_some();
+        let rustybuzz_parses = rustybuzz::Face::from_slice(data.as_slice(), index).is_some();
+        let message = if rusttype_parses || rustybuzz_parses {
+            format!("font face {index} is not supported by both text engines")
+        } else {
+            format!("font face {index} cannot be parsed")
+        };
+        return Err(FontLoadError::invalid_data(path, message));
     }
     Ok(())
 }

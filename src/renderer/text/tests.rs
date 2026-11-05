@@ -594,3 +594,151 @@ fn retained_metrics_stay_within_the_byte_budget() {
     );
     assert_eq!(cache.cached_metrics_len(), entries_before_oversized_key);
 }
+
+pub(super) const PARAGRAPH: &str = "Text shaping is the costliest part of layout. A paragraph wraps \
+the same for a range of widths, so resizing a window should not wrap it again \
+until a line actually breaks somewhere else.\nA second paragraph, 中文也要换行。";
+
+fn wrap(
+    cache: &mut TextMeasureCache,
+    content: &str,
+    width: f32,
+    max_lines: Option<usize>,
+) -> WrappedText {
+    match cache.wrap(request(content), width, max_lines) {
+        Ok(wrapped) => wrapped,
+        Err(err) => panic!("text wrapping failed: {:?}", err),
+    }
+}
+
+#[test]
+fn resizing_rewraps_only_when_a_break_moves_and_never_reshapes() {
+    let mut cache = TextMeasureCache::new();
+    if !cache.has_fonts() {
+        return;
+    }
+    let mut previous = wrap(&mut cache, PARAGRAPH, 300.0, None);
+    let shapes = cache.stats().shapes;
+    assert_eq!(shapes, 2, "one shape per paragraph");
+
+    let mut changed = 0;
+    for step in 1..=200 {
+        let wrapped = wrap(&mut cache, PARAGRAPH, 300.0 + step as f32, None);
+        if wrapped.lines != previous.lines {
+            changed += 1;
+        }
+        previous = wrapped;
+    }
+    let stats = cache.stats();
+    assert_eq!(stats.shapes, shapes, "rewrapping reuses the kept clusters");
+    assert!(changed > 0);
+    assert_eq!(
+        stats.wrap_misses,
+        1 + changed,
+        "a width rewraps only when the lines change: {stats:?}"
+    );
+}
+
+#[test]
+fn text_scrolled_out_and_back_is_shaped_once() {
+    let mut cache = TextMeasureCache::new();
+    if !cache.has_fonts() {
+        return;
+    }
+    let lines: Vec<String> = (0..300).map(|row| format!("row {row}")).collect();
+    let window = 20;
+    let tops = (0..=lines.len() - window)
+        .step_by(7)
+        .chain((0..=lines.len() - window).rev().step_by(5));
+    for top in tops {
+        cache.begin_frame();
+        for line in &lines[top..top + window] {
+            measure(&mut cache, request(line));
+        }
+    }
+    assert_eq!(cache.stats().shapes, lines.len());
+    assert_eq!(cache.stats().measure_misses, lines.len());
+}
+
+/// Mixed Latin, CJK, Arabic, Hebrew, Korean and emoji.
+const MIXED: &str = "Text 中文かな 한국어 مرحبا بالعالم שלום 👋🏽 🧑‍💻 ❤️ done";
+
+#[cfg(target_os = "macos")]
+#[test]
+fn mixed_scripts_shape_without_missing_glyphs() {
+    let mut cache = TextMeasureCache::new();
+    let plan = shape(&mut cache, request(MIXED));
+
+    let missing: Vec<_> = plan
+        .glyphs()
+        .iter()
+        .filter(|glyph| glyph.glyph_id == 0)
+        .map(|glyph| &MIXED[glyph.byte_start..glyph.byte_end])
+        .collect();
+    assert!(missing.is_empty(), ".notdef for {missing:?}");
+    assert!(
+        !plan.diagnostics().iter().any(|diagnostic| matches!(
+            diagnostic,
+            TextShapeDiagnostic::MissingGlyph { .. } | TextShapeDiagnostic::FallbackFailed { .. }
+        )),
+        "{:?}",
+        plan.diagnostics()
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn fallback_follows_the_chain_for_each_script() {
+    let mut cache = TextMeasureCache::new();
+    let plan = shape(&mut cache, request(MIXED));
+    let family_of = |text: &str| {
+        plan.clusters()
+            .iter()
+            .find(|cluster| cluster.text == text)
+            .map(|cluster| cluster.font_family.as_str())
+            .unwrap_or_else(|| panic!("no cluster {text:?}"))
+    };
+
+    // The requested font first, while it has the text.
+    let primary = cache.fonts[0].family.clone();
+    assert_eq!(family_of("T"), primary);
+    assert_eq!(family_of("ب"), primary, "Arial has Arabic");
+    // Then the fonts preferred for the script, ahead of the order fonts load in.
+    assert_eq!(family_of("中"), "Hiragino Sans GB");
+    assert_eq!(family_of("か"), "Hiragino Sans GB");
+    // Emoji try the emoji font before the requested one, which has a plain heart.
+    assert_eq!(family_of("👋🏽"), "Apple Color Emoji");
+    assert_eq!(family_of("❤️"), "Apple Color Emoji");
+    // A space inside a fallback run stays in that run's font.
+    let space_after_cjk = plan
+        .clusters()
+        .iter()
+        .find(|cluster| cluster.byte_start == MIXED.find("かな ").unwrap() + "かな".len())
+        .expect("space after kana");
+    assert_eq!(space_after_cjk.font_family, "Hiragino Sans GB");
+
+    let sf_arabic = TextRequest::new("مرحبا", 20.0, 400, Some("SF Arabic"), 1.2);
+    let plan = shape(&mut cache, sf_arabic);
+    assert!(
+        plan.clusters()
+            .iter()
+            .all(|cluster| cluster.font_family == "SF Arabic")
+    );
+}
+
+#[test]
+fn each_script_run_is_shaped_once_with_its_spaces() {
+    let mut cache = TextMeasureCache::new();
+    let plan = shape(&mut cache, request("hello brave new world"));
+    assert_eq!(plan.runs().len(), 1, "{:?}", plan.runs());
+    assert_eq!(&plan.runs()[0].script_tag, b"Latn");
+
+    let plan = shape(&mut cache, request("مرحبا بالعالم"));
+    let arabic: Vec<_> = plan
+        .runs()
+        .iter()
+        .filter(|run| &run.script_tag == b"Arab")
+        .collect();
+    assert_eq!(arabic.len(), 1, "{:?}", plan.runs());
+    assert_eq!(arabic[0].direction, TextDirection::RightToLeft);
+}

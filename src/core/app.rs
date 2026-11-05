@@ -4,6 +4,7 @@ use crate::core::action::{ActionHandler, ActionId, ActionOutcome, Keymap};
 use crate::core::app_handle::{AppHandle, AppUpdateQueue};
 use crate::core::effects::Effects;
 use crate::core::entity::{Entity, EntityId, EntityStore};
+use crate::core::foreground::{AnimationFrameRequests, ForegroundQueue, FrameTiming};
 use crate::core::geometry::Size;
 use crate::core::view::{View, ViewContext, ViewNotifier, ViewUpdates};
 use crate::core::window::{Window, WindowId, WindowOptions};
@@ -30,6 +31,9 @@ pub struct AppContext {
     runtime_view_notifier: Option<(EntityId, ViewNotifier)>,
     update_queue: Arc<AppUpdateQueue>,
     pub(crate) effects: Effects,
+    pub(crate) foreground: ForegroundQueue,
+    pub(crate) animation_frames: AnimationFrameRequests,
+    pub(crate) frame_timing: FrameTiming,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -43,6 +47,7 @@ pub enum RedrawSource {
     PlatformFocus,
     PlatformInput,
     PlatformRedraw,
+    AnimationFrame,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -56,6 +61,7 @@ pub struct RedrawSourceCounts {
     pub platform_focus: u64,
     pub platform_input: u64,
     pub platform_redraw: u64,
+    pub animation_frame: u64,
 }
 
 impl RedrawSourceCounts {
@@ -70,6 +76,7 @@ impl RedrawSourceCounts {
             RedrawSource::PlatformFocus => self.platform_focus += 1,
             RedrawSource::PlatformInput => self.platform_input += 1,
             RedrawSource::PlatformRedraw => self.platform_redraw += 1,
+            RedrawSource::AnimationFrame => self.animation_frame += 1,
         }
     }
 }
@@ -120,6 +127,9 @@ impl AppContext {
             runtime_view_notifier: None,
             update_queue: Arc::default(),
             effects: Effects::default(),
+            foreground: ForegroundQueue::default(),
+            animation_frames: AnimationFrameRequests::default(),
+            frame_timing: FrameTiming::default(),
         }
     }
 

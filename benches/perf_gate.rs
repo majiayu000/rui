@@ -151,6 +151,44 @@ fn list_with_edit(rows: usize, round: usize) -> Div {
         }))
 }
 
+/// Paragraph `index` of the wrapped text case: 8 to 127 words.
+fn paragraph(index: usize) -> String {
+    const WORDS: [&str; 12] = [
+        "layout",
+        "glyph",
+        "shaping",
+        "frame",
+        "wrapped",
+        "paragraph",
+        "text",
+        "cache",
+        "the",
+        "of",
+        "a",
+        "width",
+    ];
+    (0..8 + (index * 37) % 120)
+        .map(|word| WORDS[(index * 7 + word * 3) % WORDS.len()])
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// 200 wrapped paragraphs; paragraph 3 gets a new suffix each round.
+fn paragraphs(round: usize) -> Div {
+    div()
+        .w_full()
+        .flex_col()
+        .p(16.0)
+        .gap(8.0)
+        .children((0..200).map(move |index| {
+            let mut content = paragraph(index);
+            if index == 3 {
+                content.push_str(&format!(" revision {round}"));
+            }
+            text(content).size(14.0).line_height(1.4).wrap()
+        }))
+}
+
 /// Layout and paint state a runner keeps across frames.
 struct Surfaces {
     taffy: TaffyTree<ElementId>,
@@ -251,6 +289,13 @@ fn main() -> ExitCode {
         }),
     );
     drop(rounds);
+
+    // Wrapped paragraphs, one of which changes each frame.
+    let mut surfaces = Surfaces::new();
+    costs.insert(
+        "text.paragraphs",
+        measure(|round| surfaces.frame(&mut paragraphs(round), &mut measurer)),
+    );
 
     for (name, count) in [
         ("virtual_list.1k", 1_000usize),

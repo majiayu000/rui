@@ -20,6 +20,7 @@ use crate::platform::mac::events::{
     MAC_REDRAW_EVENT_DATA, MacWindowEvent, post_application_event_from_any_thread,
 };
 use crate::platform::mac::frame::{NativeFrameEvents, dispatch_native_events};
+use crate::platform::mac::frame_ticker::FrameTicker;
 use crate::platform::mac::window::create_window;
 use crate::platform::window::{
     PlatformImeEvent, PlatformInputEvent, PlatformMouseEvent, PlatformMouseEventKind,
@@ -129,6 +130,7 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
         let mut profile_recorder = RendererTelemetryRecorder::enabled_from_env();
         let mut native_dogfood_automation = NativeDogfoodAutomation::load_from_environment();
         let mut native_ime_state = crate::platform::mac::ime_state::NativeImeState::default();
+        let mut frame_ticker = FrameTicker::new(window_number);
 
         // Render loop (event-driven)
         loop {
@@ -140,11 +142,12 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
             let mut ordered_input_events = Vec::new();
             let mut focus_changed = None;
             let mut close_requested = false;
-            let wait_for_event = !context.has_frame_work();
+            let wait_for_event = !context.has_pending_work();
             let mut platform_events = match window.poll_events_for_app(&app, wait_for_event) {
                 Ok(events) => events,
                 Err(err) => panic!("failed to poll platform window events: {}", err),
             };
+            let iteration_started_at = Instant::now();
             let mut automation_focused_element = None;
             if let Some(automation) = &mut native_dogfood_automation {
                 automation_focused_element =
@@ -165,6 +168,10 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
                     MacWindowEvent::Text(command) => {
                         context.mark_redraw_from(RedrawSource::PlatformInput);
                         ordered_input_events.push(OrderedInputEvent::Text(command));
+                    }
+                    MacWindowEvent::DisplayTick => {
+                        frame_ticker.tick_handled();
+                        context.begin_animation_frame();
                     }
                     MacWindowEvent::Platform(event) => {
                         mark_platform_event_redraw(&event, &mut context);
@@ -265,6 +272,17 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
             ) {
                 Ok(Some(outcome)) => outcome,
                 Ok(None) => {
+                    if !context.is_running() {
+                        break;
+                    }
+                    run_between_frames(
+                        &mut context,
+                        &mut frame_ticker,
+                        &window,
+                        &app,
+                        iteration_started_at,
+                        profile_recorder.is_some(),
+                    );
                     if !context.is_running() {
                         break;
                     }
@@ -369,7 +387,62 @@ pub(crate) fn run_app_with_renderer_factory<F, E>(
             if !context.is_running() {
                 break;
             }
+            run_between_frames(
+                &mut context,
+                &mut frame_ticker,
+                &window,
+                &app,
+                iteration_started_at,
+                profile_recorder.is_some(),
+            );
+            // Idle work may have quit.
+            if !context.is_running() {
+                break;
+            }
         }
+    }
+}
+
+/// Keep frame ticks running exactly while an animation asks for frames, then
+/// spend what is left of the idle budget on idle work.
+///
+/// Idle work stops at the budget, measured from when this loop iteration
+/// started, and as soon as an event is waiting, so input and the next frame
+/// tick are never queued behind it.
+fn run_between_frames(
+    context: &mut AppContext,
+    frame_ticker: &mut FrameTicker,
+    window: &crate::platform::mac::window::MacWindow,
+    app: &NSApplication,
+    iteration_started_at: Instant,
+    report_frame_ticks: bool,
+) {
+    let animating = context.animation_frame_requested();
+    let source_before = frame_ticker.source();
+    if let Err(err) = frame_ticker.update(animating, window.display_id(), context.frame_interval())
+    {
+        panic!("failed to drive animation frames: {err}");
+    }
+    if let Some(interval) = frame_ticker.refresh_interval() {
+        context.set_frame_interval(interval);
+    }
+    let source = frame_ticker.source();
+    if report_frame_ticks && source != source_before {
+        let source = match source {
+            Some(source) => format!("\"{}\"", source.name()),
+            None => String::from("null"),
+        };
+        eprintln!(
+            "{{\"schema\":\"rui.display_link.v1\",\"running\":{},\"source\":{},\"refresh_interval_ns\":{}}}",
+            animating,
+            source,
+            context.frame_interval().as_nanos()
+        );
+    }
+
+    if context.has_idle_work() {
+        let deadline = iteration_started_at + context.idle_budget();
+        context.run_idle_tasks(|| Instant::now() < deadline && !window.has_pending_event(app));
     }
 }
 

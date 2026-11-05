@@ -12,14 +12,28 @@ The script builds both sides once, launches each binary once so macOS's first-la
 signature check stays out of the startup case, then runs every case in its own
 process: RUI, then GPUI, `REPEATS` times (default 3). It prints one table with the
 range over the repeats and keeps the raw lines in `target/gpui_compare/results.txt`.
-`CASES="quad_grid text_paragraphs"` picks cases.
+`CASES="quad_grid text_paragraphs"` picks cases. A last table gives a verdict per
+case: RUI ahead, behind, or a tie when the two ranges overlap or the midpoints are
+within 5% (instructions) or 10% (wall p50).
 
 - RUI: `benches/compare_frame.rs`, through `MetalRenderer::render_offscreen`.
 - GPUI: `benchmarks/gpui_compare/fixtures.rs`, copied into a Zed checkout as
-  `crates/gpui_platform/benches/rui_compare.rs`. It runs under `#[gpui::bench]` with
-  GPUI's headless Metal renderer and `BENCH_MEASUREMENT=instructions`. It is built with
-  `--features bench-support,runtime_shaders`, because this machine has no Xcode
-  `metal` tool.
+  `crates/gpui_platform/benches/rui_compare.rs`. Its benches are registered exactly as
+  `#[gpui::bench(fps = 120)]` registers them, except that GPUI's headless Metal
+  renderer is wrapped to count draw calls. It runs with
+  `BENCH_MEASUREMENT=instructions` and is built with
+  `--features bench-support,runtime_shaders,font-kit`: `runtime_shaders` because this
+  machine has no Xcode `metal` tool, `font-kit` because without it `gpui_macos` uses
+  `NoopTextSystem`, which shapes with fixed advances and rasterizes no glyphs. The
+  bench fails if a text fixture draws no glyphs. `run.sh` also adds Zed's workspace
+  `image` crate as a dev-dependency of `gpui_platform`, for the wrapper's signature.
+
+> **Correction to #216.** The first version of this suite, and every GPUI number in
+> the earlier long-list table below, was built without `font-kit`. GPUI's text cost
+> nothing but layout with fake advances, and its scenes held no glyphs. With real
+> text GPUI's wrapped-text frame rises from 13.6 M to 19.4 M instructions. Its list
+> frames barely change (162 M to 160 M); its `.cached()` frame drops from 356 M to
+> 262 M.
 
 ## Fixtures
 
@@ -53,6 +67,16 @@ examples and GPUI's `primitives` bench paint this way.
   p95 is therefore a lower bound.
 - Allocations / frame: heap allocations counted by a wrapping global allocator on both
   sides (RUI's bench installs one; `gpui::bench_main!` installs GPUI's).
+- Draw calls and instances / frame: RUI: median of `MetalRenderer::last_frame_stats`
+  over the 60 frames. GPUI: median over every scene the wrapped headless renderer
+  received, counting one draw per `Scene::batches()` entry, which is what its Metal
+  renderer encodes for the primitives these fixtures use (paths and surfaces would add
+  draws; no fixture has them).
+- GPU ms / frame (RUI only): a separate pass of 30 frames after the CPU samples, whose
+  frames wait for the command buffer and report `GPUEndTime - GPUStartTime`. Waiting
+  never happens in the CPU samples. GPUI's headless renderer commits its command
+  buffer inside `render_scene` and returns nothing, so its GPU time cannot be read
+  without changing Zed; it is not reported.
 - Footprint: `ri_phys_footprint`. RUI: after its 70 frames. GPUI: after the first call
   of the bench function (Criterion calls it many times, each with a new window), and
   again at the end, after thousands of frames.
@@ -68,89 +92,131 @@ examples and GPUI's `primitives` bench paint this way.
 
 ## Results
 
-Apple M2 Max (12 cores, 96 GB), macOS 26.5.2. RUI `78f3fc8` (main) with this change,
-rustc 1.99.1. GPUI at Zed `784374c`, rustc 1.98.1 (Zed's toolchain file), with
-`runtime_shaders`. Three rounds, each case in a fresh process; cells are the range.
+Apple M2 Max (12 cores, 96 GB), macOS 26.5.2. RUI `ec7660d` (main, with the text caches
+of #218 and display pacing of #215), rustc 1.99.1. GPUI at Zed `784374c`, rustc 1.98.1
+(Zed's toolchain file), with `runtime_shaders` and `font-kit`. Three rounds, each case
+in a fresh process; cells are the range.
 
-The machine was far from idle: other sessions were compiling, and the load average was
-150 to 225 throughout. **Wall times are inflated and noisy on both sides; instructions
-and allocations moved by under 2% between rounds and are the numbers to compare.**
+Other sessions were compiling on the machine; the load average rose from 93 to 111
+during the run. **Wall times are noisy on both sides; instructions and allocations
+moved by under 3% between rounds (RUI's virtual lists up to 40% in instructions,
+see below) and are the numbers to compare.**
 
-| Case | Side | Instructions (M) / frame | ms / frame p50 | ms / frame p95 | Allocations / frame | Footprint (MB) | GPUI footprint at end (MB) |
-|---|---|---|---|---|---|---|---|
-| `list_full` | RUI | 25.3–25.4 | 1.6–3.0 | 12–41 | 24 020 | 57–59 | |
-| | GPUI | 162–163 | 48–90 | 85–149 | 50 060 | 74–90 | 163–207 |
-| `list_full_one_row` | RUI | 25.3 | 1.5–2.2 | 12–37 | 24 020 | 54–62 | |
-| | GPUI `.cached()` | 356–357 | 105–181 | 212–254 | 6 205 | 93–114 | 121–167 |
-| `list_virtual_1k` | RUI | 1.4–1.6 | 0.10–0.23 | 0.7–3.8 | 451 | 73–96 | |
-| | GPUI | 3.6–3.8 | 0.66–1.14 | 1.8–2.0 | 787 | 19–60 | 109–157 |
-| `list_virtual_100k` | RUI | 1.5–1.9 | 0.17–0.24 | 0.6–5.0 | 452 | 107–128 | |
-| | GPUI | 3.6–3.8 | 0.60–1.02 | 1.4–2.2 | 787 | 22–55 | 156–188 |
-| `text_paragraphs` | RUI | **286–287** | **44–50** | **77–88** | **163 833** | 45 | |
-| | GPUI | 13.6–13.7 | 2.2–4.4 | 10–23 | 1 848 | 20–71 | 66–77 |
-| `quad_grid` | RUI | 4.4 | 0.37–0.39 | 1.0–1.5 | 28 | 67–73 | |
-| | GPUI | 80–84 | 14–66 | 35–200 | 18–39 | 75–78 | 86–93 |
-| `resize_full` | RUI | 55.7–55.8 | 6.2–11.8 | 32–65 | 36 031 | 58–73 | |
-| | GPUI | 166 | 37–74 | 81–127 | 50 060 | 71–92 | 223–242 |
-| `resize_virtual` | RUI | 2.8–3.6 | 0.36–0.43 | 0.8–3.7 | 684 | **118–142** | |
-| | GPUI | 8.4–9.1 | 0.94–1.5 | 1.7–5.6 | 788 | 22–73 | 310–463 |
+| Case | Side | Instructions (M) / frame | ms / frame p50 | ms / frame p95 | Allocations / frame | Draw calls | Instances | GPU ms p50 | Footprint (MB) | GPUI footprint at end (MB) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `list_full` | RUI | 22.7–22.8 | 3.5–4.7 | 4.7–19 | 16 014 | 1 | 1 033 | 0.38–0.65 | 58–61 | |
+| | GPUI | 161.9–162.4 | 30–41 | 35–69 | 50 060 | 2 | 1 683 | | 78–95 | 258–266 |
+| `list_full_one_row` | RUI | 22.7–22.8 | 2.7–4.9 | 6.9–21 | 16 014 | 1 | 1 033 | 0.19–0.42 | 58–64 | |
+| | GPUI `.cached()` | 267–273 | 40–68 | 66–120 | 6 114–6 141 | **3 983** | 75 972 | | 160–191 | 223–505 |
+| `list_virtual_1k` | RUI | 1.3–1.9 | 0.19–0.27 | 0.4–1.1 | 298 | 1 | 1 056 | 0.18–0.63 | **99–141** | |
+| | GPUI | 4.0 | 0.48–0.90 | 1.1–1.5 | 788 | 2 | 1 217 | | 62–91 | 122–129 |
+| `list_virtual_100k` | RUI | 1.6–1.9 | 0.11–0.36 | 0.2–1.1 | 298 | 1 | 1 122 | 0.19–0.50 | **121–164** | |
+| | GPUI | 4.0–4.1 | 0.56–0.88 | 1.1–1.5 | 788 | 2 | 1 281 | | 61–71 | 122–148 |
+| `text_paragraphs` | RUI | 16.0–16.1 | 1.2–2.2 | 3.3–4.1 | **8 558** | 1 | 6 271 | 0.28–0.39 | 57–59 | |
+| | GPUI | 19.5–19.6 | 2.5–3.6 | 4.4–7.0 | 1 843 | 1 | 6 375 | | 67–71 | 90–97 |
+| `quad_grid` | RUI | 5.1 | 0.58–0.69 | 0.7–1.2 | 15 | 1 | 12 000 | 0.49–0.76 | 74–110 | |
+| | GPUI | 80.5–80.6 | 15–23 | 18–38 | 17–18 | 1 | 12 000 | | 75–76 | 94–99 |
+| `resize_full` | RUI | 53.0 | 7.4–8.6 | 10–35 | 28 025 | 1 | 1 033 | 0.31–0.55 | 64–74 | |
+| | GPUI | 165.5–166.8 | 32–47 | 39–84 | 50 065 | 2 | 1 683 | | 75–96 | 254–266 |
+| `resize_virtual` | RUI | 2.6 | 0.54–0.60 | 1.5–8.7 | 531 | 1 | 1 056 | 0.34–0.64 | **158–224** | |
+| | GPUI | 8.7–9.0 | 0.98–1.25 | 1.7–2.6 | 788 | 2 | 1 217 | | 70–92 | 274–329 |
+
+RUI's GPU p95 ranged up to 4–7 ms in every case in at least one round, against p50s
+under 0.8 ms: the GPU was shared with the other sessions' work, so only the p50 is
+quoted.
 
 | Startup | Process start to fixture code (ms) | First frame (ms) | Process start to first frame (ms) | Footprint (MB) |
 |---|---|---|---|---|
-| RUI | 9–11 | **3 450–8 620** | **3 460–8 630** | 20–22 |
-| GPUI | 100–132 | 46–89 | 146–221 | 90–103 |
+| RUI | 11–14 | 188–247 | 202–259 | 22 |
+| GPUI | 159–174 | 253–257 | 411–431 | 101–102 |
+
+Verdict, as `run.sh` prints it:
+
+| Case | By instructions | By wall p50 |
+|---|---|---|
+| `startup` | | RUI ahead 1.8x (process start to first frame) |
+| `list_full` | RUI ahead 7.1x | RUI ahead 8.7x |
+| `list_full_one_row` | RUI ahead 11.9x | RUI ahead 14.2x |
+| `list_virtual_1k` | RUI ahead 2.5x | RUI ahead 3.0x |
+| `list_virtual_100k` | RUI ahead 2.3x | RUI ahead 3.1x |
+| `text_paragraphs` | RUI ahead 1.2x | RUI ahead 1.8x |
+| `quad_grid` | RUI ahead 15.9x | RUI ahead 29.7x |
+| `resize_full` | RUI ahead 3.1x | RUI ahead 5.0x |
+| `resize_virtual` | RUI ahead 3.4x | RUI ahead 2.0x |
+
+No case is behind by instructions or by wall p50. RUI is still behind GPUI on
+allocations in wrapped text and on footprint in the virtual-list cases (below).
 
 ## Reading the numbers
 
-Where RUI wins, by instructions:
+What changed since the last run (RUI `f7968cc`, same GPUI build):
 
-- Long list, full redraw: 6.4 times fewer instructions than GPUI and half the
-  allocations. Retained layout and renderer culling (`Primitive::may_touch`) mean
-  the 1970 offscreen rows cost build, layout and paint but no Metal work.
-- One changed row: GPUI's own incremental path (`.cached()` views) costs 2.2 times its
-  full redraw at 2000 rows, so RUI's full rebuild is 14 times cheaper than it. GPUI
-  does allocate 4 times less on that path.
-- Virtual lists: 2.4 times fewer instructions than `uniform_list`, flat from 1000 to
-  100 000 rows on both sides.
-- Quad grid: 18 times fewer instructions for 12 000 quads. GPUI's side was not
-  profiled, so where its 80 M go is not established here. Allocations are similar
-  (GPUI 18–39, RUI 28).
-- Resize: 3 times fewer instructions on both resize cases.
+- Wrapped text: 286 M to 16 M instructions and 163 821 to 8 558 allocations per frame,
+  from #218's text caches. It was 14.8 times behind GPUI by instructions; it is now
+  1.2 times ahead, and 1.8 times ahead in wall p50.
+- Startup: process start to first frame from 1.3–1.6 s to 0.20–0.26 s. It was 6.4 times
+  behind; it is now 1.8 times ahead. GPUI's own startup read slower in this run
+  (411–431 ms against 212–245 ms before, same build): its first frame took 253–257 ms
+  against 120–134 ms, which is load. Against GPUI's earlier 212–245 ms the two overlap
+  (RUI 202–259 ms), so the startup lead depends on load; recheck it on an idle machine.
+- Long list: 25.7 M to 22.7 M instructions and 24 014 to 16 014 allocations.
 
-Where RUI loses:
+Where RUI is ahead:
 
-- **Wrapped text is 21 times more instructions than GPUI, 89 times more allocations,
-  and 10 to 20 times the wall time.** Sampling shows about three quarters of the
-  frame in layout: `TextMeasureCache::wrap` reshapes every paragraph every frame
-  (`shape_with_primary`), and `TextShapingFont::supports_cluster` builds a rustybuzz
-  face (`hb_font_t::from_slice`) per cluster it checks. GPUI's line layout cache
-  reuses the previous frame's wrapped lines, so one changed paragraph costs about one
-  paragraph. This is the
-  largest gap in the suite.
-- **Startup: 3.5 s to the first frame in the best round (8.6 s in the worst) against
-  GPUI's 0.15 to 0.22 s.** Renderer creation is only about 60 ms; the rest is shaping
-  the first frame's 4000 strings, about three quarters of it in the same
-  `supports_cluster` → `hb_font_t::from_slice` path. GPUI's text system loads fonts
-  before the bench function, which is inside its 100–132 ms to fixture code, and its
-  whole startup is still about 20 times faster.
-- Footprint while resizing: RUI's offscreen path keeps one target texture and
-  reallocates it on every size change, and footprint reaches 118–142 MB against GPUI's
-  22–73 MB after its first call. GPUI's own footprint grows to 310–463 MB over
-  thousands of resizes in one process, so neither is flat.
-- Startup footprint is RUI's only clear memory win (20 MB vs 90–103 MB), partly because
-  RUI has loaded less by then.
+- Long list, full redraw: 7.1 times fewer instructions than GPUI and a third of the
+  allocations. Retained layout and renderer culling mean the offscreen rows cost
+  build, layout and paint but no Metal work: RUI submits 1 033 instances, GPUI 1 683.
+- One changed row: GPUI's `.cached()` path costs 1.7 times its own full redraw at 2000
+  rows and is 11.9 times RUI's frame. Replaying cached views breaks GPUI's batching:
+  3 983 draw calls and 75 972 instances per frame. GPUI still allocates 2.6 times less
+  than RUI on that path.
+- Virtual lists: 2.3 to 2.5 times fewer instructions and 2.6 times fewer allocations
+  than `uniform_list`, flat from 1000 to 100 000 rows on both sides. RUI's instruction
+  count varies by up to 40% between rounds here (1.3 to 1.9 M); the slowest round is
+  still 2 times ahead.
+- Quad grid: 16 times fewer instructions for the same 12 000 quads in one draw.
+  GPUI's side was not profiled.
+- Resize: 3.1 to 3.4 times fewer instructions.
+- Text, by a small margin: 1.2 times fewer instructions, with about the same glyphs
+  submitted (6 271 vs 6 375 instances).
+- Draw calls: RUI draws every fixture in 1 call; GPUI uses 2 (quads, then glyph
+  sprites) except the text-only and quad-only fixtures.
+
+Where RUI is still behind:
+
+- **Allocations in wrapped text: 8 558 against GPUI's 1 843 per frame, 4.6 times
+  more.** A per-stage split of RUI's frame (a local, uncommitted counter in the bench)
+  puts about 800 in building the 200 paragraphs, 5 864 in layout, 416 in paint and
+  1 476 in the renderer.
+- Where the text frame's time goes, from a 3 s `sample` of the steady frame:
+  - Layout is about 60% of the frame. Most of it is `TextMeasureCache::wrap_uncached`
+    (about 40% of the frame), reached through `TextWrapRequest::wrapped_size` from
+    Taffy's measure callback. Only the edited paragraph should miss the cache, so
+    each frame's misses look like that paragraph measured under Taffy's width probes.
+    That was not confirmed by counting.
+  - The renderer is about 36%: building glyph instances in `TextGlyphCache::glyph` and
+    `TextGlyphCache::shape`, with SipHash hashing of `GlyphKey` (`RandomState`) at
+    about a fifth of the frame.
+- **Footprint in the virtual-list cases:**
+  - Virtual lists: 99–164 MB against GPUI's 61–91 MB after its first call.
+  - Resize on the virtual list: 158–224 MB against 70–92 MB. RUI's offscreen path
+    still reallocates its target texture on every size change.
+  - GPUI's footprint grows over thousands of frames in one process (122–329 MB at
+    the end), so this compares RUI after 70 frames with GPUI after its first call.
+- Startup footprint is RUI's clear memory win (22 MB vs 101 MB).
 
 ## Known unfairness
 
-- Load: every number above was taken at load average 150–225 with other builds
-  running. Wall-time ranges overlap heavily between rounds; repeat on an idle machine
-  before quoting milliseconds.
+- Load: every number above was taken at load average 93–111 with other builds
+  running. Repeat on an idle machine before quoting milliseconds.
 - GPUI runs inside its test platform: each iteration also pumps the foreground
   executor and the frame profiler is enabled. Its instructions include that harness
   work; RUI's bench calls the pipeline directly.
-- GPUI's p95 is draw-only (no present); RUI's p95 includes submit.
+- GPUI's p95 is draw-only (no present); RUI's p95 includes submit. GPUI's p95 can
+  therefore read lower than its p50.
 - GPUI's per-iteration statistics include Criterion warm-up; Criterion's instruction
   estimate does not.
+- GPUI's draw calls are counted from scene batches, not from the encoder.
 - Footprint is read at different points (RUI after 70 frames, GPUI after its first
   bench call and at the end).
 - RUI's bench drains an autorelease pool per frame, as RUI's native runner does per
@@ -163,22 +229,44 @@ Where RUI loses:
 - Resize on GPUI calls what its resize callback calls (`window.resize`,
   `window.bounds_changed`) from inside a frame update, since `simulate_resize` cannot be
   called there. Neither side resizes a real `CAMetalLayer`.
-- Fonts: each side uses its default font; they were not checked to be the same face.
-  Both rasterize glyphs at device scale into an atlas with subpixel variants.
+- Fonts differ: with no family set, RUI uses the first face it loads (Arial), GPUI
+  `.SystemUIFont` (SF Pro) through Core Text. Both rasterize glyphs at device scale into
+  an atlas with subpixel variants.
 - Toolchains differ (rustc 1.99.1 for RUI, 1.98.1 for Zed) and both build with their own
   release profile.
 
+## Measurement hook in RUI
+
+GPU time needed one addition to `src/`: `MetalRenderer::render_offscreen_gpu_time`
+renders like `render_offscreen`, waits for the command buffer, and returns
+`GPUEndTime - GPUStartTime`. The command buffer never leaves the renderer, and
+metal-rs 0.31 does not wrap those two properties, so a bench cannot read them from
+outside. The existing paths are unchanged apart from sharing the offscreen-target
+lookup.
+
 ## Not measured yet
 
-- GPU time (`MTLCommandBuffer` `GPUStartTime` / `GPUEndTime`) and draw calls, which #197
-  also asks for. Neither harness exposes them; both submit without waiting.
+- GPU time on GPUI (see above).
 - Startup to a presented frame in a real on-screen window.
 - Scrolling (offset changing per frame) and input latency.
+
+## Previous run (before #218)
+
+RUI `f7968cc`, same GPUI build with `font-kit`, load 80–120. Instructions in the other
+cases moved by under 15% since:
+
+| Case | RUI | GPUI | Verdict then |
+|---|---|---|---|
+| `text_paragraphs` instructions / frame | 286–287 M | 19.3–19.4 M | RUI behind 14.8x |
+| `text_paragraphs` allocations / frame | 163 821 | 1 842 | |
+| Process start to first frame | 1 340–1 569 ms | 212–245 ms | RUI behind 6.4x |
+| `list_full` instructions / frame | 25.7 M | 159.5–159.7 M | RUI ahead 6.2x |
 
 ## Earlier long-list results
 
 Same machine, before this suite, GPUI at the same revision with its default 16 px text
-(the rows now use 14 px on both sides):
+(the rows now use 14 px on both sides) and **without `font-kit`, so GPUI drew no
+glyphs**:
 
 | Case | Instructions / frame | Wall time / frame | Footprint |
 |---|---|---|---|

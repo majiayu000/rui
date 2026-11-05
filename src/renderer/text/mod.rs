@@ -10,10 +10,13 @@ use crate::renderer::system_fonts::{
     system_font_generation,
 };
 use crate::renderer::text_shaping::{TextShapingFont, rasterize_with_plan, shape_with_fonts};
+use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 mod atlas;
+mod lru;
 mod wrap;
 
 pub use crate::renderer::text_shaping::{
@@ -111,19 +114,63 @@ impl TextMeasureKey {
         }
     }
 
+    fn matches(&self, request: &TextRequest<'_>, resolved_family: &str) -> bool {
+        self.content == request.content
+            && self.size_bits == request.font_size.to_bits()
+            && self.line_height_bits == request.line_height.to_bits()
+            && self.font_weight == request.font_weight
+            && self.font_family == resolved_family
+    }
+
+    fn hasher(&self) -> DefaultHasher {
+        let mut hasher = DefaultHasher::new();
+        self.content.hash(&mut hasher);
+        self.size_bits.hash(&mut hasher);
+        self.line_height_bits.hash(&mut hasher);
+        self.font_weight.hash(&mut hasher);
+        self.font_family.hash(&mut hasher);
+        hasher
+    }
+
     fn retained_bytes(&self) -> usize {
         self.content.len().saturating_add(self.font_family.len())
     }
 }
 
-/// Upper bound on retained measurement entries.
-///
-/// The cache is reused across frames, so text whose content changes every frame
-/// (counters, timers, cursors) would otherwise grow this map for the lifetime of
-/// the window. Reaching the bound drops every entry instead of maintaining LRU
-/// bookkeeping: measurement stays correct, only the next frame re-measures.
-const MAX_RETAINED_METRICS: usize = 4_096;
+/// Hashes like [`TextMeasureKey::hasher`] without copying the text.
+fn request_hasher(request: &TextRequest<'_>, resolved_family: &str) -> DefaultHasher {
+    let mut hasher = DefaultHasher::new();
+    request.content.hash(&mut hasher);
+    request.font_size.to_bits().hash(&mut hasher);
+    request.line_height.to_bits().hash(&mut hasher);
+    request.font_weight.hash(&mut hasher);
+    resolved_family.hash(&mut hasher);
+    hasher
+}
+
+/// Measurement entries the cache trims back to at each frame, taking only text
+/// no frame since the previous one used.
+const RETAINED_METRICS_TARGET: usize = 4_096;
+const RETAINED_METRIC_BYTES_TARGET: usize = 1024 * 1024;
+/// Hard bounds, held even within one frame. Text whose content changes every
+/// frame (counters, timers, cursors) would otherwise grow the cache for the life
+/// of the window; past these the least recently used entries are dropped.
+const MAX_RETAINED_METRICS: usize = 16_384;
 const MAX_RETAINED_METRIC_BYTES: usize = 4 * 1024 * 1024;
+
+/// What a [`TextMeasureCache`] did since it was made.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TextCacheStats {
+    /// Strings run through the shaper. Every measure or wrap miss costs at
+    /// least one, except a rewrap, which reuses the paragraph's kept clusters.
+    pub shapes: usize,
+    pub measure_hits: usize,
+    pub measure_misses: usize,
+    /// Wraps answered by a kept result whose width range holds the width asked.
+    pub wrap_hits: usize,
+    /// Wraps computed again because no kept result held the width.
+    pub wrap_misses: usize,
+}
 
 pub struct TextMeasureCache {
     fonts: Arc<Vec<TextShapingFont>>,
@@ -131,11 +178,9 @@ pub struct TextMeasureCache {
     font_generation: usize,
     font_error: Option<FontLoadError>,
     refreshed_missing_families: HashSet<String>,
-    metrics: HashMap<TextMeasureKey, TextMetrics>,
-    retained_metric_bytes: usize,
+    metrics: lru::FrameLru<TextMeasureKey, TextMetrics>,
     wraps: wrap::WrapCache,
-    #[cfg(test)]
-    metric_hits: usize,
+    stats: TextCacheStats,
     #[cfg(test)]
     font_refresh_enabled: bool,
 }
@@ -143,52 +188,44 @@ pub struct TextMeasureCache {
 impl TextMeasureCache {
     pub fn new() -> Self {
         let snapshot = load_system_fonts();
+        let mut cache = Self::with_fonts(snapshot.resources, snapshot.retryable, true);
+        cache.font_generation = snapshot.generation;
+        cache.font_error = snapshot.error;
+        cache
+    }
+
+    fn with_fonts(
+        fonts: Arc<Vec<TextShapingFont>>,
+        fonts_retryable: bool,
+        #[cfg_attr(not(test), allow(unused_variables))] font_refresh_enabled: bool,
+    ) -> Self {
         Self {
-            fonts: snapshot.resources,
-            fonts_retryable: snapshot.retryable,
-            font_generation: snapshot.generation,
-            font_error: snapshot.error,
+            fonts,
+            fonts_retryable,
+            font_generation: 0,
+            font_error: None,
             refreshed_missing_families: HashSet::new(),
-            metrics: HashMap::new(),
-            retained_metric_bytes: 0,
-            wraps: wrap::WrapCache::default(),
+            metrics: lru::FrameLru::new(
+                RETAINED_METRICS_TARGET,
+                RETAINED_METRIC_BYTES_TARGET,
+                MAX_RETAINED_METRICS,
+                MAX_RETAINED_METRIC_BYTES,
+            ),
+            wraps: wrap::WrapCache::new(),
+            stats: TextCacheStats::default(),
             #[cfg(test)]
-            metric_hits: 0,
-            #[cfg(test)]
-            font_refresh_enabled: true,
+            font_refresh_enabled,
         }
     }
 
     #[cfg(test)]
     pub(crate) fn without_font() -> Self {
-        Self {
-            fonts: Arc::new(Vec::new()),
-            fonts_retryable: false,
-            font_generation: 0,
-            font_error: None,
-            refreshed_missing_families: HashSet::new(),
-            metrics: HashMap::new(),
-            retained_metric_bytes: 0,
-            wraps: wrap::WrapCache::default(),
-            metric_hits: 0,
-            font_refresh_enabled: false,
-        }
+        Self::with_fonts(Arc::new(Vec::new()), false, false)
     }
 
     #[cfg(test)]
     pub(crate) fn retryable_without_font() -> Self {
-        Self {
-            fonts: Arc::new(Vec::new()),
-            fonts_retryable: true,
-            font_generation: 0,
-            font_error: None,
-            refreshed_missing_families: HashSet::new(),
-            metrics: HashMap::new(),
-            retained_metric_bytes: 0,
-            wraps: wrap::WrapCache::default(),
-            metric_hits: 0,
-            font_refresh_enabled: true,
-        }
+        Self::with_fonts(Arc::new(Vec::new()), true, true)
     }
 
     #[cfg(test)]
@@ -197,22 +234,25 @@ impl TextMeasureCache {
         kind: std::io::ErrorKind,
         message: &str,
     ) -> Self {
-        Self {
-            fonts: Arc::new(Vec::new()),
-            fonts_retryable: true,
-            font_generation: 0,
-            font_error: Some(FontLoadError {
-                path: path.to_string(),
-                kind,
-                message: message.to_string(),
-            }),
-            refreshed_missing_families: HashSet::new(),
-            metrics: HashMap::new(),
-            retained_metric_bytes: 0,
-            wraps: wrap::WrapCache::default(),
-            metric_hits: 0,
-            font_refresh_enabled: false,
-        }
+        let mut cache = Self::with_fonts(Arc::new(Vec::new()), true, false);
+        cache.font_error = Some(FontLoadError {
+            path: path.to_string(),
+            kind,
+            message: message.to_string(),
+        });
+        cache
+    }
+
+    /// Mark a frame boundary. Cached measurements and wraps are trimmed back to
+    /// their target size from text that neither the frame that just ended nor
+    /// this one has used.
+    pub fn begin_frame(&mut self) {
+        self.metrics.begin_frame();
+        self.wraps.begin_frame();
+    }
+
+    pub fn stats(&self) -> TextCacheStats {
+        self.stats
     }
 
     /// Number of measurement entries currently retained across frames.
@@ -223,12 +263,12 @@ impl TextMeasureCache {
 
     #[cfg(test)]
     pub(crate) fn cached_metric_bytes(&self) -> usize {
-        self.retained_metric_bytes
+        self.metrics.bytes()
     }
 
     #[cfg(test)]
     pub(crate) fn metric_hits(&self) -> usize {
-        self.metric_hits
+        self.stats.measure_hits
     }
 
     /// Whether this cache shares its font set with `other` instead of owning a
@@ -252,18 +292,32 @@ impl TextMeasureCache {
         }
 
         let primary_index = self.primary_font_index(request.font_family)?;
-        let key = TextMeasureKey::from_request(request, &self.fonts[primary_index].family);
-        if let Some(metrics) = self.metrics.get(&key) {
-            #[cfg(test)]
-            {
-                self.metric_hits += 1;
-            }
-            return Ok(*metrics);
+        Ok(self.measure_prepared(request, primary_index))
+    }
+
+    /// [`Self::measure_single_line`] once fonts are prepared.
+    fn measure_prepared(&mut self, request: TextRequest<'_>, primary_index: usize) -> TextMetrics {
+        let family = self.fonts[primary_index].family.as_str();
+        let hash = request_hasher(&request, family).finish();
+        if let Some(metrics) = self
+            .metrics
+            .get_mut(hash, |key| key.matches(&request, family))
+        {
+            self.stats.measure_hits += 1;
+            return *metrics;
         }
 
-        let metrics = self.shape_with_primary(request, primary_index).metrics();
+        self.stats.measure_misses += 1;
+        let metrics = self.shape_counted(request, primary_index).metrics();
+        let key = TextMeasureKey::from_request(request, &self.fonts[primary_index].family);
         self.retain_metrics(key, metrics);
-        Ok(metrics)
+        metrics
+    }
+
+    /// Shape, counting it in [`TextCacheStats::shapes`].
+    fn shape_counted(&mut self, request: TextRequest<'_>, primary_index: usize) -> TextShapePlan {
+        self.stats.shapes += 1;
+        self.shape_with_primary(request, primary_index)
     }
 
     pub fn shape_single_line(
@@ -372,24 +426,13 @@ impl TextMeasureCache {
     }
 
     fn retain_metrics(&mut self, key: TextMeasureKey, metrics: TextMetrics) {
-        let key_bytes = key.retained_bytes();
-        if key_bytes > MAX_RETAINED_METRIC_BYTES {
-            return;
-        }
-        let exceeds_bytes = self
-            .retained_metric_bytes
-            .checked_add(key_bytes)
-            .is_none_or(|bytes| bytes > MAX_RETAINED_METRIC_BYTES);
-        if self.metrics.len() >= MAX_RETAINED_METRICS || exceeds_bytes {
-            self.clear_metrics();
-        }
-        self.retained_metric_bytes += key_bytes;
-        self.metrics.insert(key, metrics);
+        let bytes = key.retained_bytes();
+        let hash = key.hasher().finish();
+        self.metrics.insert(hash, key, metrics, bytes);
     }
 
     fn clear_metrics(&mut self) {
         self.metrics.clear();
-        self.retained_metric_bytes = 0;
         self.wraps.clear();
     }
 

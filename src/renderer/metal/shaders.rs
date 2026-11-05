@@ -45,9 +45,9 @@ float3 oklab_to_linear(float3 lab) {
 }
 "#;
 
-/// One instanced pipeline for quads, shadows and glyph sprites. Each instance is
-/// a reference: the top two bits of `index` pick the kind and the rest index that
-/// kind's buffer, so draws of different kinds share a call while each kind keeps
+/// One instanced pipeline for quads, shadows, glyph sprites and paths. Each
+/// instance is a reference: the top three bits of `index` pick the kind and the
+/// rest index that kind's buffer, so draws of different kinds share a call while each kind keeps
 /// its own compact layout. `clip` indexes device pixel clip rectangles, applied
 /// per fragment as a scissor rectangle would be.
 ///
@@ -56,16 +56,23 @@ float3 oklab_to_linear(float3 lab) {
 /// blur_radius / 2, as CSS box shadows are: separable for square corners and
 /// integrated numerically along y for rounded ones (Evan Wallace, "Fast Rounded
 /// Rectangle Shadows"; GPUI draws its shadows the same way). Glyphs sample an A8
-/// atlas page.
+/// atlas page. Paths are tiles whose fragments take the exact area of the pixel
+/// square the path winds around, from the edges the tile lists and the backdrop
+/// of the edges right of it (see `path.rs`, whose `coverage` is the same
+/// function), or, once rasterized into the atlas, sprites whose coverage is
+/// used as is.
 pub const SPRITE_SHADER: &str = r#"
 #include <metal_stdlib>
 using namespace metal;
 
 constant uint KIND_QUAD = 0;
 constant uint KIND_SHADOW = 1;
+constant uint KIND_GLYPH = 2;
+constant uint KIND_PATH = 3;
+constant uint KIND_PATH_SPRITE = 4;
 
 struct SpriteRef {
-    uint index;              // kind << 30 | index into that kind's buffer
+    uint index;              // kind << 29 | index into that kind's buffer
     uint clip;
 };
 
@@ -93,6 +100,15 @@ struct GlyphInstance {
     float4 color;
 };
 
+struct PathInstance {
+    float4 bounds;        // x, y, width, height in logical pixels
+    float4 color;
+    uint2 edges;          // first edge and count in the edge buffer
+    float top;            // device y of the tile's first row
+    float _padding;
+    float backdrop[16];   // per row, the area edges right of the tile add
+};
+
 struct Uniforms {
     float2 viewport_size;
 };
@@ -113,6 +129,7 @@ struct VertexOut {
     float2 size;             // quad: size; shadow: half size
     float2 point;            // shadow: position relative to the rectangle's center
     float scalar;            // shadow: sigma; glyph: luma
+    uint path [[flat]];      // path: index of the tile
 };
 
 // Convert from pixel coordinates to clip space
@@ -171,6 +188,14 @@ void glyph_vertex(thread VertexOut& out, GlyphInstance instance, float2 unit_pos
     out.scalar = dot(saturate(instance.color.rgb), float3(0.2126, 0.7152, 0.0722));
 }
 
+void path_vertex(thread VertexOut& out, constant PathInstance& instance, uint index,
+                 float2 unit_pos, float2 viewport_size) {
+    out.position = to_clip_space(instance.bounds.xy + unit_pos * instance.bounds.zw,
+                                 viewport_size);
+    out.color = linear_color(instance.color);
+    out.path = index;
+}
+
 vertex VertexOut sprite_vertex(
     uint vertex_id [[vertex_id]],
     uint instance_id [[instance_id]],
@@ -179,7 +204,8 @@ vertex VertexOut sprite_vertex(
     constant QuadInstance* quads [[buffer(2)]],
     constant ShadowInstance* shadows [[buffer(3)]],
     constant GlyphInstance* glyphs [[buffer(4)]],
-    constant float4* clips [[buffer(5)]]
+    constant float4* clips [[buffer(5)]],
+    constant PathInstance* paths [[buffer(6)]]
 ) {
     // Unit quad vertices (two triangles)
     float2 positions[6] = {
@@ -188,8 +214,8 @@ vertex VertexOut sprite_vertex(
     };
 
     SpriteRef sprite = refs[instance_id];
-    uint kind = sprite.index >> 30;
-    uint index = sprite.index & 0x3fffffff;
+    uint kind = sprite.index >> 29;
+    uint index = sprite.index & 0x1fffffff;
     float2 unit_pos = positions[vertex_id];
 
     VertexOut out = {};
@@ -199,6 +225,8 @@ vertex VertexOut sprite_vertex(
         quad_vertex(out, quads[index], unit_pos, uniforms.viewport_size);
     } else if (kind == KIND_SHADOW) {
         shadow_vertex(out, shadows[index], unit_pos, uniforms.viewport_size);
+    } else if (kind == KIND_PATH) {
+        path_vertex(out, paths[index], index, unit_pos, uniforms.viewport_size);
     } else {
         glyph_vertex(out, glyphs[index], unit_pos, uniforms.viewport_size);
     }
@@ -363,16 +391,63 @@ float4 glyph_fragment(VertexOut in, texture2d<float> atlas, sampler samp) {
     return float4(in.color.rgb, in.color.a * mix(dark, light, in.scalar));
 }
 
+// The mean of clamp(u, 0, 1) as u runs linearly from u0 to u1.
+float mean_clamped(float u0, float u1) {
+    if (abs(u1 - u0) < 1e-4) {
+        return saturate((u0 + u1) * 0.5);
+    }
+    // An antiderivative of clamp(u, 0, 1).
+    float2 u = float2(u0, u1);
+    float2 integral = select(select(u - 0.5, u * u * 0.5, u <= 1.0), float2(0.0), u <= 0.0);
+    return (integral.y - integral.x) / (u1 - u0);
+}
+
+// The share of the pixel square the path winds around, nonzero rule;
+// `coverage` in `path.rs` on the CPU.
+float path_coverage(VertexOut in, constant float4* edges, constant PathInstance* paths) {
+    constant PathInstance& tile = paths[in.path];
+    float left = in.position.x - 0.5;
+    float top = in.position.y - 0.5;
+    float bottom = in.position.y + 0.5;
+    float area = tile.backdrop[clamp(int(top - tile.top), 0, 15)];
+    uint end = tile.edges.x + tile.edges.y;
+    for (uint i = tile.edges.x; i < end; i++) {
+        float4 edge = edges[i];
+        if (edge.y == edge.w) {
+            continue;
+        }
+        // Downward edges add, upward ones subtract.
+        float sign = edge.y < edge.w ? 1.0 : -1.0;
+        float4 e = edge.y < edge.w ? edge : edge.zwxy;
+        float low = max(e.y, top);
+        float high = min(e.w, bottom);
+        if (low >= high) {
+            continue;
+        }
+        float slope = (e.z - e.x) / (e.w - e.y);
+        float u0 = e.x + (low - e.y) * slope - left;
+        float u1 = e.x + (high - e.y) * slope - left;
+        area += sign * (high - low) * mean_clamped(u0, u1);
+    }
+    return min(abs(area), 1.0);
+}
+
 fragment float4 sprite_fragment(VertexOut in [[stage_in]],
                                 texture2d<float> atlas [[texture(0)]],
-                                sampler samp [[sampler(0)]]) {
+                                sampler samp [[sampler(0)]],
+                                constant float4* edges [[buffer(0)]],
+                                constant PathInstance* paths [[buffer(1)]]) {
     float4 color;
     if (in.kind == KIND_QUAD) {
         color = quad_fragment(in);
     } else if (in.kind == KIND_SHADOW) {
         color = shadow_fragment(in);
-    } else {
+    } else if (in.kind == KIND_GLYPH) {
         color = glyph_fragment(in, atlas, samp);
+    } else if (in.kind == KIND_PATH) {
+        color = float4(in.color.rgb, in.color.a * path_coverage(in, edges, paths));
+    } else {
+        color = float4(in.color.rgb, in.color.a * atlas.sample(samp, in.uv).r);
     }
     // Pixel centers sit on half pixels, so this keeps exactly the pixels a
     // scissor rectangle of the same integer edges would.
@@ -482,49 +557,5 @@ fragment float4 image_fragment(VertexOut in [[stage_in]],
     float out_alpha = color.a * in.color.a * in.opacity * alpha;
 
     return float4(color.rgb, out_alpha);
-}
-"#;
-
-/// Metal shader for path rendering
-pub const PATH_SHADER: &str = r#"
-#include <metal_stdlib>
-using namespace metal;
-
-// Packed to match GpuPathVertex: 24 bytes, with color at offset 8.
-struct PathVertex {
-    packed_float2 position;
-    packed_float4 color;
-};
-
-struct Uniforms {
-    float2 viewport_size;
-};
-
-struct VertexOut {
-    float4 position [[position]];
-    float4 color;
-};
-
-float4 to_clip_space(float2 position, float2 viewport_size) {
-    float2 ndc = (position / viewport_size) * 2.0 - 1.0;
-    ndc.y = -ndc.y;
-    return float4(ndc, 0.0, 1.0);
-}
-
-vertex VertexOut path_vertex(
-    uint vertex_id [[vertex_id]],
-    constant PathVertex* vertices [[buffer(0)]],
-    constant Uniforms& uniforms [[buffer(1)]]
-) {
-    PathVertex path_vertex_data = vertices[vertex_id];
-
-    VertexOut out;
-    out.position = to_clip_space(path_vertex_data.position, uniforms.viewport_size);
-    out.color = linear_color(path_vertex_data.color);
-    return out;
-}
-
-fragment float4 path_fragment(VertexOut in [[stage_in]]) {
-    return in.color;
 }
 "#;

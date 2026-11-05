@@ -166,6 +166,11 @@ fn overlap_order_draws_what_scene_order_draws() {
         let scene = random_scene(seed);
         let scale = if seed % 3 == 0 { 2.0 } else { 1.0 };
 
+        // Small paths drawn again come from the atlas; draw once so both
+        // captures below draw them the same way.
+        renderer
+            .capture_frame_pixels_at_scale(&scene, viewport, scale)
+            .expect("warm-up capture");
         renderer.set_scene_order(true);
         let expected = renderer
             .capture_frame_pixels_at_scale(&scene, viewport, scale)
@@ -194,4 +199,160 @@ fn overlap_order_draws_what_scene_order_draws() {
         ordered_draws < scene_draws,
         "overlap order drew {ordered_draws} draws, scene order {scene_draws}"
     );
+}
+
+/// Coverage of each device pixel by the exact shape, from 16 x 16 samples: a
+/// fill's nonzero winding, or a stroke's segment rectangles.
+fn reference_coverage(
+    points: &[(f32, f32)],
+    stroke_width: Option<f32>,
+    scale: f32,
+    width: usize,
+    height: usize,
+) -> Vec<f32> {
+    const SAMPLES: usize = 16;
+    let points: Vec<(f32, f32)> = points
+        .iter()
+        .map(|&(x, y)| (x * scale, y * scale))
+        .collect();
+    let inside = |x: f32, y: f32| -> bool {
+        match stroke_width {
+            None => {
+                let mut winding = 0;
+                for (index, &(ax, ay)) in points.iter().enumerate() {
+                    let (bx, by) = points[(index + 1) % points.len()];
+                    let cross = (bx - ax) * (y - ay) - (by - ay) * (x - ax);
+                    if ay <= y && by > y && cross > 0.0 {
+                        winding += 1;
+                    } else if ay > y && by <= y && cross < 0.0 {
+                        winding -= 1;
+                    }
+                }
+                winding != 0
+            }
+            Some(stroke) => points.windows(2).any(|pair| {
+                let ((ax, ay), (bx, by)) = (pair[0], pair[1]);
+                let length = ((bx - ax).powi(2) + (by - ay).powi(2)).sqrt();
+                let (ux, uy) = ((bx - ax) / length, (by - ay) / length);
+                let along = (x - ax) * ux + (y - ay) * uy;
+                let across = (y - ay) * ux - (x - ax) * uy;
+                (0.0..=length).contains(&along) && across.abs() <= stroke * scale * 0.5
+            }),
+        }
+    };
+    let mut coverage = Vec::with_capacity(width * height);
+    for row in 0..height {
+        for column in 0..width {
+            let mut hits = 0;
+            for sy in 0..SAMPLES {
+                for sx in 0..SAMPLES {
+                    let x = column as f32 + (sx as f32 + 0.5) / SAMPLES as f32;
+                    let y = row as f32 + (sy as f32 + 0.5) / SAMPLES as f32;
+                    hits += usize::from(inside(x, y));
+                }
+            }
+            coverage.push(hits as f32 / (SAMPLES * SAMPLES) as f32);
+        }
+    }
+    coverage
+}
+
+fn srgb_byte_to_linear(byte: u8) -> f32 {
+    let c = f32::from(byte) / 255.0;
+    if c <= 0.04045 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+#[test]
+fn paths_match_a_reference_raster_drawn_as_tiles_and_from_the_atlas() {
+    // Coverage is compared in linear light: white over black blends to it.
+    let mut renderer = match MetalRenderer::new() {
+        Ok(renderer) => renderer,
+        Err(RendererError::BackendUnavailable(_)) => return,
+        Err(err) => panic!("metal renderer should initialize: {err}"),
+    };
+    let star: Vec<(f32, f32)> = (0..10)
+        .map(|point| {
+            let angle = point as f32 * std::f32::consts::PI / 5.0;
+            let radius = if point % 2 == 0 { 14.0 } else { 6.0 };
+            (20.0 + angle.sin() * radius, 20.0 - angle.cos() * radius)
+        })
+        .collect();
+    let pentagram: Vec<(f32, f32)> = (0..5)
+        .map(|point| {
+            let angle = (point * 2) as f32 * std::f32::consts::PI * 2.0 / 5.0;
+            (20.3 + angle.sin() * 15.0, 20.6 - angle.cos() * 15.0)
+        })
+        .collect();
+    // Name, points and stroke width of each path.
+    type Case = (&'static str, Vec<(f32, f32)>, Option<f32>);
+    let cases: Vec<Case> = vec![
+        ("star", star, None),
+        ("pentagram, nonzero", pentagram, None),
+        (
+            "notched arrow",
+            vec![(3.0, 5.0), (36.0, 20.0), (3.0, 35.0), (14.5, 20.0)],
+            None,
+        ),
+        (
+            "zigzag stroke",
+            vec![
+                (3.0, 30.0),
+                (12.0, 8.0),
+                (21.0, 30.0),
+                (30.0, 8.0),
+                (37.0, 25.0),
+            ],
+            Some(3.0),
+        ),
+        ("hairline", vec![(2.0, 2.5), (38.0, 37.0)], Some(1.0)),
+    ];
+    let viewport = Size::new(40.0, 40.0);
+    for (name, points, stroke_width) in cases {
+        for scale in [1.0f32, 2.0] {
+            let mut scene = Scene::new();
+            scene.insert(Primitive::Quad {
+                bounds: Bounds::from_xywh(0.0, 0.0, 40.0, 40.0),
+                background: Rgba::new(0.0, 0.0, 0.0, 1.0),
+                border_color: Rgba::new(0.0, 0.0, 0.0, 0.0),
+                border_widths: Edges::ZERO,
+                corner_radii: Corners::all(0.0),
+            });
+            scene.insert(Primitive::Path {
+                vertices: points.iter().map(|&(x, y)| PathVertex::new(x, y)).collect(),
+                color: Rgba::new(1.0, 1.0, 1.0, 1.0),
+                stroke_width,
+            });
+            let size = (40.0 * scale) as usize;
+            let reference = reference_coverage(&points, stroke_width, scale, size, size);
+            // The first frame draws tiles; the next rasterizes into the atlas,
+            // and the one after draws the atlas sprite it placed.
+            for (frame, placed) in [("tiles", 0), ("atlas", 1), ("atlas again", 1)] {
+                let before = renderer.placed_path_sprites();
+                let pixels = renderer
+                    .capture_frame_pixels_at_scale(&scene, viewport, scale)
+                    .expect("capture");
+                if frame == "atlas" {
+                    assert_eq!(renderer.placed_path_sprites() - before, placed, "{name}");
+                }
+                let (mut worst, mut total) = (0.0f32, 0.0f32);
+                for (index, expected) in reference.iter().enumerate() {
+                    let actual = srgb_byte_to_linear(pixels[index * 4]);
+                    let error = (actual - expected).abs();
+                    worst = worst.max(error);
+                    total += error;
+                }
+                let mean = total / reference.len() as f32;
+                // Pixels where the shape winds twice beside a sharp vertex count
+                // the overlap twice before clamping, so the worst pixel is looser.
+                assert!(
+                    worst <= 0.25 && mean <= 0.002,
+                    "{name} at scale {scale}, {frame}: worst error {worst:.3}, mean {mean:.4}"
+                );
+            }
+        }
+    }
 }

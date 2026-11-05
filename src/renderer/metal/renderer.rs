@@ -2,11 +2,13 @@
 
 use super::batch::{BufferLayout, InstancePool, bind_vertex_value, write_slice};
 use super::capture::{create_capture_texture, read_texture_rgba, texture_extent};
-use super::frame::{Draw, FramePlan, ItemKind, KIND_GLYPH, KIND_QUAD, KIND_SHADOW};
+use super::frame::{
+    Draw, FramePlan, ItemKind, KIND_GLYPH, KIND_PATH, KIND_PATH_SPRITE, KIND_QUAD, KIND_SHADOW,
+};
 use super::glyph::{GlyphPages, GpuGlyph};
 use super::image_primitive::{GpuImage, calculate_fit_bounds};
 use super::order::Rect;
-use super::path::{GpuPathVertex, build_path_mesh};
+use super::path::{GpuPathTile, PathGeometry, PathSprites, PathTiles, SpriteLookup};
 use crate::core::geometry::{Bounds, Size};
 use crate::renderer::primitives::{GpuQuad, GpuShadow, Primitive};
 use crate::renderer::text::{SUBPIXEL_VARIANTS, TextGlyphCache, TextRequest};
@@ -35,19 +37,13 @@ struct Uniforms {
 pub struct MetalFrameStats {
     /// Draw calls encoded.
     pub draw_calls: u32,
-    /// Instances those draws drew; a path counts once.
+    /// Instances those draws drew.
     pub instances: u32,
 }
 
 struct ImageDraw {
     texture: Texture,
     instance: GpuImage,
-    clip: u32,
-}
-
-struct PathDraw {
-    start: usize,
-    end: usize,
     clip: u32,
 }
 
@@ -59,8 +55,11 @@ struct FrameData {
     shadows: Vec<GpuShadow>,
     glyphs: Vec<GpuGlyph>,
     images: Vec<ImageDraw>,
-    path_vertices: Vec<GpuPathVertex>,
-    paths: Vec<PathDraw>,
+    path_tiles: Vec<GpuPathTile>,
+    /// `[x0, y0, x1, y1]` in device pixels, the edges each path tile reads.
+    path_edges: Vec<[f32; 4]>,
+    /// The path being built, kept to reuse its storage.
+    path: PathGeometry,
     /// Clip rectangles in device pixels, as scissor rectangles and as the
     /// `x0, y0, x1, y1` the sprite shader tests fragments against.
     scissors: Vec<MTLScissorRect>,
@@ -74,8 +73,8 @@ impl FrameData {
         self.shadows.clear();
         self.glyphs.clear();
         self.images.clear();
-        self.path_vertices.clear();
-        self.paths.clear();
+        self.path_tiles.clear();
+        self.path_edges.clear();
         self.scissors.clear();
         self.clip_edges.clear();
     }
@@ -153,7 +152,6 @@ pub struct MetalRenderer {
     command_queue: CommandQueue,
     sprite_pipeline: RenderPipelineState,
     image_pipeline: RenderPipelineState,
-    path_pipeline: RenderPipelineState,
     sampler: SamplerState,
     /// Bound for sprite draws that sample no atlas page.
     empty_page: Texture,
@@ -162,10 +160,14 @@ pub struct MetalRenderer {
     image_cache: RendererImageCache,
     text_cache: TextGlyphCache,
     glyph_pages: GlyphPages,
+    path_sprites: PathSprites,
+    path_tiles: PathTiles,
     offscreen_target: Option<Texture>,
     frame: FrameData,
     instances: InstancePool,
     frame_stats: MetalFrameStats,
+    /// GPU time of the last frame that waited for completion.
+    gpu_time: Option<std::time::Duration>,
 }
 
 /// A pipeline drawing into the target format with source-over blending.
@@ -226,12 +228,6 @@ impl MetalRenderer {
             "image_vertex",
             "image_fragment",
         )?;
-        let path_pipeline = blended_pipeline(
-            &device,
-            super::shaders::PATH_SHADER,
-            "path_vertex",
-            "path_fragment",
-        )?;
 
         // Sampler for images/text
         let sampler_desc = SamplerDescriptor::new();
@@ -254,7 +250,6 @@ impl MetalRenderer {
             command_queue,
             sprite_pipeline,
             image_pipeline,
-            path_pipeline,
             sampler,
             empty_page,
             textures: HashMap::new(),
@@ -273,9 +268,12 @@ impl MetalRenderer {
                 limits.glyph_max_bytes,
             ),
             glyph_pages: GlyphPages::default(),
+            path_sprites: PathSprites::default(),
+            path_tiles: PathTiles::default(),
             frame: FrameData::default(),
             instances: InstancePool::default(),
             frame_stats: MetalFrameStats::default(),
+            gpu_time: None,
         })
     }
 
@@ -291,6 +289,12 @@ impl MetalRenderer {
     /// Draw calls and instances of the last frame rendered.
     pub fn last_frame_stats(&self) -> MetalFrameStats {
         self.frame_stats
+    }
+
+    /// How many paths are drawn from the atlas.
+    #[cfg(test)]
+    pub(super) fn placed_path_sprites(&self) -> usize {
+        self.path_sprites.placed()
     }
 
     /// Plan draws in scene order rather than overlap order.
@@ -333,7 +337,28 @@ impl MetalRenderer {
     ) -> Result<(), RendererError> {
         let width = texture_extent(viewport_size.width * scale_factor, "width")?;
         let height = texture_extent(viewport_size.height * scale_factor, "height")?;
-        let texture = match &self.offscreen_target {
+        let texture = self.offscreen_texture(width, height);
+        self.render_to_texture(scene, &texture, viewport_size, None, false)
+    }
+
+    /// [`Self::render_offscreen`], then wait for the GPU and return the command
+    /// buffer's GPU time (`GPUEndTime - GPUStartTime`). For benchmarks.
+    pub fn render_offscreen_gpu_time(
+        &mut self,
+        scene: &Scene,
+        viewport_size: Size,
+        scale_factor: f32,
+    ) -> Result<std::time::Duration, RendererError> {
+        let width = texture_extent(viewport_size.width * scale_factor, "width")?;
+        let height = texture_extent(viewport_size.height * scale_factor, "height")?;
+        let texture = self.offscreen_texture(width, height);
+        self.render_to_texture(scene, &texture, viewport_size, None, true)?;
+        self.gpu_time
+            .ok_or_else(|| RendererError::render_failed("the frame reported no GPU time"))
+    }
+
+    fn offscreen_texture(&mut self, width: u64, height: u64) -> Texture {
+        match &self.offscreen_target {
             Some(texture) if texture.width() == width && texture.height() == height => {
                 texture.clone()
             }
@@ -342,8 +367,7 @@ impl MetalRenderer {
                 self.offscreen_target = Some(texture.clone());
                 texture
             }
-        };
-        self.render_to_texture(scene, &texture, viewport_size, None, false)
+        }
     }
 
     /// Render a scene to a drawable
@@ -375,7 +399,10 @@ impl MetalRenderer {
         self.texture_resources.begin_frame();
         self.image_cache.begin_frame();
         self.text_cache.begin_frame();
+        self.path_sprites.begin_frame(self.text_cache.epoch());
+        self.path_tiles.begin_frame();
         self.frame_stats = MetalFrameStats::default();
+        self.gpu_time = None;
 
         let scale_factor = texture.width() as f32 / viewport_size.width.max(1.0);
         let drawable_size = Size::new(texture.width() as f32, texture.height() as f32);
@@ -565,30 +592,12 @@ impl MetalRenderer {
                     color,
                     stroke_width,
                 } => {
-                    let mesh = build_path_mesh(vertices, *color, *stroke_width)?;
-                    let Some(first) = mesh.vertices.first() else {
-                        continue;
-                    };
-                    let mut rect = [
-                        first.position[0],
-                        first.position[1],
-                        first.position[0],
-                        first.position[1],
-                    ];
-                    for vertex in &mesh.vertices {
-                        let [x, y] = vertex.position;
-                        rect = union(rect, [x, y, x, y]);
-                    }
-                    let start = frame.path_vertices.len();
-                    frame.path_vertices.extend_from_slice(&mesh.vertices);
-                    frame.paths.push(PathDraw {
-                        start,
-                        end: frame.path_vertices.len(),
-                        clip,
-                    });
-                    let kind = ItemKind::Path((frame.paths.len() - 1) as u32);
-                    // Half a pixel for rounding in the stroke's offsets.
-                    frame.push_item(kind, clip, outset(rect, 0.5), scale_factor);
+                    let mut path = std::mem::take(&mut frame.path);
+                    let built = path
+                        .set(vertices, *stroke_width, scale_factor)
+                        .and_then(|()| self.build_path(frame, &path, *color, clip, scale_factor));
+                    frame.path = path;
+                    built?;
                 }
                 Primitive::PushClip { bounds, .. } => {
                     let new_clip = if let Some(prev) = clip_stack.last() {
@@ -683,17 +692,22 @@ impl MetalRenderer {
             (4, layout.reserve(&frame.glyphs)),
             (5, layout.reserve(&frame.clip_edges)),
         ];
-        let paths_at = layout.reserve(&frame.path_vertices);
+        let paths_at = layout.reserve(&frame.path_tiles);
+        let edges_at = layout.reserve(&frame.path_edges);
         let instances = self.instances.acquire(&self.device, layout.bytes());
         write_slice(&instances, refs_at, &frame.plan.refs);
         write_slice(&instances, sprite_data[0].1, &frame.quads);
         write_slice(&instances, sprite_data[1].1, &frame.shadows);
         write_slice(&instances, sprite_data[2].1, &frame.glyphs);
         write_slice(&instances, sprite_data[3].1, &frame.clip_edges);
-        write_slice(&instances, paths_at, &frame.path_vertices);
+        write_slice(&instances, paths_at, &frame.path_tiles);
+        write_slice(&instances, edges_at, &frame.path_edges);
         for (index, offset) in sprite_data {
             encoder.set_vertex_buffer(index, Some(&instances), offset as u64);
         }
+        encoder.set_vertex_buffer(6, Some(&instances), paths_at as u64);
+        encoder.set_fragment_buffer(0, Some(&instances), edges_at as u64);
+        encoder.set_fragment_buffer(1, Some(&instances), paths_at as u64);
 
         for &draw in &frame.plan.draws {
             match draw {
@@ -740,24 +754,6 @@ impl MetalRenderer {
                     self.count_draw(1);
                     sprites_bound = false;
                 }
-                Draw::Path(index) => {
-                    let path = &frame.paths[index as usize];
-                    if scissor != path.clip {
-                        encoder.set_scissor_rect(frame.scissors[path.clip as usize]);
-                        scissor = path.clip;
-                    }
-                    encoder.set_render_pipeline_state(&self.path_pipeline);
-                    let offset = paths_at + path.start * std::mem::size_of::<GpuPathVertex>();
-                    encoder.set_vertex_buffer(0, Some(&instances), offset as u64);
-                    bind_vertex_value(encoder, 1, &uniforms);
-                    encoder.draw_primitives(
-                        MTLPrimitiveType::Triangle,
-                        0,
-                        (path.end - path.start) as u64,
-                    );
-                    self.count_draw(1);
-                    sprites_bound = false;
-                }
             }
         }
 
@@ -774,6 +770,7 @@ impl MetalRenderer {
                     "metal command buffer failed during offscreen capture",
                 ));
             }
+            self.gpu_time = Some(gpu_time(command_buffer));
         }
         Ok(())
     }
@@ -781,6 +778,94 @@ impl MetalRenderer {
     fn count_draw(&mut self, instances: usize) {
         self.frame_stats.draw_calls += 1;
         self.frame_stats.instances += instances as u32;
+    }
+
+    /// Draws `path` from the atlas when it is a small shape drawn before, and as
+    /// analytic tiles otherwise.
+    fn build_path(
+        &mut self,
+        frame: &mut FrameData,
+        path: &PathGeometry,
+        color: crate::core::color::Rgba,
+        clip: u32,
+        scale_factor: f32,
+    ) -> Result<(), RendererError> {
+        // A font loaded earlier in this frame may have emptied the atlas.
+        self.path_sprites.sync_epoch(self.text_cache.epoch());
+        let placed = match self.path_sprites.lookup(path) {
+            SpriteLookup::Analytic => None,
+            SpriteLookup::Placed(slot, cell) => Some((slot, cell)),
+            SpriteLookup::Rasterize(cell, key) => {
+                let pixels = path.rasterize(cell.origin, cell.width, cell.height);
+                match self
+                    .text_cache
+                    .place_sprite(cell.width, cell.height, pixels)
+                {
+                    Ok(slot) => {
+                        self.path_sprites.place(key, slot);
+                        Some((slot, cell))
+                    }
+                    // Without atlas room the path is still drawn, as tiles.
+                    Err(RendererResourceError::ResourcePressure { .. }) => None,
+                    Err(err) => return Err(err.into()),
+                }
+            }
+        };
+
+        if let Some((slot, cell)) = placed {
+            let (page_width, page_height) = self
+                .text_cache
+                .atlas()
+                .page_extent(slot.page)
+                .ok_or_else(|| {
+                    RendererResourceError::missing(RendererResourceKind::Glyph, slot.page as u32)
+                })?;
+            let rect = slot.rect;
+            let sprite = GpuGlyph {
+                bounds: [
+                    cell.origin[0] / scale_factor,
+                    cell.origin[1] / scale_factor,
+                    cell.width as f32 / scale_factor,
+                    cell.height as f32 / scale_factor,
+                ],
+                uv: [
+                    rect.x as f32 / page_width as f32,
+                    rect.y as f32 / page_height as f32,
+                    rect.width as f32 / page_width as f32,
+                    rect.height as f32 / page_height as f32,
+                ],
+                color: color.to_array(),
+            };
+            let kind = ItemKind::Sprites {
+                kind: KIND_PATH_SPRITE,
+                start: frame.glyphs.len() as u32,
+                count: 1,
+                page: Some(slot.page as u32),
+            };
+            frame.glyphs.push(sprite);
+            frame.push_item(kind, clip, bounds_rect(sprite.bounds), scale_factor);
+            return Ok(());
+        }
+
+        let start = frame.path_tiles.len() as u32;
+        let visible = frame.clip_edges[clip as usize];
+        if let Some(rect) = self.path_tiles.push(
+            path,
+            color,
+            scale_factor,
+            visible,
+            &mut frame.path_tiles,
+            &mut frame.path_edges,
+        ) {
+            let kind = ItemKind::Sprites {
+                kind: KIND_PATH,
+                start,
+                count: frame.path_tiles.len() as u32 - start,
+                page: None,
+            };
+            frame.push_item(kind, clip, rect, scale_factor);
+        }
+        Ok(())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1092,4 +1177,21 @@ impl Renderer for MetalRenderer {
         )
         .with_unsupported_primitives(RendererPrimitiveSupport::metal().unsupported_primitives())
     }
+}
+
+/// `GPUEndTime - GPUStartTime` of a completed command buffer; metal-rs does not
+/// wrap these properties.
+fn gpu_time(command_buffer: &CommandBufferRef) -> std::time::Duration {
+    // SAFETY: a metal-rs `CommandBufferRef` is the `MTLCommandBuffer` object itself.
+    let object = unsafe {
+        &*(command_buffer as *const CommandBufferRef as *const objc2::runtime::AnyObject)
+    };
+    // SAFETY: both properties are `CFTimeInterval` (f64) getters on MTLCommandBuffer.
+    let (start, end): (f64, f64) = unsafe {
+        (
+            objc2::msg_send![object, GPUStartTime],
+            objc2::msg_send![object, GPUEndTime],
+        )
+    };
+    std::time::Duration::from_secs_f64((end - start).max(0.0))
 }

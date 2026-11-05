@@ -118,3 +118,8 @@ harness = false
 name = "hit_test"
 path = "benches/hit_test.rs"
 harness = false
+
+[[bench]]
+name = "text_cache"
+path = "benches/text_cache.rs"
+harness = false
