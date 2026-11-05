@@ -1,15 +1,14 @@
 use rui::ElementId;
-use rui::advanced_ui::{
-    Tab, TabList, TabPanel, Tabs, Theme, ThemeDensity, container, scrollable, text,
-};
+use rui::advanced_ui::{Tab, TabList, TabPanel, Tabs, Theme, ThemeDensity, container, text};
 use rui::core::accessibility::AccessibilityRole;
 use rui::core::event::{KeyCode, KeyEvent, Modifiers, MouseButton, ScrollEvent};
 use rui::core::geometry::{Bounds, Point, Size};
 use rui::elements::Element;
+use rui::elements::Input;
 use rui::elements::element::{
     AnyElement, EventContext, LayoutContext, PointerEvent, PointerEventKind,
 };
-use rui::elements::Input;
+use rui::elements::scroll_view;
 use rui::renderer::Primitive;
 use rui::testing::mount;
 use std::cell::{Cell, RefCell};
@@ -188,7 +187,8 @@ fn advanced_ui_tabs_forward_scroll_to_selected_panel() {
             .accessibility_label("Project sections")
             .panel(TabPanel::new(
                 "overview",
-                scrollable(container().w(120.0).h(240.0))
+                scroll_view()
+                    .child(container().w(120.0).h(240.0))
                     .h(48.0)
                     .on_scroll({
                         let did_scroll_ref = Rc::clone(&did_scroll_ref);

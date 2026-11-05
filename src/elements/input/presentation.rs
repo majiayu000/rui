@@ -243,7 +243,7 @@ impl Input {
     }
 
     pub(super) fn colors(&self) -> (Color, Color, Color) {
-        if let Some(tokens) = self.paint_tokens {
+        if let Some(tokens) = self.paint_tokens() {
             let text = if self.state.value.is_empty() {
                 tokens.placeholder
             } else {
@@ -345,7 +345,7 @@ impl Input {
 
     fn font_size_for_height(&self, height: f32) -> f32 {
         let requested = self
-            .paint_tokens
+            .paint_tokens()
             .map(|tokens| tokens.font_size)
             .unwrap_or(14.0);
         requested.min((height - 4.0).max(1.0))
@@ -357,7 +357,7 @@ impl Input {
 
     fn cursor_height_for_height(&self, height: f32) -> f32 {
         let requested = self
-            .paint_tokens
+            .paint_tokens()
             .map(|tokens| tokens.font_size * 1.4)
             .unwrap_or(20.0);
         requested.min((height - 4.0).max(1.0))
@@ -373,11 +373,11 @@ impl Input {
         };
         let style = TextEditPaintStyle::new(
             INPUT_CARET_WIDTH,
-            self.paint_tokens
+            self.paint_tokens()
                 .map(|tokens| tokens.focus_ring)
                 .unwrap_or_else(|| Color::hex(0x6366f1))
                 .to_rgba(),
-            self.paint_tokens
+            self.paint_tokens()
                 .map(|tokens| tokens.focus_ring)
                 .unwrap_or_else(|| Color::hex(0x6366f1))
                 .with_alpha(0.22)
@@ -444,11 +444,11 @@ impl Input {
         };
         let style = TextEditPaintStyle::new(
             INPUT_CARET_WIDTH,
-            self.paint_tokens
+            self.paint_tokens()
                 .map(|tokens| tokens.focus_ring)
                 .unwrap_or_else(|| Color::hex(0x6366f1))
                 .to_rgba(),
-            self.paint_tokens
+            self.paint_tokens()
                 .map(|tokens| tokens.focus_ring)
                 .unwrap_or_else(|| Color::hex(0x6366f1))
                 .with_alpha(0.22)

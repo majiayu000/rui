@@ -1,11 +1,11 @@
 use super::*;
-use crate::advanced_ui::text_field::TextField;
 use crate::advanced_ui::tokens::ThemeDensity;
 use crate::advanced_ui::{button, container, text};
 use crate::core::action::{ActionId, ActionOutcome, StandardAction, route_key_event};
 use crate::core::app::AppContext;
 use crate::core::event::{Modifiers, MouseButton};
 use crate::core::geometry::{Point, Size};
+use crate::elements::Input;
 use crate::elements::element::PointerEventKind;
 use std::cell::Cell;
 use std::rc::Rc;
@@ -377,7 +377,11 @@ fn advanced_ui_dialog_inactive_forwards_nested_editor() {
         let field_id = ElementId::new();
         let mut dialog = Dialog::new(
             "Edit",
-            TextField::new("Name").id(field_id).value("").w(160.0),
+            Input::new()
+                .accessibility_label("Name")
+                .id(field_id)
+                .value("")
+                .w(160.0),
         )
         .disabled(disabled)
         .read_only(read_only);
@@ -393,7 +397,11 @@ fn advanced_ui_dialog_inactive_forwards_nested_editor() {
     let field_id = ElementId::new();
     let mut dialog = Dialog::new(
         "Edit",
-        TextField::new("Name").id(field_id).value("keep").w(160.0),
+        Input::new()
+            .accessibility_label("Name")
+            .id(field_id)
+            .value("keep")
+            .w(160.0),
     );
     assert_enabled_overlay_forwards_child_actions(
         "enabled dialog",
@@ -413,7 +421,13 @@ fn advanced_ui_dialog_enabled_routes_child_actions() {
     let mut dialog = Dialog::new(
         "Edit",
         container()
-            .child(TextField::new("Name").id(field_id).value("keep").w(160.0))
+            .child(
+                Input::new()
+                    .accessibility_label("Name")
+                    .id(field_id)
+                    .value("keep")
+                    .w(160.0),
+            )
             .child(button("Save").id(button_id).on_click(move || {
                 clicks_ref.set(clicks_ref.get() + 1);
             })),
@@ -478,7 +492,11 @@ fn advanced_ui_popover_inactive_forwards_nested_editor() {
     let mut popover = Popover::new(
         "Edit",
         button("Open"),
-        TextField::new("Name").id(field_id).value("").w(160.0),
+        Input::new()
+            .accessibility_label("Name")
+            .id(field_id)
+            .value("")
+            .w(160.0),
     )
     .open(true)
     .read_only(true);
@@ -494,7 +512,11 @@ fn advanced_ui_popover_inactive_forwards_nested_editor() {
     let mut popover = Popover::new(
         "Edit",
         button("Open"),
-        TextField::new("Name").id(field_id).value("keep").w(160.0),
+        Input::new()
+            .accessibility_label("Name")
+            .id(field_id)
+            .value("keep")
+            .w(160.0),
     )
     .open(true);
     assert_enabled_overlay_forwards_child_actions(

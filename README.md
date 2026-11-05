@@ -14,8 +14,7 @@ RUI helps you build native macOS interfaces in Rust with declarative components,
 - **GPU-Accelerated Rendering** - Metal-based rendering on macOS
 - **Declarative API** - Build UIs with a clean, chainable builder pattern
 - **Flexbox Layout** - Powered by [Taffy](https://github.com/DioxusLabs/taffy) for familiar CSS-like layouts
-- **React-like Hooks** - `use_mouse`, `use_paste`, `use_window_focus` and more
-- **Rich Component Library** - Div, Text, Button, Input, Image, Table, List, Progress, Spinner
+- **One Widget Per Role** - Div, Text, Button, Input, ScrollView, Image, Table, List, Spinner, plus themed controls in `advanced_ui`
 - **Animation System** - Built-in support for smooth animations with easing functions
 
 ## Status and Limitations
@@ -216,21 +215,17 @@ native windows and renderer attachments. The canonical runtime foundation is in
 |---------|-------------|
 | `Div` | Flexbox container element |
 | `Text` | Text rendering with styling |
-| `Button` | Interactive button with variants |
-| `Input` | Text input field |
+| `Button` | Themed, accessible button (`advanced_ui::Button`, in the prelude) |
+| `Input` | Text input field, optionally themed |
+| `ScrollView` | Clipped scroll area with accessibility |
 | `Image` | Image display with fit modes |
 | `Table` | Table layout with rows/cells |
 | `List` | Ordered/unordered lists |
-| `Progress` | Progress bar |
 | `Spinner` | Loading spinner |
 
-### Hooks Module
-
-| Hook | Description |
-|------|-------------|
-| `use_mouse` | Track mouse events and position |
-| `use_paste` | Handle clipboard paste events |
-| `use_window_focus` | Detect window focus changes |
+Themed controls (`Checkbox`, `ProgressBar`, `Tabs`, `Menu`, `Dialog` and
+more) live in `rui::advanced_ui`. See [One Widget Per Role](docs/API.md#one-widget-per-role)
+for which widget covers each role.
 
 ## Styling
 

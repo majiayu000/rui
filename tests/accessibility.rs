@@ -1,7 +1,6 @@
 use rui::advanced_ui::{
     Button, Checkbox, DataList, DataTableRow, DataTree, DataTreeItem, Dialog, Menu, Popover,
-    ProgressBar, Scrollable, SegmentedControl, Tab, TabPanel, Tabs, TextField, button, container,
-    text,
+    ProgressBar, SegmentedControl, Tab, TabPanel, Tabs, button, container, text,
 };
 use rui::core::ElementId;
 use rui::core::accessibility::{
@@ -15,6 +14,7 @@ use rui::core::geometry::{Bounds, Point, Size};
 use rui::core::presenter::Presenter;
 use rui::core::text_editing::TextInputEvent;
 use rui::elements::Element;
+use rui::elements::ScrollView;
 use rui::elements::element::{
     EventContext, LayoutContext, PaintContext, PointerEvent, PointerEventKind,
 };
@@ -36,7 +36,7 @@ fn first_node(nodes: Vec<AccessibilityNode>) -> AccessibilityNode {
     }
 }
 
-fn layout_and_paint_scrollable(scrollable: &mut Scrollable, size: Size) -> TaffyTree<ElementId> {
+fn layout_and_paint_scrollable(scrollable: &mut ScrollView, size: Size) -> TaffyTree<ElementId> {
     let mut taffy = TaffyTree::<ElementId>::new();
     let mut layout_cx = LayoutContext::new(&mut taffy, size);
     let node = scrollable.layout(&mut layout_cx);
@@ -209,7 +209,8 @@ fn accessibility_tabs_expose_tab_list_tabs_and_selected_panel() {
 fn accessibility_text_and_scrollable_expose_semantic_tree() {
     let scroll_id = ElementId::new();
     let text_id = ElementId::new();
-    let scrollable = Scrollable::new(text("Activity").id(text_id))
+    let scrollable = ScrollView::new()
+        .child(text("Activity").id(text_id))
         .id(scroll_id)
         .accessibility_label("Activity feed");
 
@@ -237,7 +238,8 @@ fn accessibility_text_and_scrollable_expose_semantic_tree() {
 #[test]
 fn accessibility_scrollable_tree_exposes_actual_scroll_position() {
     let scroll_id = ElementId::new();
-    let mut scrollable = Scrollable::new(container().w(100.0).h(300.0))
+    let mut scrollable = ScrollView::new()
+        .child(container().w(100.0).h(300.0))
         .id(scroll_id)
         .h(100.0)
         .accessibility_label("Activity feed");
@@ -388,7 +390,8 @@ fn accessibility_input_exposes_composition_range() {
 #[test]
 fn accessibility_text_field_applies_advanced_contracts_to_input_semantics() {
     let id = ElementId::new();
-    let mut field = TextField::new("Search")
+    let mut field = Input::new()
+        .accessibility_label("Search")
         .id(id)
         .value("alpha")
         .read_only(true)

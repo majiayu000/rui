@@ -1,7 +1,15 @@
 //! ScrollView element for scrollable content
 
+use crate::advanced_ui::require_non_empty;
 use crate::core::ElementId;
-use crate::core::action::{ActionId, ActionOutcome};
+use crate::core::accessibility::{
+    AccessibilityAction, AccessibilityContext, AccessibilityError, AccessibilityNode,
+    AccessibilityRole, AccessibilityScrollPosition,
+};
+use crate::core::action::{
+    ACCESSIBILITY_SCROLL_BACKWARD_ACTION, ACCESSIBILITY_SCROLL_FORWARD_ACTION, ActionId,
+    ActionOutcome,
+};
 use crate::core::color::Color;
 use crate::core::geometry::{Bounds, Edges, Size};
 use crate::core::style::{Corners, Overflow, Style};
@@ -143,6 +151,11 @@ impl ScrollState {
 /// ScrollView component
 pub struct ScrollView {
     id: Option<ElementId>,
+    /// `id` was set by the application, so layout keeps it.
+    explicit_id: bool,
+    accessibility_label: Option<String>,
+    disabled: bool,
+    read_only: bool,
     direction: ScrollDirection,
     scrollbar_visibility: ScrollbarVisibility,
     style: Style,
@@ -161,7 +174,11 @@ impl ScrollView {
         style.overflow_y = Overflow::Scroll;
 
         Self {
-            id: None,
+            id: Some(ElementId::new()),
+            explicit_id: false,
+            accessibility_label: None,
+            disabled: false,
+            read_only: false,
             direction: ScrollDirection::default(),
             scrollbar_visibility: ScrollbarVisibility::default(),
             style,
@@ -176,7 +193,31 @@ impl ScrollView {
 
     pub fn id(mut self, id: ElementId) -> Self {
         self.id = Some(id);
+        self.explicit_id = true;
         self
+    }
+
+    pub fn accessibility_label(mut self, label: impl Into<String>) -> Self {
+        let label = label.into();
+        require_non_empty(&label, "scroll view accessibility label must not be empty");
+        self.accessibility_label = Some(label);
+        self
+    }
+
+    /// Freezes scrolling. Pointer and text input still reach the children.
+    pub fn disabled(mut self, disabled: bool) -> Self {
+        self.disabled = disabled;
+        self
+    }
+
+    /// Freezes scrolling like [`ScrollView::disabled`], but reads as enabled.
+    pub fn read_only(mut self, read_only: bool) -> Self {
+        self.read_only = read_only;
+        self
+    }
+
+    fn can_scroll(&self) -> bool {
+        !self.disabled && !self.read_only
     }
 
     pub fn direction(mut self, direction: ScrollDirection) -> Self {
@@ -289,7 +330,7 @@ impl ScrollView {
         self.state.metrics()
     }
 
-    pub(crate) fn scroll_accessibility(&mut self, forward: bool) -> bool {
+    fn scroll_accessibility(&mut self, forward: bool) -> bool {
         const DELTA: f32 = 40.0;
         let (dx, dy) = match self.direction {
             ScrollDirection::Vertical => (0.0, if forward { DELTA } else { -DELTA }),
@@ -343,6 +384,12 @@ impl Element for ScrollView {
         self.id
     }
 
+    fn adopt_stable_id(&mut self, id: ElementId) {
+        if !self.explicit_id {
+            self.id = Some(id);
+        }
+    }
+
     fn style(&self) -> &Style {
         &self.style
     }
@@ -366,6 +413,9 @@ impl Element for ScrollView {
 
     fn paint(&mut self, cx: &mut PaintContext) {
         let bounds = cx.bounds();
+        if let Some(id) = self.id {
+            cx.register_accessibility_region(id, bounds);
+        }
 
         // Update viewport size
         self.state.viewport_size = bounds.size;
@@ -494,6 +544,41 @@ impl Element for ScrollView {
         &self.children
     }
 
+    fn accessibility(
+        &self,
+        cx: &AccessibilityContext,
+    ) -> Result<Option<AccessibilityNode>, AccessibilityError> {
+        let Some(id) = self.id else {
+            return Ok(None);
+        };
+        let mut node = AccessibilityNode::new(id, AccessibilityRole::ScrollArea)
+            .with_enabled(!self.disabled)
+            .with_read_only(self.read_only)
+            .with_focused(cx.a11y_has_focus(id));
+        if self.can_scroll() {
+            let mut actions = Vec::new();
+            if self.can_scroll_forward() {
+                actions.push(AccessibilityAction::ScrollForward);
+            }
+            if self.can_scroll_backward() {
+                actions.push(AccessibilityAction::ScrollBackward);
+            }
+            node = node.with_actions(actions);
+        }
+        if let Some(metrics) = self.scroll_metrics() {
+            node = node.with_scroll_position(AccessibilityScrollPosition::new(
+                metrics.offset_x,
+                metrics.offset_y,
+                metrics.max_x,
+                metrics.max_y,
+            ));
+        }
+        if let Some(label) = &self.accessibility_label {
+            node = node.with_label(label.clone());
+        }
+        Ok(Some(node))
+    }
+
     fn children_mut(&mut self) -> &mut [AnyElement] {
         &mut self.children
     }
@@ -547,7 +632,7 @@ impl Element for ScrollView {
         event: &crate::core::event::ScrollEvent,
     ) -> bool {
         let bounds = cx.bounds();
-        if !bounds.contains(event.position) {
+        if !self.can_scroll() || !bounds.contains(event.position) {
             return false;
         }
 
@@ -595,6 +680,23 @@ impl Element for ScrollView {
     }
 
     fn dispatch_action(&mut self, cx: &mut EventContext, action: &ActionId) -> ActionOutcome {
+        if self.id.is_some() && cx.focused_id() == self.id {
+            let forward = match action {
+                ActionId::Custom(name) if name == ACCESSIBILITY_SCROLL_FORWARD_ACTION => Some(true),
+                ActionId::Custom(name) if name == ACCESSIBILITY_SCROLL_BACKWARD_ACTION => {
+                    Some(false)
+                }
+                _ => None,
+            };
+            if let Some(forward) = forward {
+                if self.can_scroll() && self.scroll_accessibility(forward) {
+                    cx.request_redraw();
+                    return ActionOutcome::handled("scroll_view accessibility");
+                }
+                return ActionOutcome::Ignored;
+            }
+        }
+        // Non-scroll actions always reach nested children.
         let bounds = cx.bounds();
         if let Some(focused) = cx.focused_id() {
             for (child, node) in self

@@ -22,18 +22,14 @@ fn docs_api_covers_public_builders_and_validation_commands() {
         "list()",
         "ordered_list()",
         "unordered_list()",
-        "progress()",
         "spinner()",
         "advanced_ui::container()",
         "advanced_ui::row()",
         "advanced_ui::column()",
         "advanced_ui::text(",
         "advanced_ui::hoverable(",
-        "advanced_ui::button(",
         "advanced_ui::checkbox(",
-        "advanced_ui::text_field(",
         "advanced_ui::progress_bar(",
-        "advanced_ui::scrollable(",
         "advanced_ui::segmented_control(",
         "advanced_ui::toolbar(",
         "advanced_ui::tooltip(",
@@ -72,14 +68,6 @@ fn docs_api_covers_public_builders_and_validation_commands() {
 #[test]
 fn docs_api_enum_variants_match_source() {
     let surfaces = [
-        EnumSurface {
-            name: "ButtonVariant",
-            source: include_str!("../src/elements/button.rs"),
-        },
-        EnumSurface {
-            name: "ButtonSize",
-            source: include_str!("../src/elements/button.rs"),
-        },
         EnumSurface {
             name: "InputType",
             source: include_str!("../src/elements/input.rs"),

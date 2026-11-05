@@ -7,7 +7,7 @@ use rui::elements::element::LayoutNodes;
 use rui::elements::{Div, view};
 use rui::renderer::text::TextMeasureCache;
 use rui::renderer::{Primitive, Scene};
-use rui::{AppContext, Bounds, Color, ElementId, Size, View, ViewContext, div, text};
+use rui::{AppContext, Bounds, Color, ElementId, Size, View, ViewContext, div, scroll_view, text};
 use std::cell::Cell;
 use std::rc::Rc;
 use taffy::prelude::TaffyTree;
@@ -55,6 +55,8 @@ struct App {
     builds: Rc<Cell<u32>>,
     /// Read by the root, so notifying it rebuilds everything.
     title: Entity<String>,
+    /// Places the rows inside a `ScrollView` instead of directly in the root.
+    in_scroll_view: bool,
     root: Div,
     taffy: TaffyTree<ElementId>,
     nodes: LayoutNodes,
@@ -90,6 +92,7 @@ impl App {
             renders,
             builds: Rc::new(Cell::new(0)),
             title,
+            in_scroll_view: false,
             root: div(),
             taffy: TaffyTree::new(),
             nodes: LayoutNodes::new(),
@@ -100,14 +103,17 @@ impl App {
 
     fn build(&self) -> impl FnMut(&mut AppContext) -> Div + use<> {
         let (rows, builds, title) = (self.rows.clone(), Rc::clone(&self.builds), self.title);
+        let in_scroll_view = self.in_scroll_view;
         move |cx: &mut AppContext| {
             builds.set(builds.get() + 1);
             let heading = cx.get(title).map(|title| title.clone()).unwrap_or_default();
-            div()
-                .w(320.0)
-                .flex_col()
-                .child(text(heading))
-                .children(rows.iter().map(|row| view(*row)))
+            let root = div().w(320.0).flex_col().child(text(heading));
+            let rows = rows.iter().map(|row| view(*row));
+            if in_scroll_view {
+                root.child(scroll_view().h(400.0).children(rows))
+            } else {
+                root.children(rows)
+            }
         }
     }
 
@@ -197,6 +203,25 @@ fn a_notified_model_renders_only_the_view_that_read_it() {
     app.frame();
     assert_eq!(app.builds.get(), 1);
     assert_eq!(app.renders(), expected);
+}
+
+#[test]
+fn a_view_inside_a_scroll_view_renders_again_when_notified() {
+    let mut app = App::new(30);
+    app.in_scroll_view = true;
+    app.frame();
+    assert_eq!(app.renders(), vec![1; 30]);
+
+    app.set_label(3, "three");
+    app.frame();
+    assert_eq!(app.builds.get(), 1, "the root is not built again");
+    let mut expected = vec![1; 30];
+    expected[3] = 2;
+    assert_eq!(app.renders(), expected);
+    assert!(
+        format!("{:?}", app.scene.primitives()).contains("three (0 clicks)"),
+        "the row inside the scroll view shows its new label"
+    );
 }
 
 #[test]

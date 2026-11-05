@@ -1,11 +1,12 @@
 use rui::ElementId;
-use rui::advanced_ui::{button, container, dialog, popover, scrollable, text};
+use rui::advanced_ui::{button, container, dialog, popover, text};
 use rui::core::event::{KeyCode, KeyEvent, Modifiers, MouseButton, ScrollEvent};
 use rui::core::geometry::{Bounds, Point, Size};
 use rui::elements::Element;
 use rui::elements::element::{
     EventContext, LayoutContext, PaintContext, PointerEvent, PointerEventKind,
 };
+use rui::elements::scroll_view;
 use rui::renderer::Scene;
 use std::cell::Cell;
 use std::rc::Rc;
@@ -42,7 +43,8 @@ fn popover_and_dialog_forward_scroll_to_open_content() {
     let mut popover = popover(
         "Details",
         button("Open"),
-        scrollable(container().w(100.0).h(240.0))
+        scroll_view()
+            .child(container().w(100.0).h(240.0))
             .h(60.0)
             .on_scroll(move |_, _| popover_scrolled_ref.set(true)),
     )
@@ -70,7 +72,8 @@ fn popover_and_dialog_forward_scroll_to_open_content() {
     let dialog_scrolled_ref = Rc::clone(&dialog_scrolled);
     let mut dialog = dialog(
         "Details",
-        scrollable(container().w(100.0).h(240.0))
+        scroll_view()
+            .child(container().w(100.0).h(240.0))
             .h(60.0)
             .on_scroll(move |_, _| dialog_scrolled_ref.set(true)),
     );

@@ -25,12 +25,12 @@ pub use crate::core::{
 };
 
 pub use crate::elements::{
-    Button, ButtonSize, ButtonVariant, Canvas, Div, Element, EventResult, Image, ImageFit, Input,
-    InputType, IntoElement, Render, ScrollDirection, ScrollView, StyledText, Text, TextArea,
-    TextAreaState, TextSpan, button, canvas, div, image, input, scroll_view, span, styled_text,
-    text, text_area,
+    Canvas, Div, Element, EventResult, Image, ImageFit, Input, InputType, IntoElement, Render,
+    ScrollDirection, ScrollView, StyledText, Text, TextArea, TextAreaState, TextSpan, canvas, div,
+    image, input, scroll_view, span, styled_text, text, text_area,
 };
 
 pub use crate::advanced_ui;
+pub use crate::advanced_ui::{Button, ControlSize, ControlVariant, Theme, button};
 
 pub use std::time::Duration;

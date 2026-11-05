@@ -7,7 +7,7 @@ Complete API documentation for the RUI framework.
 - [Core Types](#core-types)
 - [Elements](#elements)
 - [Advanced UI Themes](#advanced-ui-themes)
-- [Hooks](#hooks)
+- [One Widget Per Role](#one-widget-per-role)
 - [Styling](#styling)
 - [Colors](#colors)
 - [Animation](#animation)
@@ -19,13 +19,34 @@ Complete API documentation for the RUI framework.
 
 `cargo test --test docs_api_drift` verifies that this section stays aligned with the public source API.
 
-Builders: `div()`, `text(content)`, `button(label)`, `input()`, `image(path)`, `scroll_view()`, `table()`, `row()`, `header_row()`, `cell(content)`, `list()`, `ordered_list()`, `unordered_list()`, `progress()`, `spinner()`.
+Builders: `div()`, `text(content)`, `button(label)`, `input()`, `image(path)`, `scroll_view()`, `table()`, `row()`, `header_row()`, `cell(content)`, `list()`, `ordered_list()`, `unordered_list()`, `spinner()`.
 
-Advanced UI builders: `advanced_ui::container()`, `advanced_ui::row()`, `advanced_ui::column()`, `advanced_ui::text(content)`, `advanced_ui::hoverable(child)`, `advanced_ui::button(label)`, `advanced_ui::checkbox(label)`, `advanced_ui::text_field(label)`, `advanced_ui::progress_bar(value)`, `advanced_ui::scrollable(child)`, `advanced_ui::segmented_control(options, selected)`, `advanced_ui::toolbar(label)`, `advanced_ui::tooltip(child, content)`, `advanced_ui::menu(label, items)`, `advanced_ui::popover(label, anchor, content)`, `advanced_ui::dialog(label, content)`, `advanced_ui::tab(value, label)`, `advanced_ui::tab_list(tabs, selected)`, `advanced_ui::tab_panel(value, child)`, `advanced_ui::tabs(tabs, selected)`, `advanced_ui::data_list(items)`, `advanced_ui::data_tree(roots)`, `advanced_ui::data_table_row(cells)`.
+Advanced UI builders: `advanced_ui::container()`, `advanced_ui::row()`, `advanced_ui::column()`, `advanced_ui::text(content)`, `advanced_ui::hoverable(child)`, `advanced_ui::checkbox(label)`, `advanced_ui::progress_bar(value)`, `advanced_ui::segmented_control(options, selected)`, `advanced_ui::toolbar(label)`, `advanced_ui::tooltip(child, content)`, `advanced_ui::menu(label, items)`, `advanced_ui::popover(label, anchor, content)`, `advanced_ui::dialog(label, content)`, `advanced_ui::tab(value, label)`, `advanced_ui::tab_list(tabs, selected)`, `advanced_ui::tab_panel(value, child)`, `advanced_ui::tabs(tabs, selected)`, `advanced_ui::data_list(items)`, `advanced_ui::data_tree(roots)`, `advanced_ui::data_table_row(cells)`.
 
-Enum variants: `ButtonVariant::Primary`, `ButtonVariant::Secondary`, `ButtonVariant::Outline`, `ButtonVariant::Ghost`, `ButtonVariant::Danger`, `ButtonVariant::Success`; `ButtonSize::Small`, `ButtonSize::Medium`, `ButtonSize::Large`; `InputType::Text`, `InputType::Password`, `InputType::Email`, `InputType::Number`, `InputType::Search`; `ImageFit::Cover`, `ImageFit::Contain`, `ImageFit::Fill`, `ImageFit::None`, `ImageFit::ScaleDown`; `ScrollDirection::Vertical`, `ScrollDirection::Horizontal`, `ScrollDirection::Both`; `ScrollbarVisibility::Auto`, `ScrollbarVisibility::Always`, `ScrollbarVisibility::Never`, `ScrollbarVisibility::Hover`; `ListStyle::Bullet`, `ListStyle::Numbered`, `ListStyle::LowercaseAlpha`, `ListStyle::UppercaseAlpha`, `ListStyle::LowercaseRoman`, `ListStyle::UppercaseRoman`, `ListStyle::None`; `SpinnerType::Dots`, `SpinnerType::Line`, `SpinnerType::Circle`, `SpinnerType::Arrow`, `SpinnerType::Box`, `SpinnerType::Bounce`, `SpinnerType::Grow`, `SpinnerType::Star`; `TextAlign::Left`, `TextAlign::Center`, `TextAlign::Right`; `ControlSize::Small`, `ControlSize::Medium`, `ControlSize::Large`; `ControlVariant::Primary`, `ControlVariant::Secondary`, `ControlVariant::Outline`, `ControlVariant::Ghost`, `ControlVariant::Danger`, `ControlVariant::Success`; `MainAxisAlignment::Start`, `MainAxisAlignment::End`, `MainAxisAlignment::Center`, `MainAxisAlignment::SpaceBetween`, `MainAxisAlignment::SpaceAround`; `CrossAxisAlignment::Start`, `CrossAxisAlignment::End`, `CrossAxisAlignment::Center`, `CrossAxisAlignment::Stretch`; `Easing::Linear`, `Easing::EaseIn`, `Easing::EaseOut`, `Easing::EaseInOut`, `Easing::EaseInQuad`, `Easing::EaseOutQuad`, `Easing::EaseInOutQuad`, `Easing::EaseInCubic`, `Easing::EaseOutCubic`, `Easing::EaseInOutCubic`, `Easing::EaseInQuart`, `Easing::EaseOutQuart`, `Easing::EaseInOutQuart`, `Easing::EaseInExpo`, `Easing::EaseOutExpo`, `Easing::EaseInOutExpo`, `Easing::EaseInBack`, `Easing::EaseOutBack`, `Easing::EaseInOutBack`, `Easing::EaseInElastic`, `Easing::EaseOutElastic`, `Easing::EaseInOutElastic`, `Easing::EaseInBounce`, `Easing::EaseOutBounce`, `Easing::EaseInOutBounce`, `Easing::Spring`, `Easing::Custom`.
+Enum variants: `InputType::Text`, `InputType::Password`, `InputType::Email`, `InputType::Number`, `InputType::Search`; `ImageFit::Cover`, `ImageFit::Contain`, `ImageFit::Fill`, `ImageFit::None`, `ImageFit::ScaleDown`; `ScrollDirection::Vertical`, `ScrollDirection::Horizontal`, `ScrollDirection::Both`; `ScrollbarVisibility::Auto`, `ScrollbarVisibility::Always`, `ScrollbarVisibility::Never`, `ScrollbarVisibility::Hover`; `ListStyle::Bullet`, `ListStyle::Numbered`, `ListStyle::LowercaseAlpha`, `ListStyle::UppercaseAlpha`, `ListStyle::LowercaseRoman`, `ListStyle::UppercaseRoman`, `ListStyle::None`; `SpinnerType::Dots`, `SpinnerType::Line`, `SpinnerType::Circle`, `SpinnerType::Arrow`, `SpinnerType::Box`, `SpinnerType::Bounce`, `SpinnerType::Grow`, `SpinnerType::Star`; `TextAlign::Left`, `TextAlign::Center`, `TextAlign::Right`; `ControlSize::Small`, `ControlSize::Medium`, `ControlSize::Large`; `ControlVariant::Primary`, `ControlVariant::Secondary`, `ControlVariant::Outline`, `ControlVariant::Ghost`, `ControlVariant::Danger`, `ControlVariant::Success`; `MainAxisAlignment::Start`, `MainAxisAlignment::End`, `MainAxisAlignment::Center`, `MainAxisAlignment::SpaceBetween`, `MainAxisAlignment::SpaceAround`; `CrossAxisAlignment::Start`, `CrossAxisAlignment::End`, `CrossAxisAlignment::Center`, `CrossAxisAlignment::Stretch`; `Easing::Linear`, `Easing::EaseIn`, `Easing::EaseOut`, `Easing::EaseInOut`, `Easing::EaseInQuad`, `Easing::EaseOutQuad`, `Easing::EaseInOutQuad`, `Easing::EaseInCubic`, `Easing::EaseOutCubic`, `Easing::EaseInOutCubic`, `Easing::EaseInQuart`, `Easing::EaseOutQuart`, `Easing::EaseInOutQuart`, `Easing::EaseInExpo`, `Easing::EaseOutExpo`, `Easing::EaseInOutExpo`, `Easing::EaseInBack`, `Easing::EaseOutBack`, `Easing::EaseInOutBack`, `Easing::EaseInElastic`, `Easing::EaseOutElastic`, `Easing::EaseInOutElastic`, `Easing::EaseInBounce`, `Easing::EaseOutBounce`, `Easing::EaseInOutBounce`, `Easing::Spring`, `Easing::Custom`.
 
 Validation: CI-safe checks are `cargo test --test docs_api_drift`, `cargo test example_smoke`, `cargo test dogfood`, `cargo check`, and `cargo test`. The native macOS GUI smoke is local-only: `scripts/native_dogfood_macos.sh`.
+
+---
+
+## One Widget Per Role
+
+Each role has one public widget. `button`, `input` and `scroll_view` are in
+the prelude; the other controls live in `rui::advanced_ui`.
+
+| Role | Widget | Replaces |
+|------|--------|----------|
+| Button | `button(label)` (`advanced_ui::Button`) | the old `elements::Button`, `ButtonVariant`, `ButtonSize` |
+| Single-line text | `input()` (`elements::Input`) | `advanced_ui::TextField` / `text_field(label)` |
+| Scroll area | `scroll_view()` (`elements::ScrollView`) | `advanced_ui::Scrollable` / `scrollable(child)` |
+| Progress | `advanced_ui::progress_bar(value)` | the terminal-style `elements::Progress` / `progress()` |
+
+Migration: `text_field("Name")` is `input().accessibility_label("Name").theme(Theme::default())`;
+`scrollable(child)` is `scroll_view().child(child)` and `.background(color)`
+is `.bg(color)`; `ButtonVariant` / `ButtonSize` are `ControlVariant` /
+`ControlSize`. The terminal `rui::hooks` module (terminal mouse reports,
+bracketed paste, focus reporting) is gone: window, pointer, paste and focus
+events reach elements through the element event handlers.
 
 ---
 
@@ -48,11 +69,13 @@ button("Save").theme(theme);
 `Theme::light()`, `Theme::dark()`, and `Theme::high_contrast()` provide the
 standard presets. Apps can customize the public token structs directly.
 
-Raw elements such as `div()`, `text()`, and `input()` remain explicit primitive
-builders: they use the colors, spacing, and style values passed to their own
-builder methods. They do not read advanced UI theme tokens automatically. Use
-advanced controls when shared disabled/read-only/invalid/focus/hover/pressed,
-loading, and error state styling should come from the theme contract.
+Raw elements such as `div()` and `text()` remain explicit primitive builders:
+they use the colors, spacing, and style values passed to their own builder
+methods. They do not read advanced UI theme tokens automatically. `input()`
+uses its own default look until `.theme(theme)` or `.size(ControlSize)` opts it
+into the theme contract. Use advanced controls when shared
+disabled/read-only/invalid/focus/hover/pressed, loading, and error state
+styling should come from the theme contract.
 
 ---
 
@@ -293,47 +316,28 @@ pub enum TextAlign {
 
 ### Button
 
-Interactive button element.
+Themed, focusable button (`advanced_ui::Button`, re-exported by the prelude).
+It exposes an accessible `Button` node and activates on click or the
+`Activate` action.
 
 ```rust
 button("Click Me")
-    .variant(ButtonVariant::Primary)
-    .size(ButtonSize::Medium)
-    .on_click(|_| println!("Clicked!"))
+    .variant(ControlVariant::Primary)
+    .size(ControlSize::Medium)
+    .on_click(|| println!("Clicked!"))
 ```
 
 #### Methods
 
 | Method | Description |
 |--------|-------------|
-| `button(label)` | Create button |
-| `.variant(ButtonVariant)` | Button style variant |
-| `.size(ButtonSize)` | Button size preset |
+| `button(label)` | Create button (label must not be empty) |
+| `.variant(ControlVariant)` | Style variant; also `.primary()`, `.secondary()`, `.outline()`, `.ghost()`, `.danger()`, `.success()` |
+| `.size(ControlSize)` | Size preset; also `.small()`, `.large()` |
+| `.theme(Theme)` | Theme tokens |
+| `.rounded(radius)` / `.rounded_full()` | Override the theme radius |
 | `.on_click(handler)` | Click handler |
-| `.disabled(bool)` | Disable button |
-
-#### ButtonVariant
-
-```rust
-pub enum ButtonVariant {
-    Primary,
-    Secondary,
-    Outline,
-    Ghost,
-    Danger,
-    Success,
-}
-```
-
-#### ButtonSize
-
-```rust
-pub enum ButtonSize {
-    Small,
-    Medium,
-    Large,
-}
-```
+| `.disabled(bool)` / `.read_only(bool)` / `.invalid(bool)` | Shared control state |
 
 ---
 
@@ -358,8 +362,14 @@ input()
 | `.input_type(InputType)` | Input type |
 | `.on_change(handler)` | Change handler |
 | `.on_submit(handler)` | Submit handler |
+| `.on_cancel(handler)` | Escape handler |
 | `.on_focus(handler)` | Focus handler |
 | `.on_blur(handler)` | Blur handler |
+| `.accessibility_label(text)` | Accessible name (falls back to the placeholder) |
+| `.disabled(bool)` / `.read_only(bool)` / `.invalid(bool)` | Shared control state |
+| `.theme(Theme)` | Paint with theme tokens, control height and radius |
+| `.size(ControlSize)` | Themed control size (default theme unless `.theme` sets one) |
+| `.w(width)` / `.h(height)` | Fixed size |
 
 #### InputType
 
@@ -372,6 +382,31 @@ pub enum InputType {
     Search,
 }
 ```
+
+---
+
+### ScrollView
+
+Clipped, scrollable container. It exposes a `ScrollArea` accessibility node
+with its scroll position and scroll actions.
+
+```rust
+scroll_view()
+    .h(240.0)
+    .accessibility_label("Activity")
+    .child(div().children(rows))
+```
+
+| Method | Description |
+|--------|-------------|
+| `scroll_view()` | Create scroll view |
+| `.child(element)` / `.children(iter)` | Content |
+| `.direction(ScrollDirection)` | Also `.vertical()`, `.horizontal()`, `.both()` |
+| `.scrollbar_always()` / `.scrollbar_never()` | Scrollbar visibility (default: when content overflows) |
+| `.w(width)` / `.h(height)` / `.size(size)` / `.bg(color)` | Viewport size and background |
+| `.accessibility_label(text)` | Accessible name |
+| `.disabled(bool)` / `.read_only(bool)` | Freeze scrolling; children still get pointer and text input |
+| `.on_scroll(handler)` | Called with the new `(x, y)` offset |
 
 ---
 
@@ -531,31 +566,6 @@ pub enum ListStyle {
 
 ---
 
-### Progress
-
-Progress bar element.
-
-```rust
-progress()
-    .value(0.75)  // 75%
-    .width(200.0)
-    .height(8.0)
-    .color(Color::GREEN)
-```
-
-#### Methods
-
-| Method | Description |
-|--------|-------------|
-| `progress()` | Create progress bar |
-| `.value(0.0-1.0)` | Progress value |
-| `.color(Color)` | Bar color |
-| `.width(width)` | Bar width |
-| `.height(height)` | Bar height |
-| `.show_percentage(bool)` | Show percentage label |
-
----
-
 ### Spinner
 
 Loading spinner element.
@@ -580,71 +590,6 @@ pub enum SpinnerType {
     Grow,
     Star,
 }
-```
-
----
-
-## Hooks
-
-### use_mouse
-
-Track mouse events and position.
-
-```rust
-use rui::hooks::UseMouse;
-
-let mouse = UseMouse::new();
-
-mouse.on_move(|event| {
-    println!("Mouse at: {:?}", event.position);
-});
-
-mouse.on_click(|event| {
-    println!("Clicked: {:?}", event.button);
-});
-```
-
-#### TerminalMouseEvent
-
-```rust
-pub struct TerminalMouseEvent {
-    pub kind: TerminalMouseEventKind,
-    pub button: TerminalMouseButton,
-    pub column: u16,
-    pub row: u16,
-    pub modifiers: u8,
-}
-```
-
----
-
-### use_paste
-
-Handle clipboard paste events.
-
-```rust
-use rui::hooks::UsePaste;
-
-let paste = UsePaste::new();
-
-paste.on_paste(|event| {
-    println!("Pasted: {}", event.content);
-});
-```
-
----
-
-### use_window_focus
-
-Detect window focus changes.
-
-```rust
-use rui::hooks::UseWindowFocus;
-
-let focus = UseWindowFocus::new();
-
-focus.on_focus(|_| println!("Window focused"));
-focus.on_blur(|_| println!("Window blurred"));
 ```
 
 ---

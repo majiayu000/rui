@@ -328,7 +328,9 @@ fn action_row(
     ui::row()
         .spacing(10.0)
         .child(
-            ui::text_field("Package")
+            input()
+                .accessibility_label("Package")
+                .theme(ui::Theme::default())
                 .id(DOGFOOD_PACKAGE_FIELD_ID)
                 .value(format!("{} {}", data.package_name, data.package_version))
                 .read_only(true)
@@ -534,12 +536,13 @@ fn changes_panel(data: &LocalDogfoodData) -> ui::Container {
         .background(Color::WHITE)
         .radius(6.0)
         .child(
-            ui::scrollable(ui::column().spacing(8.0).children(rows))
+            scroll_view()
+                .child(ui::column().spacing(8.0).children(rows))
                 .id(DOGFOOD_ACTIVITY_SCROLL_ID)
                 .accessibility_label("Repository git status")
                 .w(580.0)
                 .h(104.0)
-                .background(Color::hex(0xf9fafb)),
+                .bg(Color::hex(0xf9fafb)),
         )
 }
 
