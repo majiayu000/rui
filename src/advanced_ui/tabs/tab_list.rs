@@ -150,11 +150,17 @@ impl TabList {
         self.tabs[self.selected_index()].label()
     }
 
-    fn tab_width(&self) -> f32 {
+    fn tab_width(&self, cx: &mut LayoutContext) -> f32 {
         self.tabs
             .iter()
             .map(|tab| {
-                tab.label.chars().count() as f32 * self.theme.text_size(self.size) * 0.58
+                [
+                    self.theme.typography.label_weight,
+                    self.theme.typography.selected_weight,
+                ]
+                .into_iter()
+                .map(|weight| self.theme.measure_label(cx, &tab.label, self.size, weight))
+                .fold(0.0, f32::max)
                     + self.theme.horizontal_padding(self.size) * 2.0
             })
             .fold(72.0, f32::max)
@@ -258,7 +264,7 @@ impl Element for TabList {
             ));
         }
         let mut style = style_to_taffy(&self.style);
-        style.size.width = Dimension::Length(self.tab_width() * self.tabs.len() as f32);
+        style.size.width = Dimension::Length(self.tab_width(cx) * self.tabs.len() as f32);
         style.size.height = Dimension::Length(self.theme.control_height(self.size));
 
         match cx.new_leaf(style) {

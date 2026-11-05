@@ -1,7 +1,7 @@
 //! RUI - A GPU-accelerated UI framework for Rust
 //!
 //! RUI is a high-performance UI framework inspired by GPUI and Warp's architecture.
-//! It renders directly to the GPU using Metal (macOS) for smooth 120fps rendering.
+//! It renders directly to the GPU using Metal on macOS.
 //!
 //! # Architecture
 //!

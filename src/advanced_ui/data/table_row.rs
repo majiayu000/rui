@@ -120,10 +120,24 @@ impl DataTableCell {
         &self.content
     }
 
-    fn preferred_width(&self, size: ControlSize, theme: Theme) -> f32 {
+    fn preferred_width(
+        &self,
+        cx: &mut LayoutContext,
+        size: ControlSize,
+        theme: Theme,
+        header: bool,
+    ) -> f32 {
         self.width.unwrap_or_else(|| {
-            self.content.chars().count() as f32 * theme.text_size(size) * 0.56
-                + DATA_PADDING_X * 2.0
+            theme.measure_label(
+                cx,
+                &self.content,
+                size,
+                if header {
+                    FontWeight::Semibold.to_value()
+                } else {
+                    self.font_weight.to_value()
+                },
+            ) + DATA_PADDING_X * 2.0
         })
     }
 }
@@ -273,11 +287,11 @@ impl DataTableRow {
         self.state
     }
 
-    fn preferred_width(&self) -> f32 {
+    fn preferred_width(&self, cx: &mut LayoutContext) -> f32 {
         self.style.width.unwrap_or_else(|| {
             self.cells
                 .iter()
-                .map(|cell| cell.preferred_width(self.size, self.theme))
+                .map(|cell| cell.preferred_width(cx, self.size, self.theme, self.header))
                 .sum::<f32>()
                 .max(DEFAULT_DATA_WIDTH)
         })
@@ -347,7 +361,7 @@ impl Element for DataTableRow {
             ));
         }
         let mut style = style_to_taffy(&self.style);
-        style.size.width = Dimension::Length(self.preferred_width());
+        style.size.width = Dimension::Length(self.preferred_width(cx));
         style.size.height = Dimension::Length(self.preferred_height());
         cx.new_leaf(style)
             .expect("failed to create advanced data table row layout node")

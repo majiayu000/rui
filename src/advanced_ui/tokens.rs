@@ -247,15 +247,15 @@ impl Theme {
                     Color::hex(0x374151),
                 ),
                 danger: ControlVariantPalette::solid(
-                    Color::hex(0xef4444),
                     Color::hex(0xdc2626),
                     Color::hex(0xb91c1c),
+                    Color::hex(0x991b1b),
                     Color::WHITE,
                 ),
                 success: ControlVariantPalette::solid(
-                    Color::hex(0x22c55e),
-                    Color::hex(0x16a34a),
                     Color::hex(0x15803d),
+                    Color::hex(0x166534),
+                    Color::hex(0x14532d),
                     Color::WHITE,
                 ),
                 progress_track: Color::hex(0xe5e7eb),
@@ -451,6 +451,28 @@ impl Theme {
         } else {
             color
         }
+    }
+
+    /// Measure with the same font parameters used by the control's text primitive.
+    pub(crate) fn measure_label(
+        self,
+        cx: &mut crate::elements::element::LayoutContext,
+        label: &str,
+        size: ControlSize,
+        weight: u16,
+    ) -> f32 {
+        let request = crate::renderer::text::TextRequest::new(
+            label,
+            self.text_size(size),
+            weight,
+            None,
+            self.typography.line_height,
+        );
+        cx.text_measurer()
+            .measure_single_line(request)
+            .unwrap_or_else(|err| panic!("failed to measure control label: {err:?}"))
+            .size
+            .width
     }
 
     pub fn control_height(self, size: ControlSize) -> f32 {

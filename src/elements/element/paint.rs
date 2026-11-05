@@ -19,6 +19,7 @@ pub struct PaintContext<'a> {
     /// The part of the window that is seen. Unchanged subtrees entirely outside
     /// it and the active clip are not painted. `None` paints everything.
     pub(super) viewport: Option<Bounds>,
+    focused: Option<ElementId>,
 }
 
 /// A node's layout before taffy rounds it.
@@ -42,6 +43,7 @@ impl<'a> PaintContext<'a> {
             unrounded: None,
             last_child: Cell::new(None),
             viewport: None,
+            focused: None,
         }
     }
 
@@ -74,6 +76,15 @@ impl<'a> PaintContext<'a> {
             memo: false,
             ..Self::new(scene, bounds, taffy)
         }
+    }
+
+    pub fn with_focus(mut self, focused: Option<ElementId>) -> Self {
+        self.focused = focused;
+        self
+    }
+
+    pub fn is_focused(&self, id: ElementId) -> bool {
+        self.focused == Some(id)
     }
 
     /// Add a primitive to the scene
@@ -133,6 +144,7 @@ impl<'a> PaintContext<'a> {
             unrounded,
             last_child: Cell::new(None),
             viewport: self.viewport,
+            focused: self.focused,
         }
     }
 }
