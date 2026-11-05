@@ -742,3 +742,27 @@ fn each_script_run_is_shaped_once_with_its_spaces() {
     assert_eq!(arabic.len(), 1, "{:?}", plan.runs());
     assert_eq!(arabic[0].direction, TextDirection::RightToLeft);
 }
+
+#[cfg(target_os = "macos")]
+#[test]
+fn a_weight_picks_the_closest_face_of_the_family() {
+    let mut cache = TextMeasureCache::new();
+    let regular = cache.primary_font_index(None, 400).expect("regular face");
+    let bold = cache.primary_font_index(None, 700).expect("bold face");
+    assert_eq!(regular, 0);
+    assert_ne!(bold, regular);
+    assert_eq!(cache.fonts[bold].family, cache.fonts[regular].family);
+    assert!(cache.fonts[bold].weight >= 600 && !cache.fonts[bold].italic);
+
+    // Fallback faces follow the weight too.
+    let weight_of = |cache: &mut TextMeasureCache, weight: u16| {
+        let plan = shape(cache, TextRequest::new("中", 20.0, weight, None, 1.2));
+        let family = plan.clusters()[0].font_family.clone();
+        let face = plan.glyphs()[0].font_index;
+        (family, cache.fonts[face].weight)
+    };
+    let (light_family, light) = weight_of(&mut cache, 400);
+    let (bold_family, heavy) = weight_of(&mut cache, 700);
+    assert_eq!(light_family, bold_family);
+    assert!(heavy > light, "{light} then {heavy}");
+}

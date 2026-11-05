@@ -27,6 +27,6 @@ pub use progress::{Progress, progress};
 pub use scroll_view::{ScrollDirection, ScrollView, scroll_view};
 pub use spinner::{Spinner, SpinnerType, spinner};
 pub use table::{Table, TableCell, TableRow, cell, header_row, row, table};
-pub use text::{Text, text};
+pub use text::{StyledText, Text, TextSpan, span, styled_text, text};
 pub use text_area::{TextArea, TextAreaState, text_area};
 pub use virtual_list::{VirtualList, VirtualListHandle, virtual_list};

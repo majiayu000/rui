@@ -10,7 +10,7 @@ use crate::renderer::system_fonts::{
     system_font_generation,
 };
 use crate::renderer::text_shaping::{
-    ShapedParts, TextShapingFont, rasterize_with_plan, shape_parts, shape_with_fonts,
+    ShapedParts, TextShapingFont, best_face, rasterize_with_plan, shape_parts, shape_with_fonts,
 };
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
@@ -19,6 +19,7 @@ use std::sync::Arc;
 
 mod atlas;
 mod lru;
+mod rich;
 mod wrap;
 
 pub use crate::renderer::text_shaping::{
@@ -28,6 +29,7 @@ pub use atlas::{
     ATLAS_PAGE_SIZE, AtlasGlyph, AtlasRect, AtlasSlot, GlyphAtlas, GlyphUpload, PlacedGlyph,
     SUBPIXEL_VARIANTS, ShapedText, TextGlyphCache,
 };
+pub use rich::{RichLine, RichPiece, RichPieceText, RichSpan, RichWrapped};
 pub use wrap::{TextLine, WrappedText};
 
 pub const TEXT_BOUNDS_TOLERANCE: f32 = 1.0;
@@ -36,6 +38,8 @@ pub const TEXT_BOUNDS_TOLERANCE: f32 = 1.0;
 pub enum TextError {
     MissingFont,
     UnsupportedFontFamily(String),
+    /// Rich text spans that do not tile their content.
+    InvalidSpans(String),
     Resource(RendererResourceError),
 }
 
@@ -160,6 +164,10 @@ const RETAINED_METRIC_BYTES_TARGET: usize = 1024 * 1024;
 const MAX_RETAINED_METRICS: usize = 16_384;
 const MAX_RETAINED_METRIC_BYTES: usize = 4 * 1024 * 1024;
 
+/// Family and weight pairs whose face is remembered; past this, faces are
+/// looked up every time.
+const MAX_REMEMBERED_FACES: usize = 64;
+
 /// What a [`TextMeasureCache`] did since it was made.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct TextCacheStats {
@@ -180,8 +188,12 @@ pub struct TextMeasureCache {
     font_generation: usize,
     font_error: Option<FontLoadError>,
     refreshed_missing_families: HashSet<String>,
+    /// Faces chosen for requested families and weights, so a measurement does
+    /// not search the font set again. Emptied whenever the font set changes.
+    primary_faces: Vec<(Option<String>, u16, usize)>,
     metrics: lru::FrameLru<TextMeasureKey, TextMetrics>,
     wraps: wrap::WrapCache,
+    rich_wraps: rich::RichCache,
     stats: TextCacheStats,
     #[cfg(test)]
     font_refresh_enabled: bool,
@@ -207,6 +219,7 @@ impl TextMeasureCache {
             font_generation: 0,
             font_error: None,
             refreshed_missing_families: HashSet::new(),
+            primary_faces: Vec::new(),
             metrics: lru::FrameLru::new(
                 RETAINED_METRICS_TARGET,
                 RETAINED_METRIC_BYTES_TARGET,
@@ -214,6 +227,7 @@ impl TextMeasureCache {
                 MAX_RETAINED_METRIC_BYTES,
             ),
             wraps: wrap::WrapCache::new(),
+            rich_wraps: rich::RichCache::new(),
             stats: TextCacheStats::default(),
             #[cfg(test)]
             font_refresh_enabled,
@@ -251,6 +265,7 @@ impl TextMeasureCache {
     pub fn begin_frame(&mut self) {
         self.metrics.begin_frame();
         self.wraps.begin_frame();
+        self.rich_wraps.begin_frame();
     }
 
     pub fn stats(&self) -> TextCacheStats {
@@ -293,7 +308,7 @@ impl TextMeasureCache {
             return Ok(TextMetrics::empty());
         }
 
-        let primary_index = self.primary_font_index(request.font_family)?;
+        let primary_index = self.primary_font_index(request.font_family, request.font_weight)?;
         Ok(self.measure_prepared(request, primary_index))
     }
 
@@ -334,7 +349,7 @@ impl TextMeasureCache {
             return Ok(TextShapePlan::empty());
         }
 
-        let primary_index = self.primary_font_index(request.font_family)?;
+        let primary_index = self.primary_font_index(request.font_family, request.font_weight)?;
         Ok(self.shape_with_primary(request, primary_index))
     }
 
@@ -351,9 +366,25 @@ impl TextMeasureCache {
         shape_parts(self.fonts.as_slice(), primary_index, request)
     }
 
-    fn primary_font_index(&mut self, font_family: Option<&str>) -> Result<usize, TextError> {
+    fn primary_font_index(
+        &mut self,
+        font_family: Option<&str>,
+        font_weight: u16,
+    ) -> Result<usize, TextError> {
         self.prepare_fonts(font_family)?;
-        self.primary_font_index_prepared(font_family)
+        if let Some(&(.., index)) = self
+            .primary_faces
+            .iter()
+            .find(|(family, weight, _)| *weight == font_weight && family.as_deref() == font_family)
+        {
+            return Ok(index);
+        }
+        let index = self.primary_font_index_prepared(font_family, font_weight)?;
+        if self.primary_faces.len() < MAX_REMEMBERED_FACES {
+            self.primary_faces
+                .push((font_family.map(str::to_string), font_weight, index));
+        }
+        Ok(index)
     }
 
     fn prepare_fonts(&mut self, font_family: Option<&str>) -> Result<(), TextError> {
@@ -400,22 +431,26 @@ impl TextMeasureCache {
         Ok(())
     }
 
-    fn primary_font_index_prepared(&self, font_family: Option<&str>) -> Result<usize, TextError> {
+    /// The face of the requested family closest to `font_weight`; no family,
+    /// `system` or `default` mean the first loaded font's family.
+    fn primary_font_index_prepared(
+        &self,
+        font_family: Option<&str>,
+        font_weight: u16,
+    ) -> Result<usize, TextError> {
         let family = font_family
             .map(str::trim)
-            .filter(|family| !family.is_empty());
-
-        let Some(family) = family else {
-            return Ok(0);
+            .filter(|family| !family.is_empty() && !matches!(*family, "system" | "default"));
+        let family = match family {
+            Some(family) => family,
+            None => self
+                .fonts
+                .first()
+                .ok_or(TextError::MissingFont)?
+                .family
+                .as_str(),
         };
-
-        if matches!(family, "system" | "default") {
-            return Ok(0);
-        }
-
-        self.fonts
-            .iter()
-            .position(|font| font.family.eq_ignore_ascii_case(family))
+        best_face(&self.fonts, family, font_weight)
             .ok_or_else(|| TextError::UnsupportedFontFamily(family.to_string()))
     }
 
@@ -425,6 +460,7 @@ impl TextMeasureCache {
             self.refreshed_missing_families.clear();
         }
         self.fonts = snapshot.resources;
+        self.primary_faces.clear();
         self.fonts_retryable = snapshot.retryable;
         self.font_generation = snapshot.generation;
         self.font_error = snapshot.error;
@@ -449,6 +485,7 @@ impl TextMeasureCache {
     fn clear_metrics(&mut self) {
         self.metrics.clear();
         self.wraps.clear();
+        self.rich_wraps.clear();
     }
 
     fn font_refresh_enabled(&self) -> bool {
@@ -550,7 +587,7 @@ impl TextRasterCache {
         prepared?;
         let primary_index = self
             .measurer
-            .primary_font_index_prepared(request.font_family)?;
+            .primary_font_index_prepared(request.font_family, request.font_weight)?;
         let plan = self.measurer.shape_with_primary(request, primary_index);
         let metrics = plan.metrics();
         if metrics.ink_bounds.is_empty() {

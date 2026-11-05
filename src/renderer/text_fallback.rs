@@ -11,7 +11,7 @@
 //! A cluster no font has stays in the requested font and shapes to `.notdef`,
 //! which the plan reports as a missing glyph.
 
-use crate::renderer::text_shaping::{ClusterDraft, TextScript, TextShapingFont};
+use crate::renderer::text_shaping::{ClusterDraft, TextScript, TextShapingFont, faces_for_weight};
 use rustybuzz::{Direction, Script, UnicodeBuffer, script};
 use std::ops::Range;
 
@@ -159,17 +159,17 @@ fn preferred_families(script: RunScript) -> &'static [&'static str] {
 
 /// Font indices in the order a run of `script` tries them. Emoji try the
 /// emoji fonts before the requested one, since most text fonts carry plain
-/// glyphs for some emoji characters.
+/// glyphs for some emoji characters. A preferred family's faces come closest
+/// to `weight` first.
 pub(crate) fn fallback_chain(
     fonts: &[TextShapingFont],
     primary_index: usize,
     script: RunScript,
+    weight: u16,
 ) -> Vec<usize> {
     let preferred: Vec<usize> = preferred_families(script)
         .iter()
-        .flat_map(|family| {
-            (0..fonts.len()).filter(|&index| fonts[index].family.eq_ignore_ascii_case(family))
-        })
+        .flat_map(|family| faces_for_weight(fonts, family, weight))
         .collect();
     let first: Vec<usize> = if script == RunScript::Emoji {
         preferred.into_iter().chain([primary_index]).collect()
@@ -193,6 +193,7 @@ pub(crate) fn assign_fonts(
     fonts: &[TextShapingFont],
     primary_index: usize,
     script: RunScript,
+    weight: u16,
     clusters: &mut [ClusterDraft],
 ) {
     let mut chain: Option<Vec<usize>> = None;
@@ -207,7 +208,7 @@ pub(crate) fn assign_fonts(
             primary_index
         } else {
             chain
-                .get_or_insert_with(|| fallback_chain(fonts, primary_index, script))
+                .get_or_insert_with(|| fallback_chain(fonts, primary_index, script, weight))
                 .iter()
                 .copied()
                 .find(|&font| supports(font))

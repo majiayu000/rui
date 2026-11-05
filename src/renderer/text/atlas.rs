@@ -410,7 +410,7 @@ impl TextGlyphCache {
         prepared?;
         let primary_index = self
             .measurer
-            .primary_font_index_prepared(request.font_family)?;
+            .primary_font_index_prepared(request.font_family, request.font_weight)?;
         let parts = self
             .measurer
             .shape_parts_with_primary(request, primary_index);
