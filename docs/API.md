@@ -437,6 +437,9 @@ pub enum TextAlign {
 ### Button
 
 Themed, focusable button (`advanced_ui::Button`, re-exported by the prelude).
+Labels use the layout text cache with the same font parameters as painting.
+Enabled buttons request focus on pointer press and paint a two-pixel focus border
+from the window's focus owner; disabled buttons suppress this border.
 It exposes an accessible `Button` node and activates on click or the
 `Activate` action.
 

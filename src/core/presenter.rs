@@ -10,7 +10,9 @@ use crate::core::frame_pipeline::{FramePipeline, FramePipelineError};
 use crate::core::geometry::{Bounds, Point, Size};
 use crate::devtools::{Profiler, WindowDevtools};
 use crate::elements::Element;
-use crate::elements::element::{EventContext, LayoutNodes, PointerEvent, PointerEventKind};
+use crate::elements::element::{
+    EventContext, LayoutNodes, PaintContext, PointerEvent, PointerEventKind,
+};
 use crate::renderer::RendererDiagnostics;
 use crate::renderer::Scene;
 use crate::renderer::text::TextMeasureCache;
@@ -54,6 +56,8 @@ pub struct Presenter<E = ()> {
     taffy: TaffyTree<ElementId>,
     layout_nodes: LayoutNodes,
     scene: Scene,
+    /// Painting owns hit regions; layout/event changes invalidate that derived scene.
+    scene_dirty: bool,
     text_measurer: TextMeasureCache,
     root_bounds: Bounds,
     focused_element: Option<ElementId>,
@@ -81,6 +85,7 @@ impl<E> Presenter<E> {
             taffy: TaffyTree::new(),
             layout_nodes: LayoutNodes::new(),
             scene: Scene::new(),
+            scene_dirty: true,
             text_measurer: TextMeasureCache::new(),
             root_bounds,
             focused_element: None,
@@ -106,6 +111,7 @@ impl<E> Presenter<E> {
     }
 
     pub fn root_mut(&mut self) -> &mut E {
+        self.scene_dirty = true;
         &mut self.root
     }
 
@@ -114,6 +120,7 @@ impl<E> Presenter<E> {
     }
 
     pub fn set_root_bounds(&mut self, root_bounds: Bounds) {
+        self.scene_dirty = true;
         self.root_bounds = root_bounds;
     }
 
@@ -122,6 +129,7 @@ impl<E> Presenter<E> {
     }
 
     pub fn set_focused_element(&mut self, focused_element: Option<ElementId>) {
+        self.scene_dirty |= self.focused_element != focused_element;
         if self.accessibility_announcements_enabled
             && self.focused_element != focused_element
             && let Some(id) = focused_element
@@ -137,6 +145,7 @@ impl<E> Presenter<E> {
     }
 
     pub fn focused_element_mut(&mut self) -> &mut Option<ElementId> {
+        self.scene_dirty = true;
         &mut self.focused_element
     }
 
@@ -181,22 +190,26 @@ impl<E> Presenter<E> {
     }
 
     pub fn frame_surfaces_mut(&mut self) -> (&mut TaffyTree<ElementId>, &mut Scene) {
+        self.scene_dirty = true;
         (&mut self.taffy, &mut self.scene)
     }
 
     /// Layout inputs owned by the presenter. The text measurement cache is
     /// handed out by reference so its metrics survive across frames.
     pub fn layout_surfaces_mut(&mut self) -> (&mut TaffyTree<ElementId>, &mut TextMeasureCache) {
+        self.scene_dirty = true;
         (&mut self.taffy, &mut self.text_measurer)
     }
 
     pub fn paint_surfaces_mut(&mut self) -> (&TaffyTree<ElementId>, &mut Scene) {
+        self.scene_dirty = true;
         (&self.taffy, &mut self.scene)
     }
 
     pub fn event_context_parts_mut(
         &mut self,
     ) -> (Bounds, &TaffyTree<ElementId>, &mut Option<ElementId>) {
+        self.scene_dirty = true;
         (self.root_bounds, &self.taffy, &mut self.focused_element)
     }
 
@@ -354,6 +367,7 @@ where
             &mut self.text_measurer,
             viewport_size,
         )?;
+        self.scene_dirty = true;
         self.root_bounds = root_bounds;
         self.laid_out_viewport = viewport_size;
         Ok(root_bounds)
@@ -362,14 +376,21 @@ where
     /// Paints the presented tree into the scene using the stored root bounds.
     pub fn paint(&mut self) {
         self.root.refresh_text_geometry(&mut self.text_measurer);
-        FramePipeline::paint_root_in_viewport(
+        FramePipeline::paint(
             &mut self.root,
             &self.taffy,
             &mut self.scene,
             self.root_bounds,
-            self.laid_out_viewport,
+            Some(Bounds::from_xywh(
+                0.0,
+                0.0,
+                self.laid_out_viewport.width,
+                self.laid_out_viewport.height,
+            )),
+            self.focused_element,
         );
         self.paint_drag_preview();
+        self.scene_dirty = false;
         self.prepared_frame = PresenterFrame {
             viewport_size: self.laid_out_viewport,
             root_bounds: self.root_bounds,
@@ -386,23 +407,11 @@ where
     where
         F: FnMut(&mut AppContext) -> E,
     {
-        let root_bounds = FramePipeline::build_frame_retained(
-            context,
-            &mut self.root,
-            build_root,
-            &mut self.taffy,
-            &mut self.layout_nodes,
-            &mut self.scene,
-            &mut self.text_measurer,
-            viewport_size,
-        )?;
-        self.root_bounds = root_bounds;
-        self.laid_out_viewport = viewport_size;
-        self.prepared_frame = PresenterFrame {
-            viewport_size,
-            root_bounds,
-            primitive_count: self.scene.len(),
-        };
+        FramePipeline::prepare_frame(context);
+        self.rebuild_if_needed(context, build_root);
+        let root_bounds = self.layout(viewport_size)?;
+        self.paint();
+        FramePipeline::finish_frame(context);
         Ok(root_bounds)
     }
 
@@ -420,6 +429,7 @@ where
         let redraw_requested = event_cx.redraw_requested();
         let announcements = event_cx.take_accessibility_announcements();
         drop(event_cx);
+        self.scene_dirty |= redraw_requested;
         if self.accessibility_announcements_enabled {
             self.pending_accessibility_announcements
                 .extend(announcements);
@@ -428,7 +438,23 @@ where
     }
 
     pub fn dispatch_pointer_event(&mut self, event: &PointerEvent) -> PointerDispatch {
-        let hit_target = self.hit_test(event.position);
+        // Do not pair the current tree/layout with the previous frame's regions.
+        // Only input pays for this early scene collection; the regular paint
+        // still follows dispatch so hover/pressed feedback appears this frame.
+        let hit_target = if self.scene_dirty {
+            // Use a transient scene without replay: advancing the render scene
+            // here would break its previous-frame/damage chain, and replay would
+            // consume retained primitives before the real paint pass.
+            let mut hits = Scene::new();
+            self.root.paint(
+                &mut PaintContext::without_replay(&mut hits, self.root_bounds, &self.taffy)
+                    .with_focus(self.focused_element),
+            );
+            hits.finish();
+            hits.hit_test(event.position)
+        } else {
+            self.hit_test(event.position)
+        };
         let dispatch_target = self.pointer_dispatch_target(hit_target);
         let previous_target = self.previous_pointer_target(event.kind);
         let preview_moved = self.drag_follow_pointer(event);
@@ -479,9 +505,7 @@ mod tests {
     use taffy::prelude::{Dimension, NodeId};
 
     /// Test element that registers a hit region and claims pointer presses, so
-    /// the presenter's capture bookkeeping can be exercised. No shipped element
-    /// registers hit regions today, so a probe is the only way to reach this
-    /// path from a unit test.
+    /// the presenter's capture bookkeeping can be exercised independently of control behavior.
     struct CaptureProbe {
         id: ElementId,
         size: Size,

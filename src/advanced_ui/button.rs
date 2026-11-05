@@ -147,8 +147,13 @@ impl Button {
         self.state.cursor()
     }
 
-    fn preferred_width(&self) -> f32 {
-        let text_width = self.label.chars().count() as f32 * self.theme.text_size(self.size) * 0.56;
+    fn preferred_width(&self, cx: &mut LayoutContext) -> f32 {
+        let text_width = self.theme.measure_label(
+            cx,
+            &self.label,
+            self.size,
+            self.theme.typography.control_weight,
+        );
         text_width + self.theme.horizontal_padding(self.size) * 2.0
     }
 }
@@ -168,7 +173,7 @@ impl Element for Button {
 
     fn layout(&mut self, cx: &mut LayoutContext) -> NodeId {
         let mut style = style_to_taffy(&self.style);
-        style.size.width = Dimension::Length(self.preferred_width());
+        style.size.width = Dimension::Length(self.preferred_width(cx));
         style.size.height = Dimension::Length(self.theme.control_height(self.size));
 
         match cx.new_leaf(style) {
@@ -181,8 +186,12 @@ impl Element for Button {
         let bounds = cx.bounds();
         cx.register_hit_region(self.id.get(), bounds);
 
-        let colors = self.theme.control_colors(self.variant, self.state.into());
-        let border_widths = if matches!(self.variant, ControlVariant::Outline) {
+        let mut state = self.state.control_state();
+        state.focused = cx.is_focused(self.id.get()) && !state.disabled;
+        let colors = self.theme.control_colors(self.variant, state);
+        let border_widths = if state.focused {
+            Edges::all(2.0)
+        } else if state.invalid || matches!(self.variant, ControlVariant::Outline) {
             Edges::all(1.0)
         } else {
             Edges::ZERO
@@ -234,7 +243,18 @@ impl Element for Button {
                 self.state.update_hover_inside(inside, cx);
                 false
             }
-            PointerEventKind::Down => self.state.press_inside(inside, cx),
+            PointerEventKind::Down => {
+                if self.state.press_inside(inside, cx) {
+                    cx.request_focus(Some(self.id.get()));
+                    true
+                } else {
+                    if !inside && cx.is_focused(Some(self.id.get())) {
+                        cx.clear_focus();
+                        cx.request_redraw();
+                    }
+                    false
+                }
+            }
             PointerEventKind::Up => {
                 let release = self.state.release_inside(inside, cx);
                 if release.activated {

@@ -98,10 +98,15 @@ impl Checkbox {
         self.state
     }
 
-    fn preferred_width(&self) -> f32 {
+    fn preferred_width(&self, cx: &mut LayoutContext) -> f32 {
         self.theme.indicator_extent(self.size)
             + self.theme.control_gap()
-            + self.label.chars().count() as f32 * self.theme.text_size(self.size) * 0.55
+            + self.theme.measure_label(
+                cx,
+                &self.label,
+                self.size,
+                self.theme.typography.label_weight,
+            )
     }
 }
 
@@ -120,7 +125,7 @@ impl Element for Checkbox {
 
     fn layout(&mut self, cx: &mut LayoutContext) -> NodeId {
         let mut style = style_to_taffy(&self.style);
-        style.size.width = Dimension::Length(self.preferred_width());
+        style.size.width = Dimension::Length(self.preferred_width(cx));
         style.size.height = Dimension::Length(self.theme.control_height(self.size));
 
         match cx.new_leaf(style) {

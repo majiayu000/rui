@@ -183,11 +183,17 @@ impl Menu {
         self.state
     }
 
-    fn preferred_width(&self) -> f32 {
+    fn preferred_width(&self, cx: &mut LayoutContext) -> f32 {
         self.items
             .iter()
             .map(|item| {
-                item.label.chars().count() as f32 * self.theme.text_size(self.size) * 0.56
+                [
+                    self.theme.typography.label_weight,
+                    self.theme.typography.selected_weight,
+                ]
+                .into_iter()
+                .map(|weight| self.theme.measure_label(cx, &item.label, self.size, weight))
+                .fold(0.0, f32::max)
                     + self.theme.horizontal_padding(self.size) * 2.0
             })
             .fold(MENU_MIN_WIDTH, f32::max)
@@ -281,7 +287,7 @@ impl Element for Menu {
             *id = ElementId::derived(parent, index as u64, TypeId::of::<MenuItem>());
         }
         let mut style = style_to_taffy(&self.style);
-        style.size.width = Dimension::Length(self.preferred_width());
+        style.size.width = Dimension::Length(self.preferred_width(cx));
         style.size.height =
             Dimension::Length(self.item_height() * self.items.len() as f32 + MENU_PADDING * 2.0);
 

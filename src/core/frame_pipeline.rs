@@ -194,7 +194,7 @@ impl FramePipeline {
     ) where
         E: Element,
     {
-        Self::paint(root, taffy, scene, bounds, None);
+        Self::paint(root, taffy, scene, bounds, None, None);
     }
 
     /// [`Self::paint_root`] for a window `viewport_size` large: unchanged
@@ -209,24 +209,26 @@ impl FramePipeline {
         E: Element,
     {
         let viewport = Bounds::from_xywh(0.0, 0.0, viewport_size.width, viewport_size.height);
-        Self::paint(root, taffy, scene, bounds, Some(viewport));
+        Self::paint(root, taffy, scene, bounds, Some(viewport), None);
     }
 
-    fn paint<E>(
+    pub(crate) fn paint<E>(
         root: &mut E,
         taffy: &TaffyTree<ElementId>,
         scene: &mut Scene,
         bounds: Bounds,
         viewport: Option<Bounds>,
+        focused: Option<ElementId>,
     ) where
         E: Element,
     {
         scene.clear();
-        let mut paint_cx = PaintContext::for_root(scene, bounds, taffy, viewport);
+        let mut paint_cx =
+            PaintContext::for_root(scene, bounds, taffy, viewport).with_focus(focused);
         root.paint(&mut paint_cx);
         scene.finish();
         if verify_replay() {
-            Self::verify_replayed_scene(root, taffy, scene, bounds, viewport);
+            Self::verify_replayed_scene(root, taffy, scene, bounds, viewport, focused);
         }
     }
 
@@ -240,15 +242,14 @@ impl FramePipeline {
         scene: &Scene,
         bounds: Bounds,
         viewport: Option<Bounds>,
+        focused: Option<ElementId>,
     ) where
         E: Element,
     {
         let mut repainted = Scene::new();
-        root.paint(&mut PaintContext::without_replay(
-            &mut repainted,
-            bounds,
-            taffy,
-        ));
+        root.paint(
+            &mut PaintContext::without_replay(&mut repainted, bounds, taffy).with_focus(focused),
+        );
         let seen = |primitives: &[crate::renderer::Primitive]| {
             primitives
                 .iter()

@@ -169,11 +169,20 @@ impl SegmentedControl {
         self.state
     }
 
-    fn option_width(&self) -> f32 {
+    fn option_width(&self, cx: &mut LayoutContext) -> f32 {
         self.options
             .iter()
             .map(|option| {
-                option.label.chars().count() as f32 * self.theme.text_size(self.size) * 0.56
+                [
+                    self.theme.typography.label_weight,
+                    self.theme.typography.selected_weight,
+                ]
+                .into_iter()
+                .map(|weight| {
+                    self.theme
+                        .measure_label(cx, &option.label, self.size, weight)
+                })
+                .fold(0.0, f32::max)
                     + self.theme.horizontal_padding(self.size) * 2.0
             })
             .fold(72.0, f32::max)
@@ -234,7 +243,7 @@ impl Element for SegmentedControl {
             *id = ElementId::derived(parent, index as u64, TypeId::of::<SegmentedOption>());
         }
         let mut style = style_to_taffy(&self.style);
-        style.size.width = Dimension::Length(self.option_width() * self.options.len() as f32);
+        style.size.width = Dimension::Length(self.option_width(cx) * self.options.len() as f32);
         style.size.height = Dimension::Length(self.theme.control_height(self.size));
 
         match cx.new_leaf(style) {
