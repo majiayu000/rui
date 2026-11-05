@@ -660,7 +660,8 @@ pub(super) struct SpriteCell {
 struct SpriteEntry {
     /// Edges relative to the cell origin.
     edges: Vec<[f32; 4]>,
-    slot: Option<AtlasSlot>,
+    /// The slot and the generation of its page when the path was placed.
+    slot: Option<(AtlasSlot, u64)>,
     last_seen: u64,
 }
 
@@ -683,8 +684,9 @@ pub(super) struct PathSprites {
 pub(super) enum SpriteLookup {
     /// Too large, or not seen on an earlier frame: draw tiles.
     Analytic,
-    /// In the atlas already.
-    Placed(AtlasSlot, SpriteCell),
+    /// In the atlas already, placed in this generation of its page, under this
+    /// key: if the page was emptied since, rasterize it and `place` it again.
+    Placed(AtlasSlot, u64, SpriteCell, u64),
     /// Seen on an earlier frame: rasterize it and `place` the result under
     /// this key.
     Rasterize(SpriteCell, u64),
@@ -749,7 +751,7 @@ impl PathSprites {
         {
             entry.last_seen = frame;
             return match entry.slot {
-                Some(slot) => SpriteLookup::Placed(slot, cell),
+                Some((slot, generation)) => SpriteLookup::Placed(slot, generation, cell, hash),
                 None => SpriteLookup::Rasterize(cell, hash),
             };
         }
@@ -778,14 +780,14 @@ impl PathSprites {
     }
 
     /// Records the slot of the path `lookup` last asked to rasterize as `key`.
-    pub(super) fn place(&mut self, key: u64, slot: AtlasSlot) {
+    pub(super) fn place(&mut self, key: u64, slot: AtlasSlot, generation: u64) {
         let relative = &self.relative;
         if let Some(entry) = self
             .entries
             .get_mut(&key)
             .and_then(|entries| entries.iter_mut().find(|entry| entry.edges == *relative))
         {
-            entry.slot = Some(slot);
+            entry.slot = Some((slot, generation));
         }
     }
 }

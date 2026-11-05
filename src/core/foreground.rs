@@ -105,7 +105,7 @@ impl AppContext {
 
     /// Whether the event loop has anything to do before it can sleep.
     pub fn has_pending_work(&self) -> bool {
-        self.has_frame_work() || !self.foreground.is_empty()
+        self.any_window_has_frame_work() || !self.foreground.is_empty()
     }
 
     /// The display refresh interval frames are paced to.
@@ -132,7 +132,7 @@ impl AppContext {
             return false;
         }
         if requests.whole_app {
-            self.needs_rebuild = true;
+            self.frame.needs_rebuild = true;
         }
         for entity in requests.entities {
             self.notify(entity);
@@ -176,8 +176,8 @@ mod tests {
 
     fn recorder() -> (Rc<RefCell<Vec<&'static str>>>, AppContext) {
         let mut context = AppContext::new();
-        context.needs_rebuild = false;
-        context.dirty = false;
+        context.frame.needs_rebuild = false;
+        context.frame.dirty = false;
         (Rc::new(RefCell::new(Vec::new())), context)
     }
 
@@ -268,8 +268,8 @@ mod tests {
         assert!(!context.has_frame_work());
 
         assert!(context.begin_animation_frame());
-        assert!(context.pending_updates.contains(&animating.id()));
-        assert!(!context.pending_updates.contains(&still.id()));
+        assert!(context.frame.pending_updates.contains(&animating.id()));
+        assert!(!context.frame.pending_updates.contains(&still.id()));
         assert!(context.has_frame_work());
         assert!(!context.animation_frame_requested());
         assert_eq!(context.redraw_source_counts().animation_frame, 1);
@@ -281,6 +281,6 @@ mod tests {
         context.request_animation_frame();
 
         assert!(context.begin_animation_frame());
-        assert!(context.needs_rebuild);
+        assert!(context.frame.needs_rebuild);
     }
 }

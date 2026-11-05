@@ -71,8 +71,8 @@ where
     }
 
     if events.close_requested {
+        // The app loop closes the window, and quits if that was the last one.
         presenter.handle_window_event(&Event::WindowClose);
-        context.quit();
         schedule_platform_redraw(window, context, RedrawSource::PlatformLifecycle);
     }
 

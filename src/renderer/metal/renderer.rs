@@ -200,6 +200,8 @@ pub struct MetalRenderer {
     offscreen_target: Option<Texture>,
     frame: FrameData,
     instances: InstancePool,
+    /// Command buffers the GPU has not finished, with the frame each drew.
+    frames_in_flight: Vec<(u64, CommandBuffer)>,
     frame_stats: MetalFrameStats,
     /// GPU time of the last frame that waited for completion.
     gpu_time: Option<std::time::Duration>,
@@ -344,6 +346,7 @@ impl MetalRenderer {
             path_tiles: PathTiles::default(),
             frame: FrameData::default(),
             instances: InstancePool::default(),
+            frames_in_flight: Vec::new(),
             frame_stats: MetalFrameStats::default(),
             gpu_time: None,
         })
@@ -562,6 +565,17 @@ impl MetalRenderer {
         self.texture_resources.begin_frame();
         self.image_cache.begin_frame();
         self.text_cache.begin_frame();
+        // Atlas pages only finished frames drew from may be evicted.
+        self.frames_in_flight.retain(|(_, command_buffer)| {
+            !matches!(
+                command_buffer.status(),
+                MTLCommandBufferStatus::Completed | MTLCommandBufferStatus::Error
+            )
+        });
+        let oldest_in_flight = self.frames_in_flight.iter().map(|(frame, _)| *frame).min();
+        self.text_cache.set_completed_frame(
+            oldest_in_flight.map_or(self.text_cache.frame() - 1, |frame| frame - 1),
+        );
         self.path_sprites.begin_frame(self.text_cache.epoch());
         self.path_tiles.begin_frame();
         self.frame_stats = MetalFrameStats::default();
@@ -844,10 +858,15 @@ impl MetalRenderer {
     ) -> Result<(), RendererError> {
         // Glyphs placed while building are copied into their pages before any
         // draw samples them.
-        self.glyph_pages.sync(&self.device, &mut self.text_cache);
 
         let command_queue = self.command_queue.to_owned();
         let command_buffer = command_queue.new_command_buffer();
+        let staging = self.glyph_pages.sync(
+            &self.device,
+            &mut self.text_cache,
+            command_buffer,
+            &mut self.instances,
+        );
 
         let render_pass_desc = RenderPassDescriptor::new();
         let color_attachment = render_pass_desc.color_attachments().object_at(0).unwrap();
@@ -983,6 +1002,11 @@ impl MetalRenderer {
         }
         command_buffer.commit();
         self.instances.retire(command_buffer, instances);
+        if let Some(staging) = staging {
+            self.instances.retire(command_buffer, staging);
+        }
+        self.frames_in_flight
+            .push((self.text_cache.frame(), command_buffer.to_owned()));
         if wait_until_completed {
             command_buffer.wait_until_completed();
             if command_buffer.status() == MTLCommandBufferStatus::Error {
@@ -1012,17 +1036,29 @@ impl MetalRenderer {
     ) -> Result<(), RendererError> {
         // A font loaded earlier in this frame may have emptied the atlas.
         self.path_sprites.sync_epoch(self.text_cache.epoch());
-        let placed = match self.path_sprites.lookup(path) {
-            SpriteLookup::Analytic => None,
-            SpriteLookup::Placed(slot, cell) => Some((slot, cell)),
-            SpriteLookup::Rasterize(cell, key) => {
+        let (cell, key) = match self.path_sprites.lookup(path) {
+            SpriteLookup::Analytic => (None, 0),
+            SpriteLookup::Placed(slot, generation, cell, key) => {
+                if self.text_cache.use_sprite(slot, generation) {
+                    (Some((Some(slot), cell)), key)
+                } else {
+                    // Its atlas page was emptied: place it again.
+                    (Some((None, cell)), key)
+                }
+            }
+            SpriteLookup::Rasterize(cell, key) => (Some((None, cell)), key),
+        };
+        let placed = match cell {
+            None => None,
+            Some((Some(slot), cell)) => Some((slot, cell)),
+            Some((None, cell)) => {
                 let pixels = path.rasterize(cell.origin, cell.width, cell.height);
                 match self
                     .text_cache
                     .place_sprite(cell.width, cell.height, pixels)
                 {
-                    Ok(slot) => {
-                        self.path_sprites.place(key, slot);
+                    Ok((slot, generation)) => {
+                        self.path_sprites.place(key, slot, generation);
                         Some((slot, cell))
                     }
                     // Without atlas room the path is still drawn, as tiles.

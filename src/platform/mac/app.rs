@@ -13,7 +13,7 @@ use crate::core::frame_pipeline::{
 use crate::core::geometry::{Point, Size};
 use crate::core::presenter::Presenter;
 use crate::core::text_editing::TextInputEvent;
-use crate::core::window::WindowOptions;
+use crate::core::window::{WindowId, WindowOptions};
 use crate::elements::element::{Element, PointerEvent, PointerEventKind};
 use crate::platform::mac::accessibility::MacAccessibilityActionRequest;
 use crate::platform::mac::events::{
@@ -21,7 +21,9 @@ use crate::platform::mac::events::{
 };
 use crate::platform::mac::frame::{NativeFrameEvents, dispatch_native_events};
 use crate::platform::mac::frame_ticker::FrameTicker;
-use crate::platform::mac::window::create_window;
+use crate::platform::mac::window::{
+    MacAppEvent, MacWindow, create_window, has_pending_event, poll_windows,
+};
 use crate::platform::window::{
     PlatformImeEvent, PlatformInputEvent, PlatformMouseEvent, PlatformMouseEventKind,
     PlatformRendererTarget, PlatformWindow, PlatformWindowError, PlatformWindowEvent,
@@ -47,377 +49,540 @@ where
 }
 
 /// Run the application with custom window options
+///
+/// `build_root` draws the main window, which `App` registered in `context`.
+/// Windows that app code opens with [`AppContext::open_window`] are created
+/// before the next frame; each has its own presenter, scene, focus, viewport and
+/// renderer target, and all of them share `context`'s entities.
 pub fn run_app_with_options<F, E>(context: AppContext, build_root: F, options: WindowOptions)
 where
     F: FnMut(&mut AppContext) -> E + 'static,
     E: Element + 'static,
 {
-    // The renderer is created on another thread while the window opens and the
-    // first frame is built and laid out; the first present waits for it.
-    let renderer = MetalRenderer::spawn(RendererResourceLimits::default());
-    run_app_with_renderer(context, build_root, options, renderer);
+    let mut context = context;
+    let mtm = MainThreadMarker::new().expect("Must be called from main thread");
+    let app = NSApplication::sharedApplication(mtm);
+    app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
+
+    let main_window = match context.active_window() {
+        Some(window) => window,
+        None => context.register_window(options.clone()),
+    };
+    // Wakes carry no window number: they are for the app, whichever windows exist.
+    context.update_queue().set_waker(move || {
+        if let Err(err) =
+            post_application_event_from_any_thread(APP_EVENT_WINDOW_NUMBER, MAC_REDRAW_EVENT_DATA)
+        {
+            // The update stays queued and is applied with the next event.
+            log::error!("failed to wake the event loop for an app handle update: {err}");
+        }
+    });
+
+    // Each window's renderer is created on another thread while the window opens
+    // and its first frame is built and laid out; the first present waits for it.
+    let parts = create_window_parts(main_window, &options, &[], mtm);
+    // The first open window's delegate is also the application's.
+    parts.window.install_application_delegate(&app);
+    let mut windows = vec![native_window(&mut context, parts, build_root)];
+    app.activate();
+
+    let profile_enabled = RendererTelemetryRecorder::enabled_from_env().is_some();
+    let mut frame_ticker = FrameTicker::new(APP_EVENT_WINDOW_NUMBER);
+    loop {
+        open_pending_windows(&mut context, &mut windows, mtm);
+
+        let wait_for_event = !context.has_pending_work();
+        let polled = {
+            let mut mac_windows: Vec<&mut MacWindow> = windows
+                .iter_mut()
+                .map(|window| window.mac_window_mut())
+                .collect();
+            match poll_windows(&app, &mut mac_windows, wait_for_event) {
+                Ok(polled) => polled,
+                Err(err) => panic!("failed to poll platform window events: {}", err),
+            }
+        };
+        let iteration_started_at = Instant::now();
+        for event in polled.app {
+            match event {
+                MacAppEvent::DisplayTick => {
+                    frame_ticker.tick_handled();
+                    context.begin_animation_frame();
+                }
+                MacAppEvent::Wake => {}
+            }
+        }
+
+        let mut close_requested = Vec::new();
+        for (window, events) in windows.iter_mut().zip(polled.windows) {
+            if !context.activate_window(window.id()) {
+                continue;
+            }
+            if window.run_iteration(&mut context, events).close {
+                close_requested.push(window.id());
+            }
+        }
+        for window in close_requested {
+            context.close_window(window);
+        }
+        for closed in context.take_closed_windows() {
+            if let Some(index) = windows.iter().position(|window| window.id() == closed) {
+                let mut window = windows.remove(index);
+                if let Err(err) = window.mac_window_mut().close() {
+                    log::error!("failed to close platform window: {err}");
+                }
+                // NSApplication holds its delegate weakly; hand it to a window
+                // that stays open before this one's delegate is released.
+                if index == 0 {
+                    match windows.first() {
+                        Some(next) => next.mac_window().install_application_delegate(&app),
+                        None => app.setDelegate(None),
+                    }
+                }
+            }
+        }
+
+        if !context.is_running() {
+            break;
+        }
+        run_between_frames(
+            &mut context,
+            &mut frame_ticker,
+            windows.first().map(|window| window.mac_window()),
+            &app,
+            iteration_started_at,
+            profile_enabled,
+        );
+        // Idle work may have quit.
+        if !context.is_running() {
+            break;
+        }
+    }
 }
 
-pub(crate) fn run_app_with_renderer<F, E>(
-    context: AppContext,
-    mut build_root: F,
-    options: WindowOptions,
+/// Window number of application-defined events meant for the app, not a window.
+const APP_EVENT_WINDOW_NUMBER: isize = 0;
+
+/// Create the platform windows for windows app code opened since the last pass.
+fn open_pending_windows(
+    context: &mut AppContext,
+    windows: &mut Vec<Box<dyn NativeWindowDriver>>,
+    mtm: MainThreadMarker,
+) {
+    for pending in context.take_pending_windows() {
+        if !context.activate_window(pending.id) {
+            continue;
+        }
+        let open: Vec<&MacWindow> = windows.iter().map(|window| window.mac_window()).collect();
+        let parts = create_window_parts(pending.id, &pending.options, &open, mtm);
+        windows.push(pending.content.into_native(context, parts));
+    }
+}
+
+/// A platform window with its renderer, before its content is attached.
+pub(crate) struct NativeWindowParts {
+    id: WindowId,
+    window: MacWindow,
     pending_renderer: PendingMetalRenderer,
-) where
+    viewport_size: Size,
+    automation: Option<NativeDogfoodAutomation>,
+}
+
+fn create_window_parts(
+    id: WindowId,
+    options: &WindowOptions,
+    open_windows: &[&MacWindow],
+    mtm: MainThreadMarker,
+) -> NativeWindowParts {
+    let pending_renderer = MetalRenderer::spawn(RendererResourceLimits::default());
+    // SAFETY: called on the main thread.
+    let mut window = match unsafe { create_window(options, mtm) } {
+        Ok(window) => window,
+        Err(err) => panic!("failed to create platform window: {}", err),
+    };
+    if let Some(last) = open_windows.last() {
+        window.cascade_after(last);
+    }
+    let attachment = match window.renderer_attachment() {
+        Ok(attachment) => attachment,
+        Err(err) => panic!("failed to attach renderer to platform window: {}", err),
+    };
+    if attachment.target != PlatformRendererTarget::MetalLayer {
+        panic!(
+            "{}",
+            PlatformWindowError::backend(
+                "macos",
+                "Metal renderer requires a Metal layer attachment"
+            )
+        );
+    }
+    if let Err(err) = window.show() {
+        panic!("failed to show platform window: {}", err);
+    }
+    if !window.accessibility_bridge_mut().native_attached() {
+        panic!("macOS accessibility bridge failed to attach to the content view");
+    }
+    NativeWindowParts {
+        id,
+        window,
+        pending_renderer,
+        viewport_size: options.size,
+        // The dogfood script drives the first window only.
+        automation: if open_windows.is_empty() {
+            NativeDogfoodAutomation::load_from_environment()
+        } else {
+            None
+        },
+    }
+}
+
+/// What a window asked of the app loop in one iteration.
+#[derive(Debug, Default, Clone, Copy)]
+pub(crate) struct WindowRequests {
+    close: bool,
+}
+
+/// One open window, behind the type the app loop stores.
+pub(crate) trait NativeWindowDriver {
+    fn id(&self) -> WindowId;
+    fn mac_window(&self) -> &MacWindow;
+    fn mac_window_mut(&mut self) -> &mut MacWindow;
+    /// Handle this window's events and draw it if it has work. `context` has
+    /// this window active.
+    fn run_iteration(
+        &mut self,
+        context: &mut AppContext,
+        events: Vec<MacWindowEvent>,
+    ) -> WindowRequests;
+}
+
+struct NativeWindow<F, E> {
+    id: WindowId,
+    window: MacWindow,
+    /// Set at the first present, from `pending_renderer`.
+    renderer: Option<MetalRenderer>,
+    pending_renderer: Option<PendingMetalRenderer>,
+    /// This window's last frame, so each frame redraws only what changed.
+    retained: RetainedTarget,
+    presenter: Presenter<E>,
+    build_root: F,
+    last_viewport_size: Size,
+    profile_recorder: Option<RendererTelemetryRecorder>,
+    automation: Option<NativeDogfoodAutomation>,
+    ime_state: crate::platform::mac::ime_state::NativeImeState,
+}
+
+/// Attach `build_root` to a created platform window. `context` has the window
+/// active, so the first build sees its viewport.
+pub(crate) fn native_window<F, E>(
+    context: &mut AppContext,
+    parts: NativeWindowParts,
+    mut build_root: F,
+) -> Box<dyn NativeWindowDriver>
+where
     F: FnMut(&mut AppContext) -> E + 'static,
     E: Element + 'static,
 {
-    let mut context = context;
-    let root = build_root(&mut context);
+    // AppContext is the single owner of viewport size; the window options only
+    // provide its initial value.
+    context.set_viewport_size(parts.viewport_size);
+    let root = build_root(context);
+    let mut presenter = Presenter::with_root(parts.viewport_size, root);
+    presenter.set_accessibility_announcements_enabled(true);
+    Box::new(NativeWindow {
+        id: parts.id,
+        window: parts.window,
+        renderer: None,
+        pending_renderer: Some(parts.pending_renderer),
+        retained: RetainedTarget::new(),
+        presenter,
+        build_root,
+        last_viewport_size: parts.viewport_size,
+        profile_recorder: RendererTelemetryRecorder::enabled_from_env(),
+        automation: parts.automation,
+        ime_state: Default::default(),
+    })
+}
 
-    // Get main thread marker
-    let mtm = MainThreadMarker::new().expect("Must be called from main thread");
+impl<F, E> NativeWindowDriver for NativeWindow<F, E>
+where
+    F: FnMut(&mut AppContext) -> E,
+    E: Element,
+{
+    fn id(&self) -> WindowId {
+        self.id
+    }
 
-    unsafe {
-        // Initialize NSApplication
-        let app = NSApplication::sharedApplication(mtm);
-        app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
+    fn mac_window(&self) -> &MacWindow {
+        &self.window
+    }
 
-        let mut pending_renderer = Some(pending_renderer);
-        let mut renderer: Option<MetalRenderer> = None;
-        // The window's last frame, so each frame redraws only what changed.
-        let mut window_target = RetainedTarget::new();
+    fn mac_window_mut(&mut self) -> &mut MacWindow {
+        &mut self.window
+    }
 
-        // Create the window with Metal layer
-        let mut window = match create_window(&options, mtm) {
-            Ok(window) => window,
-            Err(err) => panic!("failed to create platform window: {}", err),
+    fn run_iteration(
+        &mut self,
+        context: &mut AppContext,
+        mut platform_events: Vec<MacWindowEvent>,
+    ) -> WindowRequests {
+        let NativeWindow {
+            window,
+            renderer,
+            pending_renderer,
+            retained,
+            presenter,
+            build_root,
+            last_viewport_size,
+            profile_recorder,
+            automation: native_dogfood_automation,
+            ime_state: native_ime_state,
+            ..
+        } = self;
+        let mut requests = WindowRequests::default();
+        let mut phases = RendererFramePhaseDurations::default();
+        let mut viewport_size = match window.content_size() {
+            Ok(size) => size,
+            Err(err) => panic!("failed to read platform window size: {}", err),
         };
-        window.install_application_delegate(&app);
-        let window_number = window.window_number();
-        context.update_queue().set_waker(move || {
-            if let Err(err) =
-                post_application_event_from_any_thread(window_number, MAC_REDRAW_EVENT_DATA)
-            {
-                // The update stays queued and is applied with the next event.
-                log::error!("failed to wake the event loop for an app handle update: {err}");
-            }
-        });
-        let attachment = match window.renderer_attachment() {
-            Ok(attachment) => attachment,
-            Err(err) => panic!("failed to attach renderer to platform window: {}", err),
+        let mut ordered_input_events = Vec::new();
+        let mut focus_changed = None;
+        let mut close_requested = false;
+        let mut automation_focused_element = None;
+        if let Some(automation) = native_dogfood_automation {
+            automation_focused_element =
+                automation.append_events(window, presenter.scene(), &mut platform_events);
+        }
+        let event_observed_at = if platform_events.is_empty() {
+            None
+        } else {
+            Some(Instant::now())
         };
-        if attachment.target != PlatformRendererTarget::MetalLayer {
-            panic!(
-                "{}",
-                PlatformWindowError::backend(
-                    "macos",
-                    "Metal renderer requires a Metal layer attachment"
-                )
-            );
-        }
 
-        if let Err(err) = window.show() {
-            panic!("failed to show platform window: {}", err);
-        }
-
-        // Activate the application
-        app.activate();
-
-        let mut presenter = Presenter::with_root(options.size, root);
-        presenter.set_accessibility_announcements_enabled(true);
-        if !window.accessibility_bridge_mut().native_attached() {
-            panic!("macOS accessibility bridge failed to attach to the content view");
-        }
-
-        // Main run loop. AppContext is the single owner of viewport size; the
-        // window options only provide its initial value.
-        let mut viewport_size = options.size;
-        context.set_viewport_size(viewport_size);
-        let mut last_viewport_size = viewport_size;
-        let mut profile_recorder = RendererTelemetryRecorder::enabled_from_env();
-        let mut native_dogfood_automation = NativeDogfoodAutomation::load_from_environment();
-        let mut native_ime_state = crate::platform::mac::ime_state::NativeImeState::default();
-        let mut frame_ticker = FrameTicker::new(window_number);
-
-        // Render loop (event-driven)
-        loop {
-            let mut phases = RendererFramePhaseDurations::default();
-            viewport_size = match window.content_size() {
-                Ok(size) => size,
-                Err(err) => panic!("failed to read platform window size: {}", err),
-            };
-            let mut ordered_input_events = Vec::new();
-            let mut focus_changed = None;
-            let mut close_requested = false;
-            let wait_for_event = !context.has_pending_work();
-            let mut platform_events = match window.poll_events_for_app(&app, wait_for_event) {
-                Ok(events) => events,
-                Err(err) => panic!("failed to poll platform window events: {}", err),
-            };
-            let iteration_started_at = Instant::now();
-            let mut automation_focused_element = None;
-            if let Some(automation) = &mut native_dogfood_automation {
-                automation_focused_element =
-                    automation.append_events(&window, presenter.scene(), &mut platform_events);
-            }
-            let event_observed_at = if platform_events.is_empty() {
-                None
-            } else {
-                Some(Instant::now())
-            };
-
-            for event in platform_events {
-                match event {
-                    MacWindowEvent::Accessibility(request) => {
-                        context.mark_redraw_from(RedrawSource::PlatformInput);
-                        ordered_input_events.push(OrderedInputEvent::Accessibility(request));
-                    }
-                    MacWindowEvent::Text(command) => {
-                        context.mark_redraw_from(RedrawSource::PlatformInput);
-                        ordered_input_events.push(OrderedInputEvent::Text(command));
-                    }
-                    MacWindowEvent::DisplayTick => {
-                        frame_ticker.tick_handled();
-                        context.begin_animation_frame();
-                    }
-                    MacWindowEvent::Platform(event) => {
-                        mark_platform_event_redraw(&event, &mut context);
-                        match event {
-                            PlatformWindowEvent::Created | PlatformWindowEvent::RedrawRequested => {
+        for event in platform_events {
+            match event {
+                MacWindowEvent::Accessibility(request) => {
+                    context.mark_redraw_from(RedrawSource::PlatformInput);
+                    ordered_input_events.push(OrderedInputEvent::Accessibility(request));
+                }
+                MacWindowEvent::Text(command) => {
+                    context.mark_redraw_from(RedrawSource::PlatformInput);
+                    ordered_input_events.push(OrderedInputEvent::Text(command));
+                }
+                // The app loop takes display ticks before windows see events.
+                MacWindowEvent::DisplayTick => {}
+                MacWindowEvent::Platform(event) => {
+                    mark_platform_event_redraw(&event, context);
+                    match event {
+                        PlatformWindowEvent::Created | PlatformWindowEvent::RedrawRequested => {}
+                        PlatformWindowEvent::Resized(size) => viewport_size = size,
+                        PlatformWindowEvent::ScaleFactorChanged(_)
+                        | PlatformWindowEvent::ApplicationActivated(_)
+                        | PlatformWindowEvent::Minimized(_) => {}
+                        PlatformWindowEvent::ReopenRequested => {
+                            if let Err(err) = window.show() {
+                                panic!("failed to reopen platform window: {}", err);
                             }
-                            PlatformWindowEvent::Resized(size) => viewport_size = size,
-                            PlatformWindowEvent::ScaleFactorChanged(_)
-                            | PlatformWindowEvent::ApplicationActivated(_)
-                            | PlatformWindowEvent::Minimized(_) => {}
-                            PlatformWindowEvent::ReopenRequested => {
-                                if let Err(err) = window.show() {
-                                    panic!("failed to reopen platform window: {}", err);
-                                }
-                            }
-                            PlatformWindowEvent::FocusChanged(focused) => {
-                                focus_changed = Some(focused);
-                            }
-                            PlatformWindowEvent::CloseRequested
-                            | PlatformWindowEvent::QuitRequested => close_requested = true,
-                            PlatformWindowEvent::Input(input) => {
-                                append_input_event(input, &mut ordered_input_events)
-                            }
+                        }
+                        PlatformWindowEvent::FocusChanged(focused) => {
+                            focus_changed = Some(focused);
+                        }
+                        PlatformWindowEvent::CloseRequested => {
+                            close_requested = true;
+                            requests.close = true;
+                        }
+                        PlatformWindowEvent::QuitRequested => {
+                            close_requested = true;
+                            context.quit();
+                        }
+                        PlatformWindowEvent::Input(input) => {
+                            append_input_event(input, &mut ordered_input_events)
                         }
                     }
                 }
             }
+        }
 
-            let viewport_changed = synchronize_viewport_after_platform_events(
-                &mut context,
-                viewport_size,
-                last_viewport_size,
-            );
-            if viewport_changed {
-                schedule_platform_redraw(&window, &mut context, RedrawSource::PlatformResize);
-            }
+        let viewport_changed =
+            synchronize_viewport_after_platform_events(context, viewport_size, *last_viewport_size);
+        if viewport_changed {
+            schedule_platform_redraw(&*window, context, RedrawSource::PlatformResize);
+        }
 
-            let frame_events = NativeFrameEvents {
-                viewport_changed,
-                viewport_size,
-                focus_changed,
-                close_requested,
-                automation_focused_element,
-                ordered_input_events,
-            };
-            let mut resize_applied = false;
+        let frame_events = NativeFrameEvents {
+            viewport_changed,
+            viewport_size,
+            focus_changed,
+            close_requested,
+            automation_focused_element,
+            ordered_input_events,
+        };
+        let mut resize_applied = false;
 
-            // The stage order lives in FrameStage::ORDER, shared with the
-            // headless runner. This runner only supplies the two stages that
-            // depend on the platform: which events arrived, and which backend
-            // receives the painted scene.
-            let outcome = match FramePipeline::run_frame(
-                &mut context,
-                &mut presenter,
-                &mut build_root,
-                viewport_size,
-                IdlePolicy::SkipWhenIdle,
-                |presenter, context| {
-                    resize_applied = dispatch_native_events(
-                        presenter,
-                        context,
-                        &window,
-                        &frame_events,
-                        &mut native_ime_state,
-                    );
-                    Ok(())
-                },
-                |presenter, _context| {
-                    let renderer = match (&mut renderer, pending_renderer.take()) {
-                        (Some(renderer), _) => renderer,
-                        (slot @ None, Some(pending)) => {
-                            let created = match pending.wait() {
-                                Ok(renderer) => renderer,
-                                Err(err) => panic!("failed to create renderer: {}", err),
-                            };
-                            window.set_device(created.device());
-                            slot.insert(created)
-                        }
-                        (None, None) => unreachable!("the renderer is created before it is taken"),
-                    };
-                    let drawable_wait_started_at = Instant::now();
-                    let metal_drawable = window.next_drawable();
-                    phases.drawable_wait_ns = drawable_wait_started_at.elapsed().as_nanos();
-
-                    let render_started_at = Instant::now();
-                    phases.event_to_render_latency_ns = event_observed_at.map(|observed_at| {
-                        render_started_at
-                            .saturating_duration_since(observed_at)
-                            .as_nanos()
-                    });
-                    let presentation = match metal_drawable {
-                        Some(metal_drawable) => {
-                            // Hold the owned retain across render+present; MetalRenderer
-                            // still takes &MetalDrawableRef via Deref.
-                            renderer
-                                .render_retained(
-                                    presenter.scene(),
-                                    &mut window_target,
-                                    &metal_drawable,
-                                    viewport_size,
-                                )
-                                .map_err(|err| {
-                                    FramePipelineError::stage(
-                                        crate::core::frame_pipeline::FrameStage::Present,
-                                        err.to_string(),
-                                    )
-                                })?;
-                            FramePresentation::Presented(Some(renderer.diagnostics()))
-                        }
-                        None => FramePresentation::Deferred,
-                    };
-                    phases.render_ns = render_started_at.elapsed().as_nanos();
-                    Ok(presentation)
-                },
-            ) {
-                Ok(Some(outcome)) => outcome,
-                Ok(None) => {
-                    if !context.is_running() {
-                        break;
-                    }
-                    run_between_frames(
-                        &mut context,
-                        &mut frame_ticker,
-                        &window,
-                        &app,
-                        iteration_started_at,
-                        profile_recorder.is_some(),
-                    );
-                    if !context.is_running() {
-                        break;
-                    }
-                    continue;
-                }
-                Err(err) => panic!("frame failed: {err}"),
-            };
-
-            if resize_applied {
-                last_viewport_size = viewport_size;
-            }
-            phases.layout_ns = outcome.durations.layout_ns;
-            phases.dispatch_ns = outcome.durations.dispatch_ns;
-            phases.paint_ns = outcome.durations.paint_ns;
-            let frame_committed = outcome.presented;
-
-            let (ime_sync_result, ime_redraw_requested) =
-                crate::platform::mac::ime_state::sync_text_input_snapshot(
-                    &mut presenter,
-                    &window,
-                    &mut native_ime_state,
+        // The stage order lives in FrameStage::ORDER, shared with the
+        // headless runner. This runner only supplies the two stages that
+        // depend on the platform: which events arrived, and which backend
+        // receives the painted scene.
+        let outcome = match FramePipeline::run_frame(
+            context,
+            presenter,
+            build_root,
+            viewport_size,
+            IdlePolicy::SkipWhenIdle,
+            |presenter, context| {
+                resize_applied = dispatch_native_events(
+                    presenter,
+                    context,
+                    window,
+                    &frame_events,
+                    native_ime_state,
                 );
-            if let Err(err) = ime_sync_result {
-                log::error!("failed to synchronize native text input state: {err}");
-            }
-            // Invalid-snapshot cancel can mutate the input after Paint/Present; schedule a
-            // platform redraw so cleared marked text is painted before the run loop sleeps.
-            if ime_redraw_requested {
-                schedule_platform_redraw(&window, &mut context, RedrawSource::PlatformInput);
-            }
-
-            let accessibility_bridge = window.accessibility_bridge_mut();
-            let tree_published = match presenter.accessibility_tree() {
-                Ok(accessibility_tree) => {
-                    match accessibility_bridge.publish_tree(&accessibility_tree) {
-                        Ok(()) => Some(accessibility_tree),
-                        Err(err) => {
-                            log::error!("failed to publish accessibility tree: {err}");
-                            None
-                        }
+                Ok(())
+            },
+            |presenter, _context| {
+                let renderer = match (&mut *renderer, pending_renderer.take()) {
+                    (Some(renderer), _) => renderer,
+                    (slot @ None, Some(pending)) => {
+                        let created = match pending.wait() {
+                            Ok(renderer) => renderer,
+                            Err(err) => panic!("failed to create renderer: {}", err),
+                        };
+                        window.set_device(created.device());
+                        slot.insert(created)
                     }
-                }
-                Err(err) => {
-                    log::error!("failed to build accessibility tree: {err}");
-                    None
-                }
-            };
-            // FocusChanged is tree-dependent and stays queued until a matching tree
-            // publishes. ActionFeedback posts on the content view and is announced
-            // immediately so retained-tree controls still confirm activation during
-            // recovery instead of buffering a burst for the next successful publish.
-            if let Some(published_tree) = tree_published.as_ref() {
-                let focused = presenter.focused_element();
-                for announcement in filter_retained_accessibility_announcements(
-                    presenter.take_accessibility_announcements(),
-                    published_tree,
-                    focused,
-                ) {
-                    if let Err(err) = accessibility_bridge.announce(&announcement) {
-                        log::error!("failed to publish accessibility announcement: {err}");
-                    }
-                }
-            } else {
-                let pending = presenter.take_accessibility_announcements();
-                let mut retained_focus = Vec::new();
-                for announcement in pending {
-                    match announcement.kind() {
-                        AccessibilityAnnouncementKind::ActionFeedback => {
-                            if let Err(err) = accessibility_bridge.announce(&announcement) {
-                                log::error!("failed to publish accessibility announcement: {err}");
-                            }
-                        }
-                        AccessibilityAnnouncementKind::FocusChanged => {
-                            retained_focus.push(announcement);
-                        }
-                    }
-                }
-                presenter.retain_accessibility_announcements(retained_focus);
-            }
-
-            if frame_committed && let Some(recorder) = profile_recorder.as_mut() {
-                let diagnostics = match presenter.renderer_diagnostics() {
-                    Some(diagnostics) => diagnostics,
-                    None => panic!("renderer diagnostics were not recorded for this frame"),
+                    (None, None) => unreachable!("the renderer is created before it is taken"),
                 };
-                let telemetry = recorder.capture_telemetry(
-                    "metal",
-                    viewport_size,
-                    phases,
-                    diagnostics,
-                    RendererBatchDiagnostics::for_metal_scene(presenter.scene()),
-                );
-                eprintln!("{}", telemetry.to_json_line());
-            }
+                let drawable_wait_started_at = Instant::now();
+                let metal_drawable = window.next_drawable();
+                phases.drawable_wait_ns = drawable_wait_started_at.elapsed().as_nanos();
 
-            if mark_deferred_frame_for_retry(&mut context, frame_committed) {
-                request_automation_redraw(&window);
-            }
-            // Check if we should quit
-            if !context.is_running() {
-                break;
-            }
-            run_between_frames(
-                &mut context,
-                &mut frame_ticker,
-                &window,
-                &app,
-                iteration_started_at,
-                profile_recorder.is_some(),
-            );
-            // Idle work may have quit.
-            if !context.is_running() {
-                break;
-            }
+                let render_started_at = Instant::now();
+                phases.event_to_render_latency_ns = event_observed_at.map(|observed_at| {
+                    render_started_at
+                        .saturating_duration_since(observed_at)
+                        .as_nanos()
+                });
+                let presentation = match metal_drawable {
+                    Some(metal_drawable) => {
+                        // Hold the owned retain across render+present; MetalRenderer
+                        // still takes &MetalDrawableRef via Deref.
+                        renderer
+                            .render_retained(
+                                presenter.scene(),
+                                retained,
+                                &metal_drawable,
+                                viewport_size,
+                            )
+                            .map_err(|err| {
+                                FramePipelineError::stage(
+                                    crate::core::frame_pipeline::FrameStage::Present,
+                                    err.to_string(),
+                                )
+                            })?;
+                        FramePresentation::Presented(Some(renderer.diagnostics()))
+                    }
+                    None => FramePresentation::Deferred,
+                };
+                phases.render_ns = render_started_at.elapsed().as_nanos();
+                Ok(presentation)
+            },
+        ) {
+            Ok(Some(outcome)) => outcome,
+            Ok(None) => return requests,
+            Err(err) => panic!("frame failed: {err}"),
+        };
+
+        if resize_applied {
+            *last_viewport_size = viewport_size;
         }
+        phases.layout_ns = outcome.durations.layout_ns;
+        phases.dispatch_ns = outcome.durations.dispatch_ns;
+        phases.paint_ns = outcome.durations.paint_ns;
+        let frame_committed = outcome.presented;
+
+        let (ime_sync_result, ime_redraw_requested) =
+            crate::platform::mac::ime_state::sync_text_input_snapshot(
+                presenter,
+                window,
+                native_ime_state,
+            );
+        if let Err(err) = ime_sync_result {
+            log::error!("failed to synchronize native text input state: {err}");
+        }
+        // Invalid-snapshot cancel can mutate the input after Paint/Present; schedule a
+        // platform redraw so cleared marked text is painted before the run loop sleeps.
+        if ime_redraw_requested {
+            schedule_platform_redraw(&*window, context, RedrawSource::PlatformInput);
+        }
+
+        let accessibility_bridge = window.accessibility_bridge_mut();
+        let tree_published = match presenter.accessibility_tree() {
+            Ok(accessibility_tree) => {
+                match accessibility_bridge.publish_tree(&accessibility_tree) {
+                    Ok(()) => Some(accessibility_tree),
+                    Err(err) => {
+                        log::error!("failed to publish accessibility tree: {err}");
+                        None
+                    }
+                }
+            }
+            Err(err) => {
+                log::error!("failed to build accessibility tree: {err}");
+                None
+            }
+        };
+        // FocusChanged is tree-dependent and stays queued until a matching tree
+        // publishes. ActionFeedback posts on the content view and is announced
+        // immediately so retained-tree controls still confirm activation during
+        // recovery instead of buffering a burst for the next successful publish.
+        if let Some(published_tree) = tree_published.as_ref() {
+            let focused = presenter.focused_element();
+            for announcement in filter_retained_accessibility_announcements(
+                presenter.take_accessibility_announcements(),
+                published_tree,
+                focused,
+            ) {
+                if let Err(err) = accessibility_bridge.announce(&announcement) {
+                    log::error!("failed to publish accessibility announcement: {err}");
+                }
+            }
+        } else {
+            let pending = presenter.take_accessibility_announcements();
+            let mut retained_focus = Vec::new();
+            for announcement in pending {
+                match announcement.kind() {
+                    AccessibilityAnnouncementKind::ActionFeedback => {
+                        if let Err(err) = accessibility_bridge.announce(&announcement) {
+                            log::error!("failed to publish accessibility announcement: {err}");
+                        }
+                    }
+                    AccessibilityAnnouncementKind::FocusChanged => {
+                        retained_focus.push(announcement);
+                    }
+                }
+            }
+            presenter.retain_accessibility_announcements(retained_focus);
+        }
+
+        if frame_committed && let Some(recorder) = profile_recorder.as_mut() {
+            let diagnostics = match presenter.renderer_diagnostics() {
+                Some(diagnostics) => diagnostics,
+                None => panic!("renderer diagnostics were not recorded for this frame"),
+            };
+            let telemetry = recorder.capture_telemetry(
+                "metal",
+                viewport_size,
+                phases,
+                diagnostics,
+                RendererBatchDiagnostics::for_metal_scene(presenter.scene()),
+            );
+            eprintln!("{}", telemetry.to_json_line());
+        }
+
+        if mark_deferred_frame_for_retry(context, frame_committed) {
+            request_automation_redraw(&*window);
+        }
+        requests
     }
 }
 
@@ -430,15 +595,15 @@ pub(crate) fn run_app_with_renderer<F, E>(
 fn run_between_frames(
     context: &mut AppContext,
     frame_ticker: &mut FrameTicker,
-    window: &crate::platform::mac::window::MacWindow,
+    window: Option<&MacWindow>,
     app: &NSApplication,
     iteration_started_at: Instant,
     report_frame_ticks: bool,
 ) {
     let animating = context.animation_frame_requested();
     let source_before = frame_ticker.source();
-    if let Err(err) = frame_ticker.update(animating, window.display_id(), context.frame_interval())
-    {
+    let display = window.and_then(MacWindow::display_id);
+    if let Err(err) = frame_ticker.update(animating, display, context.frame_interval()) {
         panic!("failed to drive animation frames: {err}");
     }
     if let Some(interval) = frame_ticker.refresh_interval() {
@@ -460,7 +625,7 @@ fn run_between_frames(
 
     if context.has_idle_work() {
         let deadline = iteration_started_at + context.idle_budget();
-        context.run_idle_tasks(|| Instant::now() < deadline && !window.has_pending_event(app));
+        context.run_idle_tasks(|| Instant::now() < deadline && !has_pending_event(app));
     }
 }
 
@@ -513,7 +678,7 @@ fn synchronize_viewport_after_platform_events(
     }
 
     context.set_viewport_size(viewport_size);
-    context.request_rebuild();
+    context.request_window_rebuild();
     true
 }
 
