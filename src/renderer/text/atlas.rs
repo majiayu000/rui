@@ -21,8 +21,9 @@ pub const ATLAS_PAGE_SIZE: u32 = 1024;
 pub const SUBPIXEL_VARIANTS: u8 = 4;
 /// Empty pixels kept between packed glyphs so linear sampling never reads a neighbour.
 const ATLAS_PADDING: u32 = 1;
-/// Shaped strings kept across frames. Past this, `begin_frame` keeps only the strings
-/// the previous frame drew, so a frame never evicts what it is still drawing.
+/// Shaped strings kept across frames. Past this, `begin_frame` drops the least
+/// recently drawn strings down to three quarters of it, never one the previous
+/// frame drew, so a frame never evicts what it is still drawing.
 const MAX_RETAINED_SHAPES: usize = 4_096;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -326,9 +327,20 @@ impl TextGlyphCache {
     pub fn begin_frame(&mut self) {
         if self.shapes.len() > MAX_RETAINED_SHAPES {
             let previous = self.frame;
-            let before = self.shapes.len();
-            self.shapes.retain(|_, entry| entry.last_used == previous);
-            self.evicted_shapes += before - self.shapes.len();
+            let mut frames: Vec<u64> = self
+                .shapes
+                .values()
+                .map(|entry| entry.last_used)
+                .filter(|&frame| frame < previous)
+                .collect();
+            let evict = (self.shapes.len() - MAX_RETAINED_SHAPES * 3 / 4).min(frames.len());
+            if evict > 0 {
+                let (_, &mut newest_evicted, _) = frames.select_nth_unstable(evict - 1);
+                let before = self.shapes.len();
+                self.shapes
+                    .retain(|_, entry| entry.last_used > newest_evicted);
+                self.evicted_shapes += before - self.shapes.len();
+            }
         }
         self.frame += 1;
     }

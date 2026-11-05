@@ -382,23 +382,19 @@ fn load_font_faces_with(
     let face_count = font_face_count(path, data.as_slice())?;
 
     for index in 0..face_count {
-        let rusttype_font = TextShapingFont::new(family, index, Arc::clone(&data));
-        let rustybuzz_font = rustybuzz::Face::from_slice(data.as_slice(), index);
-        match (rusttype_font, rustybuzz_font) {
-            (Some(font), Some(_)) => fonts.push(font),
-            (None, None) => {
-                return Err(FontLoadError::invalid_data(
-                    path,
-                    format!("font face {index} cannot be parsed"),
-                ));
-            }
-            _ => {
-                return Err(FontLoadError::invalid_data(
-                    path,
-                    format!("font face {index} is not supported by both text engines"),
-                ));
-            }
+        if let Some(font) = TextShapingFont::new(family, index, Arc::clone(&data)) {
+            fonts.push(font);
+            continue;
         }
+        let rusttype_parses =
+            rusttype::Font::try_from_bytes_and_index(data.as_slice(), index).is_some();
+        let rustybuzz_parses = rustybuzz::Face::from_slice(data.as_slice(), index).is_some();
+        let message = if rusttype_parses || rustybuzz_parses {
+            format!("font face {index} is not supported by both text engines")
+        } else {
+            format!("font face {index} cannot be parsed")
+        };
+        return Err(FontLoadError::invalid_data(path, message));
     }
     Ok(())
 }
