@@ -291,10 +291,10 @@ fn main() -> ExitCode {
     drop(rounds);
 
     // Wrapped paragraphs, one of which changes each frame.
-    let mut surfaces = Surfaces::new();
+    let mut rebuilt_text = Rebuilt::new();
     costs.insert(
         "text.paragraphs",
-        measure(|round| surfaces.frame(&mut paragraphs(round), &mut measurer)),
+        measure(|round| rebuilt_text.frame(paragraphs(round), &mut measurer)),
     );
 
     for (name, count) in [
