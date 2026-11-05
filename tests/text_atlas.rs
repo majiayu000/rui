@@ -197,3 +197,75 @@ fn evicted_atlas_pages_draw_what_a_fresh_atlas_draws() {
     assert!(glyphs.evicted_entries > 0, "{glyphs:?}");
     assert!(glyphs.live_bytes <= 3 * 1024 * 1024, "{glyphs:?}");
 }
+
+/// Device pixels whose channels differ: colored, which white text on black is not.
+fn colored_box(pixels: &[u8], width: usize) -> Option<(usize, usize, usize, usize)> {
+    let mut found = None::<(usize, usize, usize, usize)>;
+    for (index, pixel) in pixels.chunks_exact(4).enumerate() {
+        let (low, high) = (pixel[..3].iter().min(), pixel[..3].iter().max());
+        if high.zip(low).is_some_and(|(high, low)| high - low > 80) {
+            let (x, y) = (index % width, index / width);
+            found = Some(match found {
+                Some((x0, y0, x1, y1)) => (x0.min(x), y0.min(y), x1.max(x), y1.max(y)),
+                None => (x, y, x, y),
+            });
+        }
+    }
+    found
+}
+
+#[test]
+fn emoji_draw_in_color_beside_text_in_one_draw() {
+    let mut renderer = match MetalRenderer::new() {
+        Ok(renderer) => renderer,
+        Err(RendererError::BackendUnavailable(_)) => return,
+        Err(err) => panic!("metal renderer should initialize: {err}"),
+    };
+    let frame = |alpha: f32| {
+        let mut scene = Scene::new();
+        scene.insert(Primitive::Quad {
+            bounds: Bounds::from_xywh(0.0, 0.0, 120.0, 60.0),
+            background: Rgba::new(0.0, 0.0, 0.0, 1.0),
+            border_color: Rgba::new(0.0, 0.0, 0.0, 0.0),
+            border_widths: rui::core::geometry::Edges::ZERO,
+            corner_radii: rui::core::style::Corners::all(0.0),
+        });
+        scene.insert(text("Hi \u{1F600}", 10.0, Rgba::new(1.0, 1.0, 1.0, alpha)));
+        scene
+    };
+    let pixels = renderer
+        .capture_frame_pixels_at_scale(&frame(1.0), VIEWPORT, 2.0)
+        .expect("capture");
+    let width = (VIEWPORT.width * 2.0) as usize;
+    let emoji_font = std::path::Path::new("/System/Library/Fonts/Apple Color Emoji.ttc");
+    let Some((x0, y0, x1, y1)) = colored_box(&pixels, width) else {
+        assert!(
+            !emoji_font.exists(),
+            "Apple Color Emoji is installed but drew no color"
+        );
+        return;
+    };
+    assert_eq!(
+        renderer.last_frame_stats().draw_calls,
+        1,
+        "text and emoji share a draw"
+    );
+    // Right of "Hi ", within the 40-pixel line at 10 + 0..40, about 28 px tall.
+    let (x0, y0, x1, y1) = (x0 / 2, y0 / 2, x1 / 2, y1 / 2);
+    assert!(x0 > 30 && x1 < 70, "emoji at x {x0}..{x1}");
+    assert!(y0 >= 10 && y1 <= 50, "emoji at y {y0}..{y1}");
+    assert!((18..=32).contains(&(y1 - y0)), "emoji {} px tall", y1 - y0);
+
+    // The text's opacity dims the emoji too.
+    let faded = renderer
+        .capture_frame_pixels_at_scale(&frame(0.5), VIEWPORT, 2.0)
+        .expect("capture");
+    let brightest = |pixels: &[u8]| {
+        pixels
+            .chunks_exact(4)
+            .map(|pixel| u32::from(pixel[0]) + u32::from(pixel[1]) + u32::from(pixel[2]))
+            .max()
+            .unwrap_or(0)
+    };
+    assert!(brightest(&faded) < brightest(&pixels));
+}

@@ -16,6 +16,45 @@ pub(super) const KIND_SHADOW: u32 = 1;
 pub(super) const KIND_GLYPH: u32 = 2;
 pub(super) const KIND_PATH: u32 = 3;
 pub(super) const KIND_PATH_SPRITE: u32 = 4;
+pub(super) const KIND_COLOR_GLYPH: u32 = 5;
+
+/// The atlas pages a run of sprites samples: a coverage page and a color page,
+/// each bound to its own texture slot, so sprites on one page of each share a
+/// draw.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct Pages {
+    pub coverage: Option<u32>,
+    pub color: Option<u32>,
+}
+
+impl Pages {
+    pub(super) fn coverage(page: u32) -> Self {
+        Self {
+            coverage: Some(page),
+            color: None,
+        }
+    }
+
+    pub(super) fn color(page: u32) -> Self {
+        Self {
+            coverage: None,
+            color: Some(page),
+        }
+    }
+
+    /// Whether one draw can sample both: no slot needs two pages.
+    fn fits(self, other: Self) -> bool {
+        let fits = |a: Option<u32>, b: Option<u32>| a.is_none() || b.is_none() || a == b;
+        fits(self.coverage, other.coverage) && fits(self.color, other.color)
+    }
+
+    fn with(self, other: Self) -> Self {
+        Self {
+            coverage: self.coverage.or(other.coverage),
+            color: self.color.or(other.color),
+        }
+    }
+}
 
 /// One sprite instance as the shader reads it: `kind << 29 | index` into that
 /// kind's buffer, and the clip rectangle to apply.
@@ -28,12 +67,12 @@ pub(super) struct SpriteRef {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ItemKind {
-    /// `count` instances of `kind` from `start`, all sampling atlas `page` if any.
+    /// `count` instances of `kind` from `start`, all sampling atlas `pages`.
     Sprites {
         kind: u32,
         start: u32,
         count: u32,
-        page: Option<u32>,
+        pages: Pages,
     },
     /// The renderer's image draw at this index.
     Image(u32),
@@ -48,9 +87,9 @@ struct Item {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Draw {
-    /// Sprite references `start..start + count`, sampling atlas `page` if any.
+    /// Sprite references `start..start + count`, sampling atlas `pages`.
     Sprites {
-        page: Option<u32>,
+        pages: Pages,
         start: u32,
         count: u32,
     },
@@ -65,7 +104,7 @@ pub(super) struct FramePlan {
     /// Draw in scene order even when mixed: the plain path the tests compare with.
     #[cfg(test)]
     pub scene_order: bool,
-    page: Option<u32>,
+    pages: Pages,
     order: OverlapOrder,
     orders: Vec<u32>,
     by_order: Vec<u32>,
@@ -78,7 +117,7 @@ impl FramePlan {
     pub(super) fn clear(&mut self) {
         self.items.clear();
         self.mixed = false;
-        self.page = None;
+        self.pages = Pages::default();
         self.refs.clear();
         self.draws.clear();
     }
@@ -87,14 +126,10 @@ impl FramePlan {
     /// what can be seen. Without one, `plan` asks for it if it needs it.
     pub(super) fn push(&mut self, kind: ItemKind, clip: u32, rect: Option<Rect>) {
         match kind {
-            ItemKind::Sprites {
-                page: Some(page), ..
-            } => match self.page {
-                Some(open) if open != page => self.mixed = true,
-                _ => self.page = Some(page),
-            },
-            ItemKind::Sprites { page: None, .. } => {}
-            ItemKind::Image(_) => self.mixed = true,
+            ItemKind::Sprites { pages, .. } if self.pages.fits(pages) => {
+                self.pages = self.pages.with(pages);
+            }
+            ItemKind::Sprites { .. } | ItemKind::Image(_) => self.mixed = true,
         }
         self.items.push(Item { kind, clip, rect });
     }
@@ -167,13 +202,11 @@ impl FramePlan {
     /// Adds the item to the open draw if it can share it.
     fn join(&mut self, index: usize) -> bool {
         let item = self.items[index];
-        let ItemKind::Sprites { page, .. } = item.kind else {
+        let ItemKind::Sprites { pages, .. } = item.kind else {
             return false;
         };
         match self.draws.last() {
-            Some(&Draw::Sprites { page: open, .. })
-                if page.is_none() || open.is_none() || page == open =>
-            {
+            Some(&Draw::Sprites { pages: open, .. }) if open.fits(pages) => {
                 self.append(index);
                 true
             }
@@ -189,7 +222,7 @@ impl FramePlan {
                 kind,
                 start,
                 count,
-                page,
+                pages,
             } => {
                 let refs = self.refs.len() as u32;
                 self.refs
@@ -199,15 +232,15 @@ impl FramePlan {
                     }));
                 match self.draws.last_mut() {
                     Some(Draw::Sprites {
-                        page: open,
+                        pages: open,
                         count: open_count,
                         ..
-                    }) if page.is_none() || open.is_none() || page == *open => {
-                        *open = open.or(page);
+                    }) if open.fits(pages) => {
+                        *open = open.with(pages);
                         *open_count += count;
                     }
                     _ => self.draws.push(Draw::Sprites {
-                        page,
+                        pages,
                         start: refs,
                         count,
                     }),
@@ -232,7 +265,7 @@ mod tests {
                 kind: KIND_QUAD,
                 start: index,
                 count: 1,
-                page: None,
+                pages: Pages::default(),
             },
             0,
             Some(rect),
@@ -245,7 +278,7 @@ mod tests {
                 kind: KIND_GLYPH,
                 start,
                 count,
-                page: Some(page),
+                pages: Pages::coverage(page),
             },
             0,
             Some(rect),
@@ -264,7 +297,7 @@ mod tests {
         assert_eq!(
             plan.draws,
             [Draw::Sprites {
-                page: Some(0),
+                pages: Pages::coverage(0),
                 start: 0,
                 count: 440
             }]
@@ -293,13 +326,13 @@ mod tests {
             plan.draws,
             [
                 Draw::Sprites {
-                    page: None,
+                    pages: Pages::default(),
                     start: 0,
                     count: 11
                 },
                 Draw::Image(0),
                 Draw::Sprites {
-                    page: Some(0),
+                    pages: Pages::coverage(0),
                     start: 11,
                     count: 40
                 },
@@ -320,17 +353,17 @@ mod tests {
             plan.draws,
             [
                 Draw::Sprites {
-                    page: Some(0),
+                    pages: Pages::coverage(0),
                     start: 0,
                     count: 1
                 },
                 Draw::Sprites {
-                    page: Some(1),
+                    pages: Pages::coverage(1),
                     start: 1,
                     count: 2
                 },
                 Draw::Sprites {
-                    page: Some(0),
+                    pages: Pages::coverage(0),
                     start: 3,
                     count: 1
                 },

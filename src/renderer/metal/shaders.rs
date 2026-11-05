@@ -60,7 +60,8 @@ float3 oklab_to_linear(float3 lab) {
 /// square the path winds around, from the edges the tile lists and the backdrop
 /// of the edges right of it (see `path.rs`, whose `coverage` is the same
 /// function), or, once rasterized into the atlas, sprites whose coverage is
-/// used as is.
+/// used as is. Color glyphs, such as emoji, sample an sRGB RGBA atlas page and
+/// keep their own colors.
 pub const SPRITE_SHADER: &str = r#"
 #include <metal_stdlib>
 using namespace metal;
@@ -70,6 +71,7 @@ constant uint KIND_SHADOW = 1;
 constant uint KIND_GLYPH = 2;
 constant uint KIND_PATH = 3;
 constant uint KIND_PATH_SPRITE = 4;
+constant uint KIND_COLOR_GLYPH = 5;
 
 struct SpriteRef {
     uint index;              // kind << 29 | index into that kind's buffer
@@ -434,6 +436,7 @@ float path_coverage(VertexOut in, constant float4* edges, constant PathInstance*
 
 fragment float4 sprite_fragment(VertexOut in [[stage_in]],
                                 texture2d<float> atlas [[texture(0)]],
+                                texture2d<float> color_atlas [[texture(1)]],
                                 sampler samp [[sampler(0)]],
                                 constant float4* edges [[buffer(0)]],
                                 constant PathInstance* paths [[buffer(1)]]) {
@@ -446,8 +449,13 @@ fragment float4 sprite_fragment(VertexOut in [[stage_in]],
         color = glyph_fragment(in, atlas, samp);
     } else if (in.kind == KIND_PATH) {
         color = float4(in.color.rgb, in.color.a * path_coverage(in, edges, paths));
-    } else {
+    } else if (in.kind == KIND_PATH_SPRITE) {
         color = float4(in.color.rgb, in.color.a * atlas.sample(samp, in.uv).r);
+    } else {
+        // A color glyph keeps its own colors, read as linear from the sRGB
+        // page, and takes only the text's opacity.
+        float4 texel = color_atlas.sample(samp, in.uv);
+        color = float4(texel.rgb, texel.a * in.color.a);
     }
     // Pixel centers sit on half pixels, so this keeps exactly the pixels a
     // scissor rectangle of the same integer edges would.
