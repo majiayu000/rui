@@ -12,6 +12,7 @@ mod scroll_view;
 mod spinner;
 mod table;
 pub mod text;
+mod view_element;
 mod text_area;
 mod virtual_list;
 
@@ -29,4 +30,5 @@ pub use spinner::{Spinner, SpinnerType, spinner};
 pub use table::{Table, TableCell, TableRow, cell, header_row, row, table};
 pub use text::{StyledText, Text, TextSpan, span, styled_text, text};
 pub use text_area::{TextArea, TextAreaState, text_area};
+pub use view_element::{ViewElement, view};
 pub use virtual_list::{VirtualList, VirtualListHandle, virtual_list};

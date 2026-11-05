@@ -1091,6 +1091,27 @@ pub trait Element: Any {
         &[]
     }
 
+    /// The children of [`Self::children`], to change. Elements that list
+    /// children return them here too, so views placed among them render.
+    fn children_mut(&mut self) -> &mut [AnyElement] {
+        &mut []
+    }
+
+    /// Render the views placed in this subtree that are in `dirty` or have not
+    /// rendered yet. Returns whether anything below changed, so what was laid
+    /// out and painted for it is not reused.
+    fn refresh_views(
+        &mut self,
+        app: &mut crate::core::app::AppContext,
+        dirty: &std::collections::HashSet<crate::core::entity::EntityId>,
+    ) -> bool {
+        let mut changed = false;
+        for child in self.children_mut() {
+            changed |= child.refresh_views(app, dirty);
+        }
+        changed
+    }
+
     fn accessibility(
         &self,
         _cx: &AccessibilityContext,
@@ -1127,7 +1148,34 @@ pub struct AnyElement {
     layout_record: Option<LayoutRecord>,
     /// Paint of a memoizable subtree, which the next frame can replay.
     /// Frame and index of the subtree's [`PaintRecord`] in the scene.
-    paint_record: Option<(u64, u32)>,
+    paint_record: PaintSlot,
+}
+
+/// Frame and index of an element's [`PaintRecord`] in the scene, with a flag
+/// that fits in the same word.
+#[derive(Debug, Clone, Copy)]
+struct PaintSlot {
+    /// 0 when there is no record; scene frames start at 1.
+    frame: u64,
+    index: u32,
+    /// The subtree holds a view, so a frame that renders views visits it.
+    contains_views: bool,
+}
+
+impl PaintSlot {
+    fn get(&self) -> Option<(u64, u32)> {
+        (self.frame != 0).then_some((self.frame, self.index))
+    }
+
+    fn set(&mut self, record: Option<(u64, u32)>) {
+        (self.frame, self.index) = record.unwrap_or((0, 0));
+    }
+
+    fn take(&mut self) -> Option<(u64, u32)> {
+        let record = self.get();
+        self.set(None);
+        record
+    }
 }
 
 /// Where a memoizable subtree's layout nodes sit in the retained pass. Kept
@@ -1146,11 +1194,22 @@ struct LayoutRecord {
 
 impl AnyElement {
     pub fn new<E: Element>(element: E) -> Self {
+        let mut inner: Box<dyn Element> = Box::new(element);
+        // `children_mut` lists hidden children too, which may show later.
+        let contains_views = TypeId::of::<E>() == TypeId::of::<crate::elements::ViewElement>()
+            || inner
+                .children_mut()
+                .iter()
+                .any(|child| child.paint_record.contains_views);
         Self {
-            inner: Box::new(element),
+            inner,
             stable_id: None,
             layout_record: None,
-            paint_record: None,
+            paint_record: PaintSlot {
+                frame: 0,
+                index: 0,
+                contains_views,
+            },
         }
     }
 
@@ -1184,7 +1243,7 @@ impl AnyElement {
             return node;
         }
         // Laid out again, so what it paints may have changed.
-        self.paint_record = None;
+        self.paint_record.set(None);
         self.inner.adopt_stable_id(id);
         let parent = std::mem::replace(&mut cx.identity_parent, id);
         let next_child_index = std::mem::replace(&mut cx.next_child_index, 0);
@@ -1253,6 +1312,24 @@ impl AnyElement {
         (*self.inner).type_id()
     }
 
+    /// See [`Element::refresh_views`]. Subtrees without views are passed by.
+    pub fn refresh_views(
+        &mut self,
+        app: &mut crate::core::app::AppContext,
+        dirty: &std::collections::HashSet<crate::core::entity::EntityId>,
+    ) -> bool {
+        if !self.paint_record.contains_views {
+            return false;
+        }
+        let changed = self.inner.refresh_views(app, dirty);
+        if changed {
+            // Something inside was rendered again: lay out and paint it anew.
+            self.layout_record = None;
+            self.paint_record.set(None);
+        }
+        changed
+    }
+
     /// Identity given to this element by the last layout: the same for the
     /// same element in every rebuild. `None` before the first layout.
     pub fn stable_id(&self) -> Option<ElementId> {
@@ -1266,7 +1343,7 @@ impl AnyElement {
         }
         let origin = cx.bounds.origin;
         let Some(unrounded) = cx.unrounded else {
-            self.paint_record = None;
+            self.paint_record.set(None);
             self.inner.paint(cx);
             return;
         };
@@ -1312,7 +1389,7 @@ impl AnyElement {
                     unrounded_size: unrounded.size,
                     reach,
                 });
-                self.paint_record = Some((cx.scene.frame(), index));
+                self.paint_record.set(Some((cx.scene.frame(), index)));
                 return;
             }
         }
@@ -1326,7 +1403,7 @@ impl AnyElement {
             && scene.region_count() == regions
             && scene.layers().len() == layers
             && self.children().iter().all(|child| {
-                child.paint_record.is_some_and(|(at, index)| {
+                child.paint_record.get().is_some_and(|(at, index)| {
                     at == frame
                         && scene
                             .paint_record(at, index)
@@ -1343,7 +1420,7 @@ impl AnyElement {
                 unrounded_size: unrounded.size,
                 reach: cx.scene.reach_of(start..cx.scene.len()),
             });
-            self.paint_record = Some((frame, index));
+            self.paint_record.set(Some((frame, index)));
         }
     }
 

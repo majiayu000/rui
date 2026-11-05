@@ -279,6 +279,10 @@ impl Element for Scrollable {
     fn children(&self) -> &[AnyElement] {
         Element::children(&self.inner)
     }
+
+    fn children_mut(&mut self) -> &mut [AnyElement] {
+        Element::children_mut(&mut self.inner)
+    }
 }
 
 pub fn scrollable(child: impl Into<AnyElement>) -> Scrollable {
