@@ -5,239 +5,18 @@
 //! nodes and their paint; the full side lays out and paints a fresh tree from
 //! scratch. Their scenes must match primitive for primitive.
 
+#[path = "support/random_tree.rs"]
+mod random_tree;
+
+use random_tree::{Incremental, Node, Rng};
 use rui::core::frame_pipeline::FramePipeline;
-use rui::elements::element::LayoutNodes;
-use rui::elements::{Div, Element, canvas, div, span, styled_text, text};
+use rui::elements::{Div, canvas, div, span, styled_text, text};
 use rui::renderer::text::TextMeasureCache;
 use rui::renderer::{Primitive, Scene};
 use rui::{Bounds, Color, ElementId, Size};
 use std::cell::Cell;
 use std::rc::Rc;
 use taffy::prelude::TaffyTree;
-
-/// xorshift64*: deterministic without a dependency.
-struct Rng(u64);
-
-impl Rng {
-    fn next(&mut self) -> u64 {
-        self.0 ^= self.0 >> 12;
-        self.0 ^= self.0 << 25;
-        self.0 ^= self.0 >> 27;
-        self.0.wrapping_mul(0x2545_f491_4f6c_dd1d)
-    }
-
-    fn below(&mut self, n: u64) -> u64 {
-        self.next() % n
-    }
-}
-
-const WORDS: [&str; 6] = [
-    "a",
-    "row",
-    "longer label",
-    "x y z",
-    "",
-    "a paragraph long enough to wrap onto several lines in a narrow box",
-];
-
-/// The data a frame's tree is built from; edits change it between frames.
-#[derive(Clone)]
-enum Node {
-    Box {
-        color: u32,
-        row: bool,
-        gap: f32,
-        width: Option<f32>,
-        height: Option<f32>,
-        text_color: Option<u32>,
-        children: Vec<Node>,
-    },
-    Label {
-        word: usize,
-        size: f32,
-        wrap: bool,
-        /// Drawn as a `StyledText` of two spans instead of a `Text`.
-        styled: bool,
-    },
-}
-
-impl Node {
-    fn random(rng: &mut Rng, depth: u32) -> Node {
-        if depth == 0 || rng.below(4) == 0 {
-            return Node::Label {
-                word: rng.below(WORDS.len() as u64) as usize,
-                size: 10.0 + rng.below(8) as f32,
-                wrap: rng.below(3) == 0,
-                styled: rng.below(3) == 0,
-            };
-        }
-        Node::Box {
-            color: rng.below(0xff_ffff) as u32,
-            row: rng.below(2) == 0,
-            gap: rng.below(6) as f32,
-            width: (rng.below(3) == 0).then(|| 20.0 + rng.below(200) as f32),
-            height: (rng.below(3) == 0).then(|| 10.0 + rng.below(60) as f32),
-            text_color: (rng.below(4) == 0).then(|| rng.below(0xff_ffff) as u32),
-            children: (0..rng.below(5))
-                .map(|_| Node::random(rng, depth - 1))
-                .collect(),
-        }
-    }
-
-    fn build(&self) -> Div {
-        match self {
-            Node::Box {
-                color,
-                row,
-                gap,
-                width,
-                height,
-                text_color,
-                children,
-            } => {
-                let mut node = div().bg(Color::hex(*color)).gap(*gap);
-                node = if *row {
-                    node.flex_row()
-                } else {
-                    node.flex_col()
-                };
-                if let Some(width) = width {
-                    node = node.w(*width);
-                }
-                if let Some(height) = height {
-                    node = node.h(*height);
-                }
-                if let Some(text_color) = text_color {
-                    node = node.text_color(Color::hex(*text_color));
-                }
-                node.children(children.iter().map(Node::build))
-            }
-            Node::Label {
-                word,
-                size,
-                styled: true,
-                ..
-            } => {
-                let (head, tail) = WORDS[*word].split_at(WORDS[*word].len() / 2);
-                div().flex_row().child(styled_text([
-                    span(head).size(*size),
-                    span(tail).bold().size(*size + 4.0).color(Color::BLUE),
-                ]))
-            }
-            Node::Label {
-                word, size, wrap, ..
-            } => {
-                let label = text(WORDS[*word]).size(*size);
-                // Text sizes are fractional, so siblings after it move by
-                // fractions of a pixel when it changes.
-                div()
-                    .flex_row()
-                    .child(if *wrap { label.wrap() } else { label })
-            }
-        }
-    }
-
-    /// Every node, depth first, for picking one to edit.
-    fn count(&self) -> usize {
-        match self {
-            Node::Box { children, .. } => 1 + children.iter().map(Node::count).sum::<usize>(),
-            Node::Label { .. } => 1,
-        }
-    }
-
-    fn nth(&mut self, n: usize) -> &mut Node {
-        if n == 0 {
-            return self;
-        }
-        let mut n = n - 1;
-        let Node::Box { children, .. } = self else {
-            unreachable!("labels have no descendants")
-        };
-        for child in children {
-            let count = child.count();
-            if n < count {
-                return child.nth(n);
-            }
-            n -= count;
-        }
-        unreachable!("n is below the node count")
-    }
-
-    fn edit(&mut self, rng: &mut Rng) {
-        match self {
-            Node::Box {
-                color,
-                height,
-                text_color,
-                children,
-                ..
-            } => match rng.below(6) {
-                0 => *color = rng.below(0xff_ffff) as u32,
-                1 => *height = (rng.below(2) == 0).then(|| 10.0 + rng.below(60) as f32),
-                2 => *text_color = (rng.below(2) == 0).then(|| rng.below(0xff_ffff) as u32),
-                3 if !children.is_empty() => {
-                    children.remove(rng.below(children.len() as u64) as usize);
-                }
-                _ => {
-                    let at = rng.below(children.len() as u64 + 1) as usize;
-                    children.insert(at, Node::random(rng, 2));
-                }
-            },
-            Node::Label {
-                word,
-                size,
-                wrap,
-                styled,
-            } => match rng.below(4) {
-                0 => *word = rng.below(WORDS.len() as u64) as usize,
-                1 => *size = 10.0 + rng.below(8) as f32,
-                2 => *styled = !*styled,
-                _ => *wrap = !*wrap,
-            },
-        }
-    }
-}
-
-/// Layout and paint state an incremental runner keeps across frames.
-struct Incremental {
-    root: Div,
-    taffy: TaffyTree<ElementId>,
-    nodes: LayoutNodes,
-    scene: Scene,
-}
-
-impl Incremental {
-    fn new() -> Self {
-        Self {
-            root: div(),
-            taffy: TaffyTree::new(),
-            nodes: LayoutNodes::new(),
-            scene: Scene::new(),
-        }
-    }
-
-    /// Rebuild as the frame pipeline does: keep what reconciles.
-    fn rebuild(&mut self, mut next: Div) {
-        if !next.reconcile(&mut self.root) {
-            self.root = next;
-        }
-    }
-
-    fn frame(&mut self, measurer: &mut TextMeasureCache, viewport: Size) -> Vec<String> {
-        let bounds = match FramePipeline::layout_root_retained(
-            &mut self.root,
-            &mut self.taffy,
-            &mut self.nodes,
-            measurer,
-            viewport,
-        ) {
-            Ok(bounds) => bounds,
-            Err(err) => panic!("retained layout failed: {err}"),
-        };
-        FramePipeline::paint_root(&mut self.root, &self.taffy, &mut self.scene, bounds);
-        describe(self.scene.primitives())
-    }
-}
 
 fn full_frame(mut root: Div, measurer: &mut TextMeasureCache, viewport: Size) -> Vec<String> {
     let mut taffy = TaffyTree::<ElementId>::new();
@@ -300,7 +79,8 @@ fn incremental_frames_match_full_frames_over_random_edits() {
                     incremental.rebuild(model.build());
                 }
             }
-            let kept = incremental.frame(&mut measurer, viewport);
+            incremental.frame(&mut measurer, viewport);
+            let kept = describe(incremental.scene.primitives());
             let full = full_frame(model.build(), &mut measurer, viewport);
             assert_same(&kept, &full, &format!("seed {seed}, frame {frame}"));
             replayed += incremental.scene.replayed_len();
@@ -336,7 +116,8 @@ fn one_changed_row_replays_the_others_moved_or_not() {
     let mut incremental = Incremental::new();
     for round in 0..12 {
         incremental.rebuild(list(round % 5, round));
-        let kept = incremental.frame(&mut measurer, viewport);
+        incremental.frame(&mut measurer, viewport);
+        let kept = describe(incremental.scene.primitives());
         let full = full_frame(list(round % 5, round), &mut measurer, viewport);
         assert_same(&kept, &full, &format!("round {round}"));
         if round > 0 {
@@ -358,7 +139,8 @@ fn a_changed_inherited_text_style_repaints_kept_text() {
     let mut incremental = Incremental::new();
     for color in [0x112233, 0x445566, 0x445566, 0x778899] {
         incremental.rebuild(tree(color));
-        let kept = incremental.frame(&mut measurer, viewport);
+        incremental.frame(&mut measurer, viewport);
+        let kept = describe(incremental.scene.primitives());
         let full = full_frame(tree(color), &mut measurer, viewport);
         assert_same(&kept, &full, &format!("color {color:06x}"));
     }
@@ -387,7 +169,8 @@ fn a_changed_inherited_text_style_repaints_kept_styled_text() {
         (0x445566, 18.0),
     ] {
         incremental.rebuild(tree(color, size));
-        let kept = incremental.frame(&mut measurer, viewport);
+        incremental.frame(&mut measurer, viewport);
+        let kept = describe(incremental.scene.primitives());
         let full = full_frame(tree(color, size), &mut measurer, viewport);
         assert_same(&kept, &full, &format!("color {color:06x}, size {size}"));
     }
@@ -415,7 +198,8 @@ fn elements_that_read_shared_state_paint_every_frame() {
     for step in 0..4 {
         shade.set(step as f32 / 4.0);
         // No rebuild: the canvas must still draw its new shade.
-        let kept = incremental.frame(&mut measurer, viewport);
+        incremental.frame(&mut measurer, viewport);
+        let kept = describe(incremental.scene.primitives());
         let full = full_frame(tree(&shade), &mut measurer, viewport);
         assert_same(&kept, &full, &format!("step {step}"));
     }
