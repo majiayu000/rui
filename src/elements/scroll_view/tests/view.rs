@@ -6,8 +6,8 @@ use crate::elements::text::text;
 #[test]
 fn test_scroll_view_new() {
     let sv = ScrollView::new();
-    assert!(sv.id.is_some_and(|id| id.is_ephemeral()));
-    assert!(!sv.explicit_id);
+    assert!(sv.id.get().is_ephemeral());
+    assert!(!sv.id.is_explicit());
     assert_eq!(sv.direction, ScrollDirection::Vertical);
     assert_eq!(sv.scrollbar_visibility, ScrollbarVisibility::Auto);
     assert_eq!(sv.scrollbar_width, 8.0);
@@ -26,7 +26,7 @@ fn test_scroll_view_default() {
 fn test_scroll_view_id() {
     let id = ElementId::new();
     let sv = ScrollView::new().id(id);
-    assert_eq!(sv.id, Some(id));
+    assert_eq!(sv.id.get(), id);
 }
 
 // ========== ScrollView direction tests ==========
@@ -394,7 +394,7 @@ fn test_full_builder_chain() {
         .child(text("Content 1"))
         .child(text("Content 2"));
 
-    assert_eq!(sv.id, Some(id));
+    assert_eq!(sv.id.get(), id);
     assert_eq!(sv.direction, ScrollDirection::Both);
     assert_eq!(sv.scrollbar_visibility, ScrollbarVisibility::Always);
     assert_eq!(sv.scrollbar_width, 10.0);

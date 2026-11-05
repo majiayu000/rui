@@ -15,7 +15,7 @@
 use rui::core::entity::Entity;
 use rui::core::event::MouseButton;
 use rui::core::frame_pipeline::FramePipeline;
-use rui::elements::element::{Element, LayoutNodes, PointerEvent, PointerEventKind};
+use rui::elements::element::{Element, LayoutNodes, PointerEvent, PointerEventKind, reconcile};
 use rui::elements::view;
 use rui::elements::{VirtualListHandle, virtual_list};
 use rui::renderer::Scene;
@@ -259,7 +259,7 @@ impl Rebuilt {
     }
 
     fn frame(&mut self, mut next: Div, measurer: &mut TextMeasureCache) {
-        if !next.reconcile(&mut self.root) {
+        if !reconcile(&mut next, &mut self.root) {
             self.root = next;
         }
         self.surfaces.frame(&mut self.root, measurer);

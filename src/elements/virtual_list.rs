@@ -8,7 +8,7 @@ use crate::core::style::{Background, Dimension as StyleDimension, FlexDirection,
 use crate::core::text_editing::{TextInputCommand, TextInputEvent};
 use crate::elements::element::{
     AnyElement, Element, EventContext, LayoutContext, PaintContext, PointerEvent, PointerEventKind,
-    dispatch_action_to_children, style_to_taffy,
+    StableId, dispatch_action_to_children, style_to_taffy,
 };
 use crate::renderer::Primitive;
 use crate::renderer::text::TextMeasureCache;
@@ -55,9 +55,7 @@ type RowBuilder = Box<dyn Fn(usize) -> AnyElement>;
 /// A vertical list of `count` rows of equal height that builds, lays out and paints
 /// only the rows in view. Rows are built during layout by `row(index)`.
 pub struct VirtualList {
-    id: ElementId,
-    /// `id` was set by the application, so layout keeps it.
-    explicit_id: bool,
+    id: StableId,
     style: Style,
     handle: VirtualListHandle,
     count: usize,
@@ -83,8 +81,7 @@ pub fn virtual_list<E: Into<AnyElement>>(
         ..Style::default()
     };
     VirtualList {
-        id: ElementId::new(),
-        explicit_id: false,
+        id: StableId::new(),
         style,
         handle: handle.clone(),
         count,
@@ -98,8 +95,7 @@ pub fn virtual_list<E: Into<AnyElement>>(
 
 impl VirtualList {
     pub fn id(mut self, id: ElementId) -> Self {
-        self.id = id;
-        self.explicit_id = true;
+        self.id = StableId::explicit(id);
         self
     }
 
@@ -165,13 +161,11 @@ impl VirtualList {
 
 impl Element for VirtualList {
     fn id(&self) -> Option<ElementId> {
-        Some(self.id)
+        Some(self.id.get())
     }
 
-    fn adopt_stable_id(&mut self, id: ElementId) {
-        if !self.explicit_id {
-            self.id = id;
-        }
+    fn stable_id_mut(&mut self) -> Option<&mut StableId> {
+        Some(&mut self.id)
     }
 
     fn style(&self) -> &Style {
