@@ -105,7 +105,7 @@ impl AppContext {
 
     /// Whether the event loop has anything to do before it can sleep.
     pub fn has_pending_work(&self) -> bool {
-        self.any_window_has_frame_work() || !self.foreground.is_empty()
+        self.any_window_has_frame_work() || !self.foreground.is_empty() || self.has_ready_tasks()
     }
 
     /// The display refresh interval frames are paced to.

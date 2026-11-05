@@ -1,8 +1,8 @@
 //! Prelude module - commonly used types and traits
 
 pub use crate::core::{
-    App, AppContext, ElementId, EntityId, TaskPriority, View, ViewContext, ViewNotifier, Window,
-    WindowOptions,
+    App, AppContext, AsyncApp, ElementId, EntityId, Task, TaskPriority, View, ViewContext,
+    ViewNotifier, Window, WindowOptions,
     accessibility::{
         AccessibilityAction, AccessibilityAnnouncement, AccessibilityAnnouncementKind,
         AccessibilityBridge, AccessibilityContext, AccessibilityError, AccessibilityNode,

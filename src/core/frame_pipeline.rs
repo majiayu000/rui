@@ -52,6 +52,7 @@ pub struct FramePipeline;
 impl FramePipeline {
     pub fn prepare_frame(context: &mut AppContext) {
         context.apply_handle_updates();
+        context.poll_foreground_tasks();
         context.run_frame_tasks();
         context.flush_effects();
         if context.consume_runtime_view_notification() {
