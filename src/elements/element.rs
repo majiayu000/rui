@@ -13,11 +13,20 @@ use crate::core::text_editing::{TextInputCommand, TextInputEvent, TextInputSnaps
 use crate::elements::text::{TextStyle, TextStyleRefinement};
 use crate::renderer::text::{TextLine, TextMeasureCache, TextRequest, WrappedText};
 use crate::renderer::{Primitive, Scene};
-use std::any::TypeId;
+use std::any::{Any, TypeId};
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use taffy::prelude::*;
+
+/// Source of [`LayoutNodes`] epochs: a new one whenever the kept nodes are
+/// started over, so layout recorded against old nodes is never reused.
+static NEXT_LAYOUT_EPOCH: AtomicU64 = AtomicU64::new(1);
+
+fn next_layout_epoch() -> u64 {
+    NEXT_LAYOUT_EPOCH.fetch_add(1, Ordering::Relaxed)
+}
 
 /// Layout context passed during layout phase
 pub struct LayoutContext<'a> {
@@ -25,8 +34,9 @@ pub struct LayoutContext<'a> {
     pub(crate) available_space: Size,
     text_measurer: LayoutTextMeasurer<'a>,
     retained: Option<RetainedPass<'a>>,
-    /// Text style inherited by the element being laid out.
-    text_style: TextStyle,
+    /// Text style inherited by the element being laid out. Shared, so layout
+    /// records can keep the one they were laid out with cheaply.
+    text_style: Rc<TextStyle>,
     /// Wrapped text in this pass, measured by taffy in [`Self::compute_layout`].
     measured_text: HashMap<NodeId, MeasuredText>,
     /// Wrapped text of the previous retained pass, to dirty nodes whose text
@@ -81,13 +91,26 @@ struct MeasuredText {
 /// or children changed. Taffy then dirties just those nodes and their ancestors, so
 /// unchanged subtrees keep their cached layout. A change of tree shape costs more
 /// restyling but stays correct: every node's style and children are still written.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct LayoutNodes {
     nodes: Vec<NodeId>,
+    /// Changes whenever `nodes` are started over.
+    epoch: u64,
     /// Node count of the tree after the last retained pass. Anything else means the
     /// tree was changed outside a retained pass and the kept ids are stale.
     tree_node_count: usize,
     measured_text: HashMap<NodeId, MeasuredText>,
+}
+
+impl Default for LayoutNodes {
+    fn default() -> Self {
+        Self {
+            nodes: Vec::new(),
+            epoch: next_layout_epoch(),
+            tree_node_count: 0,
+            measured_text: HashMap::new(),
+        }
+    }
 }
 
 impl LayoutNodes {
@@ -152,7 +175,7 @@ impl<'a> LayoutContext<'a> {
             available_space,
             text_measurer,
             retained,
-            text_style: TextStyle::default(),
+            text_style: Rc::default(),
             measured_text: HashMap::new(),
             previous_measured_text: HashMap::new(),
             identity_parent: ElementId::ROOT,
@@ -172,6 +195,7 @@ impl<'a> LayoutContext<'a> {
             taffy.clear();
             kept.nodes.clear();
             kept.measured_text.clear();
+            kept.epoch = next_layout_epoch();
         }
         let previous_measured_text = std::mem::take(&mut kept.measured_text);
         let mut cx = Self::with_measurer(
@@ -256,7 +280,7 @@ impl<'a> LayoutContext<'a> {
         if refinement.is_empty() {
             return f(self);
         }
-        let inherited = self.text_style.refined(refinement);
+        let inherited = Rc::new(self.text_style.refined(refinement));
         let parent = std::mem::replace(&mut self.text_style, inherited);
         let result = f(self);
         self.text_style = parent;
@@ -372,6 +396,26 @@ pub struct PaintContext<'a> {
     pub(crate) scene: &'a mut Scene,
     pub(crate) bounds: Bounds,
     pub(crate) taffy: &'a TaffyTree<ElementId>,
+    /// Replay unchanged subtrees from the previous frame and record this one.
+    memo: bool,
+    /// Unrounded layout of the element being painted, with its origin summed
+    /// from the root as taffy sums it when rounding. `None` when the bounds did
+    /// not come from [`Self::child_bounds`].
+    unrounded: Option<Unrounded>,
+    /// The last [`Self::child_bounds`] result and its unrounded layout, which
+    /// [`Self::with_bounds`] passes on when it is given those bounds.
+    last_child: Cell<Option<(Bounds, Unrounded)>>,
+}
+
+/// A node's layout before taffy rounds it.
+///
+/// Taffy rounds each size against the node's unrounded position from the root,
+/// so a subtree's rounded layout stays the same only when that position moves
+/// by whole pixels and the unrounded layout inside does not change.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Unrounded {
+    origin: Point,
+    size: Size,
 }
 
 impl<'a> PaintContext<'a> {
@@ -380,6 +424,38 @@ impl<'a> PaintContext<'a> {
             scene,
             bounds,
             taffy,
+            memo: true,
+            unrounded: None,
+            last_child: Cell::new(None),
+        }
+    }
+
+    /// A context for the root of the tree laid out in `taffy`, which taffy
+    /// always places at the origin.
+    pub(crate) fn for_root(
+        scene: &'a mut Scene,
+        bounds: Bounds,
+        taffy: &'a TaffyTree<ElementId>,
+    ) -> Self {
+        Self {
+            unrounded: Some(Unrounded {
+                origin: Point::new(0.0, 0.0),
+                size: bounds.size,
+            }),
+            ..Self::new(scene, bounds, taffy)
+        }
+    }
+
+    /// A context that paints every element, replaying and recording nothing,
+    /// to check replayed frames against.
+    pub fn without_replay(
+        scene: &'a mut Scene,
+        bounds: Bounds,
+        taffy: &'a TaffyTree<ElementId>,
+    ) -> Self {
+        Self {
+            memo: false,
+            ..Self::new(scene, bounds, taffy)
         }
     }
 
@@ -395,12 +471,26 @@ impl<'a> PaintContext<'a> {
 
     pub fn child_bounds(&self, node: NodeId) -> Option<Bounds> {
         let layout = self.taffy.layout(node).ok()?;
-        Some(Bounds::from_xywh(
+        let bounds = Bounds::from_xywh(
             self.bounds.x() + layout.location.x,
             self.bounds.y() + layout.location.y,
             layout.size.width,
             layout.size.height,
-        ))
+        );
+        if let Some(parent) = self.unrounded {
+            let unrounded = self.taffy.unrounded_layout(node);
+            self.last_child.set(Some((
+                bounds,
+                Unrounded {
+                    origin: Point::new(
+                        parent.origin.x + unrounded.location.x,
+                        parent.origin.y + unrounded.location.y,
+                    ),
+                    size: Size::new(unrounded.size.width, unrounded.size.height),
+                },
+            )));
+        }
+        Some(bounds)
     }
 
     pub fn register_hit_region(&mut self, id: ElementId, bounds: Bounds) -> bool {
@@ -413,10 +503,18 @@ impl<'a> PaintContext<'a> {
 
     /// Create a child paint context with new bounds
     pub fn with_bounds(&mut self, bounds: Bounds) -> PaintContext<'_> {
+        let unrounded = match self.last_child.take() {
+            Some((child, unrounded)) if child == bounds => Some(unrounded),
+            _ if bounds == self.bounds => self.unrounded,
+            _ => None,
+        };
         PaintContext {
             scene: self.scene,
             bounds,
             taffy: self.taffy,
+            memo: self.memo,
+            unrounded,
+            last_child: Cell::new(None),
         }
     }
 }
@@ -780,7 +878,7 @@ impl<'a> EventContext<'a> {
 }
 
 /// The core Element trait - all UI components implement this
-pub trait Element: 'static {
+pub trait Element: Any {
     /// Unique identifier for this element (optional)
     fn id(&self) -> Option<ElementId> {
         None
@@ -791,6 +889,27 @@ pub trait Element: 'static {
     /// hit regions and accessibility keep pointing at it across rebuilds. Ids
     /// set by the application are kept.
     fn adopt_stable_id(&mut self, _id: ElementId) {}
+
+    /// Whether layout and paint depend only on what [`Element::reconcile`]
+    /// compares, the inherited text style, the children and the size layout
+    /// gives the element: never on event, timer or shared state. Such elements,
+    /// when all their children are too, keep their layout nodes and replay their
+    /// paint from the previous frame while nothing of that changed.
+    fn memoizable(&self) -> bool {
+        false
+    }
+
+    /// Called on a freshly built element with the one built at the same place
+    /// in the previous tree. Returns true when `self` would lay out and paint
+    /// exactly as `previous` did; the caller then keeps `previous`, with the
+    /// layout and paint it already did, instead of `self`.
+    ///
+    /// An element that returns false may still reconcile its children, so the
+    /// unchanged ones are kept. One that returns true must leave its children as
+    /// they were.
+    fn reconcile(&mut self, _previous: &mut dyn Element) -> bool {
+        false
+    }
 
     /// Get the element's style
     fn style(&self) -> &Style;
@@ -900,17 +1019,51 @@ pub trait Element: 'static {
 /// Type-erased element wrapper
 pub struct AnyElement {
     inner: Box<dyn Element>,
-    kind: TypeId,
     stable_id: Option<ElementId>,
+    /// Layout of a memoizable subtree, which the next retained pass can keep.
+    layout_record: Option<LayoutRecord>,
+    /// Paint of a memoizable subtree, which the next frame can replay.
+    paint_record: Option<PaintRecord>,
+}
+
+/// Where a memoizable subtree's layout nodes sit in the retained pass. Kept
+/// small: every element carries one, and containers hold children inline.
+struct LayoutRecord {
+    epoch: u64,
+    /// The subtree's nodes, in creation order, in [`LayoutNodes`]; its own node
+    /// comes last.
+    start: u32,
+    end: u32,
+    text_style: Rc<TextStyle>,
+}
+
+/// What a memoizable subtree painted, to replay moved by its change of origin.
+struct PaintRecord {
+    frame: u64,
+    start: u32,
+    end: u32,
+    origin: Point,
+    unrounded: Unrounded,
 }
 
 impl AnyElement {
     pub fn new<E: Element>(element: E) -> Self {
         Self {
             inner: Box::new(element),
-            kind: TypeId::of::<E>(),
             stable_id: None,
+            layout_record: None,
+            paint_record: None,
         }
+    }
+
+    /// Keep `previous` instead of `self` when it lays out and paints the same.
+    /// See [`Element::reconcile`].
+    pub fn reconcile(&mut self, previous: &mut AnyElement) -> bool {
+        if self.kind() != previous.kind() || !self.inner.reconcile(&mut *previous.inner) {
+            return false;
+        }
+        std::mem::swap(self, previous);
+        true
     }
 
     pub fn style(&self) -> &Style {
@@ -926,16 +1079,73 @@ impl AnyElement {
         cx.next_child_index = index + 1;
         let id = match self.inner.id() {
             Some(id) if !id.is_ephemeral() => id,
-            _ => ElementId::derived(cx.identity_parent, index, self.kind),
+            _ => ElementId::derived(cx.identity_parent, index, self.kind()),
         };
         self.stable_id = Some(id);
+        if let Some(node) = self.keep_layout(cx) {
+            return node;
+        }
+        // Laid out again, so what it paints may have changed.
+        self.paint_record = None;
         self.inner.adopt_stable_id(id);
         let parent = std::mem::replace(&mut cx.identity_parent, id);
         let next_child_index = std::mem::replace(&mut cx.next_child_index, 0);
+        let start = cx.retained.as_ref().map(|pass| pass.cursor);
         let node = self.inner.layout(cx);
         cx.identity_parent = parent;
         cx.next_child_index = next_child_index;
+        self.layout_record = match (start, &cx.retained) {
+            (Some(start), Some(pass))
+                if self.inner.memoizable()
+                    && self
+                        .children()
+                        .iter()
+                        .all(|child| child.layout_record.is_some()) =>
+            {
+                Some(LayoutRecord {
+                    epoch: pass.kept.epoch,
+                    start: start as u32,
+                    end: pass.cursor as u32,
+                    text_style: Rc::clone(&cx.text_style),
+                })
+            }
+            _ => None,
+        };
         node
+    }
+
+    /// The node of a memoizable subtree laid out unchanged in the previous
+    /// retained pass, handed back without visiting the subtree. Its nodes must
+    /// be the ones this pass reaches next, so the pass keeps them.
+    fn keep_layout(&mut self, cx: &mut LayoutContext) -> Option<NodeId> {
+        let record = self.layout_record.as_ref()?;
+        let pass = cx.retained.as_mut()?;
+        let (start, end) = (record.start as usize, record.end as usize);
+        if pass.kept.epoch != record.epoch
+            || pass.cursor != start
+            || end > pass.kept.nodes.len()
+            || start == end
+            || !(Rc::ptr_eq(&cx.text_style, &record.text_style)
+                || *cx.text_style == *record.text_style)
+        {
+            self.layout_record = None;
+            return None;
+        }
+        pass.cursor = end;
+        let nodes = &pass.kept.nodes[start..end];
+        if !cx.previous_measured_text.is_empty() {
+            for node in nodes {
+                if let Some(text) = cx.previous_measured_text.remove(node) {
+                    cx.measured_text.insert(*node, text);
+                }
+            }
+        }
+        nodes.last().copied()
+    }
+
+    fn kind(&self) -> TypeId {
+        // Deref first: the box's own type id is not the element's.
+        (*self.inner).type_id()
     }
 
     /// Identity given to this element by the last layout: the same for the
@@ -945,7 +1155,56 @@ impl AnyElement {
     }
 
     pub fn paint(&mut self, cx: &mut PaintContext) {
-        self.inner.paint(cx)
+        if !cx.memo {
+            self.inner.paint(cx);
+            return;
+        }
+        let origin = cx.bounds.origin;
+        let Some(unrounded) = cx.unrounded else {
+            self.paint_record = None;
+            self.inner.paint(cx);
+            return;
+        };
+        if let Some(record) = self.paint_record.take()
+            && record.frame == cx.scene.previous_frame()
+            && record.unrounded.size == unrounded.size
+            && let (dx, dy) = (origin.x - record.origin.x, origin.y - record.origin.y)
+            // Rounding inside the subtree repeats only after a whole-pixel move.
+            && unrounded.origin.x - record.unrounded.origin.x == dx
+            && unrounded.origin.y - record.unrounded.origin.y == dy
+            && let Some(primitives) =
+                cx.scene.replay(record.start as usize..record.end as usize, dx, dy)
+        {
+            self.paint_record = Some(PaintRecord {
+                frame: cx.scene.frame(),
+                start: primitives.start as u32,
+                end: primitives.end as u32,
+                origin,
+                unrounded,
+            });
+            return;
+        }
+        let start = cx.scene.len();
+        let regions = cx.scene.region_count();
+        let layers = cx.scene.layers().len();
+        self.inner.paint(cx);
+        let frame = cx.scene.frame();
+        let replayable = self.layout_record.is_some()
+            && cx.scene.region_count() == regions
+            && cx.scene.layers().len() == layers
+            && self.children().iter().all(|child| {
+                child
+                    .paint_record
+                    .as_ref()
+                    .is_some_and(|record| record.frame == frame)
+            });
+        self.paint_record = replayable.then(|| PaintRecord {
+            frame,
+            start: start as u32,
+            end: cx.scene.len() as u32,
+            origin,
+            unrounded,
+        });
     }
 
     pub fn refresh_text_geometry(&mut self, text_measurer: &mut TextMeasureCache) {

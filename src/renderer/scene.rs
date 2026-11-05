@@ -7,6 +7,12 @@ use smallvec::SmallVec;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hasher};
+use std::ops::Range;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// Source of [`Scene::frame`] ids, unique across scenes so a range recorded in
+/// one scene is never replayed from another.
+static NEXT_SCENE_FRAME: AtomicU64 = AtomicU64::new(1);
 
 /// Draw order for scene layers and hit regions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
@@ -234,6 +240,16 @@ pub struct Scene {
     /// All primitives in draw order
     pub(crate) primitives: Vec<Primitive>,
 
+    /// Primitives of the frame before, which [`Scene::replay`] moves ranges out of.
+    previous_primitives: Vec<Primitive>,
+
+    /// Id of the frame being painted, and of the one in `previous_primitives`.
+    frame: u64,
+    previous_frame: u64,
+
+    /// Primitives this frame took from the previous one by [`Scene::replay`].
+    replayed: usize,
+
     /// Layer stack for nested clipping
     layer_stack: SmallVec<[Bounds; 8]>,
 
@@ -258,6 +274,10 @@ impl Scene {
         let root_id = LayerId(0);
         Self {
             primitives: Vec::new(),
+            previous_primitives: Vec::new(),
+            frame: NEXT_SCENE_FRAME.fetch_add(1, Ordering::Relaxed),
+            previous_frame: 0,
+            replayed: 0,
             layer_stack: SmallVec::new(),
             layers: vec![Layer::new(root_id, 0, ZIndex::ROOT, None)],
             active_layers: smallvec::smallvec![root_id],
@@ -270,7 +290,12 @@ impl Scene {
 
     /// Clear the scene for a new frame
     pub fn clear(&mut self) {
+        // The frame just painted becomes the one later paints replay from.
+        std::mem::swap(&mut self.primitives, &mut self.previous_primitives);
         self.primitives.clear();
+        self.previous_frame = self.frame;
+        self.frame = NEXT_SCENE_FRAME.fetch_add(1, Ordering::Relaxed);
+        self.replayed = 0;
         self.layer_stack.clear();
         self.layers.clear();
         self.active_layers.clear();
@@ -290,6 +315,59 @@ impl Scene {
         if let Some(layer) = self.active_layer_mut() {
             layer.primitive_indices.push(primitive_index);
         }
+    }
+
+    /// Id of the frame being painted. Ranges recorded now can be replayed in
+    /// the next frame, while [`Self::previous_frame`] returns this id.
+    pub fn frame(&self) -> u64 {
+        self.frame
+    }
+
+    /// Id of the frame [`Self::replay`] reads from.
+    pub fn previous_frame(&self) -> u64 {
+        self.previous_frame
+    }
+
+    /// Paint `range` of the previous frame's primitives again, moved by
+    /// `(dx, dy)`, and return where they landed in this frame.
+    ///
+    /// The primitives are moved out of the previous frame, so each range can be
+    /// replayed once. Fails, painting nothing, when the range is not in the
+    /// previous frame or moving it would not give exactly the coordinates a
+    /// repaint computes (see [`Primitive::translates_exactly`]).
+    pub fn replay(&mut self, range: Range<usize>, dx: f32, dy: f32) -> Option<Range<usize>> {
+        if range.end > self.previous_primitives.len() || range.start > range.end {
+            return None;
+        }
+        let moved = dx != 0.0 || dy != 0.0;
+        if moved
+            && !self.previous_primitives[range.clone()]
+                .iter()
+                .all(|primitive| primitive.translates_exactly(dx, dy))
+        {
+            return None;
+        }
+        let start = self.primitives.len();
+        for index in range {
+            let mut primitive =
+                std::mem::replace(&mut self.previous_primitives[index], Primitive::PopClip);
+            if moved {
+                primitive.translate(dx, dy);
+            }
+            self.insert(primitive);
+        }
+        self.replayed += self.primitives.len() - start;
+        Some(start..self.primitives.len())
+    }
+
+    /// Primitives this frame replayed from the previous one instead of painting.
+    pub fn replayed_len(&self) -> usize {
+        self.replayed
+    }
+
+    /// Hit and accessibility regions registered so far this frame.
+    pub(crate) fn region_count(&self) -> (usize, usize) {
+        (self.next_hit_order, self.accessibility_regions.len())
     }
 
     pub(crate) fn accessibility_regions(&self) -> &HashMap<ElementId, Bounds> {

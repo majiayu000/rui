@@ -181,6 +181,29 @@ impl Surfaces {
     }
 }
 
+/// A runner's state across frames that rebuild the tree, as the frame pipeline
+/// does: the parts of the new tree that match the kept one are not taken.
+struct Rebuilt {
+    root: Div,
+    surfaces: Surfaces,
+}
+
+impl Rebuilt {
+    fn new() -> Self {
+        Self {
+            root: div(),
+            surfaces: Surfaces::new(),
+        }
+    }
+
+    fn frame(&mut self, mut next: Div, measurer: &mut TextMeasureCache) {
+        if !next.reconcile(&mut self.root) {
+            self.root = next;
+        }
+        self.surfaces.frame(&mut self.root, measurer);
+    }
+}
+
 fn pixel_checksum(scene: &Scene) -> Result<String, String> {
     let mut renderer = MetalRenderer::new().map_err(|err| err.to_string())?;
     let pixels = renderer
@@ -204,10 +227,10 @@ fn main() -> ExitCode {
     let mut costs: BTreeMap<&str, Cost> = BTreeMap::new();
 
     // A 2000-row column; each frame selects another row, as a click would.
-    let mut surfaces = Surfaces::new();
+    let mut rebuilt = Rebuilt::new();
     costs.insert(
         "list.frame_cpu",
-        measure(|round| surfaces.frame(&mut list(2_000, round), &mut measurer)),
+        measure(|round| rebuilt.frame(list(2_000, round), &mut measurer)),
     );
     let mut rounds: Vec<Div> = (0..WARMUP + SAMPLES)
         .map(|round| list(2_000, round))
@@ -255,7 +278,7 @@ fn main() -> ExitCode {
     let footprint_note = match MetalRenderer::new() {
         Ok(mut renderer) => {
             let viewport = Size::new(VIEWPORT.0, VIEWPORT.1);
-            match renderer.render_offscreen(&surfaces.scene, viewport, 2.0) {
+            match renderer.render_offscreen(&rebuilt.surfaces.scene, viewport, 2.0) {
                 Ok(()) => "with the Metal renderer",
                 Err(err) => {
                     failures.push(format!("rendering the long list failed: {err}"));
@@ -290,12 +313,12 @@ fn main() -> ExitCode {
         }),
     );
     drop(full_surfaces);
-    let mut edit_surfaces = Surfaces::new();
+    let mut edited = Rebuilt::new();
     costs.insert(
         "list.one_row_changed",
-        measure(|round| edit_surfaces.frame(&mut list_with_edit(2_000, round), &mut measurer)),
+        measure(|round| edited.frame(list_with_edit(2_000, round), &mut measurer)),
     );
-    drop(edit_surfaces);
+    drop(edited);
 
     let counters = costs.values().any(|cost| cost.instructions_m > 0.0);
     println!(

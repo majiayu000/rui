@@ -9,6 +9,7 @@ use crate::elements::element::{
 };
 use crate::renderer::Primitive;
 use crate::renderer::text::{TextMeasureCache, TextMetrics, TextRequest};
+use std::any::Any;
 use taffy::prelude::*;
 
 /// Text alignment
@@ -104,7 +105,7 @@ impl TextStyleRefinement {
 }
 
 /// Which text properties were set on the element itself rather than inherited.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
 struct OwnTextStyle {
     color: bool,
     font_size: bool,
@@ -318,6 +319,31 @@ impl Element for Text {
 
     fn style(&self) -> &Style {
         &self.style
+    }
+
+    fn memoizable(&self) -> bool {
+        true
+    }
+
+    fn reconcile(&mut self, previous: &mut dyn Element) -> bool {
+        let Some(previous) = (previous as &mut dyn Any).downcast_ref::<Text>() else {
+            return false;
+        };
+        // Inherited properties are compared in layout, against the style the
+        // previous text resolved them from.
+        let own = self.own;
+        own == previous.own
+            && (!own.color || self.color == previous.color)
+            && (!own.font_size || self.font_size == previous.font_size)
+            && (!own.font_weight || self.font_weight == previous.font_weight)
+            && (!own.font_family || self.font_family == previous.font_family)
+            && (!own.line_height || self.line_height == previous.line_height)
+            && self.id == previous.id
+            && self.content == previous.content
+            && self.style == previous.style
+            && self.align == previous.align
+            && self.max_lines == previous.max_lines
+            && self.wrapped.is_some() == previous.wrapped.is_some()
     }
 
     fn layout(&mut self, cx: &mut LayoutContext) -> NodeId {
