@@ -13,4 +13,4 @@ mod shaders;
 mod tests;
 
 pub(crate) use renderer::TARGET_PIXEL_FORMAT;
-pub use renderer::{MetalFrameStats, MetalRenderer};
+pub use renderer::{MetalFrameStats, MetalRenderer, PendingMetalRenderer};
