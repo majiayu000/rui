@@ -168,6 +168,12 @@ impl HeadlessApp {
         Ok(id)
     }
 
+    /// Run spawned tasks, background work and updates from other threads until
+    /// none can make progress; see `HeadlessSession::run_until_parked`.
+    pub fn run_until_parked(&mut self) {
+        self.context.run_until_parked();
+    }
+
     /// Close a window, as its close button would. Returns whether it was open.
     pub fn close_window(&mut self, window: WindowId) -> bool {
         let closed = self.context.close_window(window);

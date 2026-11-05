@@ -400,7 +400,7 @@ impl Element for Text {
             panic!("wrapped text painted without LayoutContext::compute_layout measuring it");
         };
         let line_box = self.font_size * self.line_height;
-        for (index, line) in lines.iter().enumerate() {
+        for (index, line) in lines.lines.iter().enumerate() {
             let line_bounds = Bounds::from_xywh(
                 bounds.x(),
                 bounds.y() + index as f32 * line_box,

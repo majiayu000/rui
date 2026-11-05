@@ -28,7 +28,7 @@ use crate::platform::window::{
     PlatformImeEvent, PlatformInputEvent, PlatformMouseEvent, PlatformMouseEventKind,
     PlatformRendererTarget, PlatformWindow, PlatformWindowError, PlatformWindowEvent,
 };
-use crate::renderer::metal::{MetalRenderer, PendingMetalRenderer};
+use crate::renderer::metal::{MetalRenderer, PendingMetalRenderer, RetainedTarget};
 use crate::renderer::{
     RendererBatchDiagnostics, RendererFramePhaseDurations, RendererResourceLimits,
     RendererTelemetryRecorder,
@@ -60,6 +60,7 @@ where
     E: Element + 'static,
 {
     let mut context = context;
+    context.use_background_threads();
     let mtm = MainThreadMarker::new().expect("Must be called from main thread");
     let app = NSApplication::sharedApplication(mtm);
     app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
@@ -262,6 +263,8 @@ struct NativeWindow<F, E> {
     /// Set at the first present, from `pending_renderer`.
     renderer: Option<MetalRenderer>,
     pending_renderer: Option<PendingMetalRenderer>,
+    /// This window's last frame, so each frame redraws only what changed.
+    retained: RetainedTarget,
     presenter: Presenter<E>,
     build_root: F,
     last_viewport_size: Size,
@@ -292,6 +295,7 @@ where
         window: parts.window,
         renderer: None,
         pending_renderer: Some(parts.pending_renderer),
+        retained: RetainedTarget::new(),
         presenter,
         build_root,
         last_viewport_size: parts.viewport_size,
@@ -327,6 +331,7 @@ where
             window,
             renderer,
             pending_renderer,
+            retained,
             presenter,
             build_root,
             last_viewport_size,
@@ -463,7 +468,12 @@ where
                         // Hold the owned retain across render+present; MetalRenderer
                         // still takes &MetalDrawableRef via Deref.
                         renderer
-                            .render(presenter.scene(), &metal_drawable, viewport_size)
+                            .render_retained(
+                                presenter.scene(),
+                                retained,
+                                &metal_drawable,
+                                viewport_size,
+                            )
                             .map_err(|err| {
                                 FramePipelineError::stage(
                                     crate::core::frame_pipeline::FrameStage::Present,

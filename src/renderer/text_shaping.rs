@@ -266,15 +266,113 @@ impl TextShapePlan {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct ClusterDraft {
+pub(crate) struct ClusterDraft<'a> {
     pub(crate) byte_start: usize,
     pub(crate) byte_end: usize,
-    pub(crate) text: String,
+    pub(crate) text: &'a str,
     pub(crate) script: TextScript,
     pub(crate) direction: TextDirection,
     pub(crate) font_index: usize,
     pub(crate) x_offset: f32,
     pub(crate) advance_width: f32,
+}
+
+/// A [`ShapedGlyph`] before its font family is copied out.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct GlyphDraft {
+    pub(crate) byte_start: usize,
+    pub(crate) byte_end: usize,
+    pub(crate) glyph_id: u16,
+    pub(crate) x_offset: f32,
+    pub(crate) y_offset: f32,
+    pub(crate) advance_width: f32,
+    pub(crate) font_index: usize,
+}
+
+/// A run the font shaped into fewer glyphs than it has graphemes.
+#[derive(Debug, Clone, Copy)]
+struct LigatureDraft {
+    byte_start: usize,
+    byte_end: usize,
+    glyph_count: usize,
+    grapheme_count: usize,
+}
+
+/// What shaping produces, borrowing the text it shaped. Layout and the glyph
+/// atlas read it as is; [`Self::into_plan`] copies it into a [`TextShapePlan`]
+/// for callers that want clusters, runs and diagnostics of their own.
+pub(crate) struct ShapedParts<'a> {
+    content: &'a str,
+    pub(crate) clusters: Vec<ClusterDraft<'a>>,
+    pub(crate) glyphs: Vec<GlyphDraft>,
+    /// Pieces shaped together: their clusters, script, advance and start.
+    runs: Vec<(std::ops::Range<usize>, RunScript, f32, f32)>,
+    ligatures: Vec<LigatureDraft>,
+    pub(crate) metrics: TextMetrics,
+}
+
+impl ShapedParts<'_> {
+    pub(crate) fn into_plan(
+        self,
+        fonts: &[TextShapingFont],
+        primary_index: usize,
+    ) -> TextShapePlan {
+        let direction = resolve_text_direction(&self.clusters);
+        let mut diagnostics =
+            diagnostics_for_clusters(fonts, primary_index, &self.clusters, direction);
+        diagnostics.extend(self.ligatures.iter().map(|ligature| {
+            TextShapeDiagnostic::LigatureSubstitution {
+                byte_start: ligature.byte_start,
+                byte_end: ligature.byte_end,
+                text: self.content[ligature.byte_start..ligature.byte_end].to_string(),
+                glyph_count: ligature.glyph_count,
+                grapheme_count: ligature.grapheme_count,
+            }
+        }));
+        let clusters = self
+            .clusters
+            .into_iter()
+            .map(|cluster| TextCluster {
+                byte_start: cluster.byte_start,
+                byte_end: cluster.byte_end,
+                text: cluster.text.to_string(),
+                script: cluster.script,
+                direction: cluster.direction,
+                font_family: fonts[cluster.font_index].family.clone(),
+                x_offset: cluster.x_offset,
+                advance_width: cluster.advance_width,
+            })
+            .collect::<Vec<_>>();
+        let runs = self
+            .runs
+            .into_iter()
+            .map(|(range, script, advance_width, x_offset)| {
+                text_run(&clusters[range], script, advance_width, x_offset)
+            })
+            .collect();
+        let glyphs = self
+            .glyphs
+            .into_iter()
+            .map(|glyph| ShapedGlyph {
+                byte_start: glyph.byte_start,
+                byte_end: glyph.byte_end,
+                glyph_id: glyph.glyph_id,
+                font_family: fonts[glyph.font_index].family.clone(),
+                x_offset: glyph.x_offset,
+                y_offset: glyph.y_offset,
+                advance_width: glyph.advance_width,
+                font_index: glyph.font_index,
+            })
+            .collect();
+        TextShapePlan {
+            clusters,
+            runs,
+            glyphs,
+            diagnostics,
+            direction,
+            metrics: self.metrics,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -321,9 +419,17 @@ pub(crate) fn shape_with_fonts(
     primary_index: usize,
     request: TextRequest<'_>,
 ) -> TextShapePlan {
+    shape_parts(fonts, primary_index, request).into_plan(fonts, primary_index)
+}
+
+pub(crate) fn shape_parts<'a>(
+    fonts: &[TextShapingFont],
+    primary_index: usize,
+    request: TextRequest<'a>,
+) -> ShapedParts<'a> {
     let mut clusters = build_cluster_drafts(primary_index, request);
-    let runs = script_runs(&clusters);
-    for run in &runs {
+    let script_runs = script_runs(&clusters);
+    for run in &script_runs {
         assign_fonts(
             fonts,
             primary_index,
@@ -331,14 +437,13 @@ pub(crate) fn shape_with_fonts(
             &mut clusters[run.clusters.clone()],
         );
     }
-    let direction = resolve_text_direction(&clusters);
-    let mut diagnostics = diagnostics_for_clusters(fonts, primary_index, &clusters, direction);
     let mut glyphs = Vec::new();
+    let mut ligatures = Vec::new();
     let mut ink_bounds = InkBounds::empty();
     let mut cursor_x = 0.0;
 
-    let mut shaped_runs = Vec::with_capacity(runs.len());
-    for run in &runs {
+    let mut runs = Vec::with_capacity(script_runs.len());
+    for run in &script_runs {
         // One script run is shaped in pieces where its clusters' fonts differ.
         let mut start = run.clusters.start;
         while start < run.clusters.end {
@@ -355,35 +460,14 @@ pub(crate) fn shape_with_fonts(
                 cursor_x,
                 &mut ink_bounds,
             );
-            if let Some(diagnostic) = run_result.ligature {
-                diagnostics.push(diagnostic);
-            }
-            shaped_runs.push((start..end, run.script, run_result.advance_width, cursor_x));
+            ligatures.extend(run_result.ligature);
+            runs.push((start..end, run.script, run_result.advance_width, cursor_x));
             cursor_x += run_result.advance_width;
             glyphs.extend(run_result.glyphs);
             start = end;
         }
     }
 
-    let clusters = clusters
-        .into_iter()
-        .map(|cluster| TextCluster {
-            byte_start: cluster.byte_start,
-            byte_end: cluster.byte_end,
-            text: cluster.text,
-            script: cluster.script,
-            direction: cluster.direction,
-            font_family: fonts[cluster.font_index].family.clone(),
-            x_offset: cluster.x_offset,
-            advance_width: cluster.advance_width,
-        })
-        .collect::<Vec<_>>();
-    let runs = shaped_runs
-        .into_iter()
-        .map(|(range, script, advance_width, x_offset)| {
-            text_run(&clusters[range], script, advance_width, x_offset)
-        })
-        .collect();
     let ink_bounds = ink_bounds.to_bounds();
     let width = cursor_x.max(ink_bounds.width()).ceil();
     let metrics = TextMetrics {
@@ -392,12 +476,12 @@ pub(crate) fn shape_with_fonts(
         advance_width: cursor_x,
     };
 
-    TextShapePlan {
+    ShapedParts {
+        content: request.content,
         clusters,
-        runs,
         glyphs,
-        diagnostics,
-        direction,
+        runs,
+        ligatures,
         metrics,
     }
 }
@@ -450,16 +534,16 @@ pub(crate) fn rasterize_with_plan(
 
 struct RunShapeResult {
     advance_width: f32,
-    glyphs: Vec<ShapedGlyph>,
-    ligature: Option<TextShapeDiagnostic>,
+    glyphs: Vec<GlyphDraft>,
+    ligature: Option<LigatureDraft>,
 }
 
 /// Grapheme clusters of `request`, all in the primary font until
 /// [`assign_fonts`] picks theirs.
-pub(crate) fn build_cluster_drafts(
+pub(crate) fn build_cluster_drafts<'a>(
     primary_index: usize,
-    request: TextRequest<'_>,
-) -> Vec<ClusterDraft> {
+    request: TextRequest<'a>,
+) -> Vec<ClusterDraft<'a>> {
     request
         .content
         .grapheme_indices(true)
@@ -475,7 +559,7 @@ pub(crate) fn build_cluster_drafts(
             Some(ClusterDraft {
                 byte_start,
                 byte_end,
-                text: cluster_text.to_string(),
+                text: cluster_text,
                 script,
                 direction,
                 font_index: primary_index,
@@ -500,29 +584,29 @@ fn diagnostics_for_clusters(
             diagnostics.push(TextShapeDiagnostic::UnsupportedScript {
                 byte_start: cluster.byte_start,
                 byte_end: cluster.byte_end,
-                cluster: cluster.text.clone(),
+                cluster: cluster.text.to_string(),
                 script: cluster.script,
             });
         }
 
-        if fonts[primary_index].supports_cluster(&cluster.text) {
+        if fonts[primary_index].supports_cluster(cluster.text) {
             continue;
         }
 
         diagnostics.push(TextShapeDiagnostic::FallbackRequired {
             byte_start: cluster.byte_start,
             byte_end: cluster.byte_end,
-            cluster: cluster.text.clone(),
+            cluster: cluster.text.to_string(),
             script: cluster.script,
         });
 
         if cluster.font_index != primary_index
-            && fonts[cluster.font_index].supports_cluster(&cluster.text)
+            && fonts[cluster.font_index].supports_cluster(cluster.text)
         {
             diagnostics.push(TextShapeDiagnostic::FallbackApplied {
                 byte_start: cluster.byte_start,
                 byte_end: cluster.byte_end,
-                cluster: cluster.text.clone(),
+                cluster: cluster.text.to_string(),
                 requested_family: requested_family.clone(),
                 fallback_family: fonts[cluster.font_index].family.clone(),
             });
@@ -530,12 +614,12 @@ fn diagnostics_for_clusters(
             diagnostics.push(TextShapeDiagnostic::MissingGlyph {
                 byte_start: cluster.byte_start,
                 byte_end: cluster.byte_end,
-                cluster: cluster.text.clone(),
+                cluster: cluster.text.to_string(),
             });
             diagnostics.push(TextShapeDiagnostic::FallbackFailed {
                 byte_start: cluster.byte_start,
                 byte_end: cluster.byte_end,
-                cluster: cluster.text.clone(),
+                cluster: cluster.text.to_string(),
                 script: cluster.script,
             });
         }
@@ -556,7 +640,6 @@ fn shape_run(
     ink_bounds: &mut InkBounds,
 ) -> RunShapeResult {
     let font = &fonts[clusters[0].font_index];
-    let run_text = &request.content[clusters[0].byte_start..clusters.last().unwrap().byte_end];
     let glyphs = shape_run_glyphs(font, request, clusters, script, start_x, ink_bounds);
     let advance_width = glyphs.iter().map(|glyph| glyph.advance_width).sum::<f32>();
     distribute_cluster_advances(
@@ -574,10 +657,9 @@ fn shape_run(
         .filter(|cluster| !cluster.text.chars().all(char::is_control))
         .count();
     let ligature = if glyphs.len() < grapheme_count && grapheme_count > 1 {
-        Some(TextShapeDiagnostic::LigatureSubstitution {
+        Some(LigatureDraft {
             byte_start: clusters[0].byte_start,
-            byte_end: clusters.last().unwrap().byte_end,
-            text: run_text.to_string(),
+            byte_end: clusters[clusters.len() - 1].byte_end,
             glyph_count: glyphs.len(),
             grapheme_count,
         })
@@ -599,7 +681,7 @@ fn shape_run_glyphs(
     script: RunScript,
     start_x: f32,
     ink_bounds: &mut InkBounds,
-) -> Vec<ShapedGlyph> {
+) -> Vec<GlyphDraft> {
     let mut buffer = UnicodeBuffer::new();
     buffer.set_cluster_level(BufferClusterLevel::MonotoneGraphemes);
     buffer.set_direction(if script.is_rtl() {
@@ -648,11 +730,10 @@ fn shape_run_glyphs(
         }
 
         let byte_start = info.cluster as usize;
-        glyphs.push(ShapedGlyph {
+        glyphs.push(GlyphDraft {
             byte_start,
             byte_end: glyph_byte_end_for_offset(&shaped_cluster_starts, run_end, byte_start),
             glyph_id,
-            font_family: font.family.clone(),
             x_offset,
             y_offset,
             advance_width,
@@ -670,7 +751,7 @@ fn distribute_cluster_advances(
     clusters: &mut [ClusterDraft],
     rtl: bool,
     start_x: f32,
-    glyphs: &[ShapedGlyph],
+    glyphs: &[GlyphDraft],
     shaped_advance: f32,
 ) {
     if apply_exact_cluster_positions(clusters, glyphs) {
@@ -680,7 +761,7 @@ fn distribute_cluster_advances(
     let scale = Scale::uniform(request.font_size);
     let simple_advances = clusters
         .iter()
-        .map(|cluster| simple_cluster_advance(font, scale, &cluster.text))
+        .map(|cluster| simple_cluster_advance(font, scale, cluster.text))
         .collect::<Vec<_>>();
     let simple_total = simple_advances.iter().sum::<f32>();
     let fallback_advance = if clusters.is_empty() {

@@ -208,6 +208,13 @@ where
         self.frame().map(Some)
     }
 
+    /// Run spawned tasks, background work and updates from other threads until
+    /// none can make progress. Background tasks run here, on this thread, in the
+    /// order they became ready; a following [`Self::frame`] draws the result.
+    pub fn run_until_parked(&mut self) {
+        self.context.run_until_parked();
+    }
+
     /// Run all queued idle work, as the native runner does between frames once
     /// input and frame work are done. Returns how many tasks ran.
     pub fn run_idle_work(&mut self) -> usize {

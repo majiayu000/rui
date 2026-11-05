@@ -2,7 +2,7 @@
 
 use crate::core::ElementId;
 use crate::core::geometry::{Bounds, Point};
-use crate::renderer::primitives::Primitive;
+use crate::renderer::primitives::{Primitive, Reach};
 use smallvec::SmallVec;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -250,6 +250,15 @@ pub struct Scene {
     /// Primitives this frame took from the previous one by [`Scene::replay`].
     replayed: usize,
 
+    /// Ranges of this frame replayed in place and in order, which drew exactly
+    /// what they drew in the previous frame.
+    unchanged: Vec<Range<usize>>,
+    /// End of the last range replayed from the previous frame, to notice a
+    /// replay that changed order.
+    replayed_from: usize,
+    /// Where moved or reordered replays drew, before and after.
+    moved: Reach,
+
     /// Layer stack for nested clipping
     layer_stack: SmallVec<[Bounds; 8]>,
 
@@ -278,6 +287,9 @@ impl Scene {
             frame: NEXT_SCENE_FRAME.fetch_add(1, Ordering::Relaxed),
             previous_frame: 0,
             replayed: 0,
+            unchanged: Vec::new(),
+            replayed_from: 0,
+            moved: Reach::Nothing,
             layer_stack: SmallVec::new(),
             layers: vec![Layer::new(root_id, 0, ZIndex::ROOT, None)],
             active_layers: smallvec::smallvec![root_id],
@@ -296,6 +308,9 @@ impl Scene {
         self.previous_frame = self.frame;
         self.frame = NEXT_SCENE_FRAME.fetch_add(1, Ordering::Relaxed);
         self.replayed = 0;
+        self.unchanged.clear();
+        self.replayed_from = 0;
+        self.moved = Reach::Nothing;
         self.layer_stack.clear();
         self.layers.clear();
         self.active_layers.clear();
@@ -348,7 +363,14 @@ impl Scene {
             return None;
         }
         let start = self.primitives.len();
+        // Drawn over something painted in between, or moved: its old and new
+        // places change. In place and in order, nothing it covers does.
+        let in_place = !moved && range.start >= self.replayed_from;
+        self.replayed_from = range.end;
         for index in range {
+            if !in_place {
+                self.moved = union(self.moved, damage_reach(&self.previous_primitives[index]));
+            }
             let mut primitive =
                 std::mem::replace(&mut self.previous_primitives[index], Primitive::PopClip);
             if moved {
@@ -357,7 +379,52 @@ impl Scene {
             self.insert(primitive);
         }
         self.replayed += self.primitives.len() - start;
-        Some(start..self.primitives.len())
+        let end = self.primitives.len();
+        if in_place {
+            match self.unchanged.last_mut() {
+                Some(last) if last.end == start => last.end = end,
+                _ => self.unchanged.push(start..end),
+            }
+        } else {
+            for primitive in &self.primitives[start..end] {
+                self.moved = union(self.moved, damage_reach(primitive));
+            }
+        }
+        Some(start..end)
+    }
+
+    /// Where this frame can differ from the previous one: everything painted
+    /// rather than replayed in place, everything of the previous frame that was
+    /// not replayed, and both places of what moved.
+    ///
+    /// Only meaningful for a target that shows the previous frame
+    /// ([`Self::previous_frame`]); anything else needs a full redraw.
+    pub fn damage(&self) -> Reach {
+        let mut damage = self.moved;
+        let mut unchanged = self.unchanged.iter().peekable();
+        let mut index = 0;
+        while index < self.primitives.len() {
+            if let Some(range) = unchanged.peek()
+                && range.start == index
+            {
+                index = range.end;
+                unchanged.next();
+                continue;
+            }
+            damage = union(damage, damage_reach(&self.primitives[index]));
+            if damage == Reach::Unbounded {
+                return damage;
+            }
+            index += 1;
+        }
+        // Replayed primitives were moved out, leaving clip pops that draw nothing.
+        for primitive in &self.previous_primitives {
+            damage = union(damage, damage_reach(primitive));
+            if damage == Reach::Unbounded {
+                return damage;
+            }
+        }
+        damage
     }
 
     /// Primitives this frame replayed from the previous one instead of painting.
@@ -552,6 +619,24 @@ impl Scene {
         }
 
         Some(visible)
+    }
+}
+
+/// What a primitive's appearing or going away can change on screen.
+fn damage_reach(primitive: &Primitive) -> Reach {
+    match primitive {
+        // A clip changes only what is drawn inside it.
+        Primitive::PushClip { bounds, .. } => Reach::Within(*bounds),
+        Primitive::PopClip => Reach::Nothing,
+        primitive => primitive.reach(),
+    }
+}
+
+fn union(a: Reach, b: Reach) -> Reach {
+    match (a, b) {
+        (Reach::Unbounded, _) | (_, Reach::Unbounded) => Reach::Unbounded,
+        (Reach::Nothing, other) | (other, Reach::Nothing) => other,
+        (Reach::Within(a), Reach::Within(b)) => Reach::Within(a.union(&b)),
     }
 }
 

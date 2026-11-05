@@ -1,8 +1,8 @@
-use crate::renderer::text_shaping::{ClusterDraft, ShapedGlyph};
+use crate::renderer::text_shaping::{ClusterDraft, GlyphDraft};
 
 pub(crate) fn apply_exact_cluster_positions(
     clusters: &mut [ClusterDraft],
-    glyphs: &[ShapedGlyph],
+    glyphs: &[GlyphDraft],
 ) -> bool {
     if clusters.is_empty() {
         return true;
@@ -86,11 +86,11 @@ mod tests {
         assert_eq!(clusters[1].advance_width, 9.0);
     }
 
-    fn cluster(byte_start: usize, byte_end: usize, text: &str) -> ClusterDraft {
+    fn cluster(byte_start: usize, byte_end: usize, text: &str) -> ClusterDraft<'_> {
         ClusterDraft {
             byte_start,
             byte_end,
-            text: text.to_string(),
+            text,
             script: TextScript::Latin,
             direction: TextDirection::LeftToRight,
             font_index: 0,
@@ -99,12 +99,11 @@ mod tests {
         }
     }
 
-    fn glyph(byte_start: usize, byte_end: usize, x_offset: f32, advance_width: f32) -> ShapedGlyph {
-        ShapedGlyph {
+    fn glyph(byte_start: usize, byte_end: usize, x_offset: f32, advance_width: f32) -> GlyphDraft {
+        GlyphDraft {
             byte_start,
             byte_end,
             glyph_id: byte_start as u16,
-            font_family: "test".to_string(),
             x_offset,
             y_offset: 0.0,
             advance_width,

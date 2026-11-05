@@ -564,15 +564,17 @@ impl TextGlyphCache {
         let primary_index = self
             .measurer
             .primary_font_index_prepared(request.font_family)?;
-        let plan = self.measurer.shape_with_primary(request, primary_index);
-        let metrics = plan.metrics();
+        let parts = self
+            .measurer
+            .shape_parts_with_primary(request, primary_index);
+        let metrics = parts.metrics;
         self.shape_misses += 1;
 
         let text = (!metrics.ink_bounds.is_empty()).then(|| {
             let fonts = self.measurer.fonts.as_slice();
             let scale = Scale::uniform(request.font_size);
-            let glyphs = plan
-                .glyphs()
+            let glyphs = parts
+                .glyphs
                 .iter()
                 .filter_map(|glyph| {
                     let font = fonts.get(glyph.font_index)?;
