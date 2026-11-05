@@ -28,13 +28,18 @@ fn full_frame(mut root: Div, measurer: &mut TextMeasureCache, viewport: Size) ->
     };
     let mut scene = Scene::new();
     FramePipeline::paint_root(&mut root, &taffy, &mut scene, bounds);
-    describe(scene.primitives())
+    describe(scene.primitives(), viewport)
 }
 
 /// One line per primitive, so a mismatch names the first one that differs.
-fn describe(primitives: &[Primitive]) -> Vec<String> {
+///
+/// Only what can be seen in `viewport` counts: the incremental runner does not
+/// paint unchanged subtrees outside it.
+fn describe(primitives: &[Primitive], viewport: Size) -> Vec<String> {
+    let viewport = Bounds::from_xywh(0.0, 0.0, viewport.width, viewport.height);
     primitives
         .iter()
+        .filter(|primitive| primitive.may_touch(&viewport))
         .map(|primitive| format!("{primitive:?}"))
         .collect()
 }
@@ -80,7 +85,7 @@ fn incremental_frames_match_full_frames_over_random_edits() {
                 }
             }
             incremental.frame(&mut measurer, viewport);
-            let kept = describe(incremental.scene.primitives());
+            let kept = describe(incremental.scene.primitives(), viewport);
             let full = full_frame(model.build(), &mut measurer, viewport);
             assert_same(&kept, &full, &format!("seed {seed}, frame {frame}"));
             replayed += incremental.scene.replayed_len();
@@ -117,7 +122,7 @@ fn one_changed_row_replays_the_others_moved_or_not() {
     for round in 0..12 {
         incremental.rebuild(list(round % 5, round));
         incremental.frame(&mut measurer, viewport);
-        let kept = describe(incremental.scene.primitives());
+        let kept = describe(incremental.scene.primitives(), viewport);
         let full = full_frame(list(round % 5, round), &mut measurer, viewport);
         assert_same(&kept, &full, &format!("round {round}"));
         if round > 0 {
@@ -140,7 +145,7 @@ fn a_changed_inherited_text_style_repaints_kept_text() {
     for color in [0x112233, 0x445566, 0x445566, 0x778899] {
         incremental.rebuild(tree(color));
         incremental.frame(&mut measurer, viewport);
-        let kept = describe(incremental.scene.primitives());
+        let kept = describe(incremental.scene.primitives(), viewport);
         let full = full_frame(tree(color), &mut measurer, viewport);
         assert_same(&kept, &full, &format!("color {color:06x}"));
     }
@@ -169,7 +174,7 @@ fn elements_that_read_shared_state_paint_every_frame() {
         shade.set(step as f32 / 4.0);
         // No rebuild: the canvas must still draw its new shade.
         incremental.frame(&mut measurer, viewport);
-        let kept = describe(incremental.scene.primitives());
+        let kept = describe(incremental.scene.primitives(), viewport);
         let full = full_frame(tree(&shade), &mut measurer, viewport);
         assert_same(&kept, &full, &format!("step {step}"));
     }
@@ -177,4 +182,52 @@ fn elements_that_read_shared_state_paint_every_frame() {
         incremental.scene.primitives().last(),
         Some(Primitive::PopClip)
     ));
+}
+
+/// A column far taller than the window, pushed down and back up by a spacer, so
+/// rows leave the view and come back.
+fn tall_column(spacer: f32, edited: usize, round: usize) -> Div {
+    div()
+        .w(320.0)
+        .flex_col()
+        .child(div().h(spacer))
+        .children((0..200).map(move |row| {
+            let label = if row == edited {
+                format!("edited {round}")
+            } else {
+                format!("row {row}")
+            };
+            div().h(20.0).bg(Color::hex(0x334455)).child(text(label))
+        }))
+}
+
+#[test]
+fn unchanged_rows_out_of_view_are_not_painted() {
+    let mut measurer = TextMeasureCache::new();
+    let viewport = Size::new(320.0, 200.0);
+    let mut incremental = Incremental::new();
+    let frames = [
+        (0.0, 3),
+        (0.0, 3),
+        (60.0, 5),
+        (400.0, 5),
+        (0.0, 150),
+        (2_000.0, 1),
+        (20.0, 1),
+    ];
+    for (round, (spacer, edited)) in frames.into_iter().enumerate() {
+        incremental.rebuild(tall_column(spacer, edited, round));
+        incremental.frame(&mut measurer, viewport);
+        let kept = describe(incremental.scene.primitives(), viewport);
+        let full = full_frame(tall_column(spacer, edited, round), &mut measurer, viewport);
+        assert_same(&kept, &full, &format!("round {round}"));
+        if round > 0 {
+            // A 200 px window shows at most 12 of the 20 px rows, two primitives each.
+            assert!(
+                incremental.scene.len() < 60,
+                "round {round} painted {} primitives",
+                incremental.scene.len()
+            );
+        }
+    }
 }

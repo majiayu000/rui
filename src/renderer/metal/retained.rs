@@ -118,7 +118,7 @@ impl RetainedTarget {
             Some(texture) if shows_previous => {
                 let viewport =
                     Bounds::from_xywh(0.0, 0.0, viewport_size.width, viewport_size.height);
-                let damage = match scene.damage() {
+                let damage = match scene.damage(viewport) {
                     Reach::Nothing => Some(Bounds::from_xywh(0.0, 0.0, 0.0, 0.0)),
                     Reach::Within(bounds) => Some(
                         bounds
