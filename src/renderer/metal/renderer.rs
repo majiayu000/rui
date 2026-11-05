@@ -9,6 +9,7 @@ use super::glyph::{GlyphPages, GpuGlyph};
 use super::image_primitive::{GpuImage, calculate_fit_bounds};
 use super::order::Rect;
 use super::path::{GpuPathTile, PathGeometry, PathSprites, PathTiles, SpriteLookup};
+use super::retained::{RetainedPipelines, RetainedTarget, damage_scissor, intersect_scissors};
 use crate::core::geometry::{Bounds, Size};
 use crate::renderer::primitives::{GpuQuad, GpuShadow, Primitive};
 use crate::renderer::text::{SUBPIXEL_VARIANTS, TextGlyphCache, TextRequest};
@@ -39,6 +40,16 @@ pub struct MetalFrameStats {
     pub draw_calls: u32,
     /// Instances those draws drew.
     pub instances: u32,
+    /// Device pixels drawn again: the whole target, or the damage of a
+    /// retained frame.
+    pub redrawn_pixels: u64,
+}
+
+/// A frame drawn into a [`RetainedTarget`] and copied to `copy_to`.
+struct Retained<'a> {
+    /// What to draw again, in logical pixels; `None` draws everything.
+    damage: Option<Bounds>,
+    copy_to: &'a TextureRef,
 }
 
 struct ImageDraw {
@@ -64,6 +75,8 @@ struct FrameData {
     /// `x0, y0, x1, y1` the sprite shader tests fragments against.
     scissors: Vec<MTLScissorRect>,
     clip_edges: Vec<[f32; 4]>,
+    /// The device pixels a retained frame draws again; every clip is cut to it.
+    damage: Option<MTLScissorRect>,
 }
 
 impl FrameData {
@@ -81,6 +94,10 @@ impl FrameData {
 
     /// Adds a clip rectangle and returns its index.
     fn push_clip(&mut self, scissor: MTLScissorRect) -> u32 {
+        let scissor = match self.damage {
+            Some(damage) => intersect_scissors(scissor, damage),
+            None => scissor,
+        };
         self.scissors.push(scissor);
         self.clip_edges.push([
             scissor.x as f32,
@@ -169,6 +186,7 @@ pub struct MetalRenderer {
     command_queue: CommandQueue,
     sprite_pipeline: RenderPipelineState,
     image_pipeline: RenderPipelineState,
+    retained_pipelines: RetainedPipelines,
     sampler: SamplerState,
     /// Bound for sprite draws that sample no atlas page.
     empty_page: Texture,
@@ -251,7 +269,8 @@ impl MetalRenderer {
 
         // The shaders compile at the same time: on a first launch, before the
         // system's shader cache holds them, each takes tens of milliseconds.
-        let (sprite_pipeline, image_pipeline) = std::thread::scope(|scope| {
+        let (sprite_pipeline, image_pipeline, retained_pipelines) = std::thread::scope(|scope| {
+            let retained = scope.spawn(|| RetainedPipelines::new(&device));
             let sprite = scope.spawn(|| {
                 blended_pipeline(
                     &device,
@@ -271,9 +290,15 @@ impl MetalRenderer {
                     "compiling the sprite shader panicked",
                 ))
             });
-            (sprite, image)
+            let retained = retained.join().unwrap_or_else(|_| {
+                Err(RendererError::render_failed(
+                    "compiling the copy shader panicked",
+                ))
+            });
+            (sprite, image, retained)
         });
-        let (sprite_pipeline, image_pipeline) = (sprite_pipeline?, image_pipeline?);
+        let (sprite_pipeline, image_pipeline, retained_pipelines) =
+            (sprite_pipeline?, image_pipeline?, retained_pipelines?);
 
         // Sampler for images/text
         let sampler_desc = SamplerDescriptor::new();
@@ -296,6 +321,7 @@ impl MetalRenderer {
             command_queue,
             sprite_pipeline,
             image_pipeline,
+            retained_pipelines,
             sampler,
             empty_page,
             textures: HashMap::new(),
@@ -337,6 +363,11 @@ impl MetalRenderer {
         self.frame_stats
     }
 
+    /// GPU time of the last frame, when it waited for the GPU (captures).
+    pub fn last_gpu_time(&self) -> Option<std::time::Duration> {
+        self.gpu_time
+    }
+
     /// How many paths are drawn from the atlas.
     #[cfg(test)]
     pub(super) fn placed_path_sprites(&self) -> usize {
@@ -369,8 +400,75 @@ impl MetalRenderer {
         let height = texture_extent(viewport_size.height * scale_factor, "height")?;
         let texture = create_capture_texture(&self.device, width, height);
 
-        self.render_to_texture(scene, &texture, viewport_size, None, true)?;
+        self.render_to_texture(scene, &texture, viewport_size, None, true, None)?;
         Ok(read_texture_rgba(&texture, width, height))
+    }
+
+    /// [`Self::capture_frame_pixels_at_scale`] through `target`, as a window
+    /// presents: only the scene's damage is drawn again when `target` shows the
+    /// previous frame.
+    pub fn capture_retained_pixels_at_scale(
+        &mut self,
+        scene: &Scene,
+        target: &mut RetainedTarget,
+        viewport_size: Size,
+        scale_factor: f32,
+    ) -> Result<Vec<u8>, RendererError> {
+        let width = texture_extent(viewport_size.width * scale_factor, "width")?;
+        let height = texture_extent(viewport_size.height * scale_factor, "height")?;
+        let capture = create_capture_texture(&self.device, width, height);
+        self.render_retained_to(scene, target, &capture, viewport_size, None, true)?;
+        Ok(read_texture_rgba(&capture, width, height))
+    }
+
+    /// Render a scene to a drawable through the window's `target`, drawing
+    /// again only what changed since the frame the target shows.
+    pub fn render_retained(
+        &mut self,
+        scene: &Scene,
+        target: &mut RetainedTarget,
+        drawable: &MetalDrawableRef,
+        viewport_size: Size,
+    ) -> Result<(), RendererError> {
+        self.render_retained_to(
+            scene,
+            target,
+            drawable.texture(),
+            viewport_size,
+            Some(drawable),
+            false,
+        )
+    }
+
+    fn render_retained_to(
+        &mut self,
+        scene: &Scene,
+        target: &mut RetainedTarget,
+        output: &TextureRef,
+        viewport_size: Size,
+        present_drawable: Option<&MetalDrawableRef>,
+        wait_until_completed: bool,
+    ) -> Result<(), RendererError> {
+        let (texture, damage) = target.prepare(
+            &self.device,
+            scene,
+            output.width(),
+            output.height(),
+            viewport_size,
+        );
+        self.render_to_texture(
+            scene,
+            &texture,
+            viewport_size,
+            present_drawable,
+            wait_until_completed,
+            Some(Retained {
+                damage,
+                copy_to: output,
+            }),
+        )?;
+        target.drew(scene);
+        Ok(())
     }
 
     /// Render a scene into a kept offscreen texture at `scale_factor` and commit
@@ -384,7 +482,7 @@ impl MetalRenderer {
         let width = texture_extent(viewport_size.width * scale_factor, "width")?;
         let height = texture_extent(viewport_size.height * scale_factor, "height")?;
         let texture = self.offscreen_texture(width, height);
-        self.render_to_texture(scene, &texture, viewport_size, None, false)
+        self.render_to_texture(scene, &texture, viewport_size, None, false, None)
     }
 
     /// [`Self::render_offscreen`], then wait for the GPU and return the command
@@ -398,7 +496,24 @@ impl MetalRenderer {
         let width = texture_extent(viewport_size.width * scale_factor, "width")?;
         let height = texture_extent(viewport_size.height * scale_factor, "height")?;
         let texture = self.offscreen_texture(width, height);
-        self.render_to_texture(scene, &texture, viewport_size, None, true)?;
+        self.render_to_texture(scene, &texture, viewport_size, None, true, None)?;
+        self.gpu_time
+            .ok_or_else(|| RendererError::render_failed("the frame reported no GPU time"))
+    }
+
+    /// [`Self::render_offscreen_gpu_time`] through `target`, into the same kept
+    /// offscreen texture, as a window presents. For benchmarks.
+    pub fn render_retained_offscreen_gpu_time(
+        &mut self,
+        scene: &Scene,
+        target: &mut RetainedTarget,
+        viewport_size: Size,
+        scale_factor: f32,
+    ) -> Result<std::time::Duration, RendererError> {
+        let width = texture_extent(viewport_size.width * scale_factor, "width")?;
+        let height = texture_extent(viewport_size.height * scale_factor, "height")?;
+        let texture = self.offscreen_texture(width, height);
+        self.render_retained_to(scene, target, &texture, viewport_size, None, true)?;
         self.gpu_time
             .ok_or_else(|| RendererError::render_failed("the frame reported no GPU time"))
     }
@@ -429,6 +544,7 @@ impl MetalRenderer {
             viewport_size,
             Some(drawable),
             false,
+            None,
         )
     }
 
@@ -439,6 +555,7 @@ impl MetalRenderer {
         viewport_size: Size,
         present_drawable: Option<&MetalDrawableRef>,
         wait_until_completed: bool,
+        retained: Option<Retained<'_>>,
     ) -> Result<(), RendererError> {
         RendererPrimitiveSupport::metal().validate_scene(scene)?;
 
@@ -454,6 +571,7 @@ impl MetalRenderer {
         let drawable_size = Size::new(texture.width() as f32, texture.height() as f32);
 
         let mut frame = std::mem::take(&mut self.frame);
+        let damage = retained.as_ref().and_then(|retained| retained.damage);
         let epoch = self.text_cache.epoch();
         let mut built = self.build_frame(
             &mut frame,
@@ -461,6 +579,7 @@ impl MetalRenderer {
             viewport_size,
             scale_factor,
             drawable_size,
+            damage,
         );
         if built.is_ok() && self.text_cache.epoch() != epoch {
             // A font loaded during the frame emptied the glyph atlas, so glyphs
@@ -473,6 +592,7 @@ impl MetalRenderer {
                 viewport_size,
                 scale_factor,
                 drawable_size,
+                damage,
             );
             if built.is_ok() && self.text_cache.epoch() != epoch {
                 built = Err(RendererError::render_failed(
@@ -487,13 +607,15 @@ impl MetalRenderer {
                 viewport_size,
                 present_drawable,
                 wait_until_completed,
+                retained.as_ref(),
             )
         });
         self.frame = frame;
         result
     }
 
-    /// Turns the scene into instance data and a plan of draws.
+    /// Turns the scene into instance data and a plan of draws. With `damage`,
+    /// only what can touch it, cut to it.
     fn build_frame(
         &mut self,
         frame: &mut FrameData,
@@ -501,16 +623,33 @@ impl MetalRenderer {
         viewport_size: Size,
         scale_factor: f32,
         drawable_size: Size,
+        damage: Option<Bounds>,
     ) -> Result<(), RendererError> {
         frame.clear();
+        frame.damage = damage.map(|damage| damage_scissor(damage, scale_factor, drawable_size));
+        // The damage as the device pixels it covers, which is what gets drawn.
+        let redrawn = frame.damage.map(|scissor| {
+            Bounds::from_xywh(
+                scissor.x as f32 / scale_factor,
+                scissor.y as f32 / scale_factor,
+                scissor.width as f32 / scale_factor,
+                scissor.height as f32 / scale_factor,
+            )
+        });
         let viewport = Bounds::from_xywh(0.0, 0.0, viewport_size.width, viewport_size.height);
         let mut clip_stack: Vec<Bounds> = Vec::new();
         let mut clip = frame.push_clip(scissor_rect(None, scale_factor, drawable_size));
 
         for primitive in scene.primitives() {
-            // Nothing a primitive outside the current clip draws can be seen.
+            // Nothing a primitive outside the current clip draws can be seen,
+            // nor, in a retained frame, anything outside the damage.
             let visible = clip_stack.last().copied().unwrap_or(viewport);
-            if !primitive.may_touch(&visible) {
+            let visible = match redrawn {
+                Some(redrawn) => visible.intersection(&redrawn),
+                None => Some(visible),
+            };
+            let clips = matches!(primitive, Primitive::PushClip { .. } | Primitive::PopClip);
+            if !clips && !visible.is_some_and(|visible| primitive.may_touch(&visible)) {
                 continue;
             }
             match primitive {
@@ -701,6 +840,7 @@ impl MetalRenderer {
         viewport_size: Size,
         present_drawable: Option<&MetalDrawableRef>,
         wait_until_completed: bool,
+        retained: Option<&Retained<'_>>,
     ) -> Result<(), RendererError> {
         // Glyphs placed while building are copied into their pages before any
         // draw samples them.
@@ -712,11 +852,17 @@ impl MetalRenderer {
         let render_pass_desc = RenderPassDescriptor::new();
         let color_attachment = render_pass_desc.color_attachments().object_at(0).unwrap();
         color_attachment.set_texture(Some(texture));
-        color_attachment.set_load_action(MTLLoadAction::Clear);
         color_attachment.set_store_action(MTLStoreAction::Store);
         // The clear color is linear; this is 0.1 in sRGB, as before.
         let clear = srgb_to_linear(0.1);
-        color_attachment.set_clear_color(MTLClearColor::new(clear, clear, clear, 1.0));
+        // A retained frame keeps what the target shows outside the damage.
+        let damage = frame.damage;
+        if damage.is_some() {
+            color_attachment.set_load_action(MTLLoadAction::Load);
+        } else {
+            color_attachment.set_load_action(MTLLoadAction::Clear);
+            color_attachment.set_clear_color(MTLClearColor::new(clear, clear, clear, 1.0));
+        }
 
         let encoder = command_buffer.new_render_command_encoder(render_pass_desc);
 
@@ -725,6 +871,19 @@ impl MetalRenderer {
         };
         let full = frame.scissors[0];
         encoder.set_scissor_rect(full);
+        self.frame_stats.redrawn_pixels = full.width * full.height;
+        if damage.is_some() && full.width > 0 && full.height > 0 {
+            // The damage starts as a cleared target would.
+            encoder.set_render_pipeline_state(&self.retained_pipelines.clear);
+            let color = [clear as f32, clear as f32, clear as f32, 1.0f32];
+            encoder.set_fragment_bytes(
+                0,
+                std::mem::size_of_val(&color) as u64,
+                color.as_ptr() as *const _,
+            );
+            encoder.draw_primitives(MTLPrimitiveType::Triangle, 0, 3);
+            self.count_draw(1);
+        }
         let mut scissor = 0;
         // Sprite references live at buffer 0, which image and path draws rebind.
         let mut sprites_bound = false;
@@ -804,6 +963,21 @@ impl MetalRenderer {
         }
 
         encoder.end_encoding();
+        if let Some(retained) = retained {
+            // A render pass, not a blit: see `retained`.
+            let copy_pass = RenderPassDescriptor::new();
+            let attachment = copy_pass.color_attachments().object_at(0).ok_or_else(|| {
+                RendererError::render_failed("render pass has no color attachment")
+            })?;
+            attachment.set_texture(Some(retained.copy_to));
+            attachment.set_load_action(MTLLoadAction::DontCare);
+            attachment.set_store_action(MTLStoreAction::Store);
+            let copy = command_buffer.new_render_command_encoder(copy_pass);
+            copy.set_render_pipeline_state(&self.retained_pipelines.copy);
+            copy.set_fragment_texture(0, Some(texture));
+            copy.draw_primitives(MTLPrimitiveType::Triangle, 0, 3);
+            copy.end_encoding();
+        }
         if let Some(drawable) = present_drawable {
             command_buffer.present_drawable(drawable);
         }

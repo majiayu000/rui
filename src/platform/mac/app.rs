@@ -26,7 +26,7 @@ use crate::platform::window::{
     PlatformImeEvent, PlatformInputEvent, PlatformMouseEvent, PlatformMouseEventKind,
     PlatformRendererTarget, PlatformWindow, PlatformWindowError, PlatformWindowEvent,
 };
-use crate::renderer::metal::{MetalRenderer, PendingMetalRenderer};
+use crate::renderer::metal::{MetalRenderer, PendingMetalRenderer, RetainedTarget};
 use crate::renderer::{
     RendererBatchDiagnostics, RendererFramePhaseDurations, RendererResourceLimits,
     RendererTelemetryRecorder,
@@ -80,6 +80,8 @@ pub(crate) fn run_app_with_renderer<F, E>(
 
         let mut pending_renderer = Some(pending_renderer);
         let mut renderer: Option<MetalRenderer> = None;
+        // The window's last frame, so each frame redraws only what changed.
+        let mut window_target = RetainedTarget::new();
 
         // Create the window with Metal layer
         let mut window = match create_window(&options, mtm) {
@@ -268,7 +270,12 @@ pub(crate) fn run_app_with_renderer<F, E>(
                             // Hold the owned retain across render+present; MetalRenderer
                             // still takes &MetalDrawableRef via Deref.
                             renderer
-                                .render(presenter.scene(), &metal_drawable, viewport_size)
+                                .render_retained(
+                                    presenter.scene(),
+                                    &mut window_target,
+                                    &metal_drawable,
+                                    viewport_size,
+                                )
                                 .map_err(|err| {
                                     FramePipelineError::stage(
                                         crate::core::frame_pipeline::FrameStage::Present,

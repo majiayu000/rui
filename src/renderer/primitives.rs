@@ -207,9 +207,18 @@ impl Primitive {
     /// on its ink, which can be wider than its bounds, so neither is ruled out
     /// horizontally.
     pub fn may_touch(&self, visible: &Bounds) -> bool {
+        match self.reach() {
+            Reach::Nothing => false,
+            Reach::Within(reach) => reach.intersects(visible),
+            Reach::Unbounded => true,
+        }
+    }
+
+    /// Everything the primitive can draw on.
+    pub fn reach(&self) -> Reach {
         // Antialiasing reaches about one pixel past an edge.
         const EDGE: f32 = 1.0;
-        let reach = match self {
+        Reach::Within(match self {
             Self::Quad { bounds, .. }
             | Self::LinearGradient { bounds, .. }
             | Self::RadialGradient { bounds, .. } => outset(*bounds, EDGE, EDGE),
@@ -230,7 +239,7 @@ impl Primitive {
                 ..
             } => {
                 let Some(first) = vertices.first() else {
-                    return false;
+                    return Reach::Nothing;
                 };
                 let (mut x0, mut y0) = (first.position[0], first.position[1]);
                 let (mut x1, mut y1) = (x0, y0);
@@ -243,10 +252,21 @@ impl Primitive {
                 let pad = stroke_width.unwrap_or(0.0).max(0.0) * 0.5 + EDGE;
                 outset(Bounds::from_xywh(x0, y0, x1 - x0, y1 - y0), pad, pad)
             }
-            Self::Image { .. } | Self::PushClip { .. } | Self::PopClip => return true,
-        };
-        reach.intersects(visible)
+            Self::Image { .. } | Self::PushClip { .. } | Self::PopClip => return Reach::Unbounded,
+        })
     }
+}
+
+/// What a primitive can draw on; see [`Primitive::reach`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Reach {
+    /// Nothing, as an empty path.
+    Nothing,
+    /// Only pixels inside these bounds.
+    Within(Bounds),
+    /// Cannot be bounded from the primitive alone: images can draw past their
+    /// bounds when filling, and a clip changes what other primitives show.
+    Unbounded,
 }
 
 fn outset(bounds: Bounds, dx: f32, dy: f32) -> Bounds {

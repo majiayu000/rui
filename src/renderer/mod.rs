@@ -14,7 +14,7 @@ mod text_shaping;
 #[cfg(all(target_os = "macos", feature = "metal"))]
 pub mod metal;
 
-pub use primitives::{PathVertex, Primitive, PrimitiveKind};
+pub use primitives::{PathVertex, Primitive, PrimitiveKind, Reach};
 pub use resources::{
     GlyphResourceKey, ImageResourceEntry, ImageResourceKey, RendererDeviceDiagnostics,
     RendererDiagnostics, RendererImageCache, RendererResourceAllocation, RendererResourceCache,

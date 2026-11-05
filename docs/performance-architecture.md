@@ -134,13 +134,22 @@ input/effects -> build -> layout -> paint -> hit index -> render -> present
 - **Paths (#193).** Static paths are rasterized once into the atlas. Dynamic paths
   get analytic coverage in the fragment shader. No intermediate MSAA texture and no
   encoder switch per path batch, which GPUI pays.
-- **Damage (#175).**
-  - Paint replay marks which ranges changed; their bounds, unioned, are the
-    damage region.
-  - Each window keeps a persistent offscreen color texture. Only primitives
-    touching the damage are drawn into it, scissored and with a Load action, and
-    the texture is then blitted to the rotating drawable.
-  - Resize, scale change and the first frame are full damage.
+- **Damage (done: #175).**
+  - `Scene::damage` is everything painted rather than replayed in place,
+    everything of the previous frame that was not replayed, and both places of
+    what moved or changed order, unioned into one rectangle.
+  - Each window keeps a `RetainedTarget`: a texture holding its last frame and
+    the id of the scene frame it shows. Only primitives touching the damage are
+    drawn into it, with every clip cut to the damage and a Load action, after
+    the damage is filled with the clear color. A render pass then copies the
+    texture to the rotating drawable; the normal frame path has no blit encoder,
+    which on an M3 Max makes the driver allocate about 160 MB more.
+  - A target that does not show the scene's previous frame (first frame, a
+    frame that was painted but not presented), a new size or scale, and an
+    image or other unbounded change are full damage.
+  - One changed row on the 2000-row list draws 0.087 of the window again: 0.18
+    ms of GPU time against 0.50 ms for a full redraw at 2880x1800 (M2 Max). The
+    copy costs about 0.1 ms, so a nearly empty window gains nothing.
   - GPUI clears and redraws the whole window every frame.
 - **Startup (#177).** Shader libraries compile on a background thread in parallel
   with font setup. Pipelines are cached in an `MTLBinaryArchive` keyed by the
@@ -206,7 +215,10 @@ Each optimization ships with three things.
      exact-translation check, or comparing div styles) fail it.
    - `RUI_VERIFY_REPLAY=1` repaints every frame in full and panics at the first
      primitive that differs from the replayed one.
-   - Lane 2 adds damaged vs full-redraw pixels.
+   - `tests/damage_frames.rs`: frames through a `RetainedTarget` vs full
+     redraws, byte for byte, over random edits, resizes, moved rows and a target
+     that missed a frame. Injected bugs (not damaging removed content, moved
+     replays, or skipping the clear) fail it.
    - Hit index vs linear scan: 300 random scenes.
    - Injected bugs (skip a restyle, skip a rewire) must fail the oracle; this has
      been shown for the layout oracle.

@@ -1,7 +1,7 @@
 use super::*;
 use crate::core::accessibility::{
-    AccessibilityAnnouncement, AccessibilityAnnouncementKind, AccessibilityNode,
-    AccessibilityRole, AccessibilityTree,
+    AccessibilityAnnouncement, AccessibilityAnnouncementKind, AccessibilityNode, AccessibilityRole,
+    AccessibilityTree,
 };
 use crate::core::text_editing::TextInputCommand;
 
@@ -275,11 +275,7 @@ fn retained_focus_announcements_drop_stale_targets_before_replay() {
             .with_focused(true),
     ]);
     let announcements = vec![
-        AccessibilityAnnouncement::new(
-            stale,
-            AccessibilityAnnouncementKind::FocusChanged,
-            "stale",
-        ),
+        AccessibilityAnnouncement::new(stale, AccessibilityAnnouncementKind::FocusChanged, "stale"),
         AccessibilityAnnouncement::new(
             current,
             AccessibilityAnnouncementKind::ActionFeedback,
@@ -329,8 +325,7 @@ fn retained_focus_announcements_preserve_order_before_action_feedback() {
         ),
     ];
 
-    let filtered =
-        filter_retained_accessibility_announcements(announcements, &published, Some(id));
+    let filtered = filter_retained_accessibility_announcements(announcements, &published, Some(id));
 
     assert_eq!(
         filtered,

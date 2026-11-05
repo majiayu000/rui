@@ -16,7 +16,7 @@ use rui::core::frame_pipeline::FramePipeline;
 use rui::elements::element::{Element, LayoutNodes};
 use rui::elements::{VirtualListHandle, virtual_list};
 use rui::renderer::Scene;
-use rui::renderer::metal::MetalRenderer;
+use rui::renderer::metal::{MetalRenderer, RetainedTarget};
 use rui::renderer::text::TextMeasureCache;
 use rui::{Color, Div, ElementId, Size, div, text};
 use serde::Deserialize;
@@ -30,6 +30,8 @@ const BUDGETS_JSON: &str = include_str!("../benchmarks/perf_budgets.json");
 const VIEWPORT: (f32, f32) = (1440.0, 900.0);
 const ROW_HEIGHT: f32 = 28.0;
 const EDITED_ROW: usize = 1_000;
+/// A row in view at the top of the list, for the damage case.
+const VISIBLE_EDITED_ROW: usize = 10;
 const WARMUP: usize = 3;
 const SAMPLES: usize = 15;
 
@@ -82,6 +84,8 @@ struct Budgets {
     /// Most the 100 000-row virtual list may cost relative to 1 000 rows.
     virtual_list_scaling_max: f64,
     footprint_mb_max: f64,
+    /// Most of the window one changed row may draw again (#175).
+    one_row_damage_max: f64,
     pixel_checksum: String,
 }
 
@@ -137,13 +141,13 @@ fn list(rows: usize, selected: usize) -> Div {
         .children((0..rows).map(move |index| row(index, selected)))
 }
 
-/// The list with one row's label changed: the edit `round` made to row `EDITED_ROW`.
-fn list_with_edit(rows: usize, round: usize) -> Div {
+/// The list with one row's label changed: the edit `round` made to row `edited`.
+fn list_with_edit(rows: usize, edited: usize, round: usize) -> Div {
     div()
         .w_full()
         .flex_col()
         .children((0..rows).map(move |index| {
-            if index == EDITED_ROW {
+            if index == edited {
                 row(index, usize::MAX).child(text(format!("edit {round}")))
             } else {
                 row(index, usize::MAX).child(text("edit"))
@@ -240,6 +244,48 @@ impl Rebuilt {
         }
         self.surfaces.frame(&mut self.root, measurer);
     }
+}
+
+/// What a retained window draws again per frame: median over the samples.
+struct DamageCost {
+    /// Share of the window's pixels drawn again.
+    fraction: f64,
+    damaged_ms: f64,
+    full_ms: f64,
+}
+
+/// Frames of `build(round)` through a [`RetainedTarget`], each also drawn in full.
+fn damage_cost(
+    renderer: &mut MetalRenderer,
+    rebuilt: &mut Rebuilt,
+    measurer: &mut TextMeasureCache,
+    build: impl Fn(usize) -> Div,
+) -> Result<DamageCost, String> {
+    let viewport = Size::new(VIEWPORT.0, VIEWPORT.1);
+    let total = f64::from(VIEWPORT.0) * f64::from(VIEWPORT.1) * 4.0;
+    let mut target = RetainedTarget::new();
+    let (mut fractions, mut damaged_ms, mut full_ms) = (Vec::new(), Vec::new(), Vec::new());
+    for round in 0..WARMUP + SAMPLES {
+        rebuilt.frame(build(round), measurer);
+        let scene = &rebuilt.surfaces.scene;
+        let damaged = renderer
+            .render_retained_offscreen_gpu_time(scene, &mut target, viewport, 2.0)
+            .map_err(|err| err.to_string())?;
+        let redrawn = renderer.last_frame_stats().redrawn_pixels;
+        let full = renderer
+            .render_offscreen_gpu_time(scene, viewport, 2.0)
+            .map_err(|err| err.to_string())?;
+        if round >= WARMUP {
+            fractions.push(redrawn as f64 / total);
+            damaged_ms.push(damaged.as_secs_f64() * 1e3);
+            full_ms.push(full.as_secs_f64() * 1e3);
+        }
+    }
+    Ok(DamageCost {
+        fraction: median(fractions),
+        damaged_ms: median(damaged_ms),
+        full_ms: median(full_ms),
+    })
 }
 
 fn pixel_checksum(scene: &Scene) -> Result<String, String> {
@@ -354,15 +400,33 @@ fn main() -> ExitCode {
         measure(|round| {
             full_surfaces.taffy.clear();
             full_surfaces.nodes = LayoutNodes::new();
-            full_surfaces.frame(&mut list_with_edit(2_000, round), &mut measurer);
+            full_surfaces.frame(&mut list_with_edit(2_000, EDITED_ROW, round), &mut measurer);
         }),
     );
     drop(full_surfaces);
     let mut edited = Rebuilt::new();
     costs.insert(
         "list.one_row_changed",
-        measure(|round| edited.frame(list_with_edit(2_000, round), &mut measurer)),
+        measure(|round| edited.frame(list_with_edit(2_000, EDITED_ROW, round), &mut measurer)),
     );
+
+    // #175: how much of the window one change in view draws again, and the GPU
+    // time of that frame against a full redraw.
+    let damage = match MetalRenderer::new() {
+        Ok(mut renderer) => {
+            let list = damage_cost(&mut renderer, &mut edited, &mut measurer, |round| {
+                list_with_edit(2_000, VISIBLE_EDITED_ROW, round)
+            });
+            let text = damage_cost(
+                &mut renderer,
+                &mut Rebuilt::new(),
+                &mut measurer,
+                paragraphs,
+            );
+            Some((list, text))
+        }
+        Err(_) => None,
+    };
     drop(edited);
 
     let counters = costs.values().any(|cost| cost.instructions_m > 0.0);
@@ -400,6 +464,33 @@ fn main() -> ExitCode {
         println!(
             "instruction counter unavailable on this machine: instruction budgets not checked"
         );
+    }
+
+    match damage {
+        Some((list, text)) => {
+            for (name, cost) in [("list, one row", &list), ("text, one paragraph", &text)] {
+                match cost {
+                    Ok(cost) => println!(
+                        "damage, {name} changed: {:.3} of the window, GPU {:.2} ms against {:.2} ms for a full redraw",
+                        cost.fraction, cost.damaged_ms, cost.full_ms
+                    ),
+                    Err(err) => failures.push(format!("damage, {name} changed: {err}")),
+                }
+            }
+            if let Ok(list) = list {
+                println!(
+                    "one changed row damage max {:.3}",
+                    budgets.one_row_damage_max
+                );
+                if list.fraction > budgets.one_row_damage_max {
+                    failures.push(format!(
+                        "one changed row draws {:.3} of the window again, max {:.3}",
+                        list.fraction, budgets.one_row_damage_max
+                    ));
+                }
+            }
+        }
+        None => println!("no Metal device: damage not measured"),
     }
 
     let (full, changed) = (costs["list.full_frame"], costs["list.one_row_changed"]);
