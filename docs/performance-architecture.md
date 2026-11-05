@@ -70,11 +70,19 @@ input/effects -> build -> layout -> paint -> hit index -> render -> present
 - **Fingerprints.** Each identified element hashes its inputs (style, content,
   children's fingerprints) during construction, which costs O(1) per element on
   top of building it.
-- **Rebuilding only what changed.** Today a notify rebuilds from the root view.
-  Making views entities (#186 remainder) lets a notify rebuild just the views that
-  read the changed entity, with entity reads tracked during `render`. GPUI tracks
-  this per view; RUI can track per element with an id.
-- **Target:** one-row change: build cost of one row plus the path to it.
+- **Rebuilding only what changed (done: #186 remainder).** A view made with
+  `AppContext::new_view` is placed in any tree with `view(entity)`, which
+  renders nothing. Entities read through `AppContext::get`/`get_mut` during a
+  view's render are recorded. A frame that notified only entities some child
+  view read, or the views themselves, does not build the root: it renders the
+  notified views in place, reconciles each new subtree against the old one, and
+  drops the layout and paint records on the path to them. The root is still
+  built for an explicit rebuild, an entity it read itself, or an entity no view
+  read, as before. GPUI tracks reads per view too; RUI's view keeps the
+  per-element memo, replay and damage below it.
+- **Target:** one-row change: build cost of one row plus the path to it. With
+  rows as views, the 2000-row list's one-row frame costs 2.0 M instructions and
+  23 allocations, 0.029 of a full frame.
 
 ### 3. Layout (done: retained tree; lane 4: caches; lane 2: skip unchanged subtrees)
 

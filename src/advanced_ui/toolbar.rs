@@ -196,6 +196,10 @@ impl Element for Toolbar {
         Element::children(&self.inner)
     }
 
+    fn children_mut(&mut self) -> &mut [AnyElement] {
+        Element::children_mut(&mut self.inner)
+    }
+
     fn contains_id(&self, id: ElementId) -> bool {
         self.id == id || self.inner.contains_id(id)
     }
