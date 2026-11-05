@@ -1,15 +1,22 @@
 use super::dispatch_accessibility_action;
 use super::tests::accessibility_request;
-use crate::advanced_ui::{Dialog, TextField};
+use crate::advanced_ui::Dialog;
 use crate::core::ElementId;
 use crate::core::accessibility::AccessibilityAction;
 use crate::core::geometry::Size;
 use crate::core::presenter::Presenter;
+use crate::elements::Input;
 
 #[test]
 fn native_accessibility_set_value_replaces_dialog_text() {
     let field_id = ElementId::new();
-    let dialog = Dialog::new("Edit", TextField::new("Name").id(field_id).value("keep"));
+    let dialog = Dialog::new(
+        "Edit",
+        Input::new()
+            .accessibility_label("Name")
+            .id(field_id)
+            .value("keep"),
+    );
     let mut presenter = Presenter::with_root(Size::new(320.0, 240.0), dialog);
     let tree = presenter
         .accessibility_tree()

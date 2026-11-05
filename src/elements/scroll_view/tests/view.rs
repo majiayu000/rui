@@ -6,7 +6,8 @@ use crate::elements::text::text;
 #[test]
 fn test_scroll_view_new() {
     let sv = ScrollView::new();
-    assert!(sv.id.is_none());
+    assert!(sv.id.is_some_and(|id| id.is_ephemeral()));
+    assert!(!sv.explicit_id);
     assert_eq!(sv.direction, ScrollDirection::Vertical);
     assert_eq!(sv.scrollbar_visibility, ScrollbarVisibility::Auto);
     assert_eq!(sv.scrollbar_width, 8.0);
@@ -356,9 +357,9 @@ fn test_scroll_view_element_id() {
 }
 
 #[test]
-fn test_scroll_view_element_id_none() {
+fn test_scroll_view_element_id_defaults_to_ephemeral() {
     let sv = ScrollView::new();
-    assert_eq!(Element::id(&sv), None);
+    assert!(Element::id(&sv).is_some_and(|id| id.is_ephemeral()));
 }
 
 #[test]

@@ -108,7 +108,7 @@ classDiagram
     class Button {
         +label: String
         +on_click: Callback
-        +variant(ButtonVariant)
+        +variant(ControlVariant)
     }
 
     class Image {
@@ -318,31 +318,6 @@ graph TB
 - `padding` - Inner spacing
 - `margin` - Outer spacing
 
-## Hooks System
-
-React-like hooks for managing state and side effects.
-
-```mermaid
-classDiagram
-    class UseMouse {
-        +on_move(callback)
-        +on_click(callback)
-        +on_scroll(callback)
-        +position() Point
-    }
-
-    class UsePaste {
-        +on_paste(callback)
-        +enable_bracketed_paste()
-    }
-
-    class UseWindowFocus {
-        +on_focus(callback)
-        +on_blur(callback)
-        +is_focused() bool
-    }
-```
-
 ## Memory Management
 
 RUI uses Rust's ownership system for memory safety with minimal allocations.
@@ -387,18 +362,14 @@ rui/
 │   │   ├── element.rs      # Element trait
 │   │   ├── div.rs          # Container
 │   │   ├── text.rs         # Text
-│   │   ├── button.rs       # Button
 │   │   ├── input.rs        # Text input
+│   │   ├── scroll_view.rs  # Scroll area
 │   │   ├── image.rs        # Image
 │   │   ├── table.rs        # Table
 │   │   ├── list.rs         # Lists
-│   │   ├── progress.rs     # Progress bar
 │   │   └── spinner.rs      # Spinner
 │   │
-│   ├── hooks/              # React-like hooks
-│   │   ├── use_mouse.rs    # Mouse events
-│   │   ├── use_paste.rs    # Paste events
-│   │   └── use_window_focus.rs
+│   ├── advanced_ui/        # Themed controls (Button, Checkbox, Tabs, ...)
 │   │
 │   ├── renderer/           # Rendering
 │   │   ├── scene.rs        # Scene graph

@@ -4,6 +4,7 @@ mod callbacks;
 mod presentation;
 mod scenarios;
 mod state_and_edges;
+mod themed;
 
 mod support {
     pub(super) use super::super::*;

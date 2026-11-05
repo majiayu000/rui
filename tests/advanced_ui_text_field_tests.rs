@@ -1,14 +1,15 @@
 use rui::ElementId;
-use rui::advanced_ui::{ControlSize, TextField, Theme};
+use rui::advanced_ui::{ControlSize, Theme};
 use rui::core::accessibility::AccessibilityContext;
 use rui::core::event::{KeyCode, KeyEvent, Modifiers};
 use rui::core::geometry::{Bounds, Size};
 use rui::elements::Element;
+use rui::elements::Input;
 use rui::elements::element::{LayoutContext, PaintContext};
 use rui::renderer::{Primitive, Scene};
 use taffy::prelude::{AvailableSpace, TaffyTree};
 
-fn layout_and_paint(mut field: TextField, viewport: Size) -> Vec<Primitive> {
+fn layout_and_paint(mut field: Input, viewport: Size) -> Vec<Primitive> {
     let mut taffy = TaffyTree::<ElementId>::new();
     let mut layout_cx = LayoutContext::new(&mut taffy, viewport);
     let node = field.layout(&mut layout_cx);
@@ -40,7 +41,8 @@ fn layout_and_paint(mut field: TextField, viewport: Size) -> Vec<Primitive> {
 #[test]
 fn advanced_text_field_read_only_allows_navigation_without_mutation() {
     let id = ElementId::new();
-    let mut field = TextField::new("Package")
+    let mut field = Input::new()
+        .accessibility_label("Package")
         .id(id)
         .value("rui-core")
         .read_only(true);
@@ -62,7 +64,8 @@ fn advanced_text_field_read_only_allows_navigation_without_mutation() {
 fn advanced_text_field_theme_applies_to_normal_paint() {
     let theme = Theme::dark();
     let primitives = layout_and_paint(
-        TextField::new("Search")
+        Input::new()
+            .accessibility_label("Search")
             .value("query")
             .theme(theme)
             .size(ControlSize::Large)

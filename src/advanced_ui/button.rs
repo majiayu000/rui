@@ -18,6 +18,8 @@ use taffy::prelude::*;
 
 pub struct Button {
     id: ElementId,
+    /// `id` was set by the application, so layout keeps it.
+    explicit_id: bool,
     label: String,
     variant: ControlVariant,
     size: ControlSize,
@@ -38,6 +40,7 @@ impl Button {
 
         Self {
             id: ElementId::new(),
+            explicit_id: false,
             label,
             variant: ControlVariant::default(),
             size: ControlSize::default(),
@@ -50,6 +53,7 @@ impl Button {
 
     pub fn id(mut self, id: ElementId) -> Self {
         self.id = id;
+        self.explicit_id = true;
         self
     }
 
@@ -85,6 +89,24 @@ impl Button {
     pub fn size(mut self, size: ControlSize) -> Self {
         self.size = size;
         self
+    }
+
+    pub fn small(self) -> Self {
+        self.size(ControlSize::Small)
+    }
+
+    pub fn large(self) -> Self {
+        self.size(ControlSize::Large)
+    }
+
+    /// Overrides the theme's control radius.
+    pub fn rounded(mut self, radius: f32) -> Self {
+        self.style.border.radius = Corners::all(radius);
+        self
+    }
+
+    pub fn rounded_full(self) -> Self {
+        self.rounded(9999.0)
     }
 
     pub fn theme(mut self, theme: Theme) -> Self {
@@ -138,6 +160,12 @@ impl Button {
 impl Element for Button {
     fn id(&self) -> Option<ElementId> {
         Some(self.id)
+    }
+
+    fn adopt_stable_id(&mut self, id: ElementId) {
+        if !self.explicit_id {
+            self.id = id;
+        }
     }
 
     fn style(&self) -> &Style {

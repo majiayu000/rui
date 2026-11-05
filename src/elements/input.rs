@@ -2,6 +2,7 @@
 
 mod presentation;
 
+use crate::advanced_ui::{ControlSize, ControlState, Theme};
 use crate::core::ElementId;
 use crate::core::accessibility::{
     AccessibilityAction, AccessibilityContext, AccessibilityError, AccessibilityNode,
@@ -57,7 +58,7 @@ pub struct InputState {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct InputPaintTokens {
+struct InputPaintTokens {
     pub background: Color,
     pub text: Color,
     pub placeholder: Color,
@@ -84,7 +85,9 @@ pub struct Input {
     on_cancel: Option<Box<dyn Fn()>>,
     on_focus: Option<Box<dyn Fn()>>,
     on_blur: Option<Box<dyn Fn()>>,
-    paint_tokens: Option<InputPaintTokens>,
+    /// Set by [`Input::theme`] or [`Input::size`]; paints with theme tokens.
+    theme: Option<Theme>,
+    size: ControlSize,
     caret_bounds: Option<Bounds>,
     text_layout: Option<crate::core::text_editing::TextEditLayout>,
     /// Font size and line height used to build `text_layout`.
@@ -117,7 +120,8 @@ impl Input {
             on_cancel: None,
             on_focus: None,
             on_blur: None,
-            paint_tokens: None,
+            theme: None,
+            size: ControlSize::default(),
             caret_bounds: None,
             text_layout: None,
             text_layout_shape: None,
@@ -211,18 +215,58 @@ impl Input {
         self
     }
 
-    pub(crate) fn set_interaction_flags(&mut self, disabled: bool, read_only: bool, invalid: bool) {
-        self.state.disabled = disabled;
-        self.state.read_only = read_only;
-        self.state.invalid = invalid;
-        if disabled {
-            self.state.focused = false;
-            self.state.hovered = false;
-        }
+    /// Paints with `theme` tokens and takes its control height and radius.
+    pub fn theme(mut self, theme: Theme) -> Self {
+        self.style.border.radius = Corners::all(theme.control_radius());
+        self.theme = Some(theme);
+        self
     }
 
-    pub(crate) fn set_paint_tokens(&mut self, tokens: InputPaintTokens) {
-        self.paint_tokens = Some(tokens);
+    /// Sizes the input like other themed controls (default theme unless
+    /// [`Input::theme`] sets one).
+    pub fn size(mut self, size: ControlSize) -> Self {
+        self.size = size;
+        if self.theme.is_none() {
+            self = self.theme(Theme::default());
+        }
+        self
+    }
+
+    fn height(&self) -> f32 {
+        self.height
+            .or_else(|| {
+                self.theme
+                    .as_ref()
+                    .map(|theme| theme.control_height(self.size))
+            })
+            .unwrap_or(40.0)
+    }
+
+    fn paint_tokens(&self) -> Option<InputPaintTokens> {
+        let theme = self.theme.as_ref()?;
+        let state = ControlState {
+            hovered: self.state.hovered,
+            disabled: self.state.disabled,
+            read_only: self.state.read_only,
+            invalid: self.state.invalid,
+            focused: self.state.focused,
+            ..ControlState::default()
+        };
+        let text = if self.state.disabled {
+            theme.colors.text.with_alpha(theme.state.disabled_opacity)
+        } else if self.state.read_only {
+            theme.colors.text.with_alpha(theme.state.read_only_opacity)
+        } else {
+            theme.colors.text
+        };
+        Some(InputPaintTokens {
+            background: theme.surface_color_for_state(state),
+            text,
+            placeholder: text.with_alpha(0.62),
+            border: theme.state_border_color(state, theme.colors.border),
+            focus_ring: theme.state.focus_ring,
+            font_size: theme.text_size(self.size),
+        })
     }
 
     pub fn on_change(mut self, handler: impl Fn(&str) + 'static) -> Self {
@@ -498,9 +542,10 @@ impl Element for Input {
     }
 
     fn layout(&mut self, cx: &mut LayoutContext) -> NodeId {
-        self.update_text_layout(cx.text_measurer(), self.height.unwrap_or(40.0));
+        let height = self.height();
+        self.update_text_layout(cx.text_measurer(), height);
         let mut style = style_to_taffy(&self.style);
-        style.size.height = Dimension::Length(self.height.unwrap_or(40.0));
+        style.size.height = Dimension::Length(height);
         if let Some(w) = self.width {
             style.size.width = Dimension::Length(w);
         } else {
@@ -548,7 +593,7 @@ impl Element for Input {
                 bounds: ring_bounds,
                 background: crate::core::color::Rgba::TRANSPARENT,
                 border_color: self
-                    .paint_tokens
+                    .paint_tokens()
                     .map(|tokens| tokens.focus_ring.with_alpha(0.3))
                     .unwrap_or_else(|| Color::hex(0x6366f1).with_alpha(0.3))
                     .to_rgba(),
@@ -600,7 +645,13 @@ impl Element for Input {
         let inside = cx.contains_pointer(event.position);
         match event.kind {
             PointerEventKind::Move => {
-                self.state.hovered = inside;
+                if self.state.hovered != inside {
+                    self.state.hovered = inside;
+                    cx.request_redraw();
+                }
+                if inside {
+                    cx.set_cursor(self.cursor());
+                }
                 false
             }
             PointerEventKind::Down => {

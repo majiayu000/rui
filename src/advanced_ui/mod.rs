@@ -6,11 +6,9 @@ mod data;
 mod menu;
 mod popover;
 mod progress_bar;
-mod scrollable;
 mod segmented_control;
 mod state;
 mod tabs;
-mod text_field;
 mod tokens;
 mod toolbar;
 mod tooltip;
@@ -41,14 +39,12 @@ pub use data::{
 pub use menu::{Menu, MenuItem, menu};
 pub use popover::{Dialog, Popover, dialog, popover};
 pub use progress_bar::{ProgressBar, progress_bar};
-pub use scrollable::{Scrollable, scrollable};
 pub use segmented_control::{SegmentedControl, SegmentedOption, segmented_control};
 pub use state::{
     IndexedInteractionRelease, IndexedInteractionState, InteractionRelease, InteractionState,
     require_finite, require_finite_non_negative, require_non_empty, validation_border_color,
 };
 pub use tabs::{Tab, TabList, TabPanel, Tabs, tab, tab_list, tab_panel, tabs};
-pub use text_field::{TextField, text_field};
 pub use tokens::{
     ControlColors, ControlSize, ControlState, ControlVariant, ControlVariantPalette, Theme,
     ThemeColors, ThemeDensity, ThemeMode, ThemeRadius, ThemeSpacing, ThemeStateTokens,

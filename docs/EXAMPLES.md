@@ -387,34 +387,25 @@ fn button_row() -> Div {
         .gap(12.0)
         .child(
             button("Primary")
-                .variant(ButtonVariant::Primary)
-                .on_click(|_| println!("Primary clicked"))
+                .primary()
+                .on_click(|| println!("Primary clicked"))
         )
         .child(
             button("Secondary")
-                .variant(ButtonVariant::Secondary)
-                .on_click(|_| println!("Secondary clicked"))
+                .secondary()
+                .on_click(|| println!("Secondary clicked"))
         )
 }
 ```
 
-### Step 4: Use Hooks
+### Step 4: Scroll Long Content
 
 ```rust
-use rui::hooks::*;
-
-fn interactive_area() -> Div {
-    let mouse = UseMouse::new();
-
-    mouse.on_click(|event| {
-        println!("Clicked at: ({}, {})", event.column, event.row);
-    });
-
-    div()
-        .w(400.0)
+fn activity(rows: Vec<Div>) -> ScrollView {
+    scroll_view()
         .h(300.0)
-        .bg(Color::hex(0x2d3436))
-        .child(text("Click anywhere!"))
+        .accessibility_label("Activity")
+        .child(div().flex_col().gap(8.0).children(rows))
 }
 ```
 
