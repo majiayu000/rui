@@ -7,6 +7,7 @@ pub mod app;
 pub mod app_handle;
 pub mod color;
 pub mod color_palette;
+pub mod drag;
 pub mod effects;
 pub mod entity;
 pub mod event;

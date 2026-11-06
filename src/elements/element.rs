@@ -7,6 +7,7 @@ use crate::core::accessibility::{
 };
 use crate::core::action::{ActionId, ActionOutcome};
 use crate::core::app::SharedClipboard;
+use crate::core::drag::{ActiveDrag, SharedDrag};
 use crate::core::event::{Cursor, KeyEvent, MouseButton, ScrollEvent};
 use crate::core::geometry::{Bounds, Point, Size};
 use crate::core::style::{Dimension as StyleDimension, Style};
@@ -688,6 +689,8 @@ pub struct EventContext<'a> {
     accessibility_announcements: Rc<RefCell<Vec<AccessibilityAnnouncement>>>,
     /// The app clipboard, attached while key actions run.
     clipboard: Option<SharedClipboard>,
+    /// The window's drag, shared with its presenter.
+    drag: Option<SharedDrag>,
 }
 
 impl<'a> EventContext<'a> {
@@ -710,6 +713,7 @@ impl<'a> EventContext<'a> {
             redraw_requested: Rc::new(Cell::new(false)),
             accessibility_announcements: Rc::new(RefCell::new(Vec::new())),
             clipboard: None,
+            drag: None,
         }
     }
 
@@ -860,6 +864,22 @@ impl<'a> EventContext<'a> {
         self.clipboard.as_deref().map(RefCell::borrow_mut)
     }
 
+    pub(crate) fn set_drag(&mut self, drag: SharedDrag) {
+        self.drag = Some(drag);
+    }
+
+    /// The window's drag state, present when a presenter dispatches the event.
+    pub(crate) fn drag(&self) -> Option<&SharedDrag> {
+        self.drag.as_ref()
+    }
+
+    /// Whether a drag is past its threshold.
+    pub(crate) fn is_dragging(&self) -> bool {
+        self.drag
+            .as_ref()
+            .is_some_and(|drag| drag.borrow().as_ref().is_some_and(ActiveDrag::is_dragging))
+    }
+
     pub fn announce_accessibility(&self, announcement: AccessibilityAnnouncement) {
         self.accessibility_announcements
             .borrow_mut()
@@ -916,6 +936,7 @@ impl<'a> EventContext<'a> {
             redraw_requested: Rc::clone(&self.redraw_requested),
             accessibility_announcements: Rc::clone(&self.accessibility_announcements),
             clipboard: self.clipboard.clone(),
+            drag: self.drag.clone(),
         }
     }
 
@@ -947,6 +968,7 @@ impl<'a> EventContext<'a> {
             redraw_requested: Rc::clone(&self.redraw_requested),
             accessibility_announcements: Rc::clone(&self.accessibility_announcements),
             clipboard: self.clipboard.clone(),
+            drag: self.drag.clone(),
         }
     }
 
@@ -988,6 +1010,7 @@ impl<'a> EventContext<'a> {
             redraw_requested: Rc::clone(&self.redraw_requested),
             accessibility_announcements: Rc::clone(&self.accessibility_announcements),
             clipboard: self.clipboard.clone(),
+            drag: self.drag.clone(),
         }
     }
 }

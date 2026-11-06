@@ -6,6 +6,7 @@ use crate::core::ElementId;
 use crate::core::accessibility::{AccessibilityContext, AccessibilityError, AccessibilityTree};
 use crate::core::action::route_key_event;
 use crate::core::app::{AppContext, RuntimeView};
+use crate::core::drag::FileDragEvent;
 use crate::core::entity::Entity;
 use crate::core::event::{Event, KeyEvent, MouseButton, ScrollEvent};
 use crate::core::frame_pipeline::{FramePipeline, FramePresentation, IdlePolicy};
@@ -275,6 +276,22 @@ where
             }
             dispatch.stopped
         })
+    }
+
+    /// Drive a file drag from another application, as the platform would.
+    pub fn dispatch_file_drag(&mut self, event: &FileDragEvent) -> bool {
+        self.dispatch_frame(|presenter, context| {
+            let dispatch = presenter.dispatch_file_drag(event);
+            if dispatch.redraw_requested {
+                context.request_redraw();
+            }
+            dispatch.stopped
+        })
+    }
+
+    /// Whether a drag in this window is past its threshold.
+    pub fn is_dragging(&self) -> bool {
+        self.presenter.is_dragging()
     }
 
     pub fn pointer_move(&mut self, position: Point) -> bool {

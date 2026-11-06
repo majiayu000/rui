@@ -288,6 +288,32 @@ div()
 | `.child(element)` | Add single child |
 | `.children(vec)` | Add multiple children |
 
+#### Drag and Drop
+
+```rust
+div()
+    .on_drag(|| Card { id }, |card| div().w(80.0).h(24.0).child(text(card.title())))
+    .on_click(open_card);
+
+div()
+    .on_drop::<Card>({
+        let add = cx.listener_with(|this, card: Card, _| this.cards.push(card));
+        move |card| add(card.clone())
+    })
+    .on_drag_over::<Card>(cx.listener_with(|this, over, _| this.highlight = over))
+    .on_drop_files(|paths| println!("dropped {paths:?}"));
+```
+
+| Method | Description |
+|--------|-------------|
+| `.on_drag(payload, preview)` | Drag source. A press makes the payload and its preview; past a 3 pt move the preview follows the pointer. A press and release without moving still clicks |
+| `.on_drop::<T>(handler)` | Receive a `T` released over the div |
+| `.on_drag_over::<T>(handler)` | `true` when a drag of `T` moves over the div, `false` when it leaves, drops or is cancelled |
+| `.on_drop_files(handler)` | Receive files dropped from Finder or another app (a drag of `ExternalPaths`) |
+
+Headless sessions drive in-app drags with `pointer_down` / `pointer_move` /
+`pointer_up` and file drags with `dispatch_file_drag(FileDragEvent)`.
+
 ---
 
 ### Text

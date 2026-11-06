@@ -447,6 +447,10 @@ where
                     context.mark_redraw_from(RedrawSource::PlatformInput);
                     ordered_input_events.push(OrderedInputEvent::Text(command));
                 }
+                MacWindowEvent::FileDrag(event) => {
+                    context.mark_redraw_from(RedrawSource::PlatformInput);
+                    ordered_input_events.push(OrderedInputEvent::FileDrag(event));
+                }
                 // The app loop takes display ticks before windows see events.
                 MacWindowEvent::DisplayTick => {}
                 MacWindowEvent::Platform(event) => {
@@ -858,6 +862,7 @@ pub(crate) enum OrderedInputEvent {
     Key { is_down: bool, event: KeyEvent },
     Text(crate::core::text_editing::TextInputCommand),
     Accessibility(MacAccessibilityActionRequest),
+    FileDrag(crate::core::drag::FileDragEvent),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

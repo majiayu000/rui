@@ -93,6 +93,14 @@ where
                     RedrawSource::Element,
                 )
             }
+            OrderedInputEvent::FileDrag(event) => {
+                let dispatch = presenter.dispatch_file_drag(event);
+                (
+                    dispatch.stopped,
+                    dispatch.redraw_requested,
+                    RedrawSource::Element,
+                )
+            }
             OrderedInputEvent::Scroll(event) => {
                 let (handled, redraw_requested) = presenter
                     .with_event_context(|root, event_cx| root.handle_scroll_event(event_cx, event));

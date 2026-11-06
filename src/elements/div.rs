@@ -10,7 +10,7 @@ use crate::core::style::{
 use crate::core::text_editing::{TextInputCommand, TextInputEvent};
 use crate::elements::element::{
     AnyElement, Capabilities, Element, EventContext, LayoutContext, PaintContext, PointerEvent,
-    PointerEventKind, dispatch_action_to_children, style_to_taffy,
+    PointerEventKind, StableId, dispatch_action_to_children, style_to_taffy,
 };
 use crate::elements::text::{FontWeight, TextStyleRefinement};
 use crate::renderer::Primitive;
@@ -27,6 +27,8 @@ pub struct Div {
     children: SmallVec<[AnyElement; 4]>,
     on_click: Option<Box<dyn Fn()>>,
     on_hover: Option<Box<dyn Fn(bool)>>,
+    /// Drag source and drop target handlers, when it has any.
+    drag: Option<Box<drag::DragHandlers>>,
     hovered: bool,
     layout_node: Option<NodeId>,
     child_nodes: SmallVec<[NodeId; 4]>,
@@ -41,6 +43,7 @@ impl Div {
             children: SmallVec::new(),
             on_click: None,
             on_hover: None,
+            drag: None,
             hovered: false,
             layout_node: None,
             child_nodes: SmallVec::new(),
@@ -461,6 +464,10 @@ impl Element for Div {
         self.id
     }
 
+    fn stable_id_mut(&mut self) -> Option<&mut StableId> {
+        self.drag.as_mut().map(|drag| &mut drag.identity)
+    }
+
     fn style(&self) -> &Style {
         &self.style
     }
@@ -471,7 +478,9 @@ impl Element for Div {
         // still clears focus, so presses are always delivered.
         Capabilities {
             pure: true,
-            pointer_inert: self.on_click.is_none() && self.on_hover.is_none(),
+            pointer_inert: self.on_click.is_none()
+                && self.on_hover.is_none()
+                && self.drag.is_none(),
         }
     }
 
@@ -482,8 +491,10 @@ impl Element for Div {
         // Handlers cannot be compared, so a div with any keeps the new instance.
         self.on_click.is_none()
             && self.on_hover.is_none()
+            && self.drag.is_none()
             && previous.on_click.is_none()
             && previous.on_hover.is_none()
+            && previous.drag.is_none()
             && self.id == previous.id
             && self.style == previous.style
             && self.text_style == previous.text_style
@@ -583,6 +594,8 @@ impl Element for Div {
     fn handle_pointer_event(&mut self, cx: &mut EventContext, event: &PointerEvent) -> bool {
         let is_move = matches!(event.kind, PointerEventKind::Move);
         let is_press = matches!(event.kind, PointerEventKind::Down);
+        // A release that ends a drag drops instead of clicking.
+        let dragging = cx.is_dragging();
         let mut handled = false;
 
         for (child, node) in self
@@ -617,11 +630,20 @@ impl Element for Div {
             cx.clear_focus();
         }
 
-        if !handled && matches!(event.kind, PointerEventKind::Up) && inside {
-            if let Some(handler) = &self.on_click {
-                handler();
-                handled = true;
-            }
+        if let Some(drag) = &mut self.drag
+            && drag.handle_pointer_event(cx, event, inside, handled)
+        {
+            handled = true;
+        }
+
+        if !handled
+            && matches!(event.kind, PointerEventKind::Up)
+            && inside
+            && !dragging
+            && let Some(handler) = &self.on_click
+        {
+            handler();
+            handled = true;
         }
 
         handled
@@ -749,5 +771,6 @@ pub fn div() -> Div {
     Div::new()
 }
 
+mod drag;
 #[cfg(test)]
 mod tests;
