@@ -138,8 +138,9 @@ cargo run --example counter
 ```
 
 It displays the current count and attaches `on_click` handlers to both buttons.
-Each handler updates the shared count and calls `cx.notifier().notify()` to
-rebuild the view. Use that complete example when adding state to your app.
+Each handler uses `cx.listener` to update ordinary view state; the owning view
+then rebuilds automatically. See [Getting started with state and events](docs/getting-started.md)
+for a complete application and text/entity update examples.
 
 ### Feature Cards
 

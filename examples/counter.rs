@@ -1,23 +1,16 @@
 //! Counter example - demonstrates stateful view rendering
 
 use rui::prelude::*;
-use std::cell::Cell;
-use std::rc::Rc;
 
 #[derive(Default)]
 struct CounterView {
-    count: Rc<Cell<i32>>,
+    count: i32,
 }
 
 impl View for CounterView {
     type Element = Div;
 
     fn render(&mut self, cx: &mut ViewContext<Self>) -> Self::Element {
-        let decrement_count = Rc::clone(&self.count);
-        let decrement_notify = cx.notifier();
-        let increment_count = Rc::clone(&self.count);
-        let increment_notify = cx.notifier();
-
         div()
             .w(400.0)
             .h(300.0)
@@ -37,7 +30,7 @@ impl View for CounterView {
                     .items_center()
                     .justify_center()
                     .child(
-                        text(format!("{}", self.count.get()))
+                        text(format!("{}", self.count))
                             .size(48.0)
                             .bold()
                             .color(Color::WHITE),
@@ -47,14 +40,18 @@ impl View for CounterView {
                 div()
                     .flex_row()
                     .gap(16.0)
-                    .child(button("-").danger().large().on_click(move || {
-                        decrement_count.set(decrement_count.get() - 1);
-                        decrement_notify.notify();
-                    }))
-                    .child(button("+").success().large().on_click(move || {
-                        increment_count.set(increment_count.get() + 1);
-                        increment_notify.notify();
-                    })),
+                    .child(
+                        button("-")
+                            .danger()
+                            .large()
+                            .on_click(cx.listener(|this, _| this.count -= 1)),
+                    )
+                    .child(
+                        button("+")
+                            .success()
+                            .large()
+                            .on_click(cx.listener(|this, _| this.count += 1)),
+                    ),
             )
     }
 }
