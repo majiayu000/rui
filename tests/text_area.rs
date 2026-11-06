@@ -80,7 +80,7 @@ fn text_area_supports_multiline_editing_ime_and_clipboard() {
     must(area.apply_key_event(&shifted_key_event(KeyCode::ArrowLeft)));
     let mut clipboard = MemoryClipboard::new();
     assert!(must(area.copy_selection_to(&mut clipboard)));
-    assert_eq!(clipboard.text(), "好");
+    assert_eq!(clipboard.text(), Some("好"));
 }
 
 #[test]

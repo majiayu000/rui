@@ -1,11 +1,14 @@
 //! Text element for rendering text
 
 use crate::core::ElementId;
+use crate::core::accessibility::{
+    AccessibilityContext, AccessibilityError, AccessibilityNode, AccessibilityRole,
+};
 use crate::core::color::Color;
 use crate::core::geometry::Bounds;
 use crate::core::style::Style;
 use crate::elements::element::{
-    Capabilities, Element, LayoutContext, PaintContext, TextWrapRequest, WrappedLines,
+    Capabilities, Element, LayoutContext, PaintContext, StableId, TextWrapRequest, WrappedLines,
     style_to_taffy,
 };
 use crate::renderer::Primitive;
@@ -119,9 +122,12 @@ struct OwnTextStyle {
 ///
 /// Text is one line by default and sized to its content. [`Text::wrap`] makes
 /// it wrap to the width its container offers, and [`Text::max_lines`] cuts it
-/// off with an ellipsis.
+/// off with an ellipsis. [`Text::accessible`] exposes it to assistive
+/// technology.
 pub struct Text {
     id: Option<ElementId>,
+    /// Set by [`Text::accessible`]: the id of its accessibility node.
+    accessible: Option<StableId>,
     content: String,
     style: Style,
     color: Color,
@@ -142,6 +148,7 @@ impl Text {
         let defaults = TextStyle::default();
         Self {
             id: None,
+            accessible: None,
             content: content.into(),
             style: Style::new(),
             color: defaults.color,
@@ -159,6 +166,17 @@ impl Text {
 
     pub fn id(mut self, id: ElementId) -> Self {
         self.id = Some(id);
+        if self.accessible.is_some() {
+            self.accessible = Some(StableId::explicit(id));
+        }
+        self
+    }
+
+    /// Expose the text as an accessibility node labelled with its content,
+    /// for text that is the only description of what it sits in. Such text is
+    /// laid out and painted every frame: it registers an accessibility region.
+    pub fn accessible(mut self) -> Self {
+        self.accessible = Some(self.id.map_or_else(StableId::new, StableId::explicit));
         self
     }
 
@@ -315,7 +333,11 @@ impl Text {
 
 impl Element for Text {
     fn id(&self) -> Option<ElementId> {
-        self.id
+        self.accessible.map(|id| id.get()).or(self.id)
+    }
+
+    fn stable_id_mut(&mut self) -> Option<&mut StableId> {
+        self.accessible.as_mut()
     }
 
     fn style(&self) -> &Style {
@@ -323,6 +345,11 @@ impl Element for Text {
     }
 
     fn capabilities(&self) -> Capabilities {
+        if self.accessible.is_some() {
+            // Its accessibility region is registered in paint, which a
+            // replay would skip.
+            return Capabilities::default();
+        }
         Capabilities::PURE_INERT
     }
 
@@ -386,6 +413,9 @@ impl Element for Text {
     }
 
     fn paint(&mut self, cx: &mut PaintContext) {
+        if let Some(id) = self.accessible {
+            cx.register_accessibility_region(id.get(), cx.bounds());
+        }
         if self.content.is_empty() || self.font_size <= 0.0 || self.line_height <= 0.0 {
             return;
         }
@@ -410,6 +440,22 @@ impl Element for Text {
             );
             cx.paint(self.primitive(line_bounds, line.content.clone()));
         }
+    }
+
+    fn accessibility(
+        &self,
+        cx: &AccessibilityContext,
+    ) -> Result<Option<AccessibilityNode>, AccessibilityError> {
+        let Some(id) = self.accessible.map(|id| id.get()) else {
+            return Ok(None);
+        };
+        if self.content.trim().is_empty() {
+            return Ok(None);
+        }
+        let node = AccessibilityNode::new(id, AccessibilityRole::Text)
+            .with_label(self.content.clone())
+            .with_focused(cx.a11y_has_focus(id));
+        Ok(Some(node))
     }
 }
 

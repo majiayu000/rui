@@ -7,6 +7,7 @@ use crate::core::accessibility::{
 use crate::core::color::Color;
 use crate::core::geometry::{Bounds, Edges};
 use crate::core::style::{Corners, Dimension as StyleDimension, Style};
+use crate::elements::element::StableId;
 use crate::elements::element::{
     Element, LayoutContext, PaintContext, style_dimension_or, style_to_taffy,
 };
@@ -14,7 +15,7 @@ use crate::renderer::Primitive;
 use taffy::prelude::*;
 
 pub struct ProgressBar {
-    id: ElementId,
+    id: StableId,
     value: f32,
     size: ControlSize,
     width: StyleDimension,
@@ -36,7 +37,7 @@ impl ProgressBar {
         style.border.radius = Corners::all(theme.control_radius());
 
         Self {
-            id: ElementId::new(),
+            id: StableId::new(),
             value: value.clamp(0.0, 1.0),
             size: ControlSize::default(),
             width: StyleDimension::px(220.0),
@@ -51,7 +52,7 @@ impl ProgressBar {
     }
 
     pub fn id(mut self, id: ElementId) -> Self {
-        self.id = id;
+        self.id = StableId::explicit(id);
         self
     }
 
@@ -140,7 +141,11 @@ impl ProgressBar {
 
 impl Element for ProgressBar {
     fn id(&self) -> Option<ElementId> {
-        Some(self.id)
+        Some(self.id.get())
+    }
+
+    fn stable_id_mut(&mut self) -> Option<&mut StableId> {
+        Some(&mut self.id)
     }
 
     fn style(&self) -> &Style {
@@ -163,7 +168,7 @@ impl Element for ProgressBar {
 
     fn paint(&mut self, cx: &mut PaintContext) {
         let bounds = cx.bounds();
-        cx.register_accessibility_region(self.id, bounds);
+        cx.register_accessibility_region(self.id.get(), bounds);
         let radius = self.style.border.radius;
         let state = self.state.into();
         let track = self.background.unwrap_or(self.theme.colors.progress_track);
@@ -229,7 +234,7 @@ impl Element for ProgressBar {
         let label = self.accessibility_label.as_deref().unwrap_or("Progress");
         Ok(Some(
             AccessibilityNode::label_required(
-                self.id,
+                self.id.get(),
                 AccessibilityRole::ProgressIndicator,
                 label,
             )?

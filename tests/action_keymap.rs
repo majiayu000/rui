@@ -203,6 +203,9 @@ fn keymap_maps_standard_actions_from_key_events() {
         (KeyCode::Enter, Modifiers::meta(), StandardAction::Submit),
         (KeyCode::Escape, Modifiers::none(), StandardAction::Cancel),
         (KeyCode::A, Modifiers::meta(), StandardAction::SelectAll),
+        (KeyCode::C, Modifiers::meta(), StandardAction::Copy),
+        (KeyCode::X, Modifiers::meta(), StandardAction::Cut),
+        (KeyCode::V, Modifiers::meta(), StandardAction::Paste),
         (
             KeyCode::P,
             Modifiers::meta(),

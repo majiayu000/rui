@@ -2,6 +2,7 @@
 
 mod accessibility;
 mod app;
+mod clipboard;
 mod display_link;
 mod events;
 mod frame;

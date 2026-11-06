@@ -2,8 +2,10 @@
 
 use crate::core::event::{KeyCode, KeyEvent, Modifiers, MouseButton, ScrollEvent};
 use crate::core::geometry::{Point, Size};
+use crate::core::text_editing::Clipboard;
 use crate::core::window::WindowOptions;
 use crate::platform::mac::MacAccessibilityBridge;
+use crate::platform::mac::clipboard::MacPasteboard;
 use crate::platform::mac::events::{
     MAC_REDRAW_EVENT_DATA, MacApplicationEvent, MacWindowEvent, append_platform_events,
     application_event, post_application_event,
@@ -23,8 +25,8 @@ use objc2::MainThreadOnly;
 use objc2::msg_send;
 use objc2::rc::Retained;
 use objc2_app_kit::{
-    NSApplication, NSEvent, NSEventMask, NSEventModifierFlags, NSEventType, NSPasteboard,
-    NSPasteboardTypeString, NSWindow, NSWindowStyleMask,
+    NSApplication, NSEvent, NSEventMask, NSEventModifierFlags, NSEventType, NSWindow,
+    NSWindowStyleMask,
 };
 use objc2_foundation::{NSDate, NSDefaultRunLoopMode, NSPoint, NSRect, NSSize, NSString};
 use objc2_quartz_core::CAMetalLayer;
@@ -423,26 +425,16 @@ impl PlatformWindow for MacWindow {
     }
 
     fn read_clipboard_text(&mut self) -> Result<String, PlatformWindowError> {
-        let pasteboard = NSPasteboard::generalPasteboard();
-        clipboard_text_or_error(
-            pasteboard
-                .stringForType(unsafe { NSPasteboardTypeString })
-                .map(|value| value.to_string()),
-        )
+        let text = MacPasteboard
+            .read_text()
+            .map_err(|err| PlatformWindowError::backend("macos", err.to_string()))?;
+        clipboard_text_or_error(text)
     }
 
     fn write_clipboard_text(&mut self, text: &str) -> Result<(), PlatformWindowError> {
-        let pasteboard = NSPasteboard::generalPasteboard();
-        pasteboard.clearContents();
-        let value = NSString::from_str(text);
-        if pasteboard.setString_forType(&value, unsafe { NSPasteboardTypeString }) {
-            Ok(())
-        } else {
-            Err(PlatformWindowError::backend(
-                "macos",
-                "failed to write text to the general pasteboard",
-            ))
-        }
+        MacPasteboard
+            .write_text(text)
+            .map_err(|err| PlatformWindowError::backend("macos", err.to_string()))
     }
 
     fn poll_events(&mut self) -> Result<Vec<PlatformWindowEvent>, PlatformWindowError> {

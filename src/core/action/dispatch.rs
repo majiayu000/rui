@@ -11,6 +11,7 @@ pub(crate) fn route_key_event<E: Element>(
 ) -> bool {
     let action = app.keymap().action_for_event(event).cloned();
     if let Some(action) = action {
+        cx.set_clipboard(app.clipboard());
         let outcome = root.dispatch_action(cx, &action);
         if outcome.is_handled() {
             return true;

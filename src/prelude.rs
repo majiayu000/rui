@@ -18,9 +18,9 @@ pub use crate::core::{
     geometry::{Bounds, Edges, Point, Rect, Size},
     style::{Background, BorderStyle, Corners, Dimension, DimensionConstraints, Style},
     text_editing::{
-        CaretGeometry, Clipboard, ClipboardError, MemoryClipboard, SelectionRect, TextComposition,
-        TextEditBuffer, TextEditError, TextEditLayout, TextEditOutcome, TextInputEvent, TextLine,
-        TextRange, TextSelection,
+        CaretGeometry, Clipboard, ClipboardError, ClipboardItem, MemoryClipboard, SelectionRect,
+        TextComposition, TextEditBuffer, TextEditError, TextEditLayout, TextEditOutcome,
+        TextInputEvent, TextLine, TextRange, TextSelection,
     },
 };
 

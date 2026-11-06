@@ -12,17 +12,19 @@ use crate::core::accessibility::{
 use crate::core::action::{ActionId, ActionOutcome, StandardAction};
 use crate::core::geometry::Point;
 use crate::core::style::Style;
+use crate::elements::element::StableId;
 use crate::elements::element::{
     Element, EventContext, LayoutContext, PaintContext, PointerEvent, PointerEventKind,
     style_to_taffy,
 };
 use crate::elements::text::TextAlign;
+use std::any::TypeId;
 use std::collections::HashSet;
 use taffy::prelude::*;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DataListItem {
-    id: ElementId,
+    id: StableId,
     value: String,
     label: String,
     detail: Option<String>,
@@ -39,7 +41,7 @@ impl DataListItem {
         require_non_empty(&label, "data list item label must not be empty");
 
         Self {
-            id: ElementId::new(),
+            id: StableId::new(),
             value,
             label,
             detail: None,
@@ -50,7 +52,7 @@ impl DataListItem {
     }
 
     pub fn id(mut self, id: ElementId) -> Self {
-        self.id = id;
+        self.id = StableId::explicit(id);
         self
     }
 
@@ -106,7 +108,7 @@ impl From<(&str, &str, &str)> for DataListItem {
 }
 
 pub struct DataList {
-    id: ElementId,
+    id: StableId,
     items: Vec<DataListItem>,
     selected_value: Option<String>,
     accessibility_label: Option<String>,
@@ -130,7 +132,7 @@ impl DataList {
         let items: Vec<DataListItem> = items.into_iter().map(Into::into).collect();
         validate_unique_item_values(&items);
         Self {
-            id: ElementId::new(),
+            id: StableId::new(),
             items,
             selected_value: None,
             accessibility_label: None,
@@ -145,7 +147,7 @@ impl DataList {
     }
 
     pub fn id(mut self, id: ElementId) -> Self {
-        self.id = id;
+        self.id = StableId::explicit(id);
         self
     }
 
@@ -284,7 +286,7 @@ impl DataList {
                 handler(&value);
             }
         }
-        cx.announce_accessibility_action(self.id, format!("{label} selected"));
+        cx.announce_accessibility_action(self.id.get(), format!("{label} selected"));
         cx.request_redraw();
         ActionOutcome::handled("advanced_ui.data_list")
     }
@@ -292,7 +294,11 @@ impl DataList {
 
 impl Element for DataList {
     fn id(&self) -> Option<ElementId> {
-        Some(self.id)
+        Some(self.id.get())
+    }
+
+    fn stable_id_mut(&mut self) -> Option<&mut StableId> {
+        Some(&mut self.id)
     }
 
     fn style(&self) -> &Style {
@@ -300,6 +306,15 @@ impl Element for DataList {
     }
 
     fn layout(&mut self, cx: &mut LayoutContext) -> NodeId {
+        // Item ids the app did not set follow the list's stable id.
+        let parent = self.id.get();
+        for (index, item) in self.items.iter_mut().enumerate() {
+            item.id.adopt(ElementId::derived(
+                parent,
+                index as u64,
+                TypeId::of::<DataListItem>(),
+            ));
+        }
         let mut style = style_to_taffy(&self.style);
         style.size.width = Dimension::Length(self.style.width.unwrap_or(DEFAULT_DATA_WIDTH));
         style.size.height = Dimension::Length(
@@ -313,7 +328,7 @@ impl Element for DataList {
 
     fn paint(&mut self, cx: &mut PaintContext) {
         let bounds = cx.bounds();
-        cx.register_hit_region(self.id, bounds);
+        cx.register_hit_region(self.id.get(), bounds);
         paint_surface(
             cx,
             bounds,
@@ -327,7 +342,7 @@ impl Element for DataList {
             let Some(row_bounds) = row_bounds(bounds, self.row_height, index) else {
                 continue;
             };
-            cx.register_hit_region(item.id, row_bounds);
+            cx.register_hit_region(item.id.get(), row_bounds);
             paint_data_row(
                 cx,
                 row_bounds,
@@ -361,17 +376,17 @@ impl Element for DataList {
                     role: AccessibilityRole::DataList,
                 })?;
         let mut node =
-            AccessibilityNode::label_required(self.id, AccessibilityRole::DataList, label)?
+            AccessibilityNode::label_required(self.id.get(), AccessibilityRole::DataList, label)?
                 .with_enabled(!self.state.disabled())
                 .with_read_only(self.state.read_only())
                 .with_invalid(self.state.invalid())
-                .with_focused(cx.a11y_has_focus(self.id));
+                .with_focused(cx.a11y_has_focus(self.id.get()));
         if let Some(selected) = &self.selected_value {
             node = node.with_value(selected.clone());
         }
         for item in &self.items {
             let mut child = AccessibilityNode::label_required(
-                item.id,
+                item.id.get(),
                 AccessibilityRole::DataListItem,
                 &item.label,
             )?
@@ -380,7 +395,7 @@ impl Element for DataList {
             .with_enabled(!self.state.disabled() && !item.disabled)
             .with_read_only(self.state.read_only() || item.read_only)
             .with_invalid(self.state.invalid() || item.invalid)
-            .with_focused(cx.a11y_has_focus(item.id));
+            .with_focused(cx.a11y_has_focus(item.id.get()));
             if self.state.can_activate() && item.can_activate() {
                 child = child.with_action(AccessibilityAction::Activate);
             }
@@ -420,7 +435,7 @@ impl Element for DataList {
         }
         let Some(index) = cx
             .focused_id()
-            .and_then(|focused| self.items.iter().position(|item| item.id == focused))
+            .and_then(|focused| self.items.iter().position(|item| item.id.get() == focused))
         else {
             return ActionOutcome::Ignored;
         };
@@ -428,7 +443,7 @@ impl Element for DataList {
     }
 
     fn contains_id(&self, id: ElementId) -> bool {
-        self.id == id || self.items.iter().any(|item| item.id == id)
+        self.id.get() == id || self.items.iter().any(|item| item.id.get() == id)
     }
 }
 

@@ -8,6 +8,7 @@ use crate::core::accessibility::{
 use crate::core::action::{ActionId, ActionOutcome, StandardAction};
 use crate::core::geometry::{Bounds, Edges};
 use crate::core::style::{Corners, Style};
+use crate::elements::element::StableId;
 use crate::elements::element::{
     Element, EventContext, LayoutContext, PaintContext, PointerEvent, PointerEventKind,
     style_to_taffy,
@@ -16,7 +17,7 @@ use crate::renderer::Primitive;
 use taffy::prelude::*;
 
 pub struct Checkbox {
-    id: ElementId,
+    id: StableId,
     label: String,
     checked: bool,
     size: ControlSize,
@@ -32,7 +33,7 @@ impl Checkbox {
         require_non_empty(&label, "advanced checkbox label must not be empty");
 
         Self {
-            id: ElementId::new(),
+            id: StableId::new(),
             label,
             checked: false,
             size: ControlSize::default(),
@@ -44,7 +45,7 @@ impl Checkbox {
     }
 
     pub fn id(mut self, id: ElementId) -> Self {
-        self.id = id;
+        self.id = StableId::explicit(id);
         self
     }
 
@@ -106,7 +107,11 @@ impl Checkbox {
 
 impl Element for Checkbox {
     fn id(&self) -> Option<ElementId> {
-        Some(self.id)
+        Some(self.id.get())
+    }
+
+    fn stable_id_mut(&mut self) -> Option<&mut StableId> {
+        Some(&mut self.id)
     }
 
     fn style(&self) -> &Style {
@@ -126,7 +131,7 @@ impl Element for Checkbox {
 
     fn paint(&mut self, cx: &mut PaintContext) {
         let bounds = cx.bounds();
-        cx.register_hit_region(self.id, bounds);
+        cx.register_hit_region(self.id.get(), bounds);
 
         let control_state = self.state();
         let indicator = self.theme.indicator_extent(self.size);
@@ -201,14 +206,17 @@ impl Element for Checkbox {
         cx: &AccessibilityContext,
     ) -> Result<Option<AccessibilityNode>, AccessibilityError> {
         let value = if self.checked { "checked" } else { "unchecked" };
-        let mut node =
-            AccessibilityNode::label_required(self.id, AccessibilityRole::Checkbox, &self.label)?
-                .value_required(value)?
-                .with_checked(self.checked)
-                .with_enabled(!self.state.disabled())
-                .with_read_only(self.state.read_only())
-                .with_invalid(self.state.invalid())
-                .with_focused(cx.a11y_has_focus(self.id));
+        let mut node = AccessibilityNode::label_required(
+            self.id.get(),
+            AccessibilityRole::Checkbox,
+            &self.label,
+        )?
+        .value_required(value)?
+        .with_checked(self.checked)
+        .with_enabled(!self.state.disabled())
+        .with_read_only(self.state.read_only())
+        .with_invalid(self.state.invalid())
+        .with_focused(cx.a11y_has_focus(self.id.get()));
         if self.state.can_activate() {
             node = node.with_action(AccessibilityAction::Activate);
         }
@@ -235,7 +243,7 @@ impl Element for Checkbox {
                     } else {
                         format!("{} unchecked", self.label)
                     };
-                    cx.announce_accessibility_action(self.id, message);
+                    cx.announce_accessibility_action(self.id.get(), message);
                     cx.request_redraw();
                     true
                 } else {
@@ -246,7 +254,7 @@ impl Element for Checkbox {
     }
 
     fn handle_action(&mut self, cx: &mut EventContext, action: &ActionId) -> ActionOutcome {
-        if !cx.is_focused(Some(self.id)) || !self.state.can_activate() {
+        if !cx.is_focused(Some(self.id.get())) || !self.state.can_activate() {
             return ActionOutcome::Ignored;
         }
 
@@ -261,7 +269,7 @@ impl Element for Checkbox {
                 } else {
                     format!("{} unchecked", self.label)
                 };
-                cx.announce_accessibility_action(self.id, message);
+                cx.announce_accessibility_action(self.id.get(), message);
                 cx.request_redraw();
                 ActionOutcome::handled("advanced_ui.checkbox")
             }

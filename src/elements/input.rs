@@ -331,7 +331,7 @@ impl Input {
         Ok(outcome)
     }
 
-    pub fn copy_selection_to<C: Clipboard>(
+    pub fn copy_selection_to<C: Clipboard + ?Sized>(
         &mut self,
         clipboard: &mut C,
     ) -> Result<bool, TextEditError> {
@@ -342,7 +342,7 @@ impl Input {
         self.editor.copy_selection_to(clipboard)
     }
 
-    pub fn cut_selection_to<C: Clipboard>(
+    pub fn cut_selection_to<C: Clipboard + ?Sized>(
         &mut self,
         clipboard: &mut C,
     ) -> Result<TextEditOutcome, TextEditError> {
@@ -357,7 +357,7 @@ impl Input {
         Ok(outcome)
     }
 
-    pub fn paste_from<C: Clipboard>(
+    pub fn paste_from<C: Clipboard + ?Sized>(
         &mut self,
         clipboard: &mut C,
     ) -> Result<TextEditOutcome, TextEditError> {
@@ -370,6 +370,39 @@ impl Input {
         self.sync_state_from_editor();
         self.emit_change_if_needed(outcome.changed);
         Ok(outcome)
+    }
+
+    /// Copy, cut or paste through the clipboard that key dispatch attached to `cx`.
+    fn run_clipboard_action(
+        &mut self,
+        cx: &mut EventContext,
+        action: StandardAction,
+    ) -> ActionOutcome {
+        let Some(mut clipboard) = cx.clipboard() else {
+            log::error!("input {action:?} ran without a clipboard in its event context");
+            return ActionOutcome::Ignored;
+        };
+        let result = match action {
+            StandardAction::Copy => self.copy_selection_to(&mut *clipboard),
+            StandardAction::Cut => self
+                .cut_selection_to(&mut *clipboard)
+                .map(|outcome| outcome.changed),
+            _ => self
+                .paste_from(&mut *clipboard)
+                .map(|outcome| outcome.changed),
+        };
+        drop(clipboard);
+        match result {
+            Ok(true) => {
+                cx.request_redraw();
+                ActionOutcome::handled("input")
+            }
+            Ok(false) => ActionOutcome::Ignored,
+            Err(err) => {
+                log::error!("input {action:?} failed: {err}");
+                ActionOutcome::Ignored
+            }
+        }
     }
 
     fn normalize_cursor_position(&self) -> usize {
@@ -738,6 +771,13 @@ impl Element for Input {
         if *action == StandardAction::Cancel {
             self.emit_cancel();
             return ActionOutcome::handled("input");
+        }
+
+        if matches!(
+            action,
+            StandardAction::Copy | StandardAction::Cut | StandardAction::Paste
+        ) {
+            return self.run_clipboard_action(cx, *action);
         }
 
         if *action == StandardAction::SelectAll {

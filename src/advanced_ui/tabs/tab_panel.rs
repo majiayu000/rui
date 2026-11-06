@@ -8,6 +8,7 @@ use crate::core::color::Color;
 use crate::core::event::ScrollEvent;
 use crate::core::style::Style;
 use crate::core::text_editing::{TextInputCommand, TextInputEvent, TextInputSnapshot};
+use crate::elements::element::StableId;
 use crate::elements::element::{
     AnyElement, Element, EventContext, LayoutContext, PaintContext, PointerEvent,
 };
@@ -16,7 +17,7 @@ use crate::renderer::text::TextMeasureCache;
 use taffy::prelude::NodeId;
 
 pub struct TabPanel {
-    id: ElementId,
+    id: StableId,
     value: String,
     accessibility_label: Option<String>,
     inner: Div,
@@ -30,13 +31,12 @@ impl TabPanel {
     pub fn new(value: impl Into<String>, child: impl Into<AnyElement>) -> Self {
         let value = value.into();
         require_non_empty(&value, "tab panel value must not be empty");
-        let id = ElementId::new();
         let theme = Theme::default();
         Self {
-            id,
+            id: StableId::new(),
             value,
             accessibility_label: None,
-            inner: base_tab_panel_div(id, theme).child(child),
+            inner: base_tab_panel_div(theme).child(child),
             theme,
             custom_background: false,
             custom_border: false,
@@ -45,7 +45,7 @@ impl TabPanel {
     }
 
     pub fn id(mut self, id: ElementId) -> Self {
-        self.id = id;
+        self.id = StableId::explicit(id);
         self.inner = self.inner.id(id);
         self
     }
@@ -114,9 +114,9 @@ impl TabPanel {
             .unwrap_or(fallback_label);
         let children = Element::accessibility_nodes(&self.inner, cx)?;
         Ok(vec![
-            AccessibilityNode::label_required(self.id, AccessibilityRole::TabPanel, label)?
+            AccessibilityNode::label_required(self.id.get(), AccessibilityRole::TabPanel, label)?
                 .value_required(&self.value)?
-                .with_focused(cx.a11y_has_focus(self.id))
+                .with_focused(cx.a11y_has_focus(self.id.get()))
                 .with_children(children),
         ])
     }
@@ -124,7 +124,11 @@ impl TabPanel {
 
 impl Element for TabPanel {
     fn id(&self) -> Option<ElementId> {
-        Some(self.id)
+        Some(self.id.get())
+    }
+
+    fn stable_id_mut(&mut self) -> Option<&mut StableId> {
+        Some(&mut self.id)
     }
 
     fn style(&self) -> &Style {
@@ -136,7 +140,7 @@ impl Element for TabPanel {
     }
 
     fn paint(&mut self, cx: &mut PaintContext) {
-        cx.register_accessibility_region(self.id, cx.bounds());
+        cx.register_accessibility_region(self.id.get(), cx.bounds());
         self.inner.paint(cx);
     }
 
@@ -150,9 +154,9 @@ impl Element for TabPanel {
     ) -> Result<Option<AccessibilityNode>, AccessibilityError> {
         let label = self.accessibility_label.as_deref().unwrap_or(&self.value);
         Ok(Some(
-            AccessibilityNode::label_required(self.id, AccessibilityRole::TabPanel, label)?
+            AccessibilityNode::label_required(self.id.get(), AccessibilityRole::TabPanel, label)?
                 .value_required(&self.value)?
-                .with_focused(cx.a11y_has_focus(self.id)),
+                .with_focused(cx.a11y_has_focus(self.id.get())),
         ))
     }
 
@@ -197,13 +201,12 @@ impl Element for TabPanel {
     }
 
     fn contains_id(&self, id: ElementId) -> bool {
-        self.id == id || self.inner.contains_id(id)
+        self.id.get() == id || self.inner.contains_id(id)
     }
 }
 
-fn base_tab_panel_div(id: ElementId, theme: Theme) -> Div {
+fn base_tab_panel_div(theme: Theme) -> Div {
     div()
-        .id(id)
         .flex_col()
         .p(12.0)
         .bg(theme.colors.surface)
