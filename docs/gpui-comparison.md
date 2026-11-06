@@ -51,6 +51,15 @@ to Metal without waiting for the GPU.
 | `resize_full` | the 2000-row list | width alternates 1440 / 1280 | new viewport size | `window.resize` + `window.bounds_changed`, as the platform resize callback does |
 | `resize_virtual` | the 1000-row virtual list | width alternates 1440 / 1280 | same | same |
 | `startup` | the 2000-row list | none | see below | see below |
+| `editor_scroll` | a 10 000-line code view: 20 px lines of 13 px SF Mono, a 64 px gutter of line numbers, 11 colored tokens per line (a comment every ninth line), the cursor's line highlighted; starts at line 5001 | scrolls down one line; the cursor moves with it | `virtual_list` of rows: gutter `text` + `styled_text` of `span(..).color(..)` | `uniform_list` of rows: gutter string + `StyledText::with_highlights` |
+| `editor_edit` | same, not scrolling | the cursor line's first identifier ends in a new letter | the line's tokens change in place | the line's tokens change and its `SharedString` and highlights are rebuilt |
+
+The editor cases use the same font file on both sides,
+`/System/Library/Fonts/SFNSMono.ttf`. RUI calls it "SF Mono"; Core Text hides it from
+apps, so the GPUI fixture loads that file with `TextSystem::add_fonts` and uses the
+family name inside it, ".SF NS Mono". It panics if GPUI resolves the family to
+anything else. Both sides keep the document as tokens and build only the visible rows
+each frame.
 
 `canvas` is the idiomatic tool for a dense grid on both sides; `canvas_grid` in RUI's
 examples and GPUI's `primitives` bench paint this way.
@@ -161,6 +170,45 @@ and its footprint is lower in every case. That is the claim, and its limits:
   Linux, Windows or the web, where GPUI runs and RUI does not.
 - **Fonts differ:** RUI's default is Arial, GPUI's SF Pro.
 
+
+## Editor-scale fixture (RUI `a31e116`)
+
+Same machine and GPUI revision as the final results above. Three rounds, each case in a
+fresh process. Load average 41 at the start and 56 at the end (other sessions were
+building), so trust instructions and allocations over milliseconds here.
+`list_virtual_1k` ran alongside as a control and matched the final results (0.94 M vs
+3.92–4.02 M).
+
+| Case | Side | Instructions (M) / frame | ms p50 | ms p95 | Allocations / frame | Draw calls | Instances | Footprint (MB) |
+|---|---|---|---|---|---|---|---|---|
+| editor_scroll | RUI | 7.79–7.80 | 0.50–0.52 | 0.52–0.60 | 4 456 | 1 | 1 470 | 62–64 |
+| editor_scroll | GPUI | 8.47–8.55 | 0.66–0.77 | 0.71–1.87 | 1 636 | 2 | 1 918 | 82–84 |
+| editor_edit | RUI | 3.57–3.60 | 0.24–0.66 | 0.35–1.00 | 3 283 | 1 | 1 464 | 63–64 |
+| editor_edit | GPUI | 8.51–8.66 | 0.65–1.57 | 0.69–4.05 | 1 636 | 2 | 1 908 | 83–113 |
+
+RUI GPU time: 0.24–0.29 ms (scroll) and 0.17–0.52 ms (edit) per frame.
+
+| Case | By instructions | By wall p50 |
+|---|---|---|
+| editor_scroll | RUI ahead 1.1x | RUI ahead 1.4x |
+| editor_edit | RUI ahead 2.4x | tie (ranges overlap) |
+
+### Verdict
+
+- **Editing** a visible line costs RUI 2.4x fewer instructions than GPUI.
+- **Scrolling** is a near tie by instructions (RUI 8% ahead). That is the smallest
+  margin in the suite; every other case is 1.8x or more.
+- **Allocations are behind on both cases**: 2.7x on scroll, 2.0x on edit.
+  `span(..)` takes an owned `String`, so each visible row allocates a string per token
+  (11 per token-run row, 49 rows built). GPUI clones one reference-counted `SharedString`
+  and a highlight `Vec` per row.
+- **Footprint** is lower on RUI in both cases (62–64 MB vs 82–113 MB).
+
+Why scrolling costs RUI twice what an edit does: in a sample of `editor_scroll`, about
+30% of the main thread hashes `RichSpan`s with SipHash. The callers are
+`TextMeasureCache::wrapped_rich_size` and `wrap_rich`, which key the styled-text cache
+on every span. Another ~4% is `FrameLru::evict`, which sorts the whole measure cache
+each frame once new lines keep arriving. Neither is fixed here.
 
 ## Run on `ec7660d` (before the remaining lanes)
 
@@ -295,7 +343,7 @@ Where RUI is still behind:
   event; without one, Metal's autoreleased objects grew RUI's footprint past 1.4 GB in
   the resize cases.
 - `virtual_list` builds 2 rows beyond each edge; `uniform_list` builds only the visible
-  rows.
+  rows. In the editor cases that is 49 rows against 45.
 - `list_full_one_row` on RUI is the same frame as `list_full`: RUI has no per-view
   cache, so there is no closer equivalent of GPUI's `.cached()` path.
 - Resize on GPUI calls what its resize callback calls (`window.resize`,
@@ -320,7 +368,8 @@ lookup.
 
 - GPU time on GPUI (see above).
 - Startup to a presented frame in a real on-screen window.
-- Scrolling (offset changing per frame) and input latency.
+- Input latency against GPUI. RUI's own is measured natively since #244
+  (`frame_pacing` latency mode: 24–25 ms event to photon at 120 Hz).
 
 ## Previous run (before #218)
 
