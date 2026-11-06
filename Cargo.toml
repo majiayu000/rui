@@ -89,6 +89,10 @@ path = "examples/glm_chat.rs"
 name = "canvas_grid"
 path = "examples/canvas_grid.rs"
 
+[[example]]
+name = "assets"
+path = "examples/assets.rs"
+
 [[bench]]
 name = "perf_gate"
 path = "benches/perf_gate.rs"
