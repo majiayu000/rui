@@ -175,6 +175,10 @@ where
         self.presenter.profiler()
     }
 
+    pub fn inspector(&self) -> Option<&crate::devtools::Inspector> {
+        self.presenter.inspector()
+    }
+
     pub fn frame(&mut self) -> Result<&HeadlessFrame, HeadlessError> {
         let viewport_size = self.context.viewport_size();
         // Headless supplies no events and no backend, but runs the same stage

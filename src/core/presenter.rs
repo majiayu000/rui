@@ -8,7 +8,7 @@ use crate::core::event::Event;
 use crate::core::frame_pipeline::FrameStageDurations;
 use crate::core::frame_pipeline::{FramePipeline, FramePipelineError};
 use crate::core::geometry::{Bounds, Point, Size};
-use crate::devtools::{Profiler, WindowDevtools};
+use crate::devtools::{Inspector, Profiler, WindowDevtools};
 use crate::elements::Element;
 use crate::elements::element::{
     EventContext, LayoutNodes, PaintContext, PointerEvent, PointerEventKind,
@@ -239,6 +239,11 @@ impl<E> Presenter<E> {
         self.devtools.as_mut()?.profiler_mut()
     }
 
+    /// This window's inspector, while it is on.
+    pub fn inspector(&self) -> Option<&Inspector> {
+        self.devtools.as_ref()?.inspector()
+    }
+
     /// Start or stop this window's devtools as the app asks, before a frame
     /// that will be drawn.
     pub(crate) fn begin_devtools_frame(&mut self, context: &AppContext) {
@@ -251,12 +256,6 @@ impl<E> Presenter<E> {
         self.devtools
             .get_or_insert_default()
             .begin_frame(context.devtools, context.frame_interval());
-    }
-
-    pub(crate) fn paint_devtools_overlay(&mut self) {
-        if let Some(devtools) = self.devtools.as_mut() {
-            devtools.paint_overlay(&mut self.scene, self.laid_out_viewport);
-        }
     }
 
     pub(crate) fn end_devtools_frame(
@@ -351,6 +350,24 @@ where
         Ok(tree)
     }
 
+    pub(crate) fn paint_devtools_overlay(&mut self) {
+        let Some(mut devtools) = self.devtools.take() else {
+            return;
+        };
+        devtools.inspect(|inspector| {
+            let accessibility = self.accessibility_tree();
+            inspector.inspect(
+                &mut self.root,
+                &self.taffy,
+                self.root_bounds,
+                &self.scene,
+                &accessibility,
+            );
+        });
+        devtools.paint_overlay(&mut self.scene, self.laid_out_viewport);
+        self.devtools = Some(devtools);
+    }
+
     pub fn rebuild_if_needed<F>(&mut self, context: &mut AppContext, build_root: &mut F)
     where
         F: FnMut(&mut AppContext) -> E,
@@ -438,6 +455,13 @@ where
     }
 
     pub fn dispatch_pointer_event(&mut self, event: &PointerEvent) -> PointerDispatch {
+        if let Some(dispatch) = self
+            .devtools
+            .as_mut()
+            .and_then(|devtools| devtools.inspect_pointer(event))
+        {
+            return dispatch;
+        }
         // Do not pair the current tree/layout with the previous frame's regions.
         // Only input pays for this early scene collection; the regular paint
         // still follows dispatch so hover/pressed feedback appears this frame.

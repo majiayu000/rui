@@ -1,8 +1,10 @@
 //! A window's devtools: what is drawn over its scene after paint.
 
-use super::{DevtoolsFlags, Profiler, allocations, damage};
+use super::{DevtoolsFlags, Inspector, Profiler, allocations, damage};
 use crate::core::frame_pipeline::FrameStageDurations;
 use crate::core::geometry::{Bounds, Size};
+use crate::core::presenter::PointerDispatch;
+use crate::elements::element::PointerEvent;
 use crate::renderer::Scene;
 use std::time::Duration;
 
@@ -11,6 +13,7 @@ use std::time::Duration;
 pub(crate) struct WindowDevtools {
     profiler: Option<Profiler>,
     damage: bool,
+    inspector: Option<Inspector>,
     /// Where the overlay starts in the scene it was last drawn into.
     overlay_start: Option<usize>,
 }
@@ -24,9 +27,18 @@ impl WindowDevtools {
         self.profiler.as_mut()
     }
 
+    pub(crate) fn inspector(&self) -> Option<&Inspector> {
+        self.inspector.as_ref()
+    }
+
     /// Start or stop tools as `flags` ask, before a frame that will be drawn.
     pub(crate) fn begin_frame(&mut self, flags: DevtoolsFlags, expected_interval: Duration) {
         self.damage = flags.damage;
+        if !flags.inspector {
+            self.inspector = None;
+        } else if self.inspector.is_none() {
+            self.inspector = Some(Inspector::new());
+        }
         match (flags.profiler, &mut self.profiler) {
             (true, Some(profiler)) => profiler.begin_frame(expected_interval),
             (true, None) => self
@@ -35,6 +47,28 @@ impl WindowDevtools {
                 .begin_frame(expected_interval),
             (false, _) => self.profiler = None,
         }
+    }
+
+    /// Let the inspector, if it is on, walk the tree just painted, its
+    /// allocations left out of the profiler's count.
+    pub(crate) fn inspect(&mut self, walk: impl FnOnce(&mut Inspector)) {
+        let Some(inspector) = self.inspector.as_mut() else {
+            return;
+        };
+        let allocations_before = allocations();
+        walk(inspector);
+        if let Some(profiler) = self.profiler.as_mut() {
+            profiler.exclude_allocations(allocations() - allocations_before);
+        }
+    }
+
+    /// The inspector takes pointer events while it is on.
+    pub(crate) fn inspect_pointer(&mut self, event: &PointerEvent) -> Option<PointerDispatch> {
+        let inspector = self.inspector.as_mut()?;
+        Some(PointerDispatch {
+            stopped: true,
+            redraw_requested: inspector.pointer(event),
+        })
     }
 
     /// Draw the overlay over what the app painted.
@@ -55,6 +89,9 @@ impl WindowDevtools {
         self.overlay_start = Some(scene.len());
         if self.damage {
             damage::paint(scene, damage, window);
+        }
+        if let Some(inspector) = self.inspector.as_ref() {
+            inspector.paint(scene, viewport);
         }
         if let Some(profiler) = self.profiler.as_mut() {
             profiler.paint_panel(scene, viewport);
