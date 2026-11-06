@@ -205,7 +205,11 @@ pub trait Element: Any {
         false
     }
 
-    /// Get child elements
+    /// Structural children in ownership order, including temporarily hidden ones.
+    /// Return the same nodes in the same order from `children_mut`. The frame
+    /// uses this structure for view refresh, retention and reconciliation.
+    /// Containers filter visibility separately in layout, events and accessibility.
+    /// Leaf elements may keep the empty default; wrappers must expose their child.
     fn children(&self) -> &[AnyElement] {
         &[]
     }

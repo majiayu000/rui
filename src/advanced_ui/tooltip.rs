@@ -67,6 +67,13 @@ impl Tooltip {
 }
 
 impl Element for Tooltip {
+    fn children(&self) -> &[AnyElement] {
+        std::slice::from_ref(&self.child)
+    }
+    fn children_mut(&mut self) -> &mut [AnyElement] {
+        std::slice::from_mut(&mut self.child)
+    }
+
     fn id(&self) -> Option<ElementId> {
         Some(self.id.get())
     }

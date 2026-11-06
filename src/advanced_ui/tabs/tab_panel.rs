@@ -58,17 +58,23 @@ impl TabPanel {
     }
 
     pub fn theme(mut self, theme: Theme) -> Self {
+        self.set_theme(theme);
+        self
+    }
+
+    pub(super) fn set_theme(&mut self, theme: Theme) {
         self.theme = theme;
+        let mut inner = std::mem::take(&mut self.inner);
         if !self.custom_background {
-            self.inner = self.inner.bg(theme.colors.surface);
+            inner = inner.bg(theme.colors.surface);
         }
         if !self.custom_border {
-            self.inner = self.inner.border(1.0, theme.colors.border);
+            inner = inner.border(1.0, theme.colors.border);
         }
         if !self.custom_radius {
-            self.inner = self.inner.rounded(theme.control_radius());
+            inner = inner.rounded(theme.control_radius());
         }
-        self
+        self.inner = inner;
     }
 
     pub fn padding(mut self, padding: f32) -> Self {

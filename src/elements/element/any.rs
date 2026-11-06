@@ -63,24 +63,18 @@ struct LayoutRecord {
 /// `previous`. When it does not, the children of `next` that match are swapped
 /// for the previous ones, with the layout and paint they already did.
 ///
-/// Only [`Capabilities::pure`] elements are compared, through
-/// [`Element::same_props`] and their children paired as
-/// [`reconcile_children`] does.
+/// Only [`Capabilities::pure`] elements can be kept whole. All matching
+/// container types pair their structural children through [`reconcile_children`],
+/// so an interactive wrapper does not discard an unchanged child view.
 pub fn reconcile(next: &mut dyn Element, previous: &mut dyn Element) -> bool {
     let kind = (*next).type_id();
     if kind != (*previous).type_id() {
         return false;
     }
-    // Only pure elements implement `same_props`, so the declaration is read
-    // only for the ones that changed.
-    let props = next.same_props(previous);
-    debug_assert!(
-        !props || next.capabilities().pure,
-        "same_props on an element that is not pure"
-    );
-    if !props && !next.capabilities().pure {
-        return false;
-    }
+    // Properties can only justify keeping two pure instances. An interactive
+    // container still participates in child reconciliation below.
+    let props =
+        next.capabilities().pure && previous.capabilities().pure && next.same_props(previous);
     // A view's child is what it rendered, not what was built: the same view
     // keeps it, and a refresh renders it again when it changed.
     if kind == TypeId::of::<crate::elements::ViewElement>() {
@@ -118,6 +112,15 @@ pub(crate) fn refresh_views(
 }
 
 impl AnyElement {
+    // Composite builders keep one owned child tree while accessing typed props.
+    pub(crate) fn downcast_ref<E: Element>(&self) -> Option<&E> {
+        (self.inner.as_ref() as &dyn Any).downcast_ref()
+    }
+
+    pub(crate) fn downcast_mut<E: Element>(&mut self) -> Option<&mut E> {
+        (self.inner.as_mut() as &mut dyn Any).downcast_mut()
+    }
+
     pub fn new<E: Element>(element: E) -> Self {
         let is_view = TypeId::of::<E>() == TypeId::of::<crate::elements::ViewElement>();
         let mut inner: Box<dyn Element> = Box::new(element);

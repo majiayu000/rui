@@ -10,7 +10,7 @@ use crate::core::style::{AlignItems, FlexDirection, Style};
 use crate::core::text_editing::{TextInputCommand, TextInputEvent, TextInputSnapshot};
 use crate::elements::element::StableId;
 use crate::elements::element::{
-    Element, EventContext, LayoutContext, PaintContext, PointerEvent, style_to_taffy,
+    AnyElement, Element, EventContext, LayoutContext, PaintContext, PointerEvent, style_to_taffy,
 };
 use crate::renderer::text::TextMeasureCache;
 use std::any::TypeId;
@@ -19,7 +19,7 @@ use taffy::prelude::NodeId;
 pub struct Tabs {
     id: StableId,
     tab_list: TabList,
-    panels: Vec<TabPanel>,
+    panels: Vec<AnyElement>,
     theme: Theme,
     style: Style,
     tab_list_node: Option<NodeId>,
@@ -75,11 +75,12 @@ impl Tabs {
         self.theme = theme;
         self.style.gap = theme.control_gap();
         self.tab_list = self.tab_list.theme(theme);
-        self.panels = self
-            .panels
-            .into_iter()
-            .map(|panel| panel.theme(theme))
-            .collect();
+        for panel in &mut self.panels {
+            panel
+                .downcast_mut::<TabPanel>()
+                .expect("Tabs owns TabPanel children")
+                .set_theme(theme);
+        }
         self
     }
 
@@ -105,7 +106,7 @@ impl Tabs {
 
     pub fn panel(mut self, panel: TabPanel) -> Self {
         validate_panel_value(self.tab_list.tabs(), panel.value());
-        self.panels.push(panel.theme(self.theme));
+        self.panels.push(panel.theme(self.theme).into());
         self
     }
 
@@ -115,7 +116,7 @@ impl Tabs {
     {
         for panel in panels {
             validate_panel_value(self.tab_list.tabs(), panel.value());
-            self.panels.push(panel.theme(self.theme));
+            self.panels.push(panel.theme(self.theme).into());
         }
         self
     }
@@ -159,11 +160,27 @@ impl Tabs {
         self.panels
             .iter()
             .enumerate()
+            .map(|(index, panel)| {
+                (
+                    index,
+                    panel
+                        .downcast_ref::<TabPanel>()
+                        .expect("Tabs owns TabPanel children"),
+                )
+            })
             .find(|(_, panel)| panel.value() == self.selected_value())
     }
 }
 
 impl Element for Tabs {
+    fn children(&self) -> &[AnyElement] {
+        &self.panels
+    }
+
+    fn children_mut(&mut self) -> &mut [AnyElement] {
+        &mut self.panels
+    }
+
     fn id(&self) -> Option<ElementId> {
         Some(self.id.get())
     }
@@ -177,14 +194,18 @@ impl Element for Tabs {
     }
 
     fn layout(&mut self, cx: &mut LayoutContext) -> NodeId {
-        // The list and panels are laid out here, not as children, so they
-        // take their stable ids from this one.
+        // The tab strip is internal; panels belong to the structural tree,
+        // but only the selected panel participates in layout and paint.
         let parent = self.id.get();
         if let Some(id) = self.tab_list.stable_id_mut() {
             id.adopt(ElementId::derived(parent, 0, TypeId::of::<TabList>()));
         }
         for (index, panel) in self.panels.iter_mut().enumerate() {
-            if let Some(id) = panel.stable_id_mut() {
+            if let Some(id) = panel
+                .downcast_mut::<TabPanel>()
+                .expect("Tabs owns TabPanel children")
+                .stable_id_mut()
+            {
                 id.adopt(ElementId::derived(
                     parent,
                     index as u64 + 1,
@@ -193,10 +214,7 @@ impl Element for Tabs {
             }
         }
         let tab_list_node = self.tab_list.layout(cx);
-        let selected_panel_index = self
-            .panels
-            .iter()
-            .position(|panel| panel.value() == self.tab_list.selected_value());
+        let selected_panel_index = self.selected_panel().map(|(index, _)| index);
         let selected_panel_node = selected_panel_index.map(|index| self.panels[index].layout(cx));
 
         let mut child_nodes = vec![tab_list_node];
@@ -237,11 +255,7 @@ impl Element for Tabs {
 
     fn refresh_text_geometry(&mut self, text_measurer: &mut TextMeasureCache) {
         self.tab_list.refresh_text_geometry(text_measurer);
-        if let Some(index) = self
-            .panels
-            .iter()
-            .position(|panel| panel.value() == self.tab_list.selected_value())
-        {
+        if let Some((index, _)) = self.selected_panel() {
             self.panels[index].refresh_text_geometry(text_measurer);
         }
     }
@@ -300,10 +314,8 @@ impl Element for Tabs {
     }
 
     fn handle_text_input_event(&mut self, cx: &mut EventContext, event: &TextInputEvent) -> bool {
-        self.panels
-            .iter_mut()
-            .find(|panel| panel.value() == self.tab_list.selected_value())
-            .is_some_and(|panel| panel.handle_text_input_event(cx, event))
+        let index = self.selected_panel().map(|(index, _)| index);
+        index.is_some_and(|index| self.panels[index].handle_text_input_event(cx, event))
     }
 
     fn handle_text_input_command(
@@ -311,10 +323,8 @@ impl Element for Tabs {
         cx: &mut EventContext,
         command: &TextInputCommand,
     ) -> bool {
-        self.panels
-            .iter_mut()
-            .find(|panel| panel.value() == self.tab_list.selected_value())
-            .is_some_and(|panel| panel.handle_text_input_command(cx, command))
+        let index = self.selected_panel().map(|(index, _)| index);
+        index.is_some_and(|index| self.panels[index].handle_text_input_command(cx, command))
     }
 
     fn text_input_snapshot(&self, focused: ElementId) -> Option<TextInputSnapshot> {

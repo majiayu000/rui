@@ -64,9 +64,10 @@ pub trait Element: Any {
 
 - `AnyElement::reconcile` pairs the children of a pure element by position,
   calls `same_props`, and swaps the kept children back. `Div` keeps only its
-  property comparison. Non-pure containers are not reconciled, as today, so the
-  refactor is behavior-identical; reconciling the children of non-pure containers
-  such as `ScrollView` is a separate, measured change.
+  property comparison. Follow-up #250 pairs children of matching non-pure
+  containers too: the new container itself is still used, while unchanged child
+  views keep their content and placement. This prevents an interactive wrapper
+  from forcing its entire subtree to render again on a root rebuild.
 - `refresh_views` leaves the trait. `AnyElement` walks `children_mut` and
   handles `ViewElement` itself, as it already does when it computes
   `contains_views`.
@@ -76,6 +77,10 @@ pub trait Element: Any {
 - `AnyElement::new` asserts in debug builds that `children()` and
   `children_mut()` have the same length, naming the type, so a container that
   forgets `children_mut` fails in tests.
+- `children` and `children_mut` describe the same owned child subtrees in the
+  same order, including hidden content. Visibility is filtered separately in
+  layout, events and accessibility. Hidden views remain placed and can update;
+  removing a subtree releases its views through the usual placement lifecycle.
 - A new container implements `children`/`children_mut` and, if pure,
   `capabilities` and `same_props`. Nothing else.
 - Old names are not kept: all implementers are in this crate and move in the
