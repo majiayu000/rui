@@ -59,6 +59,18 @@ impl View for Editor {
                         this.status = "Reverted".into();
                     })),
             )
+            .child(
+                Button::new("Open independent editor")
+                    .id(ElementId(91008))
+                    .on_click(cx.listener(|_, cx| {
+                        cx.app_mut().open_view_window(
+                            WindowOptions::default()
+                                .title("RUI Independent Editor")
+                                .size(640.0, 600.0),
+                            Editor::default(),
+                        );
+                    })),
+            )
             .child(text(format!("Saved: {}", self.saved)))
             .child(text(format!("Status: {}", self.status)));
         root = root.child(
