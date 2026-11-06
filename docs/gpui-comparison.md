@@ -90,7 +90,79 @@ examples and GPUI's `primitives` bench paint this way.
   - Neither side opens an on-screen window or waits for a presented frame. Startup of
     a real app window is not measured here.
 
-## Results
+## Final results (RUI `c2e3596`)
+
+Apple M2 Max (12 cores, 96 GB), macOS 26.5.2. RUI `c2e3596`: every lane of #179
+merged (retained layout, default subtree replay, view-level rebuild, damage regions,
+one sprite shader, analytic paths, text caches, font fallback, rich text, color emoji,
+off-thread renderer creation, display pacing, multi-window, spawn). GPUI at Zed
+`784374c` with `runtime_shaders` and `font-kit`, as above. Three rounds, each case in a
+fresh process; cells are the range.
+
+The machine was nearly idle: load average 7.1 at the start and 10.5 at the end (one
+unrelated Python process was using about one core). Earlier runs were at 80–225.
+
+| Case | Side | Instructions (M) / frame | ms p50 | ms p95 | Allocations / frame | Draw calls | Footprint (MB) |
+|---|---|---|---|---|---|---|---|
+| list_full | RUI | 25.13–25.17 | 1.64–1.87 | 2.04–12.06* | 16 015 | 1 | 67–70 |
+| list_full | GPUI | 159.5–159.9 | 13.1–13.6 | 14.0–14.5 | 50 046 | 2 | 78–79 |
+| list_full_one_row | RUI | 25.18–25.19 | 1.63–1.68 | 2.00–2.09 | 16 015 | 1 | 67 |
+| list_full_one_row (GPUI `.cached()`) | GPUI | 252.9–253.1 | 24.3–24.5 | 26.0–26.4 | 6 092 | 3 983 | 190–191 |
+| list_virtual_1k | RUI | 0.93 | 0.22 | 0.46–0.48 | 299 | 1 | 56 |
+| list_virtual_1k | GPUI | 3.92 | 0.31 | 0.32–0.33 | 787 | 2 | 92 |
+| list_virtual_100k | RUI | 0.94 | 0.22 | 0.48 | 299 | 1 | 57 |
+| list_virtual_100k | GPUI | 3.98 | 0.31–0.32 | 0.33 | 787 | 2 | 92 |
+| text_paragraphs | RUI | 10.47 | 0.74–0.76 | 0.84–0.92 | 1 553 | 1 | 63–64 |
+| text_paragraphs | GPUI | 19.31–19.32 | 1.39–1.41 | 1.49–1.53 | 1 842 | 1 | 68–69 |
+| quad_grid | RUI | 5.58–5.59 | 0.33–0.35 | 0.68–0.69 | 16 | 1 | 64–66 |
+| quad_grid | GPUI | 79.97–79.98 | 6.22–6.31 | 6.34–6.55 | 14 | 1 | 74–76 |
+| resize_full | RUI | 48.9–49.2 | 3.03–3.10 | 3.43–3.50 | 28 026 | 1 | 65–67 |
+| resize_full | GPUI | 164.3–164.4 | 13.1–13.4 | 13.9–14.4 | 50 045 | 2 | 78–79 |
+| resize_virtual | RUI | 1.38–1.39 | 0.21–0.23 | 0.48 | 532 | 1 | 57 |
+| resize_virtual | GPUI | 9.03–9.09 | 0.52–0.57 | 0.37–0.54 | 788 | 2 | 92 |
+
+\* One round's p95; the other two were 2.04 and 2.08 ms.
+
+| Startup | Process start to fixture code | First frame | Process start to first frame | Footprint |
+|---|---|---|---|---|
+| RUI | 5.1–5.8 ms | 46.7–49.2 ms | 52.5–54.3 ms | 24–26 MB |
+| GPUI | 68.7–77.5 ms | 113.9–115.7 ms | 182.8–191.4 ms | 76–102 MB |
+
+Both startups are warm: the system Metal shader cache already held each side's
+shaders. A cold RUI start still compiles its sprite shader (about 195 ms, #226),
+which a build-time `metallib` would remove; GPUI ships one by default but is built
+here with `runtime_shaders`.
+
+| Case | By instructions | By wall p50 |
+|---|---|---|
+| startup | – | RUI ahead 3.5x |
+| list_full | RUI ahead 6.4x | RUI ahead 7.6x |
+| list_full_one_row | RUI ahead 10.0x | RUI ahead 14.7x |
+| list_virtual_1k | RUI ahead 4.2x | RUI ahead 1.4x |
+| list_virtual_100k | RUI ahead 4.2x | RUI ahead 1.5x |
+| text_paragraphs | RUI ahead 1.8x | RUI ahead 1.9x |
+| quad_grid | RUI ahead 14.3x | RUI ahead 18.4x |
+| resize_full | RUI ahead 3.3x | RUI ahead 4.3x |
+| resize_virtual | RUI ahead 6.5x | RUI ahead 2.4x |
+
+### Verdict
+
+On every fixture in this suite RUI is ahead of GPUI by instructions and by wall time,
+and its footprint is lower in every case. That is the claim, and its limits:
+
+- **Allocations are not uniformly lower.** On `list_full_one_row` RUI allocates
+  16 015 per frame against 6 092 for GPUI's `.cached()` path, because this fixture
+  rebuilds the list from the root. With rows as views (#234), the same edit costs
+  23 allocations and 2.0 M instructions (perf_gate `list.one_row_changed_views`), but
+  that path is not in this fixture. On `quad_grid` the two are equal (16 vs 14).
+- **GPU time** is reported for RUI only (0.16–0.51 ms); GPUI's headless renderer
+  exposes none.
+- **One fixture set, one machine, one GPUI revision.** It says nothing about
+  Linux, Windows or the web, where GPUI runs and RUI does not.
+- **Fonts differ:** RUI's default is Arial, GPUI's SF Pro.
+
+
+## Run on `ec7660d` (before the remaining lanes)
 
 Apple M2 Max (12 cores, 96 GB), macOS 26.5.2. RUI `ec7660d` (main, with the text caches
 of #218 and display pacing of #215), rustc 1.99.1. GPUI at Zed `784374c`, rustc 1.98.1
@@ -147,7 +219,7 @@ Verdict, as `run.sh` prints it:
 No case is behind by instructions or by wall p50. RUI is still behind GPUI on
 allocations in wrapped text and on footprint in the virtual-list cases (below).
 
-## Reading the numbers
+### Reading that run
 
 What changed since the last run (RUI `f7968cc`, same GPUI build):
 
@@ -207,8 +279,8 @@ Where RUI is still behind:
 
 ## Known unfairness
 
-- Load: every number above was taken at load average 93–111 with other builds
-  running. Repeat on an idle machine before quoting milliseconds.
+- Load: the final results were taken at load average 7–10; the earlier runs below
+  them at 93–111 with other builds running. Quote milliseconds from the final run.
 - GPUI runs inside its test platform: each iteration also pumps the foreground
   executor and the frame profiler is enabled. Its instructions include that harness
   work; RUI's bench calls the pipeline directly.

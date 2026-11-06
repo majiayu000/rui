@@ -18,7 +18,7 @@ use crate::core::text_editing::{
     TextInputSnapshot, TextRange, TextSelection, VisualCaret,
 };
 use crate::elements::element::{
-    Element, EventContext, LayoutContext, PaintContext, PointerEvent, PointerEventKind,
+    Element, EventContext, LayoutContext, PaintContext, PointerEvent, PointerEventKind, StableId,
     style_to_taffy,
 };
 use crate::renderer::Primitive;
@@ -69,9 +69,7 @@ struct InputPaintTokens {
 
 /// Text input component
 pub struct Input {
-    id: Option<ElementId>,
-    /// `id` was set by the application, so layout keeps it.
-    explicit_id: bool,
+    id: StableId,
     placeholder: String,
     accessibility_label: Option<String>,
     input_type: InputType,
@@ -105,8 +103,7 @@ impl Input {
         style.border.width = Edges::all(1.0);
 
         Self {
-            id: Some(ElementId::new()),
-            explicit_id: false,
+            id: StableId::new(),
             placeholder: String::new(),
             accessibility_label: None,
             input_type: InputType::default(),
@@ -130,8 +127,7 @@ impl Input {
     }
 
     pub fn id(mut self, id: ElementId) -> Self {
-        self.id = Some(id);
-        self.explicit_id = true;
+        self.id = StableId::explicit(id);
         self
     }
 
@@ -524,13 +520,11 @@ impl Default for Input {
 
 impl Element for Input {
     fn id(&self) -> Option<ElementId> {
-        self.id
+        Some(self.id.get())
     }
 
-    fn adopt_stable_id(&mut self, id: ElementId) {
-        if !self.explicit_id {
-            self.id = Some(id);
-        }
+    fn stable_id_mut(&mut self) -> Option<&mut StableId> {
+        Some(&mut self.id)
     }
 
     fn style(&self) -> &Style {
@@ -570,9 +564,7 @@ impl Element for Input {
 
     fn paint(&mut self, cx: &mut PaintContext) {
         let bounds = cx.bounds();
-        if let Some(id) = self.id {
-            cx.register_hit_region(id, bounds);
-        }
+        cx.register_hit_region(self.id.get(), bounds);
         let (bg, text_color, border_color) = self.colors();
         cx.paint(Primitive::Quad {
             bounds,
@@ -672,7 +664,7 @@ impl Element for Input {
                             handler();
                         }
                     }
-                    cx.request_focus(self.id);
+                    cx.request_focus(Some(self.id.get()));
                     true
                 } else if self.state.focused {
                     self.state.focused = false;
@@ -706,7 +698,7 @@ impl Element for Input {
         cx: &mut EventContext,
         event: &crate::core::event::KeyEvent,
     ) -> bool {
-        if !cx.is_focused(self.id) && !self.state.focused {
+        if !cx.is_focused(Some(self.id.get())) && !self.state.focused {
             return false;
         }
 
@@ -735,7 +727,7 @@ impl Element for Input {
             self.sync_focus_from_context(cx);
             return ActionOutcome::Ignored;
         }
-        if !cx.is_focused(self.id) && !self.state.focused {
+        if !cx.is_focused(Some(self.id.get())) && !self.state.focused {
             return ActionOutcome::Ignored;
         }
 
@@ -809,9 +801,7 @@ impl Element for Input {
         &self,
         cx: &AccessibilityContext,
     ) -> Result<Option<AccessibilityNode>, AccessibilityError> {
-        let Some(id) = self.id else {
-            return Ok(None);
-        };
+        let id = self.id.get();
         let label = self
             .accessibility_label
             .as_deref()

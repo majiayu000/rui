@@ -9,7 +9,7 @@ use crate::core::style::Style;
 use crate::core::text_editing::{TextInputCommand, TextInputEvent, TextInputSnapshot};
 use crate::core::view::{View, ViewPlacement};
 use crate::elements::element::{
-    AnyElement, Element, EventContext, LayoutContext, PaintContext, PointerEvent,
+    AnyElement, Capabilities, Element, EventContext, LayoutContext, PaintContext, PointerEvent,
 };
 use crate::renderer::text::TextMeasureCache;
 use std::any::Any;
@@ -65,33 +65,10 @@ impl ViewElement {
             ),
         }
     }
-}
 
-impl Element for ViewElement {
-    fn style(&self) -> &Style {
-        self.content
-            .as_ref()
-            .map_or(&self.style, |content| content.style())
-    }
-
-    fn memoizable(&self) -> bool {
-        // Only a wrapper: what it shows records its own layout and paint.
-        true
-    }
-
-    fn ignores_pointer(&self) -> bool {
-        true
-    }
-
-    fn reconcile(&mut self, previous: &mut dyn Element) -> bool {
-        // The same view keeps what it rendered; a refresh renders it again
-        // when it changed.
-        (previous as &mut dyn Any)
-            .downcast_ref::<ViewElement>()
-            .is_some_and(|previous| previous.view == self.view && previous.content.is_some())
-    }
-
-    fn refresh_views(&mut self, app: &mut AppContext, dirty: &HashSet<EntityId>) -> bool {
+    /// Render the view if it is in `dirty` or has not rendered here yet, then
+    /// the views inside it. See [`crate::elements::element::refresh_views`].
+    pub(crate) fn refresh(&mut self, app: &mut AppContext, dirty: &HashSet<EntityId>) -> bool {
         let mut changed = false;
         if self.content.is_none() || dirty.contains(&self.view) {
             if self.placement.is_none() {
@@ -109,6 +86,27 @@ impl Element for ViewElement {
             changed |= content.refresh_views(app, dirty);
         }
         changed
+    }
+}
+
+impl Element for ViewElement {
+    fn style(&self) -> &Style {
+        self.content
+            .as_ref()
+            .map_or(&self.style, |content| content.style())
+    }
+
+    fn capabilities(&self) -> Capabilities {
+        // Only a wrapper: what it shows records its own layout and paint.
+        Capabilities::PURE_INERT
+    }
+
+    fn same_props(&self, previous: &dyn Element) -> bool {
+        // The same view keeps what it rendered; a refresh renders it again
+        // when it changed.
+        (previous as &dyn Any)
+            .downcast_ref::<ViewElement>()
+            .is_some_and(|previous| previous.view == self.view && previous.content.is_some())
     }
 
     fn layout(&mut self, cx: &mut LayoutContext) -> NodeId {

@@ -5,7 +5,7 @@ use crate::core::color::{Color, Rgba};
 use crate::core::geometry::{Bounds, Edges, Point};
 use crate::core::style::{Corners, Dimension as StyleDimension, Style};
 use crate::elements::element::{
-    Element, EventContext, LayoutContext, PaintContext, PointerEvent, PointerEventKind,
+    Element, EventContext, LayoutContext, PaintContext, PointerEvent, PointerEventKind, StableId,
     style_to_taffy,
 };
 use crate::renderer::{Primitive, Scene};
@@ -61,9 +61,7 @@ type PointerFn = Box<dyn Fn(&PointerEvent)>;
 /// A leaf element that calls a closure with its bounds to paint primitives, clipped
 /// to those bounds. Size it like a [`Div`](crate::elements::Div).
 pub struct Canvas {
-    id: ElementId,
-    /// `id` was set by the application, so layout keeps it.
-    explicit_id: bool,
+    id: StableId,
     style: Style,
     paint: PaintFn,
     on_pointer: Option<PointerFn>,
@@ -73,8 +71,7 @@ pub struct Canvas {
 /// A [`Canvas`] painted by `paint(bounds, painter)`.
 pub fn canvas(paint: impl FnMut(Bounds, &mut Painter) + 'static) -> Canvas {
     Canvas {
-        id: ElementId::new(),
-        explicit_id: false,
+        id: StableId::new(),
         style: Style::default(),
         paint: Box::new(paint),
         on_pointer: None,
@@ -84,8 +81,7 @@ pub fn canvas(paint: impl FnMut(Bounds, &mut Painter) + 'static) -> Canvas {
 
 impl Canvas {
     pub fn id(mut self, id: ElementId) -> Self {
-        self.id = id;
-        self.explicit_id = true;
+        self.id = StableId::explicit(id);
         self
     }
 
@@ -128,13 +124,11 @@ impl Canvas {
 
 impl Element for Canvas {
     fn id(&self) -> Option<ElementId> {
-        Some(self.id)
+        Some(self.id.get())
     }
 
-    fn adopt_stable_id(&mut self, id: ElementId) {
-        if !self.explicit_id {
-            self.id = id;
-        }
+    fn stable_id_mut(&mut self) -> Option<&mut StableId> {
+        Some(&mut self.id)
     }
 
     fn style(&self) -> &Style {
@@ -149,7 +143,7 @@ impl Element for Canvas {
     fn paint(&mut self, cx: &mut PaintContext) {
         let bounds = cx.bounds();
         if self.on_pointer.is_some() {
-            cx.register_hit_region(self.id, bounds);
+            cx.register_hit_region(self.id.get(), bounds);
         }
         cx.scene.push_layer(bounds);
         (self.paint)(bounds, &mut Painter { scene: cx.scene });
