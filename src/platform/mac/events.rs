@@ -1,4 +1,5 @@
 use super::window::MacWindow;
+use crate::core::drag::FileDragEvent;
 use crate::core::text_editing::{TextInputCommand, TextInputEvent};
 use crate::platform::mac::accessibility::MacAccessibilityActionRequest;
 use crate::platform::window::{
@@ -18,6 +19,8 @@ pub(crate) enum MacWindowEvent {
     Platform(PlatformWindowEvent),
     Text(TextInputCommand),
     Accessibility(MacAccessibilityActionRequest),
+    /// Files dragged over the window from another app.
+    FileDrag(FileDragEvent),
     /// The display refreshed while an animation asked for frames.
     DisplayTick,
 }
@@ -31,6 +34,7 @@ pub enum MacPlatformEvent {
     Platform(PlatformWindowEvent),
     Text(TextInputCommand),
     Accessibility(MacAccessibilityActionRequest),
+    FileDrag(FileDragEvent),
 }
 
 impl MacWindowEvent {
@@ -39,6 +43,7 @@ impl MacWindowEvent {
             Self::Platform(event) => MacPlatformEvent::Platform(event),
             Self::Text(command) => MacPlatformEvent::Text(command),
             Self::Accessibility(request) => MacPlatformEvent::Accessibility(request),
+            Self::FileDrag(event) => MacPlatformEvent::FileDrag(event),
             Self::DisplayTick => MacPlatformEvent::Platform(PlatformWindowEvent::RedrawRequested),
         }
     }
@@ -76,6 +81,10 @@ impl MacWindowEvent {
             Self::Accessibility(_) => Err(PlatformWindowError::backend(
                 "macos",
                 "native accessibility action cannot be represented by PlatformWindowEvent; use MacWindow::poll_events_with_text_commands",
+            )),
+            Self::FileDrag(_) => Err(PlatformWindowError::backend(
+                "macos",
+                "file drag cannot be represented by PlatformWindowEvent; use MacWindow::poll_events_with_text_commands",
             )),
         }
     }

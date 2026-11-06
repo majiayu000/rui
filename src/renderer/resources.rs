@@ -1,14 +1,14 @@
 //! Renderer-owned resource lifecycle management.
 
-use crate::ImageSource;
 use crate::core::geometry::Size;
 use crate::renderer::primitives::PrimitiveKind;
+use crate::{DecodedImage, ImageSource};
 use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::error::Error;
 use std::fmt;
 use std::hash::{Hash, Hasher};
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RendererResourceKind {
@@ -495,7 +495,13 @@ where
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ImageResourceKey {
     File(String),
-    Data { hash: u64, width: u32, height: u32 },
+    Data {
+        hash: u64,
+        width: u32,
+        height: u32,
+    },
+    /// A [`crate::DecodedImage`], by its id.
+    Decoded(u64),
 }
 
 impl ImageResourceKey {
@@ -526,6 +532,7 @@ impl ImageResourceKey {
                 RendererResourceKind::Image,
                 format!("external texture {id} is resolved by the renderer backend"),
             )),
+            ImageSource::Decoded(image) => Ok(Self::Decoded(image.id())),
         }
     }
 }
@@ -534,7 +541,7 @@ impl ImageResourceKey {
 pub struct ImageResourceEntry {
     pub handle: RendererResourceHandle,
     pub size: Size,
-    pub pixels: Vec<u8>,
+    pub pixels: Arc<[u8]>,
 }
 
 impl ImageResourceEntry {
@@ -546,6 +553,8 @@ impl ImageResourceEntry {
 pub struct RendererImageCache {
     resources: RendererResourceCache<ImageResourceKey>,
     entries: HashMap<ImageResourceKey, Arc<ImageResourceEntry>>,
+    /// Decoded images drawn, released once nothing else holds them.
+    decoded: HashMap<ImageResourceKey, Weak<DecodedImage>>,
 }
 
 impl RendererImageCache {
@@ -553,6 +562,7 @@ impl RendererImageCache {
         Self {
             resources: RendererResourceCache::unbounded(RendererResourceKind::Image),
             entries: HashMap::new(),
+            decoded: HashMap::new(),
         }
     }
 
@@ -564,6 +574,7 @@ impl RendererImageCache {
                 max_bytes,
             ),
             entries: HashMap::new(),
+            decoded: HashMap::new(),
         }
     }
 
@@ -584,6 +595,9 @@ impl RendererImageCache {
 
         let (size, pixels) = load_image_pixels(source)?;
         let byte_size = pixels.len();
+        if let ImageSource::Decoded(image) = source {
+            self.decoded.insert(key.clone(), Arc::downgrade(image));
+        }
         let allocation = self.resources.resolve(key.clone(), byte_size)?;
         self.drop_evicted(allocation.evicted);
 
@@ -608,6 +622,28 @@ impl RendererImageCache {
         self.resources.stats()
     }
 
+    /// Dispose of decoded images that no element or scene holds any more, and
+    /// return their handles so the backend drops their textures.
+    pub fn release_dropped(
+        &mut self,
+    ) -> Result<Vec<RendererResourceHandle>, RendererResourceError> {
+        let dropped: Vec<ImageResourceKey> = self
+            .decoded
+            .iter()
+            .filter(|(_, image)| image.strong_count() == 0)
+            .map(|(key, _)| key.clone())
+            .collect();
+        let mut released = Vec::new();
+        for key in dropped {
+            self.decoded.remove(&key);
+            // Unless the budget evicted it already.
+            if self.entries.contains_key(&key) {
+                released.push(self.dispose(&key)?);
+            }
+        }
+        Ok(released)
+    }
+
     fn drop_evicted(&mut self, evicted: Vec<ImageResourceKey>) {
         for key in evicted {
             self.entries.remove(&key);
@@ -621,7 +657,7 @@ impl Default for RendererImageCache {
     }
 }
 
-fn load_image_pixels(source: &ImageSource) -> Result<(Size, Vec<u8>), RendererResourceError> {
+fn load_image_pixels(source: &ImageSource) -> Result<(Size, Arc<[u8]>), RendererResourceError> {
     match source {
         ImageSource::File(path) => {
             let image = image::open(path).map_err(|err| {
@@ -632,13 +668,23 @@ fn load_image_pixels(source: &ImageSource) -> Result<(Size, Vec<u8>), RendererRe
             })?;
             let rgba = image.to_rgba8();
             let (width, height) = rgba.dimensions();
-            Ok((Size::new(width as f32, height as f32), rgba.into_raw()))
+            Ok((
+                Size::new(width as f32, height as f32),
+                rgba.into_raw().into(),
+            ))
         }
         ImageSource::Data {
             data,
             width,
             height,
-        } => Ok((Size::new(*width as f32, *height as f32), data.clone())),
+        } => Ok((
+            Size::new(*width as f32, *height as f32),
+            data.as_slice().into(),
+        )),
+        ImageSource::Decoded(image) => Ok((
+            Size::new(image.width() as f32, image.height() as f32),
+            Arc::clone(image.pixels()),
+        )),
         ImageSource::Texture(_) => {
             let _ = ImageResourceKey::from_source(source)?;
             Err(RendererResourceError::invalid(

@@ -1,7 +1,9 @@
+use crate::core::drag::FileDragEvent;
 use crate::core::geometry::{Bounds, Point};
 use crate::core::text_editing::{
     TextEditError, TextInputCommand, TextInputSnapshot, Utf16TextRange,
 };
+use crate::platform::mac::file_drop::{self, FileDropTarget};
 use crate::platform::window::{PlatformInputEvent, PlatformWindowEvent};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, Sel};
@@ -13,6 +15,14 @@ use objc2_foundation::{
 };
 use std::cell::RefCell;
 use std::collections::VecDeque;
+
+fn drag_operation(accepted: bool) -> NSUInteger {
+    if accepted {
+        file_drop::DRAG_OPERATION_COPY
+    } else {
+        file_drop::DRAG_OPERATION_NONE
+    }
+}
 
 fn not_found_range() -> NSRange {
     NSRange::new(NSNotFound as NSUInteger, 0)
@@ -298,6 +308,7 @@ impl MacImeSession {
 
 pub(crate) struct RuiContentViewIvars {
     ime: RefCell<MacImeSession>,
+    file_drop: RefCell<FileDropTarget>,
 }
 
 define_class!(
@@ -319,6 +330,38 @@ define_class!(
         fn key_down(&self, event: &NSEvent) {
             let events = NSArray::from_slice(&[event]);
             self.interpretKeyEvents(&events);
+        }
+
+        // NSDraggingDestination, for files dragged in from other apps.
+        #[unsafe(method(draggingEntered:))]
+        fn dragging_entered(&self, info: &AnyObject) -> NSUInteger {
+            let position = file_drop::drag_position(self, info);
+            let paths = file_drop::dragged_paths(info);
+            let accepted = self.ivars().file_drop.borrow_mut().enter(position, paths);
+            file_drop::wake_window_of(self);
+            drag_operation(accepted)
+        }
+
+        #[unsafe(method(draggingUpdated:))]
+        fn dragging_updated(&self, info: &AnyObject) -> NSUInteger {
+            let position = file_drop::drag_position(self, info);
+            let accepted = self.ivars().file_drop.borrow_mut().update(position);
+            file_drop::wake_window_of(self);
+            drag_operation(accepted)
+        }
+
+        #[unsafe(method(draggingExited:))]
+        fn dragging_exited(&self, _info: Option<&AnyObject>) {
+            self.ivars().file_drop.borrow_mut().exit();
+            file_drop::wake_window_of(self);
+        }
+
+        #[unsafe(method(performDragOperation:))]
+        fn perform_drag_operation(&self, info: &AnyObject) -> bool {
+            let position = file_drop::drag_position(self, info);
+            let accepted = self.ivars().file_drop.borrow_mut().drop_at(position);
+            file_drop::wake_window_of(self);
+            accepted
         }
     }
 
@@ -489,8 +532,15 @@ impl RuiContentView {
     pub(crate) fn new(frame: NSRect, mtm: MainThreadMarker) -> Retained<Self> {
         let this = Self::alloc(mtm).set_ivars(RuiContentViewIvars {
             ime: RefCell::new(MacImeSession::default()),
+            file_drop: RefCell::new(FileDropTarget::default()),
         });
-        unsafe { msg_send![super(this), initWithFrame: frame] }
+        let this: Retained<Self> = unsafe { msg_send![super(this), initWithFrame: frame] };
+        file_drop::register_for_file_drags(&this);
+        this
+    }
+
+    pub(crate) fn drain_file_drags(&self) -> Vec<FileDragEvent> {
+        self.ivars().file_drop.borrow_mut().drain()
     }
 
     pub(crate) fn drain_ime_events(&self) -> Vec<TextInputCommand> {

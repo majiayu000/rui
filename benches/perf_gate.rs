@@ -14,9 +14,11 @@
 //! runs before and after a renderer change, not for CI.
 mod perf_budgets;
 mod perf_icons;
+mod perf_images;
 
 use perf_budgets::{CaseBudget, load_budgets};
 use perf_icons::IconGrid;
+use perf_images::ImageGrid;
 use rui::core::entity::Entity;
 use rui::core::event::MouseButton;
 use rui::core::frame_pipeline::FramePipeline;
@@ -674,6 +676,12 @@ fn main() -> ExitCode {
     let growth_kb = (LIVE_BYTES.load(Ordering::Relaxed) - before) as f64 / 1024.0;
     drop(churn);
 
+    let mut grid = ImageGrid::new(Size::new(VIEWPORT.0, VIEWPORT.1), &mut measurer);
+    costs.insert(
+        "images.grid_rebuilt",
+        measure(|round| grid.frame(round, &mut measurer)),
+    );
+    drop(grid);
     let mut icons = IconGrid::new(Size::new(VIEWPORT.0, VIEWPORT.1), &mut measurer);
     costs.insert(
         "icons.grid_rebuilt",

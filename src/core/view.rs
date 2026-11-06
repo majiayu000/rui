@@ -171,6 +171,11 @@ impl<'a, T: 'static> ViewContext<'a, T> {
         self.app.app_handle()
     }
 
+    /// An image of `asset` decoded off the UI thread; see [`AppContext::image`].
+    pub fn image(&mut self, asset: impl Into<crate::core::ImageAsset>) -> crate::Image {
+        self.app.image(asset)
+    }
+
     /// Access the application context
     pub fn app(&self) -> &AppContext {
         self.app

@@ -5,6 +5,7 @@ mod app;
 mod clipboard;
 mod display_link;
 mod events;
+mod file_drop;
 mod frame;
 mod frame_ticker;
 mod ime_state;
