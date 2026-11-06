@@ -1,6 +1,8 @@
 # Variable-height list: bounded initial contract
 
-Status: design only; not implemented by the runtime-correctness PR. Tracking: [#287](https://github.com/majiayu000/rui/issues/287). Baseline: 1311a1d. Background: [source comparison](../research/rui-gpui-bui-2026-11-07.md).
+Implementation: [PR #292](https://github.com/majiayu000/rui/pull/292).
+
+Status: implemented in the #287 feature branch; validation commands and boundaries below. Tracking: [#287](https://github.com/majiayu000/rui/issues/287). Baseline: 1311a1d.
 
 ## User task
 
@@ -8,7 +10,7 @@ Read a chat/log with wrapped text and late-arriving content without losing the c
 
 ## Initial surface
 
-A VariableList element and persistent handle at the existing element layer. Proposed API (not currently available):
+A VariableList element and persistent handle at the existing element layer. API:
 
 ```text
 variable_list(&handle, stable_item_ids, |id| render_row(id)).w(width).h(height)
@@ -47,6 +49,47 @@ Positive row heights are required to bound visible row construction. Invisible i
 6. Clipped parts cannot receive pointer input. Retained/fresh scene and layout results agree after edits and resize.
 7. Focused editable-row policy is a prerequisite to claiming editing support: either retain the focused row explicitly or cancel its composition before removal. Never silently discard marked text. This is not waived by list geometry tests.
 
-## Decision / implementation gate
+## Implementation and decision
 
-Adopt anchor semantics and one shared layout/paint path. Reject a separate list platform. Start implementation only with the subtree-measurement contract and focus policy reviewed; they are actual architecture work, not a cosmetic new builder. This specification does not claim a finished feature.
+Adopt this explicit-viewport element and the shared Taffy/text measurement path.
+Reject a separate renderer, scheduler, data source abstraction, or adaptive estimate API.
+
+`VariableListHandle::anchor()` exposes the current `(ElementId, pixel_offset)` after
+layout. `offset()` and `estimated_total_height()` are estimates because unseen rows
+use an internal 40px height. `scroll_to_item(id)` aligns the item to the top;
+`scroll_to(px)` navigates estimated geometry. A missing jump ID is ignored.
+Invalidations and handle scrolling take effect at the next layout; the caller must
+request a frame when changing these outside an event that already requests one.
+
+Rows are measured at the specified width and mounted as absolute children of the
+fixed viewport. A fixed 80px neighborhood is built on either side. Metadata scans
+and ID validation are O(N); there is no claim of O(log N) edits or a measured
+100k-frame latency budget. Positive row height is a contract; zero-height rows
+must be removed from the sequence. No scrollbar or tail-follow mode is included.
+An item jump near the end may leave space below the last row, because item alignment
+and surviving-anchor preservation take precedence over bottom alignment. The same
+anchor rule applies when a resize or content edit shortens the remaining tail.
+Ordinary pixel/wheel scrolling backfills the measured end to avoid blank tail space
+and an estimated-height correction jumping the reader backward.
+
+The presenter passes its actual focus owner into layout, including keyboard and
+programmatic focus. Reconciliation transfers row instances only; new list props
+and handle stay authoritative. A surviving focused row stays mounted offscreen,
+so keyboard/IME state survives scrolling and view rebuilding. Explicitly invalidating that
+row cancels its active composition, clears focus, and rebuilds its new content
+immediately. Other visible invalidations also rebuild immediately. Removing a focused row cancels its active composition on
+the old logical editor before dropping it; the presenter clears the absent focus
+owner. Replacing a handle on the same reconciled list cancels old composition
+and rebuilds all rows. Root-list identity replacement also performs that cleanup.
+Keep a nested list and its ancestors structurally present with stable container
+IDs during editing: removing the whole list/ancestor, or replacing a keyed nested
+list identity, bypasses existing reconciliation and is not covered by this
+row-virtualization contract. Whole-subtree unmount cancellation requires a
+separate runtime lifecycle change. A custom editor that refuses to cancel its active
+composition fails explicitly instead of silently discarding it. The list owns no
+native IME session; actual candidate-window behavior still needs platform testing.
+
+Validation: `RUI_VERIFY_REPLAY=1 cargo test --test variable_list`; neighboring
+fixed-height list and retained-layout tests; `cargo check --example variable_list`.
+The executable example is `cargo run --example variable_list`.
+
