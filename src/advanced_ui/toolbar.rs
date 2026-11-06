@@ -6,6 +6,7 @@ use crate::core::accessibility::{
 };
 use crate::core::style::Style;
 use crate::core::text_editing::{TextInputCommand, TextInputEvent, TextInputSnapshot};
+use crate::elements::element::StableId;
 use crate::elements::element::{
     AnyElement, Element, EventContext, LayoutContext, PaintContext, PointerEvent,
 };
@@ -14,7 +15,7 @@ use crate::renderer::text::TextMeasureCache;
 use taffy::prelude::NodeId;
 
 pub struct Toolbar {
-    id: ElementId,
+    id: StableId,
     label: String,
     theme: Theme,
     state: InteractionState,
@@ -26,19 +27,18 @@ impl Toolbar {
         let label = label.into();
         require_non_empty(&label, "toolbar accessibility label must not be empty");
 
-        let id = ElementId::new();
         let theme = Theme::default();
         Self {
-            id,
+            id: StableId::new(),
             label,
             theme,
             state: InteractionState::default(),
-            inner: base_toolbar_div(id, InteractionState::default(), theme),
+            inner: base_toolbar_div(InteractionState::default(), theme),
         }
     }
 
     pub fn id(mut self, id: ElementId) -> Self {
-        self.id = id;
+        self.id = StableId::explicit(id);
         self.inner = self.inner.id(id);
         self
     }
@@ -86,7 +86,11 @@ impl Toolbar {
 
 impl Element for Toolbar {
     fn id(&self) -> Option<ElementId> {
-        Some(self.id)
+        Some(self.id.get())
+    }
+
+    fn stable_id_mut(&mut self) -> Option<&mut StableId> {
+        Some(&mut self.id)
     }
 
     fn style(&self) -> &Style {
@@ -98,7 +102,7 @@ impl Element for Toolbar {
     }
 
     fn paint(&mut self, cx: &mut PaintContext) {
-        cx.register_accessibility_region(self.id, cx.bounds());
+        cx.register_accessibility_region(self.id.get(), cx.bounds());
         self.inner.paint(cx);
     }
 
@@ -111,11 +115,15 @@ impl Element for Toolbar {
         cx: &AccessibilityContext,
     ) -> Result<Option<AccessibilityNode>, AccessibilityError> {
         Ok(Some(
-            AccessibilityNode::label_required(self.id, AccessibilityRole::Toolbar, &self.label)?
-                .with_enabled(!self.state.disabled())
-                .with_read_only(self.state.read_only())
-                .with_invalid(self.state.invalid())
-                .with_focused(cx.a11y_has_focus(self.id)),
+            AccessibilityNode::label_required(
+                self.id.get(),
+                AccessibilityRole::Toolbar,
+                &self.label,
+            )?
+            .with_enabled(!self.state.disabled())
+            .with_read_only(self.state.read_only())
+            .with_invalid(self.state.invalid())
+            .with_focused(cx.a11y_has_focus(self.id.get())),
         ))
     }
 
@@ -201,12 +209,12 @@ impl Element for Toolbar {
     }
 
     fn contains_id(&self, id: ElementId) -> bool {
-        self.id == id || self.inner.contains_id(id)
+        self.id.get() == id || self.inner.contains_id(id)
     }
 }
 
-fn base_toolbar_div(id: ElementId, state: InteractionState, theme: Theme) -> Div {
-    apply_toolbar_theme(div().id(id).flex_row().items_center(), state, theme)
+fn base_toolbar_div(state: InteractionState, theme: Theme) -> Div {
+    apply_toolbar_theme(div().flex_row().items_center(), state, theme)
 }
 
 fn apply_toolbar_theme(inner: Div, state: InteractionState, theme: Theme) -> Div {

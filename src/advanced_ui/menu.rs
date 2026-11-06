@@ -10,11 +10,13 @@ use crate::core::color::Color;
 use crate::core::event::{KeyCode, KeyEvent};
 use crate::core::geometry::{Bounds, Edges, Point};
 use crate::core::style::{Corners, Style};
+use crate::elements::element::StableId;
 use crate::elements::element::{
     Element, EventContext, LayoutContext, PaintContext, PointerEvent, PointerEventKind,
     style_to_taffy,
 };
 use crate::renderer::Primitive;
+use std::any::TypeId;
 use taffy::prelude::*;
 
 const MENU_PADDING: f32 = 6.0;
@@ -68,7 +70,7 @@ impl From<(&str, &str)> for MenuItem {
 }
 
 pub struct Menu {
-    id: ElementId,
+    id: StableId,
     label: String,
     items: Vec<MenuItem>,
     item_ids: Vec<ElementId>,
@@ -98,7 +100,7 @@ impl Menu {
         style.border.radius = Corners::all(theme.control_radius());
 
         Self {
-            id: ElementId::new(),
+            id: StableId::new(),
             label,
             items,
             item_ids,
@@ -113,7 +115,7 @@ impl Menu {
     }
 
     pub fn id(mut self, id: ElementId) -> Self {
-        self.id = id;
+        self.id = StableId::explicit(id);
         self
     }
 
@@ -228,7 +230,7 @@ impl Menu {
         if let Some(handler) = &self.on_select {
             handler(&value);
         }
-        cx.announce_accessibility_action(self.id, format!("{label} selected"));
+        cx.announce_accessibility_action(self.id.get(), format!("{label} selected"));
         cx.request_redraw();
         true
     }
@@ -261,7 +263,11 @@ impl Menu {
 
 impl Element for Menu {
     fn id(&self) -> Option<ElementId> {
-        Some(self.id)
+        Some(self.id.get())
+    }
+
+    fn stable_id_mut(&mut self) -> Option<&mut StableId> {
+        Some(&mut self.id)
     }
 
     fn style(&self) -> &Style {
@@ -269,6 +275,11 @@ impl Element for Menu {
     }
 
     fn layout(&mut self, cx: &mut LayoutContext) -> NodeId {
+        // Item ids follow the menu's stable id, which layout has given it.
+        let parent = self.id.get();
+        for (index, id) in self.item_ids.iter_mut().enumerate() {
+            *id = ElementId::derived(parent, index as u64, TypeId::of::<MenuItem>());
+        }
         let mut style = style_to_taffy(&self.style);
         style.size.width = Dimension::Length(self.preferred_width());
         style.size.height =
@@ -280,7 +291,7 @@ impl Element for Menu {
 
     fn paint(&mut self, cx: &mut PaintContext) {
         let bounds = cx.bounds();
-        cx.register_hit_region(self.id, bounds);
+        cx.register_hit_region(self.id.get(), bounds);
 
         cx.paint(Primitive::Quad {
             bounds,
@@ -350,11 +361,11 @@ impl Element for Menu {
         cx: &AccessibilityContext,
     ) -> Result<Option<AccessibilityNode>, AccessibilityError> {
         let mut node =
-            AccessibilityNode::label_required(self.id, AccessibilityRole::Menu, &self.label)?
+            AccessibilityNode::label_required(self.id.get(), AccessibilityRole::Menu, &self.label)?
                 .with_enabled(!self.state.disabled())
                 .with_read_only(self.state.read_only())
                 .with_invalid(self.state.invalid())
-                .with_focused(cx.a11y_has_focus(self.id));
+                .with_focused(cx.a11y_has_focus(self.id.get()));
         if let Some(selected) = &self.selected {
             node = node.with_value(selected.clone());
         }
@@ -394,7 +405,7 @@ impl Element for Menu {
             }
             PointerEventKind::Down => {
                 if inside && self.state.can_activate() {
-                    cx.request_focus(Some(self.id));
+                    cx.request_focus(Some(self.id.get()));
                 }
                 self.indexed_state.press(index, cx, self.state) || inside
             }
@@ -467,7 +478,7 @@ impl Element for Menu {
     }
 
     fn contains_id(&self, id: ElementId) -> bool {
-        self.id == id || self.item_ids.contains(&id)
+        self.id.get() == id || self.item_ids.contains(&id)
     }
 }
 

@@ -12,6 +12,7 @@ use crate::core::style::{
     AlignItems, Corners, Display, FlexDirection, JustifyContent, Position, Style,
 };
 use crate::core::text_editing::{TextInputCommand, TextInputEvent, TextInputSnapshot};
+use crate::elements::element::StableId;
 use crate::elements::element::{
     AnyElement, Element, EventContext, LayoutContext, PaintContext, PointerEvent,
     dispatch_action_to_children, style_to_taffy,
@@ -23,7 +24,7 @@ use taffy::prelude::*;
 type DismissHandler = Box<dyn Fn()>;
 
 pub struct Popover {
-    id: ElementId,
+    id: StableId,
     label: String,
     open: bool,
     state: InteractionState,
@@ -45,7 +46,7 @@ impl Popover {
 
         let theme = Theme::default();
         Self {
-            id: ElementId::new(),
+            id: StableId::new(),
             label,
             open: false,
             state: InteractionState::default(),
@@ -58,7 +59,7 @@ impl Popover {
     }
 
     pub fn id(mut self, id: ElementId) -> Self {
-        self.id = id;
+        self.id = StableId::explicit(id);
         self
     }
 
@@ -117,7 +118,7 @@ impl Popover {
         if let Some(handler) = &self.on_dismiss {
             handler();
         }
-        cx.announce_accessibility_action(self.id, format!("{} dismissed", self.label));
+        cx.announce_accessibility_action(self.id.get(), format!("{} dismissed", self.label));
         cx.request_redraw();
         true
     }
@@ -125,7 +126,11 @@ impl Popover {
 
 impl Element for Popover {
     fn id(&self) -> Option<ElementId> {
-        Some(self.id)
+        Some(self.id.get())
+    }
+
+    fn stable_id_mut(&mut self) -> Option<&mut StableId> {
+        Some(&mut self.id)
     }
 
     fn style(&self) -> &Style {
@@ -146,7 +151,7 @@ impl Element for Popover {
     }
 
     fn paint(&mut self, cx: &mut PaintContext) {
-        cx.register_hit_region(self.id, cx.bounds());
+        cx.register_hit_region(self.id.get(), cx.bounds());
         for index in 0..self.visible_child_count() {
             let node = self.child_nodes[index];
             let bounds = cx.child_bounds(node).unwrap_or(cx.bounds());
@@ -173,11 +178,15 @@ impl Element for Popover {
         }
 
         Ok(Some(
-            AccessibilityNode::label_required(self.id, AccessibilityRole::Popover, &self.label)?
-                .with_enabled(!self.state.disabled())
-                .with_read_only(self.state.read_only())
-                .with_invalid(self.state.invalid())
-                .with_focused(cx.a11y_has_focus(self.id)),
+            AccessibilityNode::label_required(
+                self.id.get(),
+                AccessibilityRole::Popover,
+                &self.label,
+            )?
+            .with_enabled(!self.state.disabled())
+            .with_read_only(self.state.read_only())
+            .with_invalid(self.state.invalid())
+            .with_focused(cx.a11y_has_focus(self.id.get())),
         ))
     }
 
@@ -289,7 +298,7 @@ impl Element for Popover {
     }
 
     fn contains_id(&self, id: ElementId) -> bool {
-        self.id == id
+        self.id.get() == id
             || self.children[..self.visible_child_count()]
                 .iter()
                 .any(|child| child.contains_id(id))
@@ -297,7 +306,7 @@ impl Element for Popover {
 }
 
 pub struct Dialog {
-    id: ElementId,
+    id: StableId,
     label: String,
     open: bool,
     modal: bool,
@@ -316,7 +325,7 @@ impl Dialog {
 
         let theme = Theme::default();
         Self {
-            id: ElementId::new(),
+            id: StableId::new(),
             label,
             open: true,
             modal: true,
@@ -330,7 +339,7 @@ impl Dialog {
     }
 
     pub fn id(mut self, id: ElementId) -> Self {
-        self.id = id;
+        self.id = StableId::explicit(id);
         self
     }
 
@@ -393,7 +402,7 @@ impl Dialog {
         if let Some(handler) = &self.on_dismiss {
             handler();
         }
-        cx.announce_accessibility_action(self.id, format!("{} dismissed", self.label));
+        cx.announce_accessibility_action(self.id.get(), format!("{} dismissed", self.label));
         cx.request_redraw();
         true
     }
@@ -401,7 +410,11 @@ impl Dialog {
 
 impl Element for Dialog {
     fn id(&self) -> Option<ElementId> {
-        Some(self.id)
+        Some(self.id.get())
+    }
+
+    fn stable_id_mut(&mut self) -> Option<&mut StableId> {
+        Some(&mut self.id)
     }
 
     fn style(&self) -> &Style {
@@ -436,7 +449,7 @@ impl Element for Dialog {
         }
 
         if self.modal {
-            cx.register_hit_region(self.id, cx.bounds());
+            cx.register_hit_region(self.id.get(), cx.bounds());
             cx.paint(Primitive::Quad {
                 bounds: cx.bounds(),
                 background: Color::rgba(0.0, 0.0, 0.0, 0.32).to_rgba(),
@@ -450,7 +463,7 @@ impl Element for Dialog {
             .content_node
             .and_then(|node| cx.child_bounds(node))
             .unwrap_or(cx.bounds());
-        cx.register_hit_region(self.id, content_bounds);
+        cx.register_hit_region(self.id.get(), content_bounds);
         paint_panel(cx, content_bounds, self.state.invalid(), self.theme);
         let mut content_cx = cx.with_bounds(content_bounds);
         self.content[0].paint(&mut content_cx);
@@ -471,11 +484,15 @@ impl Element for Dialog {
         }
 
         Ok(Some(
-            AccessibilityNode::label_required(self.id, AccessibilityRole::Dialog, &self.label)?
-                .with_enabled(!self.state.disabled())
-                .with_read_only(self.state.read_only())
-                .with_invalid(self.state.invalid())
-                .with_focused(cx.a11y_has_focus(self.id)),
+            AccessibilityNode::label_required(
+                self.id.get(),
+                AccessibilityRole::Dialog,
+                &self.label,
+            )?
+            .with_enabled(!self.state.disabled())
+            .with_read_only(self.state.read_only())
+            .with_invalid(self.state.invalid())
+            .with_focused(cx.a11y_has_focus(self.id.get())),
         ))
     }
 
@@ -574,7 +591,7 @@ impl Element for Dialog {
     }
 
     fn contains_id(&self, id: ElementId) -> bool {
-        self.id == id || (self.open && self.content[0].contains_id(id))
+        self.id.get() == id || (self.open && self.content[0].contains_id(id))
     }
 }
 

@@ -13,17 +13,19 @@ use crate::core::action::{ActionId, ActionOutcome, StandardAction};
 use crate::core::color::Color;
 use crate::core::geometry::{Bounds, Edges};
 use crate::core::style::{Corners, Style};
+use crate::elements::element::StableId;
 use crate::elements::element::{
     Element, EventContext, LayoutContext, PaintContext, PointerEvent, PointerEventKind,
     style_to_taffy,
 };
 use crate::elements::text::{FontWeight, TextAlign};
 use crate::renderer::Primitive;
+use std::any::TypeId;
 use taffy::prelude::*;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DataTableCell {
-    id: ElementId,
+    id: StableId,
     content: String,
     width: Option<f32>,
     align: TextAlign,
@@ -40,7 +42,7 @@ impl DataTableCell {
         require_non_empty(&content, "data table cell content must not be empty");
 
         Self {
-            id: ElementId::new(),
+            id: StableId::new(),
             content,
             width: None,
             align: TextAlign::Left,
@@ -53,7 +55,7 @@ impl DataTableCell {
     }
 
     pub fn id(mut self, id: ElementId) -> Self {
-        self.id = id;
+        self.id = StableId::explicit(id);
         self
     }
 
@@ -139,7 +141,7 @@ impl From<String> for DataTableCell {
 }
 
 pub struct DataTableRow {
-    id: ElementId,
+    id: StableId,
     cells: Vec<DataTableCell>,
     accessibility_label: Option<String>,
     size: ControlSize,
@@ -163,7 +165,7 @@ impl DataTableRow {
         }
 
         Self {
-            id: ElementId::new(),
+            id: StableId::new(),
             cells,
             accessibility_label: None,
             size: ControlSize::default(),
@@ -185,7 +187,7 @@ impl DataTableRow {
     }
 
     pub fn id(mut self, id: ElementId) -> Self {
-        self.id = id;
+        self.id = StableId::explicit(id);
         self
     }
 
@@ -323,7 +325,11 @@ impl DataTableRow {
 
 impl Element for DataTableRow {
     fn id(&self) -> Option<ElementId> {
-        Some(self.id)
+        Some(self.id.get())
+    }
+
+    fn stable_id_mut(&mut self) -> Option<&mut StableId> {
+        Some(&mut self.id)
     }
 
     fn style(&self) -> &Style {
@@ -331,6 +337,15 @@ impl Element for DataTableRow {
     }
 
     fn layout(&mut self, cx: &mut LayoutContext) -> NodeId {
+        // Cell ids the app did not set follow the row's stable id.
+        let parent = self.id.get();
+        for (index, cell) in self.cells.iter_mut().enumerate() {
+            cell.id.adopt(ElementId::derived(
+                parent,
+                index as u64,
+                TypeId::of::<DataTableCell>(),
+            ));
+        }
         let mut style = style_to_taffy(&self.style);
         style.size.width = Dimension::Length(self.preferred_width());
         style.size.height = Dimension::Length(self.preferred_height());
@@ -340,7 +355,7 @@ impl Element for DataTableRow {
 
     fn paint(&mut self, cx: &mut PaintContext) {
         let bounds = cx.bounds();
-        cx.register_hit_region(self.id, bounds);
+        cx.register_hit_region(self.id.get(), bounds);
         let background = if self.header {
             self.theme.colors.surface_muted
         } else {
@@ -391,13 +406,16 @@ impl Element for DataTableRow {
                 .collect::<Vec<_>>()
                 .join(" ")
         });
-        let mut node =
-            AccessibilityNode::label_required(self.id, AccessibilityRole::DataTableRow, label)?
-                .with_enabled(!self.state.disabled())
-                .with_read_only(self.state.read_only())
-                .with_invalid(self.state.invalid())
-                .with_selected(self.selected)
-                .with_focused(cx.a11y_has_focus(self.id));
+        let mut node = AccessibilityNode::label_required(
+            self.id.get(),
+            AccessibilityRole::DataTableRow,
+            label,
+        )?
+        .with_enabled(!self.state.disabled())
+        .with_read_only(self.state.read_only())
+        .with_invalid(self.state.invalid())
+        .with_selected(self.selected)
+        .with_focused(cx.a11y_has_focus(self.id.get()));
         if self.state.can_activate() {
             node = node.with_action(AccessibilityAction::Activate);
         }
@@ -408,7 +426,7 @@ impl Element for DataTableRow {
                 .unwrap_or(cell.content.as_str());
             node = node.with_child(
                 AccessibilityNode::label_required(
-                    cell.id,
+                    cell.id.get(),
                     AccessibilityRole::DataTableCell,
                     label,
                 )?
@@ -436,7 +454,7 @@ impl Element for DataTableRow {
                     if let Some(handler) = &self.on_select {
                         handler();
                     }
-                    cx.announce_accessibility_action(self.id, "row selected");
+                    cx.announce_accessibility_action(self.id.get(), "row selected");
                     return true;
                 }
                 false
@@ -445,7 +463,7 @@ impl Element for DataTableRow {
     }
 
     fn handle_action(&mut self, cx: &mut EventContext, action: &ActionId) -> ActionOutcome {
-        if !cx.is_focused(Some(self.id))
+        if !cx.is_focused(Some(self.id.get()))
             || !self.state.can_activate()
             || !matches!(action, ActionId::Standard(StandardAction::Activate))
         {
@@ -456,13 +474,13 @@ impl Element for DataTableRow {
         if let Some(handler) = &self.on_select {
             handler();
         }
-        cx.announce_accessibility_action(self.id, "row selected");
+        cx.announce_accessibility_action(self.id.get(), "row selected");
         cx.request_redraw();
         ActionOutcome::handled("advanced_ui.data_table_row")
     }
 
     fn contains_id(&self, id: ElementId) -> bool {
-        self.id == id || self.cells.iter().any(|cell| cell.id == id)
+        self.id.get() == id || self.cells.iter().any(|cell| cell.id.get() == id)
     }
 }
 
@@ -478,7 +496,7 @@ fn paint_cell(
     if bounds.is_empty() {
         return;
     }
-    cx.register_hit_region(cell.id, bounds);
+    cx.register_hit_region(cell.id.get(), bounds);
     if let Some(background) = cell.background {
         cx.paint(Primitive::Quad {
             bounds,

@@ -14,19 +14,16 @@ mod toolbar;
 mod tooltip;
 
 use crate::core::ElementId;
-use crate::core::accessibility::{
-    AccessibilityContext, AccessibilityError, AccessibilityNode, AccessibilityRole,
-};
 use crate::core::color::Color;
 use crate::core::event::Cursor;
 use crate::core::geometry::{Edges, Point, Size};
 use crate::core::style::{Dimension, Shadow, Style};
 use crate::core::text_editing::{TextInputCommand, TextInputEvent, TextInputSnapshot};
+use crate::elements::element::StableId;
 use crate::elements::element::{
     AnyElement, Element, EventContext, LayoutContext, PaintContext, PointerEvent,
 };
-use crate::elements::text::{FontWeight, TextAlign};
-use crate::elements::{Div, Text as RawText, div, text as raw_text};
+use crate::elements::{Div, Text, div};
 use crate::renderer::text::TextMeasureCache;
 use taffy::prelude::NodeId;
 
@@ -492,130 +489,9 @@ impl Flex {
 
 impl_div_wrapper_element!(Flex);
 
-/// Thin text wrapper for the advanced UI layer.
-pub struct Text {
-    inner: RawText,
-    id: ElementId,
-    content: String,
-}
-
-impl Text {
-    pub fn new(content: impl Into<String>) -> Self {
-        let content = content.into();
-        let id = ElementId::new();
-        Self {
-            inner: raw_text(content.clone()).id(id),
-            id,
-            content,
-        }
-    }
-
-    pub fn id(mut self, id: ElementId) -> Self {
-        self.inner = self.inner.id(id);
-        self.id = id;
-        self
-    }
-
-    pub fn color(mut self, color: impl Into<Color>) -> Self {
-        self.inner = self.inner.color(color);
-        self
-    }
-
-    pub fn size(mut self, size: f32) -> Self {
-        self.inner = self.inner.size(size);
-        self
-    }
-
-    pub fn weight(mut self, weight: FontWeight) -> Self {
-        self.inner = self.inner.weight(weight);
-        self
-    }
-
-    pub fn medium(mut self) -> Self {
-        self.inner = self.inner.medium();
-        self
-    }
-
-    pub fn semibold(mut self) -> Self {
-        self.inner = self.inner.semibold();
-        self
-    }
-
-    pub fn bold(mut self) -> Self {
-        self.inner = self.inner.bold();
-        self
-    }
-
-    pub fn font(mut self, family: impl Into<String>) -> Self {
-        self.inner = self.inner.font(family);
-        self
-    }
-
-    pub fn line_height(mut self, height: f32) -> Self {
-        self.inner = self.inner.line_height(height);
-        self
-    }
-
-    pub fn align(mut self, align: TextAlign) -> Self {
-        self.inner = self.inner.align(align);
-        self
-    }
-
-    pub fn center(mut self) -> Self {
-        self.inner = self.inner.center();
-        self
-    }
-
-    pub fn right(mut self) -> Self {
-        self.inner = self.inner.right();
-        self
-    }
-
-    pub fn into_text(self) -> RawText {
-        self.inner
-    }
-}
-
-impl Element for Text {
-    fn id(&self) -> Option<ElementId> {
-        Some(self.id)
-    }
-
-    fn style(&self) -> &Style {
-        Element::style(&self.inner)
-    }
-
-    fn layout(&mut self, cx: &mut LayoutContext) -> NodeId {
-        self.inner.layout(cx)
-    }
-
-    fn paint(&mut self, cx: &mut PaintContext) {
-        cx.register_accessibility_region(self.id, cx.bounds());
-        self.inner.paint(cx);
-    }
-
-    fn refresh_text_geometry(&mut self, text_measurer: &mut TextMeasureCache) {
-        self.inner.refresh_text_geometry(text_measurer);
-    }
-
-    fn accessibility(
-        &self,
-        cx: &AccessibilityContext,
-    ) -> Result<Option<AccessibilityNode>, AccessibilityError> {
-        if self.content.trim().is_empty() {
-            return Ok(None);
-        }
-
-        let node = AccessibilityNode::new(self.id, AccessibilityRole::Text)
-            .with_label(self.content.clone())
-            .with_focused(cx.a11y_has_focus(self.id));
-        Ok(Some(node))
-    }
-}
-
 /// Pointer hover wrapper with enter, move, leave, and cursor intent.
 pub struct Hoverable {
-    id: ElementId,
+    id: StableId,
     inner: AnyElement,
     hovered: bool,
     cursor: Option<Cursor>,
@@ -627,7 +503,7 @@ pub struct Hoverable {
 impl Hoverable {
     pub fn new(child: impl Into<AnyElement>) -> Self {
         Self {
-            id: ElementId::new(),
+            id: StableId::new(),
             inner: child.into(),
             hovered: false,
             cursor: None,
@@ -638,7 +514,7 @@ impl Hoverable {
     }
 
     pub fn id(mut self, id: ElementId) -> Self {
-        self.id = id;
+        self.id = StableId::explicit(id);
         self
     }
 
@@ -665,7 +541,11 @@ impl Hoverable {
 
 impl Element for Hoverable {
     fn id(&self) -> Option<ElementId> {
-        Some(self.id)
+        Some(self.id.get())
+    }
+
+    fn stable_id_mut(&mut self) -> Option<&mut StableId> {
+        Some(&mut self.id)
     }
 
     fn style(&self) -> &Style {
@@ -677,7 +557,7 @@ impl Element for Hoverable {
     }
 
     fn paint(&mut self, cx: &mut PaintContext) {
-        cx.register_hit_region(self.id, cx.bounds());
+        cx.register_hit_region(self.id.get(), cx.bounds());
         self.inner.paint(cx);
     }
 
@@ -767,7 +647,7 @@ impl Element for Hoverable {
     }
 
     fn contains_id(&self, id: ElementId) -> bool {
-        self.id == id || self.inner.contains_id(id)
+        self.id.get() == id || self.inner.contains_id(id)
     }
 }
 
@@ -783,8 +663,10 @@ pub fn column() -> Flex {
     Flex::column()
 }
 
+/// [`crate::elements::Text`] exposed to assistive technology: see
+/// [`crate::elements::Text::accessible`].
 pub fn text(content: impl Into<String>) -> Text {
-    Text::new(content)
+    crate::elements::text(content).accessible()
 }
 
 pub fn hoverable(child: impl Into<AnyElement>) -> Hoverable {

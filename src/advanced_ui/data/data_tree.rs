@@ -12,17 +12,19 @@ use crate::core::accessibility::{
 use crate::core::action::{ActionId, ActionOutcome, StandardAction};
 use crate::core::geometry::Point;
 use crate::core::style::Style;
+use crate::elements::element::StableId;
 use crate::elements::element::{
     Element, EventContext, LayoutContext, PaintContext, PointerEvent, PointerEventKind,
     style_to_taffy,
 };
 use crate::elements::text::TextAlign;
+use std::any::TypeId;
 use std::collections::HashSet;
 use taffy::prelude::*;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DataTreeItem {
-    id: ElementId,
+    id: StableId,
     value: String,
     label: String,
     detail: Option<String>,
@@ -41,7 +43,7 @@ impl DataTreeItem {
         require_non_empty(&label, "data tree item label must not be empty");
 
         Self {
-            id: ElementId::new(),
+            id: StableId::new(),
             value,
             label,
             detail: None,
@@ -54,7 +56,7 @@ impl DataTreeItem {
     }
 
     pub fn id(mut self, id: ElementId) -> Self {
-        self.id = id;
+        self.id = StableId::explicit(id);
         self
     }
 
@@ -123,7 +125,7 @@ impl From<(&str, &str)> for DataTreeItem {
 }
 
 pub struct DataTree {
-    id: ElementId,
+    id: StableId,
     roots: Vec<DataTreeItem>,
     selected_value: Option<String>,
     accessibility_label: Option<String>,
@@ -148,7 +150,7 @@ impl DataTree {
         let roots: Vec<DataTreeItem> = roots.into_iter().map(Into::into).collect();
         validate_unique_tree_values(&roots);
         Self {
-            id: ElementId::new(),
+            id: StableId::new(),
             roots,
             selected_value: None,
             accessibility_label: None,
@@ -164,7 +166,7 @@ impl DataTree {
     }
 
     pub fn id(mut self, id: ElementId) -> Self {
-        self.id = id;
+        self.id = StableId::explicit(id);
         self
     }
 
@@ -294,7 +296,7 @@ impl DataTree {
         let Some((value, label)) = self
             .visible_items()
             .into_iter()
-            .find(|visible| visible.item.id == id && visible.item.can_activate())
+            .find(|visible| visible.item.id.get() == id && visible.item.can_activate())
             .map(|visible| (visible.item.value.clone(), visible.item.label.clone()))
         else {
             return ActionOutcome::Ignored;
@@ -308,7 +310,7 @@ impl DataTree {
                 handler(&value);
             }
         }
-        cx.announce_accessibility_action(self.id, format!("{label} selected"));
+        cx.announce_accessibility_action(self.id.get(), format!("{label} selected"));
         cx.request_redraw();
         ActionOutcome::handled("advanced_ui.data_tree")
     }
@@ -316,7 +318,11 @@ impl DataTree {
 
 impl Element for DataTree {
     fn id(&self) -> Option<ElementId> {
-        Some(self.id)
+        Some(self.id.get())
+    }
+
+    fn stable_id_mut(&mut self) -> Option<&mut StableId> {
+        Some(&mut self.id)
     }
 
     fn style(&self) -> &Style {
@@ -324,6 +330,8 @@ impl Element for DataTree {
     }
 
     fn layout(&mut self, cx: &mut LayoutContext) -> NodeId {
+        // Item ids the app did not set follow the tree's stable id.
+        adopt_item_ids(&mut self.roots, self.id.get());
         let mut style = style_to_taffy(&self.style);
         style.size.width = Dimension::Length(self.style.width.unwrap_or(DEFAULT_DATA_WIDTH));
         style.size.height = Dimension::Length(
@@ -337,7 +345,7 @@ impl Element for DataTree {
 
     fn paint(&mut self, cx: &mut PaintContext) {
         let bounds = cx.bounds();
-        cx.register_hit_region(self.id, bounds);
+        cx.register_hit_region(self.id.get(), bounds);
         paint_surface(
             cx,
             bounds,
@@ -351,7 +359,7 @@ impl Element for DataTree {
             let Some(row_bounds) = row_bounds(bounds, self.row_height, index) else {
                 continue;
             };
-            cx.register_hit_region(visible.item.id, row_bounds);
+            cx.register_hit_region(visible.item.id.get(), row_bounds);
             let marker = tree_marker(visible.item);
             paint_data_row(
                 cx,
@@ -386,11 +394,11 @@ impl Element for DataTree {
                     role: AccessibilityRole::DataTree,
                 })?;
         let mut node =
-            AccessibilityNode::label_required(self.id, AccessibilityRole::DataTree, label)?
+            AccessibilityNode::label_required(self.id.get(), AccessibilityRole::DataTree, label)?
                 .with_enabled(!self.state.disabled())
                 .with_read_only(self.state.read_only())
                 .with_invalid(self.state.invalid())
-                .with_focused(cx.a11y_has_focus(self.id));
+                .with_focused(cx.a11y_has_focus(self.id.get()));
         if let Some(selected) = &self.selected_value {
             node = node.with_value(selected.clone());
         }
@@ -427,7 +435,8 @@ impl Element for DataTree {
                 let visible = self.visible_items();
                 let id = visible[release.released_index.expect("selected tree index")]
                     .item
-                    .id;
+                    .id
+                    .get();
                 self.select_item_id(id, cx).is_handled()
             }
         }
@@ -444,7 +453,7 @@ impl Element for DataTree {
     }
 
     fn contains_id(&self, id: ElementId) -> bool {
-        self.id == id || tree_contains_id(&self.roots, id)
+        self.id.get() == id || tree_contains_id(&self.roots, id)
     }
 }
 
@@ -489,10 +498,22 @@ fn collect_visible_tree_items<'a>(
     }
 }
 
+/// Gives each item without an id set by the app one derived from its parent.
+fn adopt_item_ids(items: &mut [DataTreeItem], parent: ElementId) {
+    for (index, item) in items.iter_mut().enumerate() {
+        item.id.adopt(ElementId::derived(
+            parent,
+            index as u64,
+            TypeId::of::<DataTreeItem>(),
+        ));
+        adopt_item_ids(&mut item.children, item.id.get());
+    }
+}
+
 fn tree_contains_id(items: &[DataTreeItem], id: ElementId) -> bool {
     items
         .iter()
-        .any(|item| item.id == id || tree_contains_id(&item.children, id))
+        .any(|item| item.id.get() == id || tree_contains_id(&item.children, id))
 }
 
 fn tree_item_accessibility(
@@ -501,14 +522,17 @@ fn tree_item_accessibility(
     selected_value: Option<&str>,
     cx: &AccessibilityContext,
 ) -> Result<AccessibilityNode, AccessibilityError> {
-    let mut node =
-        AccessibilityNode::label_required(item.id, AccessibilityRole::DataTreeItem, &item.label)?
-            .value_required(&item.value)?
-            .with_selected(selected_value == Some(item.value()))
-            .with_enabled(!state.disabled() && !item.disabled)
-            .with_read_only(state.read_only() || item.read_only)
-            .with_invalid(state.invalid() || item.invalid)
-            .with_focused(cx.a11y_has_focus(item.id));
+    let mut node = AccessibilityNode::label_required(
+        item.id.get(),
+        AccessibilityRole::DataTreeItem,
+        &item.label,
+    )?
+    .value_required(&item.value)?
+    .with_selected(selected_value == Some(item.value()))
+    .with_enabled(!state.disabled() && !item.disabled)
+    .with_read_only(state.read_only() || item.read_only)
+    .with_invalid(state.invalid() || item.invalid)
+    .with_focused(cx.a11y_has_focus(item.id.get()));
     if state.can_activate() && item.can_activate() {
         node = node.with_action(AccessibilityAction::Activate);
     }
