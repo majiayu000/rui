@@ -211,7 +211,7 @@ fn shaping_marks_emoji_clusters_without_splitting_zwj_sequences() {
 }
 
 #[test]
-fn shaping_reports_mixed_direction_as_observable_diagnostic() {
+fn mixed_direction_text_is_laid_out_without_a_diagnostic() {
     let mut cache = TextMeasureCache::new();
     let plan = shape(&mut cache, request("abc שלום"));
 
@@ -219,12 +219,7 @@ fn shaping_reports_mixed_direction_as_observable_diagnostic() {
     assert!(plan.runs().iter().any(|run| {
         run.direction == TextDirection::RightToLeft && run.script == TextScript::Rtl
     }));
-    assert!(plan.diagnostics().iter().any(|diagnostic| matches!(
-        diagnostic,
-        TextShapeDiagnostic::MixedDirection {
-            direction: TextDirection::Mixed
-        }
-    )));
+    assert!(plan.diagnostics().is_empty(), "{:?}", plan.diagnostics());
 }
 
 #[test]
@@ -239,7 +234,7 @@ fn shaping_recognizes_non_latin_ltr_scripts() {
 }
 
 #[test]
-fn shaping_treats_emoji_as_neutral_for_bidi_diagnostics() {
+fn shaping_treats_emoji_as_neutral_direction() {
     let mut cache = TextMeasureCache::new();
     let plan = shape(&mut cache, request("שלום 🙂"));
 
@@ -248,12 +243,6 @@ fn shaping_treats_emoji_as_neutral_for_bidi_diagnostics() {
         plan.clusters().iter().any(|cluster| {
             cluster.text == "🙂" && cluster.direction == TextDirection::Neutral
         })
-    );
-    assert!(
-        !plan
-            .diagnostics()
-            .iter()
-            .any(|diagnostic| matches!(diagnostic, TextShapeDiagnostic::MixedDirection { .. }))
     );
 }
 
@@ -272,12 +261,6 @@ fn shaping_treats_arabic_indic_digits_as_numeric_neutral() {
 
     let latin_with_digits = shape(&mut cache, request("abc ١٢٣"));
     assert_eq!(latin_with_digits.direction(), TextDirection::LeftToRight);
-    assert!(
-        !latin_with_digits
-            .diagnostics()
-            .iter()
-            .any(|diagnostic| matches!(diagnostic, TextShapeDiagnostic::MixedDirection { .. }))
-    );
 }
 
 #[test]
@@ -298,12 +281,6 @@ fn shaping_recognizes_rtl_scripts_from_bidi_properties() {
 
     let mixed = shape(&mut cache, request("abc \u{1e900}"));
     assert_eq!(mixed.direction(), TextDirection::Mixed);
-    assert!(mixed.diagnostics().iter().any(|diagnostic| matches!(
-        diagnostic,
-        TextShapeDiagnostic::MixedDirection {
-            direction: TextDirection::Mixed
-        }
-    )));
 }
 
 #[test]

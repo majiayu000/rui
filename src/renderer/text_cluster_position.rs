@@ -93,6 +93,7 @@ mod tests {
             text,
             script: TextScript::Latin,
             direction: TextDirection::LeftToRight,
+            bidi_level: 0,
             font_index: 0,
             x_offset: 0.0,
             advance_width: 0.0,
