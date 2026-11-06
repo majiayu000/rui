@@ -677,7 +677,7 @@ impl Scene {
         self.layers.get_mut(id.index())
     }
 
-    fn visible_bounds_for(&self, bounds: Bounds) -> Option<Bounds> {
+    pub(crate) fn visible_bounds_for(&self, bounds: Bounds) -> Option<Bounds> {
         let mut visible = bounds;
 
         if let Some(render_clip) = self

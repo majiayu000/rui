@@ -252,3 +252,61 @@ fn retained_frames_with_the_inspector_match_full_redraws() {
         );
     }
 }
+
+#[test]
+fn inspector_does_not_pick_the_clipped_part_of_a_child() {
+    let child = ElementId::from(99001);
+    let mut session = mount(Size::new(300.0, 200.0), |_| {
+        div().child(
+            rui::scroll_view()
+                .w(100.0)
+                .h(40.0)
+                .child(div().id(child).w(100.0).h(100.0)),
+        )
+    })
+    .unwrap();
+    session.app_context_mut().toggle_inspector();
+    session.frame().unwrap();
+    let inspector = session.inspector().unwrap();
+    assert_eq!(
+        inspector.element_at(Point::new(20.0, 20.0)).unwrap().id,
+        child
+    );
+    assert_ne!(
+        inspector
+            .element_at(Point::new(20.0, 70.0))
+            .map(|element| element.id),
+        Some(child)
+    );
+}
+
+#[test]
+fn inspector_intersects_nested_clips_across_replayed_frames() {
+    let child = ElementId::from(99002);
+    let mut session = mount(Size::new(300.0, 200.0), |_| {
+        div().child(
+            rui::scroll_view().w(80.0).h(40.0).child(
+                rui::scroll_view()
+                    .w(100.0)
+                    .h(100.0)
+                    .child(div().id(child).w(100.0).h(100.0)),
+            ),
+        )
+    })
+    .unwrap();
+    session.app_context_mut().toggle_inspector();
+    for _ in 0..2 {
+        session.frame().unwrap();
+        let inspector = session.inspector().unwrap();
+        assert_eq!(
+            inspector.element_at(Point::new(20.0, 20.0)).unwrap().id,
+            child
+        );
+        for point in [Point::new(20.0, 70.0), Point::new(90.0, 20.0)] {
+            assert_ne!(
+                inspector.element_at(point).map(|element| element.id),
+                Some(child)
+            );
+        }
+    }
+}
