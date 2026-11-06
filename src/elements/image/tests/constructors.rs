@@ -9,7 +9,7 @@ fn test_image_new() {
 
     assert!(image.id.is_none());
     assert_eq!(image.fit, ImageFit::Contain);
-    assert_eq!(image.state, ImageState::Loading);
+    assert_eq!(image.state, ImageState::Loaded);
     assert!(image.alt_text.is_none());
     assert!(image.texture_id.is_none());
     assert!(image.intrinsic_size.is_none());
@@ -20,7 +20,7 @@ fn test_image_new() {
 fn test_image_from_file() {
     let image = Image::from_file("assets/logo.png");
 
-    if let ImageSource::File(path) = &image.source {
+    if let ImageSource::File(path) = &image.source.as_ref().expect("source") {
         assert_eq!(path, "assets/logo.png");
     } else {
         panic!("Expected File source");
@@ -32,7 +32,7 @@ fn test_image_from_file_with_string() {
     let path = String::from("assets/logo.png");
     let image = Image::from_file(path);
 
-    if let ImageSource::File(p) = &image.source {
+    if let ImageSource::File(p) = &image.source.as_ref().expect("source") {
         assert_eq!(p, "assets/logo.png");
     } else {
         panic!("Expected File source");
@@ -48,7 +48,7 @@ fn test_image_from_data() {
         data,
         width,
         height,
-    } = &image.source
+    } = &image.source.as_ref().expect("source")
     {
         assert_eq!(*data, pixel_data);
         assert_eq!(*width, 2);
@@ -62,7 +62,7 @@ fn test_image_from_data() {
 fn test_image_from_texture() {
     let image = Image::from_texture(123);
 
-    if let ImageSource::Texture(id) = &image.source {
+    if let ImageSource::Texture(id) = &image.source.as_ref().expect("source") {
         assert_eq!(*id, 123);
     } else {
         panic!("Expected Texture source");

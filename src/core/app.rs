@@ -13,9 +13,11 @@ use crate::core::view::{
 };
 
 mod clipboard;
+mod images;
 mod release;
 
 pub(crate) use clipboard::SharedClipboard;
+pub use images::ImageAsset;
 
 #[cfg(all(target_os = "macos", feature = "metal"))]
 use crate::core::window::WindowId;
@@ -62,6 +64,7 @@ pub struct AppContext {
     /// What each child view read in its last render.
     view_reads: HashMap<EntityId, Vec<EntityId>>,
     pub(crate) devtools: DevtoolsFlags,
+    images: images::ImageAssets,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -214,6 +217,7 @@ impl AppContext {
             observers: HashMap::new(),
             view_reads: HashMap::new(),
             devtools: DevtoolsFlags::from_env(),
+            images: images::ImageAssets::default(),
         }
     }
 

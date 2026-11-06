@@ -680,6 +680,13 @@ impl MetalRenderer {
 
         self.texture_resources.begin_frame();
         self.image_cache.begin_frame();
+        for handle in self.image_cache.release_dropped()? {
+            let id = handle.id.as_u32();
+            self.textures.remove(&id);
+            if self.texture_resources.contains(&id) {
+                self.texture_resources.dispose(&id)?;
+            }
+        }
         self.text_cache.begin_frame();
         // Atlas pages only finished frames drew from may be evicted.
         let time_completed = self.profiling;

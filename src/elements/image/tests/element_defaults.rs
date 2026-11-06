@@ -29,7 +29,7 @@ fn test_image_default_values() {
     // Check all default values
     assert!(image.id.is_none());
     assert_eq!(image.fit, ImageFit::Contain);
-    assert_eq!(image.state, ImageState::Loading);
+    assert_eq!(image.state, ImageState::Loaded);
     assert!(image.alt_text.is_none());
     assert!(image.texture_id.is_none());
     assert!(image.intrinsic_size.is_none());
@@ -57,7 +57,7 @@ fn test_image_placeholder_default_color() {
 fn test_image_helper_function() {
     let img = image("path/to/file.png");
 
-    if let ImageSource::File(path) = &img.source {
+    if let ImageSource::File(path) = &img.source.as_ref().expect("source") {
         assert_eq!(path, "path/to/file.png");
     } else {
         panic!("Expected File source from image() helper");
@@ -70,7 +70,7 @@ fn test_image_helper_function() {
 fn test_image_empty_path() {
     let image = Image::from_file("");
 
-    if let ImageSource::File(path) = &image.source {
+    if let ImageSource::File(path) = &image.source.as_ref().expect("source") {
         assert_eq!(path, "");
     } else {
         panic!("Expected File source");
@@ -85,7 +85,7 @@ fn test_image_empty_data() {
         data,
         width,
         height,
-    } = &image.source
+    } = &image.source.as_ref().expect("source")
     {
         assert!(data.is_empty());
         assert_eq!(*width, 0);
@@ -144,7 +144,7 @@ fn test_image_unicode_alt_text() {
 fn test_image_unicode_path() {
     let image = Image::from_file("image.png");
 
-    if let ImageSource::File(path) = &image.source {
+    if let ImageSource::File(path) = &image.source.as_ref().expect("source") {
         assert_eq!(path, "image.png");
     } else {
         panic!("Expected File source");

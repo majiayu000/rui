@@ -18,7 +18,7 @@ pub use canvas::{Canvas, Painter, canvas};
 pub use div::{Div, div};
 pub use element::{AnyElement, Capabilities, Element, EventResult, IntoElement, Render, StableId};
 pub(crate) use image::fit_bounds;
-pub use image::{Image, ImageFit, ImageSource, image};
+pub use image::{DecodedImage, Image, ImageFit, ImageSource, ImageState, image};
 pub use input::{Input, InputType, input};
 pub use list::{List, ListItem, ListStyle, list, ordered_list, unordered_list};
 pub use scroll_view::{ScrollDirection, ScrollView, scroll_view};
