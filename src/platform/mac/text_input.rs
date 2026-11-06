@@ -321,6 +321,11 @@ define_class!(
     pub(crate) struct RuiContentView;
 
     impl RuiContentView {
+        #[unsafe(method_id(accessibilityFocusedUIElement))]
+        fn accessibility_focused_ui_element(&self) -> Option<Retained<AnyObject>> {
+            super::accessibility::focused_native_descendant(self)
+        }
+
         #[unsafe(method(acceptsFirstResponder))]
         fn accepts_first_responder(&self) -> bool {
             true

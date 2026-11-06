@@ -752,7 +752,7 @@ fn keycode_from_char(ch: char) -> KeyCode {
         '\r' | '\n' => KeyCode::Enter,
         '\u{7f}' => KeyCode::Backspace,
         '\u{1b}' => KeyCode::Escape,
-        '\t' => KeyCode::Tab,
+        '\t' | '\u{19}' => KeyCode::Tab,
         ' ' => KeyCode::Space,
         '0' => KeyCode::Key0,
         '1' => KeyCode::Key1,

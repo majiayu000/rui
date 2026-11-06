@@ -661,3 +661,26 @@ impl AccessibilityBridge for MacAccessibilityBridge {
 #[cfg(test)]
 #[path = "accessibility_tests.rs"]
 mod tests;
+
+/// Resolve logical keyboard focus inside the content view's published AX tree.
+/// AppKit's first responder remains the content view for text input.
+pub(crate) fn focused_native_descendant(view: &NSView) -> Option<Retained<AnyObject>> {
+    fn find(nodes: &NSArray<AnyObject>) -> Option<Retained<AnyObject>> {
+        for node in nodes {
+            // SAFETY: these are the NSAccessibilityElement nodes published by
+            // AppKitAccessibilityHost, which implement both accessibility selectors.
+            let focused: bool = unsafe { msg_send![&*node, isAccessibilityFocused] };
+            if focused {
+                return Some(node);
+            }
+            let children: Option<Retained<NSArray<AnyObject>>> = unsafe {
+                msg_send![&*node, accessibilityChildren]
+            };
+            if let Some(found) = children.as_deref().and_then(find) {
+                return Some(found);
+            }
+        }
+        None
+    }
+    view.accessibilityChildren().as_deref().and_then(find)
+}
