@@ -19,7 +19,11 @@ impl TextArea {
         &mut self,
         command: TextInputCommand,
     ) -> Result<TextEditOutcome, TextEditError> {
-        if !self.can_edit() {
+        // Cancellation is owner cleanup, including after becoming read-only or
+        // disabled. It must restore provisional text before detach/focus loss.
+        let cancel_existing = matches!(command, TextInputCommand::CancelComposition)
+            && self.editor.composition().is_some();
+        if !self.can_edit() && !cancel_existing {
             return Ok(TextEditOutcome::default());
         }
         self.sync_editor_from_public_state_if_needed()?;
