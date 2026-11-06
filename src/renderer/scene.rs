@@ -431,6 +431,12 @@ impl Scene {
     /// Only what can be seen in `visible` counts, so content that left the
     /// view or was not painted for being out of it does not.
     pub fn damage(&self, visible: Bounds) -> Reach {
+        self.damage_before_previous(visible, self.previous_primitives.len())
+    }
+
+    /// [`Self::damage`] counting only the previous frame's primitives before
+    /// `end`, to leave out content drawn over the frame after its paint.
+    pub(crate) fn damage_before_previous(&self, visible: Bounds, end: usize) -> Reach {
         let seen = |reach: Reach| match reach {
             Reach::Within(bounds) => bounds
                 .intersection(&visible)
@@ -455,7 +461,8 @@ impl Scene {
             index += 1;
         }
         // Replayed primitives were moved out, leaving clip pops that draw nothing.
-        for primitive in &self.previous_primitives {
+        let end = end.min(self.previous_primitives.len());
+        for primitive in &self.previous_primitives[..end] {
             damage = union(damage, seen(damage_reach(primitive)));
             if damage == Reach::Unbounded {
                 return damage;
@@ -488,10 +495,9 @@ impl Scene {
         reach.unwrap_or(Bounds::from_xywh(0.0, 0.0, 0.0, 0.0))
     }
 
-    /// Drop the previous frame's primitives from `len` on, so they are not
-    /// damage. For content painted again over the same place every frame.
-    pub(crate) fn truncate_previous(&mut self, len: usize) {
-        self.previous_primitives.truncate(len);
+    /// What the memoizable subtrees painted so far this frame painted.
+    pub(crate) fn paint_records(&self) -> &[PaintRecord] {
+        &self.records
     }
 
     /// Primitives this frame replayed from the previous one instead of painting.
@@ -696,6 +702,8 @@ pub(crate) struct PaintRecord {
     /// The primitives are in the frame's range `start..end`; false when the
     /// subtree was left out.
     pub(crate) painted: bool,
+    /// The primitives were replayed from the previous frame, not painted.
+    pub(crate) replayed: bool,
     pub(crate) start: u32,
     pub(crate) end: u32,
     pub(crate) origin: Point,

@@ -7,7 +7,7 @@ use crate::core::event::Event;
 use crate::core::frame_pipeline::FrameStageDurations;
 use crate::core::frame_pipeline::{FramePipeline, FramePipelineError};
 use crate::core::geometry::{Bounds, Point, Size};
-use crate::devtools::Profiler;
+use crate::devtools::{Profiler, WindowDevtools};
 use crate::elements::Element;
 use crate::elements::element::{EventContext, LayoutNodes, PointerEvent, PointerEventKind};
 use crate::renderer::RendererDiagnostics;
@@ -60,7 +60,7 @@ pub struct Presenter<E = ()> {
     prepared_frame: PresenterFrame,
     last_frame: Option<PresenterFrame>,
     /// Only while the profiling overlay is on.
-    profiler: Option<Box<Profiler>>,
+    devtools: Option<Box<WindowDevtools>>,
 }
 
 impl<E> Presenter<E> {
@@ -89,7 +89,7 @@ impl<E> Presenter<E> {
                 primitive_count: 0,
             },
             last_frame: None,
-            profiler: None,
+            devtools: None,
         }
     }
 
@@ -211,30 +211,30 @@ impl<E> Presenter<E> {
 
     /// This window's profiler, while the profiling overlay is on.
     pub fn profiler(&self) -> Option<&Profiler> {
-        self.profiler.as_deref()
+        self.devtools.as_ref()?.profiler()
     }
 
     pub fn profiler_mut(&mut self) -> Option<&mut Profiler> {
-        self.profiler.as_deref_mut()
+        self.devtools.as_mut()?.profiler_mut()
     }
 
-    /// Start or stop this window's profiler as the app asks, and start timing
-    /// a frame that will be drawn.
+    /// Start or stop this window's devtools as the app asks, before a frame
+    /// that will be drawn.
     pub(crate) fn begin_devtools_frame(&mut self, context: &AppContext) {
-        if !context.devtools.profiler {
+        if !context.devtools.any() {
             // The last overlay stays in the scene, so the next frame's damage
             // covers it and it is painted over.
-            self.profiler = None;
+            self.devtools = None;
             return;
         }
-        self.profiler
-            .get_or_insert_with(|| Box::new(Profiler::new()))
-            .begin_frame(context.frame_interval());
+        self.devtools
+            .get_or_insert_default()
+            .begin_frame(context.devtools, context.frame_interval());
     }
 
     pub(crate) fn paint_devtools_overlay(&mut self) {
-        if let Some(profiler) = self.profiler.as_mut() {
-            profiler.paint_overlay(&mut self.scene, self.laid_out_viewport);
+        if let Some(devtools) = self.devtools.as_mut() {
+            devtools.paint_overlay(&mut self.scene, self.laid_out_viewport);
         }
     }
 
@@ -243,8 +243,8 @@ impl<E> Presenter<E> {
         context: &AppContext,
         durations: FrameStageDurations,
     ) {
-        if let Some(profiler) = self.profiler.as_mut() {
-            profiler.end_frame(durations, context.animation_frame_requested());
+        if let Some(devtools) = self.devtools.as_mut() {
+            devtools.end_frame(durations, context.animation_frame_requested());
         }
     }
 
