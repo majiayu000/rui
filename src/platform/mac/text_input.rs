@@ -333,6 +333,11 @@ define_class!(
 
         #[unsafe(method(keyDown:))]
         fn key_down(&self, event: &NSEvent) {
+            // Non-text controls need the raw key-down (for example Space on a
+            // button), not an InsertText command that suppresses that event.
+            if self.ivars().ime.borrow().snapshot.is_none() {
+                return;
+            }
             let events = NSArray::from_slice(&[event]);
             self.interpretKeyEvents(&events);
         }
