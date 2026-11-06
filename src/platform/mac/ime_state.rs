@@ -20,6 +20,7 @@ impl NativeImeState {
         focused: Option<ElementId>,
     ) -> Option<ElementId> {
         match event {
+            TextInputCommand::Undo | TextInputCommand::Redo => focused,
             TextInputCommand::InsertText(_) | TextInputCommand::InsertTextReplacing { .. } => {
                 focused
             }
@@ -260,6 +261,9 @@ where
             return (Err(err), redraw_requested);
         }
     };
+    if snapshot.composition().is_none() && ime_state.composition_owner.take().is_some() {
+        window.discard_marked_text();
+    }
     window.content_view.update_text_input_state(
         Some(snapshot.clone()),
         Some(selected_range),

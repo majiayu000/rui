@@ -10,7 +10,7 @@ use crate::core::accessibility::{
 };
 use crate::core::action::{ActionId, ActionOutcome, StandardAction};
 use crate::core::color::Color;
-use crate::core::event::{KeyCode, KeyEvent, Modifiers};
+use crate::core::event::{KeyCode, KeyEvent};
 use crate::core::geometry::{Bounds, Edges};
 use crate::core::style::{Corners, Style};
 use crate::core::text_editing::{
@@ -76,6 +76,7 @@ pub struct Input {
     style: Style,
     state: InputState,
     editor: TextEditBuffer,
+    value_supplied: bool,
     width: Option<f32>,
     height: Option<f32>,
     on_change: Option<Box<dyn Fn(&str)>>,
@@ -109,6 +110,7 @@ impl Input {
             input_type: InputType::default(),
             style,
             state: InputState::default(),
+            value_supplied: false,
             editor: TextEditBuffer::new(),
             width: None,
             height: None,
@@ -142,6 +144,7 @@ impl Input {
     }
 
     pub fn value(mut self, value: impl Into<String>) -> Self {
+        self.value_supplied = true;
         self.editor = TextEditBuffer::with_text(value.into());
         self.sync_state_from_editor();
         self
@@ -431,19 +434,6 @@ impl Input {
             }
             _ => TextSelection::collapsed(cursor),
         }
-    }
-
-    fn sync_editor_from_public_state_if_needed(&mut self) -> Result<(), TextEditError> {
-        if self.public_state_matches_editor() {
-            return Ok(());
-        }
-
-        let mut editor = TextEditBuffer::with_text(self.state.value.clone());
-        editor.set_selection(self.state_selection())?;
-        self.editor = editor;
-        self.visual_caret = None;
-        self.sync_state_from_editor();
-        Ok(())
     }
 
     fn public_state_matches_editor(&self) -> bool {
@@ -755,86 +745,7 @@ impl Element for Input {
     }
 
     fn handle_action(&mut self, cx: &mut EventContext, action: &ActionId) -> ActionOutcome {
-        if matches!(action, ActionId::Custom(name) if name == crate::core::action::SYNC_ACCESSIBILITY_FOCUS_ACTION)
-        {
-            self.sync_focus_from_context(cx);
-            return ActionOutcome::Ignored;
-        }
-        if !cx.is_focused(Some(self.id.get())) && !self.state.focused {
-            return ActionOutcome::Ignored;
-        }
-
-        let ActionId::Standard(action) = action else {
-            return ActionOutcome::Ignored;
-        };
-
-        if *action == StandardAction::Cancel {
-            self.emit_cancel();
-            return ActionOutcome::handled("input");
-        }
-
-        if matches!(
-            action,
-            StandardAction::Copy | StandardAction::Cut | StandardAction::Paste
-        ) {
-            return self.run_clipboard_action(cx, *action);
-        }
-
-        if *action == StandardAction::SelectAll {
-            self.visual_caret = None;
-            let result = self
-                .sync_editor_from_public_state_if_needed()
-                .and_then(|_| {
-                    let end = self.editor.text().len();
-                    self.editor.set_selection(TextSelection::new(0, end))
-                });
-            return match result {
-                Ok(()) => {
-                    self.sync_state_from_editor();
-                    cx.request_redraw();
-                    ActionOutcome::handled("input")
-                }
-                Err(err) => {
-                    log::error!("input select all action failed: {err}");
-                    ActionOutcome::Ignored
-                }
-            };
-        }
-
-        let event = match action {
-            StandardAction::MoveLeft => KeyEvent::new(KeyCode::ArrowLeft, Modifiers::none()),
-            StandardAction::MoveRight => KeyEvent::new(KeyCode::ArrowRight, Modifiers::none()),
-            StandardAction::MoveUp => KeyEvent::new(KeyCode::ArrowUp, Modifiers::none()),
-            StandardAction::MoveDown => KeyEvent::new(KeyCode::ArrowDown, Modifiers::none()),
-            StandardAction::MoveWordLeft => KeyEvent::new(KeyCode::ArrowLeft, Modifiers::alt()),
-            StandardAction::MoveWordRight => KeyEvent::new(KeyCode::ArrowRight, Modifiers::alt()),
-            StandardAction::SelectLeft => KeyEvent::new(KeyCode::ArrowLeft, Modifiers::shift()),
-            StandardAction::SelectRight => KeyEvent::new(KeyCode::ArrowRight, Modifiers::shift()),
-            StandardAction::DeleteBackward => KeyEvent::new(KeyCode::Backspace, Modifiers::none()),
-            StandardAction::DeleteForward => KeyEvent::new(KeyCode::Delete, Modifiers::none()),
-            StandardAction::DeleteWordBackward => {
-                KeyEvent::new(KeyCode::Backspace, Modifiers::alt())
-            }
-            StandardAction::DeleteWordForward => KeyEvent::new(KeyCode::Delete, Modifiers::alt()),
-            StandardAction::Activate | StandardAction::Submit | StandardAction::InsertNewline => {
-                KeyEvent::new(KeyCode::Enter, Modifiers::none())
-            }
-            _ => return ActionOutcome::Ignored,
-        };
-
-        match self
-            .apply_shaped_navigation(&event)
-            .unwrap_or_else(|| self.apply_key_event(&event))
-        {
-            Ok(_) => {
-                cx.request_redraw();
-                ActionOutcome::handled("input")
-            }
-            Err(err) => {
-                log::error!("input action failed: {err}");
-                ActionOutcome::Ignored
-            }
-        }
+        self.handle_action_impl(cx, action)
     }
 
     fn accessibility(

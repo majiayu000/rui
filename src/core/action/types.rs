@@ -24,6 +24,8 @@ impl ActionId {
                     | StandardAction::DeleteWordBackward
                     | StandardAction::DeleteWordForward
                     | StandardAction::Cut
+                    | StandardAction::Undo
+                    | StandardAction::Redo
                     | StandardAction::Paste
             )
         )
@@ -38,6 +40,8 @@ impl From<StandardAction> for ActionId {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum StandardAction {
+    Undo,
+    Redo,
     MoveLeft,
     MoveRight,
     MoveUp,

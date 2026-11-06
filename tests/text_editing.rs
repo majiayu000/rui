@@ -880,29 +880,21 @@ fn text_editing_composition_rejects_selection_outside_marked_range() {
 }
 
 #[test]
-fn text_editing_failed_cancel_retains_composition_for_recovery() {
+fn text_editing_cancel_restores_snapshot_even_after_grapheme_or_policy_changes() {
     let mut buffer = TextEditBuffer::with_text("e");
     must(buffer.begin_composition("\u{301}"));
-    let before = buffer.clone();
-    assert_eq!(
-        buffer.cancel_composition(),
-        Err(TextEditError::InvalidBoundary { index: 1 })
-    );
-    assert_eq!(buffer, before);
+    must(buffer.cancel_composition());
+    assert_eq!(buffer.text(), "e");
+    assert_eq!(buffer.selection(), TextSelection::collapsed(1));
 
     let mut buffer = TextEditBuffer::multiline_with_text("original\ntext");
-    must(buffer.set_selection(TextSelection::new(0, buffer.text().len())));
+    let original = TextSelection::new(0, buffer.text().len());
+    must(buffer.set_selection(original));
     must(buffer.begin_composition("XY"));
     let mut buffer = buffer.allow_multiline(false);
-    let before = buffer.clone();
-    assert_eq!(
-        buffer.cancel_composition(),
-        Err(TextEditError::MultilineDisabled)
-    );
-    assert_eq!(buffer, before);
-    let mut buffer = buffer.allow_multiline(true);
     must(buffer.cancel_composition());
     assert_eq!(buffer.text(), "original\ntext");
+    assert_eq!(buffer.selection(), original);
     assert!(buffer.composition().is_none());
 }
 

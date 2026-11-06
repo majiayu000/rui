@@ -19,7 +19,11 @@ impl TextArea {
         &mut self,
         command: TextInputCommand,
     ) -> Result<TextEditOutcome, TextEditError> {
-        if !self.can_edit() {
+        // Cancellation is owner cleanup, including after becoming read-only or
+        // disabled. It must restore provisional text before detach/focus loss.
+        let cancel_existing = matches!(command, TextInputCommand::CancelComposition)
+            && self.editor.composition().is_some();
+        if !self.can_edit() && !cancel_existing {
             return Ok(TextEditOutcome::default());
         }
         self.sync_editor_from_public_state_if_needed()?;
@@ -266,6 +270,18 @@ impl TextArea {
                 log::error!("text area caret paint failed: {err}");
                 None
             }
+        }
+    }
+}
+
+impl TextArea {
+    pub(crate) fn reconcile_editing_state(&mut self, previous: &mut Self) {
+        // Uncontrolled rebuilds keep the editor. Controlled values keep it only
+        // when echoing the current text; a different value is a programmatic reset.
+        let same_identity = self.id == previous.id;
+        if same_identity && (!self.value_supplied || self.editor.text() == previous.editor.text()) {
+            std::mem::swap(&mut self.editor, &mut previous.editor);
+            self.sync_state_from_editor();
         }
     }
 }

@@ -71,6 +71,18 @@ pub fn reconcile(next: &mut dyn Element, previous: &mut dyn Element) -> bool {
     if kind != (*previous).type_id() {
         return false;
     }
+    if let (Some(next), Some(previous)) = (
+        (next as &mut dyn Any).downcast_mut::<crate::elements::Input>(),
+        (previous as &mut dyn Any).downcast_mut::<crate::elements::Input>(),
+    ) {
+        next.reconcile_editing_state(previous);
+    }
+    if let (Some(next), Some(previous)) = (
+        (next as &mut dyn Any).downcast_mut::<crate::elements::TextArea>(),
+        (previous as &mut dyn Any).downcast_mut::<crate::elements::TextArea>(),
+    ) {
+        next.reconcile_editing_state(previous);
+    }
     // Properties can only justify keeping two pure instances. An interactive
     // container still participates in child reconciliation below.
     let props =
