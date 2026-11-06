@@ -8,7 +8,7 @@ use crate::platform::window::{PlatformInputEvent, PlatformWindowEvent};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, Sel};
 use objc2::{DefinedClass, MainThreadOnly, define_class, msg_send, sel};
-use objc2_app_kit::{NSEvent, NSTextInputClient, NSView};
+use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSTextInputClient, NSView};
 use objc2_foundation::{
     MainThreadMarker, NSArray, NSAttributedString, NSAttributedStringKey, NSNotFound,
     NSObjectProtocol, NSPoint, NSRange, NSRangePointer, NSRect, NSSize, NSString, NSUInteger,
@@ -336,6 +336,13 @@ define_class!(
             // Non-text controls need the raw key-down (for example Space on a
             // button), not an InsertText command that suppresses that event.
             if self.ivars().ime.borrow().snapshot.is_none() {
+                return;
+            }
+            // The raw event reaches the application keymap. Do not let the IME
+            // commit marked text first or suppress an explicit app Cmd-Z binding.
+            if event.modifierFlags().contains(NSEventModifierFlags::Command)
+                && event.charactersIgnoringModifiers().is_some_and(|s| s.to_string().eq_ignore_ascii_case("z"))
+            {
                 return;
             }
             let events = NSArray::from_slice(&[event]);
