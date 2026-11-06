@@ -13,7 +13,7 @@ set -euo pipefail
 
 ZED_REV="${ZED_REV:-784374c6794ace885137bc4806427a5f47cc3f06}"
 REPEATS="${REPEATS:-3}"
-CASES="${CASES:-startup list_full list_full_one_row list_virtual_1k list_virtual_100k text_paragraphs quad_grid resize_full resize_virtual}"
+CASES="${CASES:-startup list_full list_full_one_row list_virtual_1k list_virtual_100k text_paragraphs quad_grid resize_full resize_virtual editor_scroll editor_edit}"
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 ZED_DIR="${1:-$ROOT/target/gpui_compare/zed}"
 OUT="$ROOT/target/gpui_compare"
