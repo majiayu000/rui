@@ -186,7 +186,7 @@ fn native_dogfood_script_contract_launches_example_and_profile() {
     let script = include_str!("../scripts/native_dogfood_macos.sh");
     let example = include_str!("../examples/native_dogfood.rs");
     let validator = include_str!("../examples/validate_renderer_profile.rs");
-    let mac_runner = include_str!("../src/platform/mac/app.rs");
+    let mac_runner = include_str!("../src/platform/mac/app/dogfood_automation.rs");
     let mac_window = include_str!("../src/platform/mac/window.rs");
 
     for required in [
