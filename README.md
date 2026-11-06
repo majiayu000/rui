@@ -171,8 +171,8 @@ fn feature_card(title: &str, description: &str, color: u32) -> Div {
 RUI follows a native runtime architecture: `AppContext` owns framework state,
 `View` values build transient element trees, elements produce layout and scene
 output, renderers consume backend-neutral scenes, and platform adapters own
-native windows and renderer attachments. The canonical runtime foundation is in
-[`docs/runtime-architecture-foundation.md`](docs/runtime-architecture-foundation.md).
+native windows and renderer attachments. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for how the
+frame pipeline, incremental core, renderer and platform fit together.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐

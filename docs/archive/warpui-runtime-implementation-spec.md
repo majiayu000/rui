@@ -1,3 +1,5 @@
+> Archived 2026-11-06: coordination notes for issue #87, whose work has landed; see [ARCHITECTURE.md](../ARCHITECTURE.md).
+
 # WarpUI-Aligned Runtime Implementation Spec
 
 This spec turns the issue #87 gap analysis into implementation rules. It is a

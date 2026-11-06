@@ -1,420 +1,272 @@
 # RUI Architecture
 
-This document describes the current architecture of RUI, a GPU-accelerated UI
-framework for Rust. The canonical runtime direction, source-of-truth map, and
-future `Presenter` / `FramePipeline` boundaries live in
-[`runtime-architecture-foundation.md`](runtime-architecture-foundation.md).
-
-## Overview
-
-RUI is designed as a native Rust UI runtime: `AppContext` owns framework state,
-`View` values build transient element trees, elements produce layout and scene
-output, renderers consume backend-neutral scenes, and platform adapters own
-native windows and renderer attachments.
-
-```mermaid
-graph TB
-    subgraph Application["Application Layer"]
-        App["App::new().run()"]
-        View["View"]
-    end
-
-    subgraph Elements["Element Layer"]
-        Div["Div"]
-        Text["Text"]
-        Button["Button"]
-        Input["Input"]
-        Image["Image"]
-        More["..."]
-    end
-
-    subgraph Core["Core Layer"]
-        Geometry["Geometry"]
-        Color["Color"]
-        Style["Style"]
-        Animation["Animation"]
-        Entity["Entity"]
-    end
-
-    subgraph Renderer["Renderer Layer"]
-        Scene["Scene"]
-        Primitive["Primitives"]
-        Metal["Metal Renderer"]
-    end
-
-    subgraph Platform["Platform Layer"]
-        Window["Window"]
-        Event["Event Loop"]
-        GPU["GPU/Metal"]
-    end
-
-    App --> View
-    View --> Elements
-    Elements --> Core
-    Elements --> Renderer
-    Renderer --> Platform
-```
-
-## Layer Responsibilities
-
-### 1. Application Layer
-
-The entry point for RUI applications.
-
-```rust
-App::new().run(|cx| {
-    // Build your UI here
-    div()
-        .child(text("Hello"))
-});
-```
-
-**Components:**
-- `App` - Application lifecycle management
-- `AppContext` - Global application state and services
-- `View` - View abstraction for rendering
-- `ViewContext` - View-local state and rendering context
-
-### 2. Element Layer
-
-UI building blocks with a declarative builder pattern.
-
-```mermaid
-classDiagram
-    class Element {
-        <<trait>>
-        +id() ElementId
-        +style() Style
-        +layout(cx) NodeId
-        +paint(cx)
-    }
-
-    class Div {
-        +children: Vec~AnyElement~
-        +style: Style
-        +child(element)
-        +flex_row()
-        +flex_col()
-    }
-
-    class Text {
-        +content: String
-        +font_size: f32
-        +size(f32)
-        +bold()
-        +color(Color)
-    }
-
-    class Button {
-        +label: String
-        +on_click: Callback
-        +variant(ControlVariant)
-    }
-
-    class Image {
-        +source: ImageSource
-        +fit: ImageFit
-        +cover()
-        +contain()
-    }
-
-    Element <|-- Div
-    Element <|-- Text
-    Element <|-- Button
-    Element <|-- Image
-```
-
-### 3. Core Layer
-
-Fundamental types and abstractions.
-
-```mermaid
-graph LR
-    subgraph Geometry
-        Point["Point {x, y}"]
-        Size["Size {width, height}"]
-        Bounds["Bounds {origin, size}"]
-        Edges["Edges {top, right, bottom, left}"]
-    end
-
-    subgraph ColorSystem["Color"]
-        Color["Color"]
-        Rgba["Rgba {r, g, b, a}"]
-        Hsla["Hsla {h, s, l, a}"]
-    end
-
-    subgraph StyleSystem["Style"]
-        Style["Style"]
-        Border["BorderStyle"]
-        Corners["Corners"]
-        Background["Background"]
-    end
-
-    subgraph AnimationSystem["Animation"]
-        Animation["Animation"]
-        Easing["Easing Functions"]
-        Transition["Transition"]
-    end
-```
-
-### 4. Renderer Layer
-
-GPU-accelerated rendering pipeline.
-
-```mermaid
-sequenceDiagram
-    participant App
-    participant Element
-    participant Scene
-    participant Renderer
-    participant GPU
-
-    App->>Element: build()
-    Element->>Scene: add primitives
-    Scene->>Renderer: render(scene)
-    Renderer->>GPU: draw commands
-    GPU-->>Renderer: rendered frame
-    Renderer-->>App: display
-```
-
-**Primitives:**
-- `Quad` - Rectangles with background, border, corners
-- `Text` - Text rendering with font styling
-- `Image` - Texture-based image rendering
-- `Shadow` - Drop shadows with blur
-- `PushClip/PopClip` - Clip stack for scissoring
-
-### 4.1 Render Scheduling
-
-Rendering is event-driven. The main loop blocks when there are no events and no dirty flags:
-
-```mermaid
-flowchart LR
-    A[OS Event] --> B[Event Dispatch]
-    B --> C[Set Dirty/Rebuild]
-    C --> D[Layout + Paint]
-    D --> E[Render]
-```
-
-`AppContext` maintains render state and source counters:
-- `needs_rebuild`: rebuild the element tree
-- `dirty`: re-layout/repaint without rebuilding
-- `RedrawSourceCounts`: cumulative counters for explicit, element,
-  view-notification, and platform lifecycle/input/resize/focus/redraw requests
-
-Explicit runtime and element redraw requests are coalesced before they post a
-platform redraw event. Native platform events still mark the app dirty and bump
-their source counters, but they do not create an extra wake event while the loop
-is already processing AppKit input.
-
-### 4.1.1 Runtime Ownership and State Contracts
-
-RUI separates long-lived application state from the short-lived element tree:
-
-- `AppContext` owns framework state: the `EntityStore`, windows, pending view updates, and dirty/rebuild flags.
-- `App::run_view` and `testing::mount_view` own a long-lived `View` inside `RuntimeView`; each rebuild calls `View::render` with a fresh `ViewContext`.
-- Caller-owned state may live outside RUI, such as `Rc<Cell<T>>`, `Rc<RefCell<T>>`, or application data protected by the caller. Event callbacks can mutate that state, then call `ViewNotifier::notify` to request a rebuild.
-- Component-local state belongs to the current element instance, for example hover, pressed, focused, selected, and text-editing transients. It may be replaced on rebuild, so persistent values should be supplied by caller state or an `AppContext` entity.
-
-Typed handles are context-bound:
-
-- `Entity<T>` is a typed handle, not the state itself. Clone or copy the handle freely, but read or mutate the value only through `AppContext::get` or `AppContext::get_mut` while an `AppContext` or `ViewContext` is active.
-- Borrowed `Ref` and `RefMut` values from the entity store must not escape the current render or callback scope.
-- A `ViewContext` grants access to the current view entity and to `AppContext` only for the duration of `render`.
-- `ViewNotifier` is the safe object to move into callbacks. It does not expose state; it only schedules the owning view to rebuild on the next runtime pass.
-
-RUI does not currently expose a separate `Model` trait. Model-like state should be represented as caller-owned state or as typed `Entity<T>` values in `AppContext` until a dedicated model API exists.
-
-### 4.2 Resource Pipeline
-
-The renderer owns explicit resource caches for text, images, and GPU textures:
-- Text is rasterized via `rusttype` and tracked as glyph resources by `(content, size, weight, family)`
-- Images are decoded via `image`, tracked by source key, and fail explicitly on invalid data
-- Texture uploads are tracked as renderer-owned resources with observable pressure and disposal counters
-
-Caches lazily upload textures to the GPU on first use. Resource pressure must
-evict only inactive entries; active visible content returns a renderer error
-instead of being silently dropped.
-
-### 5. Platform Layer
-
-OS-specific window and event handling.
-
-```mermaid
-graph TB
-    subgraph macOS["macOS Platform"]
-        Window["NSWindow"]
-        View["NSView + CAMetalLayer"]
-        EventLoop["NSRunLoop"]
-        Metal["Metal API"]
-    end
-
-    subgraph Future["Future Platforms"]
-        Windows["Windows (DX12/Vulkan)"]
-        Linux["Linux (Vulkan)"]
-        Web["Web (WebGPU)"]
-    end
-```
-
-## Data Flow
-
-### Rendering Pipeline
-
-```mermaid
-flowchart LR
-    A[App::run] --> B[Event Dispatch]
-    B --> C[Dirty/Rebuild Flags]
-    C --> D[Build Element Tree]
-    D --> E[Layout with Taffy]
-    E --> F[Generate Primitives]
-    F --> G[Metal Render Pass]
-    G --> H[Present to Screen]
-```
-
-### Event Flow
-
-```mermaid
-flowchart TB
-    A[OS Event] --> B[Platform Layer]
-    B --> C[Event Dispatcher]
-    C --> D{Event Type}
-    D -->|Mouse| E[Mouse Handler]
-    D -->|Keyboard| F[Keyboard Handler]
-    D -->|Window| G[Window Handler]
-    E --> H[Update State]
-    F --> H
-    G --> H
-    H --> I[Re-render]
-```
-
-## Layout System
-
-RUI uses [Taffy](https://github.com/DioxusLabs/taffy) for Flexbox layout.
-
-```mermaid
-graph TB
-    subgraph Layout["Layout Calculation"]
-        A[Element Tree] --> B[Taffy Nodes]
-        B --> C[Compute Layout]
-        C --> D[Position + Size]
-    end
-
-    subgraph Flexbox["Flexbox Properties"]
-        direction["flex_direction"]
-        justify["justify_content"]
-        align["align_items"]
-        gap["gap"]
-        wrap["flex_wrap"]
-    end
-
-    Flexbox --> Layout
-```
-
-**Layout Properties:**
-- `flex_direction` - Row or Column
-- `justify_content` - Main axis alignment
-- `align_items` - Cross axis alignment
-- `gap` - Space between children
-- `padding` - Inner spacing
-- `margin` - Outer spacing
-
-## Memory Management
-
-RUI uses Rust's ownership system for memory safety with minimal allocations.
-
-```mermaid
-graph LR
-    subgraph Ownership
-        A[App owns Window]
-        B[Window owns View]
-        C[View owns Elements]
-        D[Elements own Children]
-    end
-
-    A --> B --> C --> D
-```
-
-**Strategies:**
-- `SmallVec` for small collections
-- `SlotMap` for entity storage
-- Stack allocation for primitives
-- GPU buffer pooling
-
-## Module Structure
+RUI is a retained, GPU-rendered UI framework for Rust, with a Metal backend
+on macOS. Application state lives in an `AppContext`. Views build element
+trees. Each frame keeps every part of the tree, its layout and its paint that
+did not change, and the renderer draws again only the pixels that changed.
+
+Related documents:
+
+- [`performance-architecture.md`](performance-architecture.md): the cost of each
+  stage and the algorithm behind it.
+- [`gpui-comparison.md`](gpui-comparison.md): the same fixtures measured
+  against Zed's GPUI.
+- [`API.md`](API.md): the public API, checked by `tests/docs_api_drift.rs`.
+- [`adr/`](adr/): architecture decisions, starting with
+  [ADR 0001](adr/0001-element-capabilities-and-defaults.md) on element
+  capabilities and the default fast path.
+- [`platform-window-boundary.md`](platform-window-boundary.md): what the platform
+  window layer must provide.
+- [`devtools.md`](devtools.md): the profiling overlay and the damage and replay
+  visualizer.
+
+## Layers
+
+| Layer | Module | Owns |
+|---|---|---|
+| Runtime | `core` | `AppContext`, entities, views and rows, windows, tasks, actions and keymaps, clipboard, drag and drop, menus, image assets, accessibility tree, `Presenter`, `FramePipeline` |
+| Elements | `elements`, `advanced_ui` | the `Element` trait, `AnyElement`, layout, paint and event contexts, built-in and themed widgets, SVG icons |
+| Renderer | `renderer` | `Scene` and primitives, text measurement, shaping, fallback and glyph atlas, the Metal backend |
+| Platform | `platform` | the window contract (`platform::window`) and the macOS runner (`platform::mac`) |
+| Devtools | `devtools` | the profiling overlay and the damage and replay visualizer, drawn into each window's scene |
+| Testing | `testing` | headless sessions, frame capture and snapshots, driven by the same frame pipeline |
+
+Dependencies point down the table. Renderers never touch native windows: the
+platform layer hands them a renderer target.
+
+## Module layout
+
+The files that used to pass 800 lines are split into child modules. Each child
+starts with `use super::*;`, and items shared between siblings are
+`pub(super)`.
 
 ```
-rui/
-├── src/
-│   ├── lib.rs              # Library entry
-│   ├── prelude.rs          # Common exports
-│   │
-│   ├── core/               # Core types
-│   │   ├── app.rs          # Application
-│   │   ├── color.rs        # Color types
-│   │   ├── geometry.rs     # Geometry types
-│   │   ├── style.rs        # Style system
-│   │   ├── animation.rs    # Animations
-│   │   ├── entity.rs       # Entity system
-│   │   ├── view.rs         # View abstraction
-│   │   └── window.rs       # Window management
-│   │
-│   ├── elements/           # UI Elements
-│   │   ├── element.rs      # Element trait
-│   │   ├── div.rs          # Container
-│   │   ├── text.rs         # Text
-│   │   ├── input.rs        # Text input
-│   │   ├── scroll_view.rs  # Scroll area
-│   │   ├── image.rs        # Image
-│   │   ├── table.rs        # Table
-│   │   ├── list.rs         # Lists
-│   │   └── spinner.rs      # Spinner
-│   │
-│   ├── advanced_ui/        # Themed controls (Button, Checkbox, Tabs, ...)
-│   │
-│   ├── renderer/           # Rendering
-│   │   ├── scene.rs        # Scene graph
-│   │   └── primitives.rs   # Render primitives
-│   │
-│   └── platform/           # Platform-specific runtime boundary
-│       ├── window.rs       # Shared window backend contract
-│       └── mac/            # macOS (Metal)
-│
-└── examples/               # Example apps
-    ├── hello_world.rs
-    ├── counter.rs
-    ├── dashboard.rs
-    └── animation_demo.rs
+src/
+├── core/
+│   ├── app.rs, app/          # AppContext; app/{rows, release, images, clipboard, menus}.rs
+│   ├── presenter.rs, presenter/  # one window's frame; presenter/{drag, menus}.rs
+│   ├── frame_pipeline.rs     # FrameStage::ORDER, run by every runner
+│   ├── drag.rs, menu.rs      # drag and drop, native menu declarations
+│   ├── action/, accessibility/, text_editing/
+│   └── entity.rs, view.rs, windows.rs, executor.rs, foreground.rs, ...
+├── elements/
+│   ├── element.rs            # Element, Capabilities, StableId, IntoElement, Render
+│   ├── element/              # layout, paint, event, any (AnyElement), reconcile
+│   ├── view_element.rs       # view(entity) in a tree
+│   ├── div.rs, text/, input.rs, text_area.rs, scroll_view.rs,
+│   │   virtual_list.rs, image.rs, svg.rs, canvas.rs, list.rs, table.rs, ...
+├── advanced_ui/              # themed controls built from elements
+├── renderer/
+│   ├── scene.rs, primitives.rs   # Scene, Primitive, Reach, damage
+│   ├── text/                 # measure cache, wrap, rich text, glyph atlas
+│   └── metal/
+│       ├── renderer.rs       # MetalRenderer
+│       ├── renderer/         # planning, encoding, resources, offscreen
+│       └── retained.rs, shaders.rs, path.rs, glyph.rs, order.rs, ...
+├── platform/
+│   ├── window.rs             # the window contract
+│   └── mac/
+│       ├── app.rs            # run_app, window opening, the loop
+│       ├── app/              # window_driver, event_loop, dogfood_automation
+│       └── window.rs, events.rs, clipboard.rs, file_drop.rs, menus.rs,
+│           accessibility.rs, frame_ticker.rs, ime_state.rs, ...
+├── devtools/                 # profiler, damage, window
+└── testing/
+benchmarks/perf_budgets/      # one budget file per perf_gate case, plus shared.json
+benches/perf_budgets/         # the loader perf_gate uses
 ```
 
-## Performance Considerations
+## Runtime
 
-### GPU Rendering
-- Direct Metal rendering bypasses CPU-bound drawing
-- Primitives are drawn in order for correctness
-- Future optimization: batch compatible primitives
+- `AppContext` is the state root. Entities (`Entity<T>`, stored in a `SlotMap`)
+  hold application state. `cx.notify(entity)` marks the views whose last render
+  read that entity.
+- A view (`AppContext::new_view`) is an entity that renders. `view(entity)`
+  places it in a tree as a `ViewElement`. It renders when it is first laid out
+  and again only when it is notified, without rebuilding the tree around it.
+- `cx.rows(&entities, |item, cx| ..)` places one view per entity without a
+  view type (`core::app::rows`). Each row records its entity as read, so
+  notifying the entity renders that row and nothing else.
+- Views are released once no tree places them (`core::app::release`): the
+  rebuild drops the view, its read set and its queued notifications, unless the
+  same rebuild placed it again. `AppContext::release` releases one explicitly.
+- Windows share entities. Each window has its own frame state, presenter,
+  scene, focus and renderer target (`core::windows`). A runner activates a
+  window before running its frame.
+- Work on the UI thread is prioritized (`core::foreground`: input, animation,
+  layout, idle). Animations request frames. `cx.spawn` runs futures on the UI
+  thread and `cx.background_spawn` runs them on worker threads
+  (`core::executor`). Foreground tasks are polled at the start of a frame.
+- Keys go through a keymap to typed actions, which are dispatched to the
+  focused element first (`core::action`).
 
-### Layout Caching
-- Current implementation clears the layout tree on every rendered frame.
-- Future optimization: persistent Taffy nodes + incremental dirty propagation.
+## Frame pipeline
 
-### Memory Efficiency
-- Zero-copy where possible
-- Pre-allocated buffers
-- Minimal heap allocations in hot paths
+`FramePipeline` (in `core::frame_pipeline`) runs the stages in
+`FrameStage::ORDER`, for the native and headless runners alike:
 
-## Future Directions
+1. **Prepare.** Apply handle updates, poll foreground tasks, run frame tasks,
+   flush effects and queue view notifications.
+2. **Rebuild.** If the root read a notified entity, or a rebuild was asked for,
+   build the root again and reconcile it against the previous tree. Then render
+   the views that are new or notified.
+3. **Layout.** Taffy computes layout on a tree kept across frames.
+4. **Dispatch events.** Events reach the laid-out tree: pointer events through
+   the scene's hit index, keys and actions through focus.
+5. **Paint.** Elements push primitives into the `Scene`.
+6. **Present.** The renderer draws the scene.
+7. **Finish.** Complete the redraw and clear the frame's requests.
 
-1. **Cross-Platform Support**
-   - Implement the shared platform window contract before claiming support
-   - Vulkan renderer for Windows/Linux
-   - WebGPU for browser support
+`Presenter` (in `core::presenter`) holds one window's root, layout tree, scene
+and focus, and runs these stages for it.
 
-2. **State Management**
-   - `use_state` hook
-   - `use_effect` for side effects
-   - Context system for shared state
+## Incremental core
 
-3. **Advanced Features**
-   - Text editing/selection
-   - Accessibility support
-   - Internationalization
+What a frame keeps from the previous one:
+
+- **Identity.** In layout, every `AnyElement` gets a stable id: the id the app
+  set, or else one derived from its parent's id, its position and its type
+  (`ElementId::derived`). Elements that need an id for focus, hit regions or
+  accessibility keep it in a `StableId` and receive this identity. Composites
+  derive the ids of their parts from it.
+- **Capabilities.** An element declares `Capabilities { pure, pointer_inert }`
+  (ADR 0001). A pure element's layout and paint depend only on what
+  `same_props` compares, the inherited text style, its children and its size.
+- **Reconcile.** `elements::element::reconcile` pairs a rebuilt pure element
+  with the previous one at the same position. It keeps the previous instance,
+  with its layout and paint, when the props and all the children match, and
+  otherwise keeps the children that do.
+- **Layout keep.** A pure subtree records the range of layout nodes it owns. The
+  next retained pass hands those nodes back without visiting the subtree, as
+  long as the inherited text style is the same.
+- **Paint replay.** A pure subtree records its range of primitives. The next
+  frame moves that range out of the previous scene, translated, when the
+  subtree moved by whole pixels and is otherwise unchanged. Subtrees outside the
+  viewport and clip are not painted at all.
+- **Pointer inertness.** Subtrees without pointer handlers are skipped when
+  moves, releases and scrolls are dispatched.
+- **Damage.** The scene knows which primitives are new. A window draws into a
+  `RetainedTarget` kept across frames: only the primitives that touch the
+  damage are drawn again, scissored to it, and a render pass copies the result
+  to the drawable.
+
+- **Keyed pairing.** Children of pure elements are paired in place while
+  their keys agree. From the first mismatch on they are paired by key: an
+  explicit id, or the entity a view shows (`element/reconcile.rs`). A list that
+  moved keeps its rows.
+- **Bounded reach.** Every primitive declares how far it can draw
+  (`Reach::{Nothing, Within, Unbounded}`). Images reach only their bounds, so an
+  image changes the damage only where it is, and is culled outside the
+  viewport. Clips stay unbounded.
+
+Rows as views (`cx.rows`) are the fast path for lists. Rebuilding from the root
+stays correct through reconcile, but its cost grows with the size of the tree
+(ADR 0001).
+
+## Interaction
+
+- **Clipboard.** `cx.write_to_clipboard` and `cx.read_from_clipboard` reach the
+  app clipboard (`core::app::clipboard`): in memory by default, so headless
+  runs are deterministic, and the general pasteboard on macOS. Copy, Cut and
+  Paste are standard actions bound to Cmd+C/X/V; `Input` and `TextArea` handle
+  them through the event context.
+- **Drag and drop.** `Div::on_drag` makes a typed payload and a preview,
+  `on_drop::<T>` and `on_drag_over::<T>` receive it, and `on_drop_files` takes
+  files dropped from Finder (`core::drag`, `core::presenter::drag`,
+  `platform::mac::file_drop`). A drag remembers its targets by stable identity,
+  so a target rebuilt mid-drag still hears that the drag left.
+- **Menus.** `cx.set_menus` declares the menu bar and `cx.show_context_menu`
+  opens a context menu (`core::menu`). Choosing an item routes its action as a
+  key binding would: to the focused element, then the app's handlers. Each item
+  shows the chord the keymap binds to its action. `platform::mac::menus` builds
+  the `NSMenu`s.
+
+## Assets
+
+- **Images.** `cx.image(asset)` takes a path or encoded bytes and decodes them
+  off the UI thread with `background_spawn` (`core::app::images`). Until then
+  the image shows its placeholder; a failed decode is an explicit error state.
+  When the decode lands, only the view that asked is notified. Decoded images
+  are kept while shown and otherwise within a byte budget
+  (`set_image_budget`). `Image` is pure, so an unchanged image replays its
+  paint.
+- **SVG icons.** `svg(markup)` parses a practical subset of SVG once
+  (`elements::svg`) and turns it into filled path primitives per size and tint.
+  Unsupported features fail with a message that names the element, shown in
+  place of the icon.
+
+## Renderer
+
+- **Text.** `TextMeasureCache` measures, shapes (rustybuzz, with a shape plan
+  kept per font) and wraps text. It falls back per script run, and keeps results
+  in frame-aware LRUs. `TextGlyphCache` rasterizes glyphs once at device scale
+  into A8 atlas pages, plus RGBA pages for color emoji. Pages are evicted whole,
+  and only once the GPU has finished every frame that drew from them.
+- **Metal.** A frame is planned before anything is encoded. The scene becomes
+  instance data in one pooled buffer, plus a plan of draws. Quads, shadows,
+  glyphs and paths share one sprite pipeline. Draws are ordered by overlap, so a
+  frame is usually one draw call. Paths are drawn as analytic tiles, or from an
+  atlas when they are small shapes drawn before. Images have their own pipeline.
+  The sprite shader skips the per-fragment clip test for draws wholly inside
+  their clip, and plain quads take a specialized path. The renderer is created
+  off the main thread (`MetalRenderer::spawn`). `renderer.rs` holds
+  `MetalRenderer`; planning, encoding, resources and offscreen frames are its
+  child modules.
+- **Offscreen.** Captures and offscreen frames, used by tests and benchmarks,
+  render into a kept texture through the same planning and encoding code.
+
+## Platform (macOS)
+
+`platform::mac` runs the app:
+
+- The runner (`run_app`) opens windows and runs the event loop.
+- Each window has a driver that turns AppKit events into platform events, runs
+  the frame pipeline, and presents with the Core Animation transaction.
+- Window events are held until the next display tick, so input coalesces into
+  one frame.
+- Animation frames come from a display link while one is requested, or from a
+  timer when no display is awake (`frame_ticker`). An idle window gets no ticks.
+- IME composition, the accessibility bridge (`NSAccessibility`), the pasteboard,
+  file drops and native menus also live here.
+- `app.rs` holds the runner. Its child modules are `window_driver` (one window's
+  driver), `event_loop` (held events, idle work, viewport sync, redraw
+  scheduling) and `dogfood_automation` (scripted input for native dogfood
+  runs).
+
+Other platforms fail with explicit unsupported errors until a backend
+implements the window contract.
+
+## Devtools
+
+`RUI_DEVTOOLS=1` (or `cx.toggle_profiler()`) draws a profiling overlay after
+paint, outside layout: stage times, frame interval, GPU time, draw calls,
+damage share, replayed primitives and, with the opt-in `CountingAllocator`,
+allocations. `RUI_DEVTOOLS=damage` (or `cx.toggle_damage_visualizer()`) tints
+replayed subtrees green, outlines repainted ones red and outlines the frame's
+damage in magenta. Both are off unless asked for, and the overlay is left out of
+the damage it reports. See [`devtools.md`](devtools.md).
+
+## Testing and gates
+
+- **Headless.** `testing` mounts views and drives the same `FramePipeline`
+  without a window. It captures primitives, accessibility trees and, with Metal,
+  pixels.
+- **Oracles.** These compare the incremental paths with full recomputation over
+  random edits:
+  - `tests/retained_layout.rs`
+  - `tests/incremental_frames.rs`
+  - `tests/damage_frames.rs`, pixel-exact
+  - `tests/child_views.rs`
+  - `tests/pointer_inert.rs`
+  - `tests/stable_identity.rs`
+- **Replay check.** `RUI_VERIFY_REPLAY=1 cargo test` repaints every painted
+  frame in full and panics at the first primitive that differs from the replay.
+- **Performance gate.** `cargo bench --bench perf_gate` gates instructions,
+  allocations, footprint, damage area and virtual-list scaling against
+  `benchmarks/perf_budgets/`. `PERF_GATE_PIXELS=1` also checks a pixel checksum.
+  CI runs it without the instruction counter. See
+  [`performance-benchmarks.md`](performance-benchmarks.md).
+- **Comparison.** `benchmarks/gpui_compare/` runs the GPUI fixtures; the results
+  are in [`gpui-comparison.md`](gpui-comparison.md).
+- **Dogfood.** `scripts/native_dogfood_macos.sh` drives the native example with
+  scripted input and checks its profile output.

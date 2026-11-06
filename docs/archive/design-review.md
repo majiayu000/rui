@@ -1,3 +1,5 @@
+> Archived 2026-11-06: early review notes whose issues (layout not used in paint, unbounded layout tree) were fixed long ago.
+
 # RUI Design Review
 
 ## What this repository does

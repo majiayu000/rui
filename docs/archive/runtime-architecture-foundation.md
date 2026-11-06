@@ -1,3 +1,5 @@
+> Archived 2026-11-06: its planned `Presenter` and shared `FramePipeline` exist now; [ARCHITECTURE.md](../ARCHITECTURE.md) is the current source of truth.
+
 # RUI Runtime Architecture Foundation
 
 This document is the source-of-truth for RUI's runtime architecture direction.
