@@ -92,4 +92,3 @@ native IME session; actual candidate-window behavior still needs platform testin
 Validation: `RUI_VERIFY_REPLAY=1 cargo test --test variable_list`; neighboring
 fixed-height list and retained-layout tests; `cargo check --example variable_list`.
 The executable example is `cargo run --example variable_list`.
-
