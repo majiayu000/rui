@@ -4,10 +4,14 @@ use crate::core::color::Rgba;
 use crate::core::geometry::{Bounds, Edges, Point, Size};
 use crate::core::style::Corners;
 use crate::renderer::Primitive;
-use crate::renderer::text::{TextDirection, TextShapePlan};
+use crate::renderer::text::TextShapePlan;
 use unicode_segmentation::UnicodeSegmentation;
 
 mod navigation;
+
+/// Horizontal positions this close are the same place. Runs placed in display
+/// order meet at sums that round differently; shaping positions are 1/64 px.
+const SAME_X: f32 = 1.0 / 64.0;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TextLine {
@@ -75,7 +79,8 @@ struct EditClusterGeometry {
     line_index: usize,
     x_offset: f32,
     advance_width: f32,
-    direction: TextDirection,
+    /// Laid out right to left: the logical start is the right edge.
+    rtl: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -256,7 +261,7 @@ impl TextEditLayout {
                 line_index: 0,
                 x_offset: cluster.x_offset,
                 advance_width: cluster.advance_width,
-                direction: cluster.direction,
+                rtl: cluster.is_rtl(),
             });
         }
 
@@ -309,7 +314,7 @@ impl TextEditLayout {
                     line_index,
                     x_offset: cluster.x_offset,
                     advance_width: cluster.advance_width,
-                    direction: cluster.direction,
+                    rtl: cluster.is_rtl(),
                 });
             }
         }
@@ -397,7 +402,7 @@ impl TextEditLayout {
             let mut merged: Vec<(f32, f32, usize, usize)> = Vec::new();
             for run in visual_runs {
                 if let Some(last) = merged.last_mut()
-                    && run.0 <= last.1 + f32::EPSILON
+                    && run.0 <= last.1 + SAME_X
                     && run.2 <= last.3
                     && run.3 >= last.2
                 {
@@ -562,7 +567,7 @@ impl TextEditLayout {
             .iter()
             .filter(|cluster| cluster.line_index == line_index)
             .find_map(|cluster| {
-                let rtl = cluster.direction == TextDirection::RightToLeft;
+                let rtl = cluster.rtl;
                 if offset == cluster.byte_start {
                     Some(
                         line.origin.x
@@ -640,7 +645,7 @@ fn push_fixed_clusters(
             line_index,
             x_offset,
             advance_width: grapheme_width,
-            direction: TextDirection::LeftToRight,
+            rtl: false,
         });
         x_offset += grapheme_width;
     }

@@ -16,6 +16,7 @@ use super::{
     RETAINED_METRICS_TARGET, TextError, TextMeasureCache, TextRequest,
 };
 use crate::core::geometry::Size;
+use crate::renderer::text_bidi::{line_levels, visual_order};
 use rusttype::Scale;
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
@@ -108,6 +109,8 @@ struct RichParagraph {
     offset: usize,
     layout: BreakParagraph,
     spans: Vec<usize>,
+    /// Each cluster's embedding level, when any is right to left.
+    levels: Option<Vec<u8>>,
 }
 
 struct RichEntry {
@@ -282,10 +285,17 @@ impl TextMeasureCache {
                     cluster_spans.push(index);
                 }
             }
+            let levels = line_levels(&content[offset..end]).map(|levels| {
+                clusters
+                    .iter()
+                    .map(|cluster| levels[cluster.byte_start].number())
+                    .collect()
+            });
             paragraphs.push(RichParagraph {
                 offset,
                 layout: BreakParagraph::new(clusters),
                 spans: cluster_spans,
+                levels,
             });
             offset = end + 1;
         }
@@ -405,13 +415,24 @@ impl TextMeasureCache {
         ellipsis: Option<(usize, f32)>,
     ) -> RichLine {
         let layout = &paragraph.layout;
+        let level = |cluster: usize| {
+            paragraph
+                .levels
+                .as_ref()
+                .map_or(0, |levels| levels[cluster])
+        };
         let mut pieces = Vec::new();
+        let mut piece_levels = Vec::new();
         let mut start = first;
         while start < end {
             let span = paragraph.spans[start];
+            // A piece is one style at one embedding level.
             let stop = (start..end)
-                .find(|&cluster| paragraph.spans[cluster] != span)
+                .find(|&cluster| paragraph.spans[cluster] != span || level(cluster) != level(start))
                 .unwrap_or(end);
+            if paragraph.levels.is_some() {
+                piece_levels.push(level(start));
+            }
             let bytes = paragraph.offset + layout.clusters[start].byte_start
                 ..paragraph.offset + layout.clusters[stop - 1].byte_end;
             let ink_x = self
@@ -431,6 +452,13 @@ impl TextMeasureCache {
                 height: 0.0,
             });
             start = stop;
+        }
+        if paragraph.levels.is_some() {
+            let mut x = 0.0;
+            for index in visual_order(&piece_levels) {
+                pieces[index].x = x;
+                x += pieces[index].width;
+            }
         }
         let mut width = layout.width(first, end);
         if let Some((span, ellipsis_width)) = ellipsis {

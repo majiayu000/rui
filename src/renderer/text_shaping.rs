@@ -1,13 +1,21 @@
 use crate::core::geometry::{Bounds, Size};
 use crate::renderer::text::{TextMetrics, TextRequest};
+use crate::renderer::text_bidi::{ink_of, line_levels, place_visually};
+use crate::renderer::text_classify::{
+    classify_direction, classify_script, is_default_ignorable, resolve_text_direction,
+};
 use crate::renderer::text_cluster_position::apply_exact_cluster_positions;
 use crate::renderer::text_fallback::{RunScript, assign_fonts, script_runs};
+pub use crate::renderer::text_plan::{
+    ShapedGlyph, TextCluster, TextDirection, TextRun, TextScript, TextShapeDiagnostic,
+    TextShapePlan,
+};
 use rusttype::{Font, GlyphId, Scale, point};
 use rustybuzz::{
     BufferClusterLevel, Direction as HbDirection, Face, Language, Script, ShapePlan, UnicodeBuffer,
 };
+use std::ops::Range;
 use std::sync::{Arc, Mutex, PoisonError};
-use unicode_bidi::{BidiClass, bidi_class};
 use unicode_segmentation::UnicodeSegmentation;
 
 /// The bytes of one font file, shared by every face in it.
@@ -150,154 +158,6 @@ impl TextShapingFont {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum TextScript {
-    Latin,
-    Cjk,
-    Emoji,
-    Rtl,
-    Number,
-    Whitespace,
-    Other,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum TextDirection {
-    LeftToRight,
-    RightToLeft,
-    Neutral,
-    Mixed,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct ShapedGlyph {
-    pub byte_start: usize,
-    pub byte_end: usize,
-    pub glyph_id: u16,
-    pub font_family: String,
-    pub x_offset: f32,
-    pub y_offset: f32,
-    pub advance_width: f32,
-    pub(crate) font_index: usize,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct TextCluster {
-    pub byte_start: usize,
-    pub byte_end: usize,
-    pub text: String,
-    pub script: TextScript,
-    pub direction: TextDirection,
-    pub font_family: String,
-    pub x_offset: f32,
-    pub advance_width: f32,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct TextRun {
-    pub byte_start: usize,
-    pub byte_end: usize,
-    pub script: TextScript,
-    /// ISO 15924 code of the script the run was shaped as: `Latn`, `Arab`,
-    /// `Hani` and so on, `Zsye` for emoji, `Zyyy` for text no script owns.
-    pub script_tag: [u8; 4],
-    pub direction: TextDirection,
-    pub font_family: String,
-    pub x_offset: f32,
-    pub advance_width: f32,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum TextShapeDiagnostic {
-    MissingGlyph {
-        byte_start: usize,
-        byte_end: usize,
-        cluster: String,
-    },
-    FallbackRequired {
-        byte_start: usize,
-        byte_end: usize,
-        cluster: String,
-        script: TextScript,
-    },
-    FallbackApplied {
-        byte_start: usize,
-        byte_end: usize,
-        cluster: String,
-        requested_family: String,
-        fallback_family: String,
-    },
-    FallbackFailed {
-        byte_start: usize,
-        byte_end: usize,
-        cluster: String,
-        script: TextScript,
-    },
-    UnsupportedScript {
-        byte_start: usize,
-        byte_end: usize,
-        cluster: String,
-        script: TextScript,
-    },
-    MixedDirection {
-        direction: TextDirection,
-    },
-    LigatureSubstitution {
-        byte_start: usize,
-        byte_end: usize,
-        text: String,
-        glyph_count: usize,
-        grapheme_count: usize,
-    },
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct TextShapePlan {
-    clusters: Vec<TextCluster>,
-    runs: Vec<TextRun>,
-    glyphs: Vec<ShapedGlyph>,
-    diagnostics: Vec<TextShapeDiagnostic>,
-    direction: TextDirection,
-    metrics: TextMetrics,
-}
-
-impl TextShapePlan {
-    pub fn empty() -> Self {
-        Self {
-            clusters: Vec::new(),
-            runs: Vec::new(),
-            glyphs: Vec::new(),
-            diagnostics: Vec::new(),
-            direction: TextDirection::Neutral,
-            metrics: TextMetrics::empty(),
-        }
-    }
-
-    pub fn clusters(&self) -> &[TextCluster] {
-        &self.clusters
-    }
-
-    pub fn runs(&self) -> &[TextRun] {
-        &self.runs
-    }
-
-    pub fn glyphs(&self) -> &[ShapedGlyph] {
-        &self.glyphs
-    }
-
-    pub fn diagnostics(&self) -> &[TextShapeDiagnostic] {
-        &self.diagnostics
-    }
-
-    pub fn direction(&self) -> TextDirection {
-        self.direction
-    }
-
-    pub fn metrics(&self) -> TextMetrics {
-        self.metrics
-    }
-}
-
 #[derive(Debug, Clone)]
 pub(crate) struct ClusterDraft<'a> {
     pub(crate) byte_start: usize,
@@ -305,6 +165,7 @@ pub(crate) struct ClusterDraft<'a> {
     pub(crate) text: &'a str,
     pub(crate) script: TextScript,
     pub(crate) direction: TextDirection,
+    pub(crate) bidi_level: u8,
     pub(crate) font_index: usize,
     pub(crate) x_offset: f32,
     pub(crate) advance_width: f32,
@@ -331,6 +192,17 @@ struct LigatureDraft {
     grapheme_count: usize,
 }
 
+/// Clusters shaped together, in one font at one embedding level.
+pub(crate) struct ShapedRun {
+    pub(crate) clusters: Range<usize>,
+    pub(crate) glyphs: Range<usize>,
+    script: RunScript,
+    rtl: bool,
+    pub(crate) bidi_level: u8,
+    pub(crate) advance_width: f32,
+    pub(crate) x_offset: f32,
+}
+
 /// What shaping produces, borrowing the text it shaped. Layout and the glyph
 /// atlas read it as is; [`Self::into_plan`] copies it into a [`TextShapePlan`]
 /// for callers that want clusters, runs and diagnostics of their own.
@@ -338,8 +210,7 @@ pub(crate) struct ShapedParts<'a> {
     content: &'a str,
     pub(crate) clusters: Vec<ClusterDraft<'a>>,
     pub(crate) glyphs: Vec<GlyphDraft>,
-    /// Pieces shaped together: their clusters, script, advance and start.
-    runs: Vec<(std::ops::Range<usize>, RunScript, f32, f32)>,
+    runs: Vec<ShapedRun>,
     ligatures: Vec<LigatureDraft>,
     pub(crate) metrics: TextMetrics,
 }
@@ -351,8 +222,7 @@ impl ShapedParts<'_> {
         primary_index: usize,
     ) -> TextShapePlan {
         let direction = resolve_text_direction(&self.clusters);
-        let mut diagnostics =
-            diagnostics_for_clusters(fonts, primary_index, &self.clusters, direction);
+        let mut diagnostics = diagnostics_for_clusters(fonts, primary_index, &self.clusters);
         diagnostics.extend(self.ligatures.iter().map(|ligature| {
             TextShapeDiagnostic::LigatureSubstitution {
                 byte_start: ligature.byte_start,
@@ -371,6 +241,7 @@ impl ShapedParts<'_> {
                 text: cluster.text.to_string(),
                 script: cluster.script,
                 direction: cluster.direction,
+                bidi_level: cluster.bidi_level,
                 font_family: fonts[cluster.font_index].family.clone(),
                 x_offset: cluster.x_offset,
                 advance_width: cluster.advance_width,
@@ -379,9 +250,7 @@ impl ShapedParts<'_> {
         let runs = self
             .runs
             .into_iter()
-            .map(|(range, script, advance_width, x_offset)| {
-                text_run(&clusters[range], script, advance_width, x_offset)
-            })
+            .map(|run| text_run(&clusters[run.clusters.clone()], &run))
             .collect();
         let glyphs = self
             .glyphs
@@ -409,7 +278,7 @@ impl ShapedParts<'_> {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct InkBounds {
+pub(crate) struct InkBounds {
     min_x: i32,
     min_y: i32,
     max_x: i32,
@@ -417,7 +286,7 @@ struct InkBounds {
 }
 
 impl InkBounds {
-    fn empty() -> Self {
+    pub(crate) fn empty() -> Self {
         Self {
             min_x: i32::MAX,
             min_y: i32::MAX,
@@ -426,7 +295,7 @@ impl InkBounds {
         }
     }
 
-    fn include(&mut self, bounds: rusttype::Rect<i32>) {
+    pub(crate) fn include(&mut self, bounds: rusttype::Rect<i32>) {
         self.min_x = self.min_x.min(bounds.min.x);
         self.min_y = self.min_y.min(bounds.min.y);
         self.max_x = self.max_x.max(bounds.max.x);
@@ -461,6 +330,12 @@ pub(crate) fn shape_parts<'a>(
     request: TextRequest<'a>,
 ) -> ShapedParts<'a> {
     let mut clusters = build_cluster_drafts(primary_index, request);
+    let levels = line_levels(request.content);
+    if let Some(levels) = &levels {
+        for cluster in &mut clusters {
+            cluster.bidi_level = levels[cluster.byte_start].number();
+        }
+    }
     let script_runs = script_runs(&clusters);
     for run in &script_runs {
         assign_fonts(
@@ -478,28 +353,49 @@ pub(crate) fn shape_parts<'a>(
 
     let mut runs = Vec::with_capacity(script_runs.len());
     for run in &script_runs {
-        // One script run is shaped in pieces where its clusters' fonts differ.
+        // One script run is shaped in pieces where its clusters' fonts or
+        // embedding levels differ.
         let mut start = run.clusters.start;
         while start < run.clusters.end {
-            let font_index = clusters[start].font_index;
+            let (font_index, bidi_level) = (clusters[start].font_index, clusters[start].bidi_level);
             let end = clusters[start..run.clusters.end]
                 .iter()
-                .position(|cluster| cluster.font_index != font_index)
+                .position(|cluster| {
+                    cluster.font_index != font_index || cluster.bidi_level != bidi_level
+                })
                 .map_or(run.clusters.end, |offset| start + offset);
+            let rtl = match levels {
+                Some(_) => bidi_level % 2 == 1,
+                None => run.script.is_rtl(),
+            };
             let run_result = shape_run(
                 fonts,
                 request,
                 &mut clusters[start..end],
                 run.script,
+                rtl,
                 cursor_x,
                 &mut ink_bounds,
             );
             ligatures.extend(run_result.ligature);
-            runs.push((start..end, run.script, run_result.advance_width, cursor_x));
-            cursor_x += run_result.advance_width;
+            let glyph_start = glyphs.len();
             glyphs.extend(run_result.glyphs);
+            runs.push(ShapedRun {
+                clusters: start..end,
+                glyphs: glyph_start..glyphs.len(),
+                script: run.script,
+                rtl,
+                bidi_level,
+                advance_width: run_result.advance_width,
+                x_offset: cursor_x,
+            });
+            cursor_x += run_result.advance_width;
             start = end;
         }
+    }
+    if levels.is_some() {
+        place_visually(&mut runs, &mut clusters, &mut glyphs);
+        ink_bounds = ink_of(fonts, request, &glyphs);
     }
 
     let ink_bounds = ink_bounds.to_bounds();
@@ -596,6 +492,7 @@ pub(crate) fn build_cluster_drafts<'a>(
                 text: cluster_text,
                 script,
                 direction,
+                bidi_level: 0,
                 font_index: primary_index,
                 x_offset: 0.0,
                 advance_width: 0.0,
@@ -608,7 +505,6 @@ fn diagnostics_for_clusters(
     fonts: &[TextShapingFont],
     primary_index: usize,
     clusters: &[ClusterDraft],
-    direction: TextDirection,
 ) -> Vec<TextShapeDiagnostic> {
     let mut diagnostics = Vec::new();
     let requested_family = fonts[primary_index].family.clone();
@@ -659,9 +555,6 @@ fn diagnostics_for_clusters(
         }
     }
 
-    if direction == TextDirection::Mixed {
-        diagnostics.push(TextShapeDiagnostic::MixedDirection { direction });
-    }
     diagnostics
 }
 
@@ -670,17 +563,18 @@ fn shape_run(
     request: TextRequest<'_>,
     clusters: &mut [ClusterDraft],
     script: RunScript,
+    rtl: bool,
     start_x: f32,
     ink_bounds: &mut InkBounds,
 ) -> RunShapeResult {
     let font = &fonts[clusters[0].font_index];
-    let glyphs = shape_run_glyphs(font, request, clusters, script, start_x, ink_bounds);
+    let glyphs = shape_run_glyphs(font, request, clusters, script, rtl, start_x, ink_bounds);
     let advance_width = glyphs.iter().map(|glyph| glyph.advance_width).sum::<f32>();
     distribute_cluster_advances(
         font,
         request,
         clusters,
-        script.is_rtl(),
+        rtl,
         start_x,
         &glyphs,
         advance_width,
@@ -713,12 +607,13 @@ fn shape_run_glyphs(
     request: TextRequest<'_>,
     clusters: &[ClusterDraft],
     script: RunScript,
+    rtl: bool,
     start_x: f32,
     ink_bounds: &mut InkBounds,
 ) -> Vec<GlyphDraft> {
     let mut buffer = UnicodeBuffer::new();
     buffer.set_cluster_level(BufferClusterLevel::MonotoneGraphemes);
-    buffer.set_direction(if script.is_rtl() {
+    buffer.set_direction(if rtl {
         HbDirection::RightToLeft
     } else {
         HbDirection::LeftToRight
@@ -853,66 +748,14 @@ fn glyph_byte_end_for_offset(
     shaped_cluster_starts.get(next).copied().unwrap_or(run_end)
 }
 
-fn classify_script(cluster: &str) -> TextScript {
-    if cluster.chars().all(char::is_whitespace) {
-        return TextScript::Whitespace;
-    }
-    if cluster.chars().any(is_emoji) {
-        return TextScript::Emoji;
-    }
-    if cluster.chars().any(is_cjk) {
-        return TextScript::Cjk;
-    }
-    if cluster.chars().any(is_rtl) {
-        return TextScript::Rtl;
-    }
-    if cluster.chars().all(char::is_numeric) {
-        return TextScript::Number;
-    }
-    if cluster.chars().any(is_latin) {
-        return TextScript::Latin;
-    }
-    TextScript::Other
-}
-
-fn classify_direction(cluster: &str) -> TextDirection {
-    if cluster.chars().any(is_rtl) {
-        TextDirection::RightToLeft
-    } else if cluster.chars().any(is_ltr) {
-        TextDirection::LeftToRight
-    } else {
-        TextDirection::Neutral
-    }
-}
-
-fn resolve_text_direction(clusters: &[ClusterDraft]) -> TextDirection {
-    let has_ltr = clusters
-        .iter()
-        .any(|cluster| cluster.direction == TextDirection::LeftToRight);
-    let has_rtl = clusters
-        .iter()
-        .any(|cluster| cluster.direction == TextDirection::RightToLeft);
-    match (has_ltr, has_rtl) {
-        (true, true) => TextDirection::Mixed,
-        (true, false) => TextDirection::LeftToRight,
-        (false, true) => TextDirection::RightToLeft,
-        (false, false) => TextDirection::Neutral,
-    }
-}
-
-/// The run of `clusters`, shaped together as `script` from `x_offset`.
-fn text_run(
-    clusters: &[TextCluster],
-    script: RunScript,
-    advance_width: f32,
-    x_offset: f32,
-) -> TextRun {
+/// The [`TextRun`] of `run`, whose clusters are `clusters`.
+fn text_run(clusters: &[TextCluster], run: &ShapedRun) -> TextRun {
     let coarse = clusters
         .iter()
         .map(|cluster| cluster.script)
         .find(|script| !matches!(script, TextScript::Whitespace | TextScript::Number))
         .unwrap_or(clusters[0].script);
-    let direction = if script.is_rtl() {
+    let direction = if run.rtl {
         TextDirection::RightToLeft
     } else if clusters
         .iter()
@@ -926,59 +769,10 @@ fn text_run(
         byte_start: clusters[0].byte_start,
         byte_end: clusters[clusters.len() - 1].byte_end,
         script: coarse,
-        script_tag: script.tag(),
+        script_tag: run.script.tag(),
         direction,
         font_family: clusters[0].font_family.clone(),
-        x_offset,
-        advance_width,
+        x_offset: run.x_offset,
+        advance_width: run.advance_width,
     }
-}
-
-fn is_latin(ch: char) -> bool {
-    matches!(ch as u32, 0x0041..=0x024f | 0x1e00..=0x1eff)
-}
-
-fn is_cjk(ch: char) -> bool {
-    matches!(
-        ch as u32,
-        0x3040..=0x30ff
-            | 0x3400..=0x4dbf
-            | 0x4e00..=0x9fff
-            | 0xac00..=0xd7af
-            | 0xf900..=0xfaff
-    )
-}
-
-fn is_emoji(ch: char) -> bool {
-    matches!(
-        ch as u32,
-        0x2600..=0x27bf | 0x1f1e6..=0x1f1ff | 0x1f300..=0x1faff
-    )
-}
-
-fn is_ltr(ch: char) -> bool {
-    ch.is_alphabetic() && bidi_class(ch) == BidiClass::L
-}
-
-fn is_rtl(ch: char) -> bool {
-    ch.is_alphabetic() && matches!(bidi_class(ch), BidiClass::R | BidiClass::AL)
-}
-
-fn is_default_ignorable(ch: char) -> bool {
-    matches!(
-        ch as u32,
-        0x00ad
-            | 0x034f
-            | 0x061c
-            | 0x115f..=0x1160
-            | 0x17b4..=0x17b5
-            | 0x180b..=0x180f
-            | 0x200b..=0x200f
-            | 0x202a..=0x202e
-            | 0x2060..=0x206f
-            | 0xfe00..=0xfe0f
-            | 0xfeff
-            | 0xfff0..=0xfff8
-            | 0xe0100..=0xe01ef
-    )
 }

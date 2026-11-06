@@ -1,6 +1,5 @@
-use super::{CaretAffinity, CaretGeometry, TextEditLayout, VisualCaret};
+use super::{CaretAffinity, CaretGeometry, SAME_X, TextEditLayout, VisualCaret};
 use crate::core::text_editing::{TextEditError, TextRange};
-use crate::renderer::text::TextDirection;
 use unicode_segmentation::UnicodeSegmentation;
 
 impl TextEditLayout {
@@ -108,7 +107,7 @@ impl TextEditLayout {
         let target = if move_right {
             stops
                 .into_iter()
-                .find(|stop| stop.x > current.x + f32::EPSILON)
+                .find(|stop| stop.x > current.x + SAME_X)
                 .or_else(|| {
                     (line_index + 1 < self.lines.len())
                         .then(|| self.visual_edge_caret(line_index + 1, false))
@@ -117,7 +116,7 @@ impl TextEditLayout {
             stops
                 .into_iter()
                 .rev()
-                .find(|stop| stop.x < current.x - f32::EPSILON)
+                .find(|stop| stop.x < current.x - SAME_X)
                 .or_else(|| (line_index > 0).then(|| self.visual_edge_caret(line_index - 1, true)))
         };
         Ok(target.unwrap_or(current))
@@ -219,7 +218,7 @@ impl TextEditLayout {
             .iter()
             .filter(|cluster| cluster.line_index == line_index)
         {
-            let rtl = cluster.direction == TextDirection::RightToLeft;
+            let rtl = cluster.rtl;
             stops.push(VisualCaret {
                 offset: cluster.byte_start,
                 affinity: CaretAffinity::Downstream,
@@ -236,7 +235,7 @@ impl TextEditLayout {
         }
         stops.sort_by(|left, right| left.x.total_cmp(&right.x));
         stops.dedup_by(|right, left| {
-            right.offset == left.offset && (right.x - left.x).abs() <= f32::EPSILON
+            right.offset == left.offset && (right.x - left.x).abs() <= SAME_X
         });
         stops
     }
@@ -253,7 +252,7 @@ impl TextEditLayout {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::renderer::text::{TextMeasureCache, TextRequest};
+    use crate::renderer::text::{TextDirection, TextMeasureCache, TextRequest};
 
     fn mixed_layout() -> (TextEditLayout, usize) {
         let text = "abc שלום";
@@ -312,5 +311,61 @@ mod tests {
             assert_eq!(hit.offset, boundary);
             assert!((hit.x - expected.x).abs() <= f32::EPSILON);
         }
+    }
+
+    #[test]
+    fn arrows_cross_reordered_runs_one_drawn_position_at_a_time() {
+        // On screen: "abc " then עולם, 123 and שלום, the Hebrew words swapped.
+        let text = "abc שלום 123 עולם";
+        let plan = TextMeasureCache::new()
+            .shape_single_line(TextRequest::new(text, 18.0, 400, None, 1.0))
+            .unwrap_or_else(|err| panic!("shaping failed: {err:?}"));
+        let layout = TextEditLayout::from_shape_plan(text, &plan)
+            .unwrap_or_else(|err| panic!("layout failed: {err}"));
+        let walk = |right: bool| {
+            let mut current = layout.visual_edge_caret(0, !right);
+            let mut visited = vec![current];
+            loop {
+                let next = layout
+                    .visual_caret_horizontal(current, right)
+                    .unwrap_or_else(|err| panic!("navigation failed: {err}"));
+                if next == current {
+                    return visited;
+                }
+                visited.push(next);
+                current = next;
+            }
+        };
+        let rightward = walk(true);
+        assert!(rightward.windows(2).all(|pair| pair[0].x < pair[1].x));
+        // Left edge is the start, right edge the start of שלום, drawn last.
+        assert_eq!(rightward[0].offset, 0);
+        assert_eq!(rightward[rightward.len() - 1].offset, 4);
+        // Leftward passes the same places. Where two runs meet, one place is
+        // two offsets, and each direction stops at the one it reaches first.
+        let mut leftward = walk(false);
+        leftward.reverse();
+        assert_eq!(leftward.len(), rightward.len());
+        assert!(
+            leftward
+                .iter()
+                .zip(&rightward)
+                .all(|(left, right)| (left.x - right.x).abs() <= SAME_X),
+            "{leftward:?} {rightward:?}"
+        );
+        let mut offsets: Vec<usize> = rightward
+            .iter()
+            .chain(&leftward)
+            .map(|caret| caret.offset)
+            .collect();
+        offsets.sort_unstable();
+        offsets.dedup();
+        let boundaries: Vec<usize> = plan
+            .clusters()
+            .iter()
+            .map(|cluster| cluster.byte_start)
+            .chain([text.len()])
+            .collect();
+        assert_eq!(offsets, boundaries, "every caret position is reached");
     }
 }
