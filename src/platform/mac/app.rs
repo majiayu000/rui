@@ -22,6 +22,7 @@ use crate::platform::mac::events::{
 };
 use crate::platform::mac::frame::{NativeFrameEvents, dispatch_native_events};
 use crate::platform::mac::frame_ticker::FrameTicker;
+use crate::platform::mac::present_latency;
 use crate::platform::mac::window::{
     MacAppEvent, MacWindow, create_window, has_pending_event, poll_windows,
 };
@@ -90,10 +91,14 @@ where
 
     let profile_enabled = RendererTelemetryRecorder::enabled_from_env().is_some();
     let mut frame_ticker = FrameTicker::new(APP_EVENT_WINDOW_NUMBER);
+    let mut held_events = HeldEvents::default();
     loop {
         open_pending_windows(&mut context, &mut windows, mtm);
 
-        let wait_for_event = !context.has_pending_work();
+        // While the display paces frames, the next tick is at most a refresh
+        // away and its frame does whatever work is pending.
+        let display_paced = frame_ticker.source().is_some();
+        let wait_for_event = display_paced || !context.has_pending_work();
         let polled = {
             let mut mac_windows: Vec<&mut MacWindow> = windows
                 .iter_mut()
@@ -105,22 +110,44 @@ where
             }
         };
         let iteration_started_at = Instant::now();
+        let mut ticked = false;
         for event in polled.app {
             match event {
                 MacAppEvent::DisplayTick => {
                     frame_ticker.tick_handled();
                     context.begin_animation_frame();
+                    ticked = true;
                 }
                 MacAppEvent::Wake => {}
             }
         }
 
+        // Between ticks of a display-paced animation, events wait for the next
+        // tick's frame. A frame drawn between ticks would reach the screen with
+        // the tick's frame and one of them would be thrown away.
+        if display_paced && !ticked {
+            held_events.hold(windows.iter().map(|window| window.id()), polled.windows);
+            run_between_frames(
+                &mut context,
+                &mut frame_ticker,
+                windows.first().map(|window| window.mac_window()),
+                &app,
+                iteration_started_at,
+                profile_enabled,
+            );
+            if !context.is_running() {
+                break;
+            }
+            continue;
+        }
+
         let mut close_requested = Vec::new();
-        for (window, events) in windows.iter_mut().zip(polled.windows) {
+        for (window, new_events) in windows.iter_mut().zip(polled.windows) {
             if !context.activate_window(window.id()) {
                 continue;
             }
-            if window.run_iteration(&mut context, events).close {
+            let (events, held_since) = held_events.take(window.id(), new_events);
+            if window.run_iteration(&mut context, events, held_since).close {
                 close_requested.push(window.id());
             }
         }
@@ -128,6 +155,7 @@ where
             context.close_window(window);
         }
         for closed in context.take_closed_windows() {
+            held_events.take(closed, Vec::new());
             if let Some(index) = windows.iter().position(|window| window.id() == closed) {
                 let mut window = windows.remove(index);
                 if let Err(err) = window.mac_window_mut().close() {
@@ -158,6 +186,43 @@ where
         // Idle work may have quit.
         if !context.is_running() {
             break;
+        }
+    }
+}
+
+/// Window events held back until the next display tick, in arrival order.
+#[derive(Default)]
+struct HeldEvents {
+    windows: Vec<(WindowId, Instant, Vec<MacWindowEvent>)>,
+}
+
+impl HeldEvents {
+    fn hold(&mut self, windows: impl Iterator<Item = WindowId>, polled: Vec<Vec<MacWindowEvent>>) {
+        for (window, events) in windows.zip(polled) {
+            if events.is_empty() {
+                continue;
+            }
+            match self.windows.iter_mut().find(|(id, ..)| *id == window) {
+                Some((.., held)) => held.extend(events),
+                None => self.windows.push((window, Instant::now(), events)),
+            }
+        }
+    }
+
+    /// The window's held events followed by `new_events`, and when the first
+    /// held one arrived.
+    fn take(
+        &mut self,
+        window: WindowId,
+        new_events: Vec<MacWindowEvent>,
+    ) -> (Vec<MacWindowEvent>, Option<Instant>) {
+        match self.windows.iter().position(|(id, ..)| *id == window) {
+            Some(index) => {
+                let (_, held_since, mut events) = self.windows.swap_remove(index);
+                events.extend(new_events);
+                (events, Some(held_since))
+            }
+            None => (new_events, None),
         }
     }
 }
@@ -250,11 +315,13 @@ pub(crate) trait NativeWindowDriver {
     fn mac_window(&self) -> &MacWindow;
     fn mac_window_mut(&mut self) -> &mut MacWindow;
     /// Handle this window's events and draw it if it has work. `context` has
-    /// this window active.
+    /// this window active. `held_since` is when the first of `events` arrived,
+    /// if they were held for this frame.
     fn run_iteration(
         &mut self,
         context: &mut AppContext,
         events: Vec<MacWindowEvent>,
+        held_since: Option<Instant>,
     ) -> WindowRequests;
 }
 
@@ -327,6 +394,7 @@ where
         &mut self,
         context: &mut AppContext,
         mut platform_events: Vec<MacWindowEvent>,
+        held_since: Option<Instant>,
     ) -> WindowRequests {
         let NativeWindow {
             window,
@@ -358,8 +426,14 @@ where
         let event_observed_at = if platform_events.is_empty() {
             None
         } else {
-            Some(Instant::now())
+            Some(held_since.unwrap_or_else(Instant::now))
         };
+        let present_profile = profile_recorder.as_ref().map(|recorder| {
+            let event_observed_at = event_observed_at.map(|observed_at| {
+                present_latency::media_time() - observed_at.elapsed().as_secs_f64()
+            });
+            (recorder.next_frame_index(), event_observed_at)
+        });
 
         for event in platform_events {
             match event {
@@ -467,6 +541,9 @@ where
                 renderer.set_time_completed_frames(presenter.profiler().is_some());
                 let presentation = match metal_drawable {
                     Some(metal_drawable) => {
+                        if let Some((frame_index, event_observed_at)) = present_profile {
+                            present_latency::track(&metal_drawable, frame_index, event_observed_at);
+                        }
                         // Hold the owned retain across render+present; MetalRenderer
                         // still takes &MetalDrawableRef via Deref.
                         renderer

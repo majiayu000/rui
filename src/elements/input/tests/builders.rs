@@ -6,7 +6,7 @@ use super::support::*;
 fn test_builder_id() {
     let id = ElementId::new();
     let inp = Input::new().id(id);
-    assert_eq!(inp.id, Some(id));
+    assert_eq!(inp.id.get(), id);
 }
 
 #[test]
@@ -128,7 +128,7 @@ fn test_builder_chain() {
         .rounded(8.0)
         .border_color(Color::BLUE);
 
-    assert_eq!(inp.id, Some(id));
+    assert_eq!(inp.id.get(), id);
     assert_eq!(inp.state.value, "test");
     assert_eq!(inp.placeholder, "Enter text");
     assert_eq!(inp.input_type, InputType::Password);

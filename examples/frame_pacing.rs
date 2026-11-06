@@ -8,6 +8,11 @@
 //!
 //! `RUI_FRAME_PACING_MODE=input` queues slow idle work, posts a real click from
 //! inside it, and reports how much idle work ran before the click was handled.
+//!
+//! `RUI_FRAME_PACING_MODE=latency` animates like `animate` while another thread
+//! posts mouse moves at uneven intervals, then quits. With `RUI_PROFILE=1` each
+//! frame's `rui.present.v1` line reports how long after its first event it
+//! reached the screen.
 
 use rui::core::{AppContext, TaskPriority};
 use rui::prelude::*;
@@ -33,12 +38,16 @@ struct Animate {
     frames: u32,
     stopped: bool,
     quit_after_idle: Option<Duration>,
+    post_mouse_moves: bool,
 }
 
 impl View for Animate {
     type Element = Div;
 
     fn render(&mut self, cx: &mut ViewContext<Self>) -> Self::Element {
+        if self.started_at.is_none() && self.post_mouse_moves {
+            post_mouse_moves_until(self.duration);
+        }
         let started_at = *self.started_at.get_or_insert_with(Instant::now);
         let elapsed = started_at.elapsed();
         self.frames += 1;
@@ -167,6 +176,69 @@ fn post_click_at_window_center() {
     }
 }
 
+/// Post mouse moves over the first window from another thread, 9 to 25 ms
+/// apart so they land at every phase of the display refresh.
+#[cfg(target_os = "macos")]
+fn post_mouse_moves_until(duration: Duration) {
+    use objc2::MainThreadMarker;
+    use objc2::msg_send;
+    use objc2::runtime::AnyObject;
+    use objc2_app_kit::NSApplication;
+    use objc2_foundation::{NSPoint, NSRect};
+
+    const MOUSE_MOVED: usize = 5;
+    const CAN_JOIN_ALL_SPACES: usize = 1;
+    const FLOATING_WINDOW_LEVEL: isize = 3;
+
+    let mtm = MainThreadMarker::new().expect("views render on the main thread");
+    let app = NSApplication::sharedApplication(mtm);
+    let (window_number, size) = unsafe {
+        let windows: *mut AnyObject = msg_send![&*app, windows];
+        let window: *mut AnyObject = msg_send![windows, firstObject];
+        assert!(!window.is_null(), "the app has a window");
+        let window_number: isize = msg_send![window, windowNumber];
+        let content_view: *mut AnyObject = msg_send![window, contentView];
+        let bounds: NSRect = msg_send![content_view, bounds];
+        // Float on every Space so no other window hides the presents measured.
+        let _: () = msg_send![window, setCollectionBehavior: CAN_JOIN_ALL_SPACES];
+        let _: () = msg_send![window, setLevel: FLOATING_WINDOW_LEVEL];
+        (window_number, bounds.size)
+    };
+    std::thread::spawn(move || {
+        let until = Instant::now() + duration;
+        let mut seed: u32 = 0x9e37_79b9;
+        while Instant::now() < until {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            let delay_us = 9_000 + u64::from(seed >> 8) % 16_000;
+            std::thread::sleep(Duration::from_micros(delay_us));
+            let x = f64::from(seed % 1000) / 1000.0 * size.width;
+            unsafe {
+                let app: *mut AnyObject =
+                    msg_send![objc2::class!(NSApplication), sharedApplication];
+                let event: *mut AnyObject = msg_send![
+                    objc2::class!(NSEvent),
+                    mouseEventWithType: MOUSE_MOVED,
+                    location: NSPoint::new(x, size.height / 2.0),
+                    modifierFlags: 0usize,
+                    timestamp: 0.0f64,
+                    windowNumber: window_number,
+                    context: std::ptr::null_mut::<AnyObject>(),
+                    eventNumber: 0isize,
+                    clickCount: 0isize,
+                    pressure: 0.0f32
+                ];
+                assert!(!event.is_null(), "AppKit created the mouse event");
+                let _: () = msg_send![app, postEvent: event, atStart: false];
+            }
+        }
+    });
+}
+
+#[cfg(not(target_os = "macos"))]
+fn post_mouse_moves_until(_duration: Duration) {
+    panic!("the latency check posts native macOS events");
+}
+
 #[cfg(not(target_os = "macos"))]
 fn post_click_at_window_center() {
     panic!("the input check posts native macOS events");
@@ -182,11 +254,20 @@ fn main() {
             stopped: false,
             quit_after_idle: env_u64("RUI_FRAME_PACING_QUIT_AFTER_IDLE_MS")
                 .map(Duration::from_millis),
+            post_mouse_moves: false,
+        }),
+        "latency" => App::new().run_view(Animate {
+            started_at: None,
+            duration: Duration::from_secs(env_u64("RUI_FRAME_PACING_SECONDS").unwrap_or(5)),
+            frames: 0,
+            stopped: false,
+            quit_after_idle: Some(Duration::ZERO),
+            post_mouse_moves: true,
         }),
         "input" => App::new().run_view(InputCheck {
             queued: false,
             idle_done: Rc::new(Cell::new(0)),
         }),
-        other => panic!("RUI_FRAME_PACING_MODE must be animate or input, not {other:?}"),
+        other => panic!("RUI_FRAME_PACING_MODE must be animate, latency or input, not {other:?}"),
     }
 }
