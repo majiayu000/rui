@@ -344,7 +344,9 @@ impl PathGeometry {
         bucket(
             &scratch.band,
             columns,
-            |edge| edge.enter - first,
+            // An edge crossing no column enters at i64::MIN, which no
+            // column takes.
+            |edge| edge.enter.saturating_sub(first),
             &mut scratch.enter,
         );
         bucket(

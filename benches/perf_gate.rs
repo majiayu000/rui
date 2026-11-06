@@ -13,9 +13,11 @@
 //! committed checksum. Different GPUs antialias differently, so that is for local
 //! runs before and after a renderer change, not for CI.
 mod perf_budgets;
+mod perf_icons;
 mod perf_images;
 
 use perf_budgets::{CaseBudget, load_budgets};
+use perf_icons::IconGrid;
 use perf_images::ImageGrid;
 use rui::core::entity::Entity;
 use rui::core::event::MouseButton;
@@ -680,6 +682,12 @@ fn main() -> ExitCode {
         measure(|round| grid.frame(round, &mut measurer)),
     );
     drop(grid);
+    let mut icons = IconGrid::new(Size::new(VIEWPORT.0, VIEWPORT.1), &mut measurer);
+    costs.insert(
+        "icons.grid_rebuilt",
+        measure(|round| icons.frame(round, &mut measurer)),
+    );
+    drop(icons);
 
     // #175: how much of the window one change in view draws again, and the GPU
     // time of that frame against a full redraw.
