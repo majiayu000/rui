@@ -3,6 +3,10 @@
 RUI's developer tools live in `src/devtools/`. They are off by default, and a
 frame with them off pays one branch per stage and allocates nothing for them.
 
+`RUI_DEVTOOLS` names the tools to start with, comma-separated: `profiler` (or
+`1`), `damage`, or `all`. An unknown name panics at startup rather than being
+ignored.
+
 ## Profiling overlay
 
 A panel in the top-right corner of every window with the last complete frame's
@@ -11,7 +15,8 @@ never moves the app's elements and is not hit-tested.
 
 Turn it on:
 
-- `RUI_DEVTOOLS=1 cargo run --example animation_demo` starts with it on.
+- `RUI_DEVTOOLS=profiler cargo run --example animation_demo` (or `RUI_DEVTOOLS=1`)
+  starts with it on.
 - `cx.toggle_profiler()` (on `AppContext` or `ViewContext`) shows or hides it in
   every window; `cx.profiler_enabled()` reads the state.
 
@@ -62,3 +67,26 @@ The same counters can be read in code: `Presenter::profiler()` (and
 for scripts. The overlay shows the same stage times on screen, and the numbers
 `RUI_PROFILE` does not have: prepare and rebuild time, GPU time, damage and
 replay, dropped frames and allocations. The two are independent.
+
+## Damage and replay visualizer
+
+Tints what the incremental core did this frame, for debugging it:
+
+- a green fill over each memoizable subtree replayed from the previous frame,
+  moved or in place;
+- a red outline around each one painted again;
+- a magenta outline around the frame's damage, the rectangle the renderer draws
+  again (the devtools overlay left out).
+
+Elements that are never memoized (the root, subtrees that register hit or
+accessibility regions or layers while painting) get no tint.
+
+Turn it on with `RUI_DEVTOOLS=damage` or `cx.toggle_damage_visualizer()`;
+`cx.damage_visualizer_enabled()` reads the state. It combines with the profiler
+(`RUI_DEVTOOLS=all`).
+
+Like the profiler it draws after paint, so it changes neither layout nor what
+the app's subtrees replay. Each frame's tints are drawn again by the next
+frame, so with it on the renderer also redraws the previous frame's damage
+rectangle, and a frame with a replayed subtree on screen redraws that subtree's
+area.

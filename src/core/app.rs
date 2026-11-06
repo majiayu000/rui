@@ -384,6 +384,17 @@ impl AppContext {
         self.devtools.profiler
     }
 
+    /// Show or hide the damage and replay visualizer in every window.
+    /// `RUI_DEVTOOLS=damage` starts with it shown. See `docs/devtools.md`.
+    pub fn toggle_damage_visualizer(&mut self) {
+        self.devtools.damage = !self.devtools.damage;
+        self.request_redraw();
+    }
+
+    pub fn damage_visualizer_enabled(&self) -> bool {
+        self.devtools.damage
+    }
+
     /// Rebuild only the window whose frame runs now, such as after it resized.
     pub(crate) fn request_window_rebuild(&mut self) {
         self.frame.request_rebuild();

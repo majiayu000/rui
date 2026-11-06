@@ -1515,6 +1515,7 @@ impl AnyElement {
                 let index = cx.scene.record(PaintRecord {
                     // A subtree left out has no range to replay next time.
                     painted: seen,
+                    replayed: true,
                     start: primitives.start as u32,
                     end: primitives.end as u32,
                     origin,
@@ -1546,6 +1547,7 @@ impl AnyElement {
         if replayable {
             let index = cx.scene.record(PaintRecord {
                 painted: true,
+                replayed: false,
                 start: start as u32,
                 end: cx.scene.len() as u32,
                 origin,
