@@ -51,8 +51,8 @@ to Metal without waiting for the GPU.
 | `resize_full` | the 2000-row list | width alternates 1440 / 1280 | new viewport size | `window.resize` + `window.bounds_changed`, as the platform resize callback does |
 | `resize_virtual` | the 1000-row virtual list | width alternates 1440 / 1280 | same | same |
 | `startup` | the 2000-row list | none | see below | see below |
-| `editor_scroll` | a 10 000-line code view: 20 px lines of 13 px SF Mono, a 64 px gutter of line numbers, 11 colored tokens per line (a comment every ninth line), the cursor's line highlighted; starts at line 5001 | scrolls down one line; the cursor moves with it | `virtual_list` of rows: gutter `text` + `styled_text` of `span(..).color(..)` | `uniform_list` of rows: gutter string + `StyledText::with_highlights` |
-| `editor_edit` | same, not scrolling | the cursor line's first identifier ends in a new letter | the line's tokens change in place | the line's tokens change and its `SharedString` and highlights are rebuilt |
+| `editor_scroll` | a 10 000-line code view: 20 px lines of 13 px SF Mono, a 64 px gutter of line numbers, 11 colored tokens per line (a comment every ninth line), the cursor's line highlighted; starts at line 5001 | scrolls down one line; the cursor moves with it | `virtual_list` of rows: gutter `text` + `shared_styled_text` of `span_range(..).color(..)` over the line's `Arc<str>` (the editor run below used `styled_text` of `span(..)`, a `String` per token) | `uniform_list` of rows: gutter string + `StyledText::with_highlights` |
+| `editor_edit` | same, not scrolling | the cursor line's first identifier ends in a new letter | the line's tokens change and its `Arc<str>` and ranges are rebuilt | the line's tokens change and its `SharedString` and highlights are rebuilt |
 
 The editor cases use the same font file on both sides,
 `/System/Library/Fonts/SFNSMono.ttf`. RUI calls it "SF Mono"; Core Text hides it from
@@ -257,6 +257,23 @@ Why scrolling costs RUI twice what an edit does: in a sample of `editor_scroll`,
 `TextMeasureCache::wrapped_rich_size` and `wrap_rich`, which key the styled-text cache
 on every span. Another ~4% is `FrameLru::evict`, which sorts the whole measure cache
 each frame once new lines keep arriving. Neither is fixed here.
+
+### After the text follow-ups (#260 and shared spans)
+
+This run is on main plus #253, #256, #260 and the shared-spans change, with the editor
+fixture's RUI side using `shared_styled_text`. Three rounds, load average 33–35.
+
+| Case | Side | Instructions (M) / frame | Allocations / frame | Verdict by instructions |
+|---|---|---|---|---|
+| editor_scroll | RUI | 5.62–5.64 (was 7.79–7.80) | 2 819 (was 4 456) | RUI ahead 1.5x (was 1.1x) |
+| editor_scroll | GPUI | 8.48–8.76 | 1 636–1 638 | |
+| editor_edit | RUI | 2.60–2.67 (was 3.57–3.60) | 1 667 (was 3 283) | RUI ahead 3.3x (was 2.4x) |
+| editor_edit | GPUI | 8.49–8.68 | 1 636 | |
+
+- **Edit:** allocations are now level with GPUI's (1.02x).
+- **Scroll:** still 1.7x GPUI's allocations. Each `Primitive::Text` the renderer
+  receives owns its piece's text and family name, which is renderer work left to lane G.
+  Measuring the line that scrolls in also allocates.
 
 ## Run on `ec7660d` (before the remaining lanes)
 

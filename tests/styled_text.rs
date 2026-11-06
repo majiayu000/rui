@@ -3,7 +3,7 @@
 use rui::core::frame_pipeline::FramePipeline;
 use rui::elements::element::LayoutNodes;
 use rui::elements::text::FontWeight;
-use rui::elements::{Div, div, span, styled_text};
+use rui::elements::{Div, div, shared_styled_text, span, span_range, styled_text};
 use rui::renderer::text::TextMeasureCache;
 use rui::renderer::{Primitive, Scene};
 use rui::{Bounds, Color, ElementId, Size};
@@ -203,4 +203,58 @@ fn a_retained_layout_rewraps_styled_text_when_its_container_resizes() {
     let narrow = rows(150.0);
     assert!(narrow > wide, "{narrow} lines at 150px, {wide} at 600px");
     assert_eq!(rows(600.0), wide);
+}
+
+#[test]
+fn spans_over_one_shared_text_draw_as_spans_with_their_own_text() {
+    let line: std::sync::Arc<str> = std::sync::Arc::from("let width = 42;");
+    let mut shared = div().text_size(16.0).child(shared_styled_text(
+        std::sync::Arc::clone(&line),
+        [
+            span_range(0..4).color(Color::BLUE),
+            span_range(4..9).bold(),
+            span_range(9..12),
+            span_range(12..15).size(20.0),
+        ],
+    ));
+    let mut owned = div().text_size(16.0).child(styled_text([
+        span("let ").color(Color::BLUE),
+        span("width").bold(),
+        span(" = "),
+        span("42;").size(20.0),
+    ]));
+    let viewport = Size::new(800.0, 200.0);
+    assert_eq!(
+        lay_out(&mut shared, viewport),
+        lay_out(&mut owned, viewport)
+    );
+}
+
+#[test]
+fn appending_a_span_extends_the_text() {
+    let mut appended = div().child(styled_text([span("one ")]).span(span("two").bold()));
+    let mut listed = div().child(styled_text([span("one "), span("two").bold()]));
+    let viewport = Size::new(800.0, 200.0);
+    assert_eq!(
+        lay_out(&mut appended, viewport),
+        lay_out(&mut listed, viewport)
+    );
+}
+
+#[test]
+#[should_panic(expected = "cover 3 of its 5 bytes")]
+fn shared_spans_must_cover_the_whole_text() {
+    shared_styled_text("hello", [span_range(0..3)]);
+}
+
+#[test]
+#[should_panic(expected = "does not follow byte 2")]
+fn shared_spans_must_follow_each_other() {
+    shared_styled_text("hello", [span_range(0..2), span_range(3..5)]);
+}
+
+#[test]
+#[should_panic(expected = "place it with shared_styled_text")]
+fn a_range_span_needs_shared_text() {
+    styled_text([span_range(0..2)]);
 }
