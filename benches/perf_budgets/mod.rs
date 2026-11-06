@@ -36,6 +36,9 @@ pub struct Budgets {
     pub footprint_mb_max: f64,
     /// Most of the window one changed row may draw again (#175).
     pub one_row_damage_max: f64,
+    /// Most of a full frame one changed row may cost in a list written with
+    /// `AppContext::rows` (ADR 0001), by instructions where counted.
+    pub one_row_changed_rows_max: f64,
     /// Most the heap may grow over `CHURN_FRAMES` frames of `views.churn`, in KB.
     pub churn_growth_kb_max: f64,
     pub pixel_checksum: String,

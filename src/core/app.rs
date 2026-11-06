@@ -14,6 +14,9 @@ use crate::core::view::{
 
 mod clipboard;
 mod release;
+mod rows;
+
+pub use rows::Row;
 
 pub(crate) use clipboard::SharedClipboard;
 
@@ -61,6 +64,8 @@ pub struct AppContext {
     observers: HashMap<EntityId, HashSet<EntityId>>,
     /// What each child view read in its last render.
     view_reads: HashMap<EntityId, Vec<EntityId>>,
+    /// The views [`Self::rows`] made.
+    row_views: rows::RowViews,
     pub(crate) devtools: DevtoolsFlags,
 }
 
@@ -213,6 +218,7 @@ impl AppContext {
             reads: RefCell::default(),
             observers: HashMap::new(),
             view_reads: HashMap::new(),
+            row_views: rows::RowViews::default(),
             devtools: DevtoolsFlags::from_env(),
         }
     }

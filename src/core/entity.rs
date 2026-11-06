@@ -47,6 +47,11 @@ impl EntityStore {
         })
     }
 
+    /// The entity's shared cell, borrowed apart from the store.
+    pub(crate) fn cell(&self, id: EntityId) -> Option<AnyEntity> {
+        self.entities.get(id).cloned()
+    }
+
     /// Remove an entity
     pub fn remove(&mut self, id: EntityId) -> bool {
         self.entities.remove(id).is_some()

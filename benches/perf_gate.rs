@@ -137,6 +137,12 @@ fn row(index: usize, selected: usize) -> Div {
 }
 
 /// A row of the long list as a view, showing its own label entity.
+/// A row of the list written with `AppContext::rows`.
+struct RowItem {
+    index: usize,
+    label: String,
+}
+
 struct ListRow {
     index: usize,
     label: Entity<String>,
@@ -603,6 +609,51 @@ fn main() -> ExitCode {
     );
     drop(viewed_root);
 
+    // The same list written with `cx.rows`: a view per entity without a view type.
+    let items: Vec<Entity<RowItem>> = (0..2_000)
+        .map(|index| {
+            context.create(RowItem {
+                index,
+                label: String::from("edit"),
+            })
+        })
+        .collect();
+    let edited_item = items[EDITED_ROW];
+    let mut build_rows = move |cx: &mut AppContext| {
+        div()
+            .w_full()
+            .flex_col()
+            .children(cx.rows(&items, |item: &RowItem, _| {
+                row(item.index, usize::MAX).child(text(item.label.clone()))
+            }))
+    };
+    let mut rows_surfaces = Surfaces::new();
+    let mut rows_root = div();
+    let mut rows_frame =
+        |context: &mut AppContext, root: &mut Div, measurer: &mut TextMeasureCache| {
+            FramePipeline::build_frame_retained(
+                context,
+                root,
+                &mut build_rows,
+                &mut rows_surfaces.taffy,
+                &mut rows_surfaces.nodes,
+                &mut rows_surfaces.scene,
+                measurer,
+                Size::new(VIEWPORT.0, VIEWPORT.1),
+            )
+            .expect("rows frame");
+        };
+    rows_frame(&mut context, &mut rows_root, &mut measurer);
+    costs.insert(
+        "list.one_row_changed_rows",
+        measure(|round| {
+            context.get_mut(edited_item).expect("edited item").label = format!("edit {round}");
+            context.notify(edited_item.id());
+            rows_frame(&mut context, &mut rows_root, &mut measurer);
+        }),
+    );
+    drop(rows_root);
+
     // Row views made and dropped every frame: the oldest rows leave the list
     // and new ones join it. The rows that stay move up and render again none.
     let mut churn = Churn::new(&mut context);
@@ -721,6 +772,7 @@ fn main() -> ExitCode {
     for (name, case) in [
         ("rebuilt list", "list.one_row_changed"),
         ("rows as views", "list.one_row_changed_views"),
+        ("cx.rows", "list.one_row_changed_rows"),
     ] {
         let changed = costs[case];
         let by_instructions = if counters {
@@ -732,6 +784,19 @@ fn main() -> ExitCode {
             "one row changed, {name} / full frame: {by_instructions} by instructions, {:.3} by allocations (#173 target 0.10)",
             changed.allocations / full.allocations
         );
+    }
+
+    let rows = costs["list.one_row_changed_rows"];
+    let rows_fraction = if counters {
+        rows.instructions_m / full.instructions_m
+    } else {
+        rows.allocations / full.allocations
+    };
+    if rows_fraction > budgets.one_row_changed_rows_max {
+        failures.push(format!(
+            "list.one_row_changed_rows costs {rows_fraction:.3} of a full frame, max {:.2}",
+            budgets.one_row_changed_rows_max
+        ));
     }
 
     let (small, large) = (costs["virtual_list.1k"], costs["virtual_list.100k"]);

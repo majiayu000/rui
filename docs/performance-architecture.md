@@ -80,9 +80,14 @@ input/effects -> build -> layout -> paint -> hit index -> render -> present
   built for an explicit rebuild, an entity it read itself, or an entity no view
   read, as before. GPUI tracks reads per view too; RUI's view keeps the
   per-element memo, replay and damage below it.
+- **Lists without view types (ADR 0001).** `cx.rows(&entities, |item, cx| ..)`
+  places a view per entity, keyed by the row closure's type and the entity, made
+  on first use and released once no tree places it. Notifying an entity renders
+  only its row. Rows render with the newest closure of their call site.
 - **Target:** one-row change: build cost of one row plus the path to it. With
   rows as views, the 2000-row list's one-row frame costs 2.0 M instructions and
-  23 allocations, 0.029 of a full frame.
+  23 allocations, 0.029 of a full frame. Written with `cx.rows` it costs the same,
+  2.1 M and 23 (`list.one_row_changed_rows`, gated at 0.05 of a full frame).
 
 ### 3. Layout (done: retained tree; lane 4: caches; lane 2: skip unchanged subtrees)
 
