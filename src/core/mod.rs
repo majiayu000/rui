@@ -23,7 +23,7 @@ pub mod view;
 pub mod window;
 mod windows;
 
-pub use app::{App, AppContext, RedrawSource, RedrawSourceCounts, Row};
+pub use app::{App, AppContext, ImageAsset, RedrawSource, RedrawSourceCounts, Row};
 pub use app_handle::{AppClosed, AppHandle};
 pub use color::{Color, Hsla, Rgba};
 pub use effects::Subscription;

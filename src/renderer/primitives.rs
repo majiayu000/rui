@@ -266,6 +266,10 @@ impl Primitive {
                         let size = Size::new(*width as f32, *height as f32);
                         fit_bounds(*bounds, size, *fit).intersection(bounds)
                     }
+                    ImageSource::Decoded(image) => {
+                        let size = Size::new(image.width() as f32, image.height() as f32);
+                        fit_bounds(*bounds, size, *fit).intersection(bounds)
+                    }
                     ImageSource::File(_) | ImageSource::Texture(_) => Some(*bounds),
                 };
                 match drawn {

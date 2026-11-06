@@ -232,6 +232,17 @@ fn primitive_line(index: usize, primitive: &Primitive) -> Result<String, Primiti
                 f32_text(*opacity),
                 corners_text(*corner_radii)
             ),
+            ImageSource::Decoded(image) => format!(
+                "primitive[{index}].image bounds={} source=decoded(width={},height={},len={},fnv64={}) fit={:?} opacity={} radii={}",
+                bounds_text(*bounds),
+                image.width(),
+                image.height(),
+                image.pixels().len(),
+                fnv64_text(image.pixels()),
+                fit,
+                f32_text(*opacity),
+                corners_text(*corner_radii)
+            ),
             ImageSource::File(_) => {
                 return Err(PrimitiveSnapshotError::UnsupportedImageSource {
                     index,

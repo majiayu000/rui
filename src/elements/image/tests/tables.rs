@@ -138,7 +138,7 @@ fn test_constructor_variants_table() {
 
     for case in test_cases {
         assert!(
-            (case.check)(&case.image.source),
+            (case.check)(case.image.source.as_ref().expect("source")),
             "Source check failed for case: {}",
             case.name
         );

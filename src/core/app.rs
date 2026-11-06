@@ -13,12 +13,14 @@ use crate::core::view::{
 };
 
 mod clipboard;
+mod images;
 mod release;
 mod rows;
 
 pub use rows::Row;
 
 pub(crate) use clipboard::SharedClipboard;
+pub use images::ImageAsset;
 
 #[cfg(all(target_os = "macos", feature = "metal"))]
 use crate::core::window::WindowId;
@@ -67,6 +69,7 @@ pub struct AppContext {
     /// The views [`Self::rows`] made.
     row_views: rows::RowViews,
     pub(crate) devtools: DevtoolsFlags,
+    images: images::ImageAssets,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -220,6 +223,7 @@ impl AppContext {
             view_reads: HashMap::new(),
             row_views: rows::RowViews::default(),
             devtools: DevtoolsFlags::from_env(),
+            images: images::ImageAssets::default(),
         }
     }
 
