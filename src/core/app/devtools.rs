@@ -34,5 +34,4 @@ impl AppContext {
     pub fn inspector_enabled(&self) -> bool {
         self.devtools.inspector
     }
-
 }

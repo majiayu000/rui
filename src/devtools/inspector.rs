@@ -72,6 +72,8 @@ pub struct InspectedElement {
     /// Where the element was painted, which is its layout bounds moved by any
     /// scrolling above it.
     pub bounds: Bounds,
+    /// The portion inside all active clips and the window; None when hidden.
+    pub visible_bounds: Option<Bounds>,
     /// The style properties set to something other than their default.
     pub style: String,
     pub paint: PaintState,
@@ -91,7 +93,12 @@ pub(crate) struct Inspection {
 }
 
 impl Inspection {
-    pub(crate) fn enter(&self, element: &AnyElement, bounds: Bounds) {
+    pub(crate) fn enter(
+        &self,
+        element: &AnyElement,
+        bounds: Bounds,
+        visible_bounds: Option<Bounds>,
+    ) {
         let id = element
             .stable_id()
             .expect("inspector: an element was painted before it was laid out");
@@ -100,6 +107,7 @@ impl Inspection {
             element.type_name(),
             element.style(),
             bounds,
+            visible_bounds,
             element.paint_record_slot(),
         );
     }
@@ -110,7 +118,14 @@ impl Inspection {
             .id()
             .filter(|id| !id.is_ephemeral())
             .unwrap_or(ElementId::ROOT);
-        self.push(id, root.type_name(), root.style(), bounds, None);
+        self.push(
+            id,
+            root.type_name(),
+            root.style(),
+            bounds,
+            Some(bounds),
+            None,
+        );
     }
 
     fn push(
@@ -119,6 +134,7 @@ impl Inspection {
         type_name: &str,
         style: &Style,
         bounds: Bounds,
+        visible_bounds: Option<Bounds>,
         slot: Option<(u64, u32)>,
     ) {
         let mut open = self.open.borrow_mut();
@@ -130,6 +146,7 @@ impl Inspection {
             parent: open.last().copied(),
             depth: open.len(),
             bounds,
+            visible_bounds,
             style: style_summary(style),
             paint: PaintState::Painted,
             accessibility: None,
@@ -218,10 +235,11 @@ impl Inspector {
 
     /// The element painted last, so on top, at `point`.
     pub fn element_at(&self, point: Point) -> Option<&InspectedElement> {
-        self.elements
-            .iter()
-            .rev()
-            .find(|element| element.bounds.contains(point))
+        self.elements.iter().rev().find(|element| {
+            element
+                .visible_bounds
+                .is_some_and(|bounds| bounds.contains(point))
+        })
     }
 
     pub fn find(&self, id: ElementId) -> Option<&InspectedElement> {
@@ -266,12 +284,14 @@ impl Inspector {
         let inspection = Inspection::default();
         inspection.enter_root(&*root, bounds);
         self.scratch.clear();
+        self.scratch.push_layer(bounds);
         root.paint(&mut PaintContext::inspecting(
             &mut self.scratch,
             bounds,
             taffy,
             &inspection,
         ));
+        self.scratch.pop_layer();
         inspection.exit();
         self.elements = inspection.finish(scene, accessibility);
     }

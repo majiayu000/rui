@@ -276,7 +276,7 @@ impl AnyElement {
     pub fn paint(&mut self, cx: &mut PaintContext) {
         if !cx.memo {
             if let Some(inspection) = cx.inspection {
-                inspection.enter(self, cx.bounds);
+                inspection.enter(self, cx.bounds, cx.scene.visible_bounds_for(cx.bounds));
                 self.inner.paint(cx);
                 inspection.exit();
                 return;
