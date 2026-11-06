@@ -11,9 +11,10 @@ cargo bench --bench perf_gate
 | Check | Where | Why |
 |---|---|---|
 | Heap allocations per frame, by case | CI and local | Counted by the gate's own allocator; exact on any machine. |
-| CPU instructions per frame (build, layout, paint), by case | Wherever the machine exposes the counter | Repeat within about 1% locally. Hosted VMs may not expose the counter; the report then says the instruction budgets were not checked. |
+| CPU instructions per frame (build, layout, paint), by case | Wherever the machine exposes the counter | Repeat within about 1% locally. GitHub's macOS runners do not expose the counter (seen on CI), and the report then says the instruction budgets were not checked; allocations, which match local runs exactly, still are. |
 | `virtual_list` at 100 000 rows vs 1 000 | CI and local | By instructions, or by allocations without the counter. Must stay within 1.2x. |
-| Resident footprint | CI and local | Includes the Metal renderer when a device is present. |
+| Resident footprint before the renderer | CI and local | RUI's own memory for the cases above; the same on any machine, so its budget is tight. |
+| Resident footprint with the renderer | CI and local | Adds GPU driver memory, which depends on the GPU: GitHub's macOS VMs measure about 20 MB more than a local M2 Max, so this budget is looser. |
 | Pixel checksum of the long list | Local, `PERF_GATE_PIXELS=1` | Different GPUs antialias differently. Run before and after a renderer change. |
 
 Cases use the long-list fixture (2000 rows of 28 px, 1440x900) with one row's selection changing per frame, and the same rows in a `virtual_list`. Metal work is not gated by instructions: driver threads make it move too much.

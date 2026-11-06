@@ -368,3 +368,48 @@ fn retained_focus_announcements_are_dropped_when_focus_clears() {
         filter_retained_accessibility_announcements(announcements, &published, None).is_empty()
     );
 }
+
+#[test]
+fn held_events_come_back_before_new_ones_in_arrival_order() {
+    let (first, second) = (WindowId::new(1), WindowId::new(2));
+    let mut held = HeldEvents::default();
+    held.hold(
+        [first, second].into_iter(),
+        vec![
+            vec![MacWindowEvent::Platform(
+                PlatformWindowEvent::RedrawRequested,
+            )],
+            Vec::new(),
+        ],
+    );
+    held.hold(
+        [first, second].into_iter(),
+        vec![
+            vec![MacWindowEvent::Platform(PlatformWindowEvent::Created)],
+            Vec::new(),
+        ],
+    );
+
+    let (events, held_since) = held.take(
+        first,
+        vec![MacWindowEvent::Platform(
+            PlatformWindowEvent::CloseRequested,
+        )],
+    );
+    let events: Vec<_> = events
+        .into_iter()
+        .map(|event| match event {
+            MacWindowEvent::Platform(event) => format!("{event:?}"),
+            _ => panic!("only platform events were held"),
+        })
+        .collect();
+    assert_eq!(events, ["RedrawRequested", "Created", "CloseRequested",]);
+    assert!(held_since.is_some());
+
+    // A window with nothing held gets its new events and no hold time.
+    let (events, held_since) = held.take(second, Vec::new());
+    assert!(events.is_empty());
+    assert!(held_since.is_none());
+    // Taking empties the hold.
+    assert!(held.take(first, Vec::new()).1.is_none());
+}

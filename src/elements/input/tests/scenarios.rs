@@ -114,7 +114,7 @@ fn test_full_builder_chain() {
         });
 
     // Verify all properties
-    assert_eq!(inp.id, Some(id));
+    assert_eq!(inp.id.get(), id);
     assert_eq!(inp.state.value, "initial");
     assert_eq!(inp.placeholder, "Type here");
     assert_eq!(inp.input_type, InputType::Password);

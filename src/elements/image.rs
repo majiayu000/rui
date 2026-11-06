@@ -4,7 +4,9 @@ use crate::core::ElementId;
 use crate::core::color::Color;
 use crate::core::geometry::{Bounds, Edges, Size};
 use crate::core::style::{Corners, Style};
-use crate::elements::element::{Element, LayoutContext, PaintContext, style_to_taffy};
+use crate::elements::element::{
+    Capabilities, Element, LayoutContext, PaintContext, style_to_taffy,
+};
 use crate::renderer::Primitive;
 use std::any::Any;
 use taffy::prelude::*;
@@ -214,18 +216,14 @@ impl Element for Image {
         &self.style
     }
 
-    fn memoizable(&self) -> bool {
-        true
+    fn capabilities(&self) -> Capabilities {
+        Capabilities::PURE_INERT
     }
 
-    fn ignores_pointer(&self) -> bool {
-        true
-    }
-
-    /// Kept when it shows the same thing. Handlers cannot be compared, so an
-    /// image with one is built again.
-    fn reconcile(&mut self, previous: &mut dyn Element) -> bool {
-        let Some(previous) = (previous as &mut dyn Any).downcast_ref::<Image>() else {
+    /// The same when it shows the same thing. Handlers cannot be compared, so
+    /// an image with one is built again.
+    fn same_props(&self, previous: &dyn Element) -> bool {
+        let Some(previous) = (previous as &dyn Any).downcast_ref::<Image>() else {
             return false;
         };
         self.on_load.is_none()

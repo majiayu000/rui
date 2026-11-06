@@ -973,6 +973,75 @@ impl<'a> EventContext<'a> {
     }
 }
 
+/// What the retained frame may assume about an element, declared once instead
+/// of through hooks. See [`Element::capabilities`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Capabilities {
+    /// Layout and paint depend only on what [`Element::same_props`] compares,
+    /// the inherited text style, the children and the size layout gives the
+    /// element: never on event, timer or shared state. Such elements, when all
+    /// their children are too, keep their layout nodes and replay their paint
+    /// from the previous frame while nothing of that changed, and a rebuild
+    /// keeps the previous instance when it has the same props and children.
+    pub pure: bool,
+    /// Pointer moves, releases and scrolls change nothing this element shows
+    /// or calls, so dispatch can skip it when its children are inert too. Only
+    /// read for [`Capabilities::pure`] elements.
+    pub pointer_inert: bool,
+}
+
+impl Capabilities {
+    /// Pure, and inert to pointer moves, releases and scrolls.
+    pub const PURE_INERT: Self = Self {
+        pure: true,
+        pointer_inert: true,
+    };
+}
+
+/// The id of an element that needs one for focus, hit regions or
+/// accessibility: one the application set, or else the element's stable
+/// identity, which layout gives it so the id is the same across rebuilds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct StableId {
+    id: ElementId,
+    explicit: bool,
+}
+
+impl StableId {
+    /// An ephemeral id, replaced by the stable identity in layout.
+    pub fn new() -> Self {
+        Self {
+            id: ElementId::new(),
+            explicit: false,
+        }
+    }
+
+    /// An id set by the application, which layout keeps.
+    pub fn explicit(id: ElementId) -> Self {
+        Self { id, explicit: true }
+    }
+
+    pub fn get(&self) -> ElementId {
+        self.id
+    }
+
+    pub fn is_explicit(&self) -> bool {
+        self.explicit
+    }
+
+    fn adopt(&mut self, id: ElementId) {
+        if !self.explicit {
+            self.id = id;
+        }
+    }
+}
+
+impl Default for StableId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// The core Element trait - all UI components implement this
 pub trait Element: Any {
     /// Unique identifier for this element (optional)
@@ -980,38 +1049,26 @@ pub trait Element: Any {
         None
     }
 
-    /// Called in layout with the element's stable identity. An element that
-    /// made its own id with [`ElementId::new`] takes this one instead, so focus,
-    /// hit regions and accessibility keep pointing at it across rebuilds. Ids
-    /// set by the application are kept.
-    fn adopt_stable_id(&mut self, _id: ElementId) {}
+    /// What the retained frame may assume about this element.
+    fn capabilities(&self) -> Capabilities {
+        Capabilities::default()
+    }
 
-    /// Whether layout and paint depend only on what [`Element::reconcile`]
-    /// compares, the inherited text style, the children and the size layout
-    /// gives the element: never on event, timer or shared state. Such elements,
-    /// when all their children are too, keep their layout nodes and replay their
-    /// paint from the previous frame while nothing of that changed.
-    fn memoizable(&self) -> bool {
+    /// For [`Capabilities::pure`] elements: whether `self`, built at the same
+    /// place in the next tree as `previous`, lays out and paints exactly as
+    /// `previous` did, children aside. The frame pairs and compares the
+    /// children itself, and when they match too it keeps `previous`, with the
+    /// layout and paint it already did. Elements that are not pure leave it
+    /// false.
+    fn same_props(&self, _previous: &dyn Element) -> bool {
         false
     }
 
-    /// Whether pointer moves, releases and scrolls change nothing this element
-    /// shows or calls, so dispatch can skip it when its children do too. Only
-    /// consulted for [`Element::memoizable`] elements.
-    fn ignores_pointer(&self) -> bool {
-        false
-    }
-
-    /// Called on a freshly built element with the one built at the same place
-    /// in the previous tree. Returns true when `self` would lay out and paint
-    /// exactly as `previous` did; the caller then keeps `previous`, with the
-    /// layout and paint it already did, instead of `self`.
-    ///
-    /// An element that returns false may still reconcile its children, so the
-    /// unchanged ones are kept. One that returns true must leave its children as
-    /// they were.
-    fn reconcile(&mut self, _previous: &mut dyn Element) -> bool {
-        false
+    /// Where an element that made its own id keeps it. Layout gives it the
+    /// element's stable identity unless the application set the id, so focus,
+    /// hit regions and accessibility keep pointing at it across rebuilds.
+    fn stable_id_mut(&mut self) -> Option<&mut StableId> {
+        None
     }
 
     /// Get the element's style
@@ -1092,24 +1149,10 @@ pub trait Element: Any {
     }
 
     /// The children of [`Self::children`], to change. Elements that list
-    /// children return them here too, so views placed among them render.
+    /// children must return the same ones here, so the frame can reconcile
+    /// them and render the views placed among them.
     fn children_mut(&mut self) -> &mut [AnyElement] {
         &mut []
-    }
-
-    /// Render the views placed in this subtree that are in `dirty` or have not
-    /// rendered yet. Returns whether anything below changed, so what was laid
-    /// out and painted for it is not reused.
-    fn refresh_views(
-        &mut self,
-        app: &mut crate::core::app::AppContext,
-        dirty: &std::collections::HashSet<crate::core::entity::EntityId>,
-    ) -> bool {
-        let mut changed = false;
-        for child in self.children_mut() {
-            changed |= child.refresh_views(app, dirty);
-        }
-        changed
     }
 
     fn accessibility(
@@ -1192,9 +1235,74 @@ struct LayoutRecord {
     pointer_inert: bool,
 }
 
+/// Keep `previous` instead of `next`, built at the same place in the next
+/// tree, when it lays out and paints the same: the caller then keeps
+/// `previous`. When it does not, the children of `next` that match are swapped
+/// for the previous ones, with the layout and paint they already did.
+///
+/// Only [`Capabilities::pure`] elements are compared, through
+/// [`Element::same_props`] and their children paired by position.
+pub fn reconcile(next: &mut dyn Element, previous: &mut dyn Element) -> bool {
+    let kind = (*next).type_id();
+    if kind != (*previous).type_id() {
+        return false;
+    }
+    // Only pure elements implement `same_props`, so the declaration is read
+    // only for the ones that changed.
+    let props = next.same_props(previous);
+    debug_assert!(
+        !props || next.capabilities().pure,
+        "same_props on an element that is not pure"
+    );
+    if !props && !next.capabilities().pure {
+        return false;
+    }
+    // A view's child is what it rendered, not what was built: the same view
+    // keeps it, and a refresh renders it again when it changed.
+    if kind == TypeId::of::<crate::elements::ViewElement>() {
+        return props;
+    }
+    let (children, old_children) = (next.children_mut(), previous.children_mut());
+    let mut same = props && children.len() == old_children.len();
+    for (child, old) in children.iter_mut().zip(old_children.iter_mut()) {
+        same &= child.reconcile(old);
+    }
+    if same {
+        // `previous` is kept whole, so it gets its own children back.
+        for (child, old) in children.iter_mut().zip(old_children.iter_mut()) {
+            std::mem::swap(child, old);
+        }
+    }
+    same
+}
+
+/// Render the views placed in `element`'s subtree that are in `dirty` or have
+/// not rendered yet. Returns whether anything below changed, so what was laid
+/// out and painted for it is not reused.
+pub(crate) fn refresh_views(
+    element: &mut dyn Element,
+    app: &mut crate::core::app::AppContext,
+    dirty: &std::collections::HashSet<crate::core::entity::EntityId>,
+) -> bool {
+    if let Some(view) = (element as &mut dyn Any).downcast_mut::<crate::elements::ViewElement>() {
+        return view.refresh(app, dirty);
+    }
+    let mut changed = false;
+    for child in element.children_mut() {
+        changed |= child.refresh_views(app, dirty);
+    }
+    changed
+}
+
 impl AnyElement {
     pub fn new<E: Element>(element: E) -> Self {
         let mut inner: Box<dyn Element> = Box::new(element);
+        debug_assert_eq!(
+            inner.children().len(),
+            inner.children_mut().len(),
+            "{} lists children that children_mut leaves out",
+            std::any::type_name::<E>()
+        );
         // `children_mut` lists hidden children too, which may show later.
         let contains_views = TypeId::of::<E>() == TypeId::of::<crate::elements::ViewElement>()
             || inner
@@ -1214,9 +1322,9 @@ impl AnyElement {
     }
 
     /// Keep `previous` instead of `self` when it lays out and paints the same.
-    /// See [`Element::reconcile`].
+    /// See [`reconcile`].
     pub fn reconcile(&mut self, previous: &mut AnyElement) -> bool {
-        if self.kind() != previous.kind() || !self.inner.reconcile(&mut *previous.inner) {
+        if !reconcile(&mut *self.inner, &mut *previous.inner) {
             return false;
         }
         std::mem::swap(self, previous);
@@ -1244,7 +1352,9 @@ impl AnyElement {
         }
         // Laid out again, so what it paints may have changed.
         self.paint_record.set(None);
-        self.inner.adopt_stable_id(id);
+        if let Some(slot) = self.inner.stable_id_mut() {
+            slot.adopt(id);
+        }
         let parent = std::mem::replace(&mut cx.identity_parent, id);
         let next_child_index = std::mem::replace(&mut cx.next_child_index, 0);
         let start = cx.retained.as_ref().map(|pass| pass.cursor);
@@ -1252,26 +1362,23 @@ impl AnyElement {
         cx.identity_parent = parent;
         cx.next_child_index = next_child_index;
         self.layout_record = match (start, &cx.retained) {
-            (Some(start), Some(pass))
-                if self.inner.memoizable()
-                    && self
-                        .children()
-                        .iter()
-                        .all(|child| child.layout_record.is_some()) =>
-            {
-                Some(LayoutRecord {
-                    epoch: pass.kept.epoch,
-                    start: start as u32,
-                    end: pass.cursor as u32,
-                    text_style: Rc::clone(&cx.text_style),
-                    pointer_inert: self.inner.ignores_pointer()
-                        && self.children().iter().all(|child| {
-                            child
-                                .layout_record
-                                .as_ref()
-                                .is_some_and(|record| record.pointer_inert)
-                        }),
-                })
+            (Some(start), Some(pass)) => {
+                let capabilities = self.inner.capabilities();
+                let children = self.children();
+                (capabilities.pure && children.iter().all(|child| child.layout_record.is_some()))
+                    .then(|| LayoutRecord {
+                        epoch: pass.kept.epoch,
+                        start: start as u32,
+                        end: pass.cursor as u32,
+                        text_style: Rc::clone(&cx.text_style),
+                        pointer_inert: capabilities.pointer_inert
+                            && children.iter().all(|child| {
+                                child
+                                    .layout_record
+                                    .as_ref()
+                                    .is_some_and(|record| record.pointer_inert)
+                            }),
+                    })
             }
             _ => None,
         };
@@ -1312,8 +1419,8 @@ impl AnyElement {
         (*self.inner).type_id()
     }
 
-    /// See [`Element::refresh_views`]. Subtrees without views are passed by.
-    pub fn refresh_views(
+    /// See [`refresh_views`]. Subtrees without views are passed by.
+    pub(crate) fn refresh_views(
         &mut self,
         app: &mut crate::core::app::AppContext,
         dirty: &std::collections::HashSet<crate::core::entity::EntityId>,
@@ -1321,7 +1428,7 @@ impl AnyElement {
         if !self.paint_record.contains_views {
             return false;
         }
-        let changed = self.inner.refresh_views(app, dirty);
+        let changed = refresh_views(&mut *self.inner, app, dirty);
         if changed {
             // Something inside was rendered again: lay out and paint it anew.
             self.layout_record = None;

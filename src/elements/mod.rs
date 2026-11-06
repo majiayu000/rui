@@ -16,7 +16,7 @@ mod virtual_list;
 
 pub use canvas::{Canvas, Painter, canvas};
 pub use div::{Div, div};
-pub use element::{AnyElement, Element, EventResult, IntoElement, Render};
+pub use element::{AnyElement, Capabilities, Element, EventResult, IntoElement, Render, StableId};
 pub(crate) use image::fit_bounds;
 pub use image::{Image, ImageFit, ImageSource, image};
 pub use input::{Input, InputType, input};

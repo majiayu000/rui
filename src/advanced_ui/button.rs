@@ -10,16 +10,14 @@ use crate::core::event::Cursor;
 use crate::core::geometry::Edges;
 use crate::core::style::{Corners, Style};
 use crate::elements::element::{
-    Element, EventContext, LayoutContext, PaintContext, PointerEvent, PointerEventKind,
+    Element, EventContext, LayoutContext, PaintContext, PointerEvent, PointerEventKind, StableId,
     style_to_taffy,
 };
 use crate::renderer::Primitive;
 use taffy::prelude::*;
 
 pub struct Button {
-    id: ElementId,
-    /// `id` was set by the application, so layout keeps it.
-    explicit_id: bool,
+    id: StableId,
     label: String,
     variant: ControlVariant,
     size: ControlSize,
@@ -39,8 +37,7 @@ impl Button {
         style.border.radius = Corners::all(theme.control_radius());
 
         Self {
-            id: ElementId::new(),
-            explicit_id: false,
+            id: StableId::new(),
             label,
             variant: ControlVariant::default(),
             size: ControlSize::default(),
@@ -52,8 +49,7 @@ impl Button {
     }
 
     pub fn id(mut self, id: ElementId) -> Self {
-        self.id = id;
-        self.explicit_id = true;
+        self.id = StableId::explicit(id);
         self
     }
 
@@ -159,13 +155,11 @@ impl Button {
 
 impl Element for Button {
     fn id(&self) -> Option<ElementId> {
-        Some(self.id)
+        Some(self.id.get())
     }
 
-    fn adopt_stable_id(&mut self, id: ElementId) {
-        if !self.explicit_id {
-            self.id = id;
-        }
+    fn stable_id_mut(&mut self) -> Option<&mut StableId> {
+        Some(&mut self.id)
     }
 
     fn style(&self) -> &Style {
@@ -185,7 +179,7 @@ impl Element for Button {
 
     fn paint(&mut self, cx: &mut PaintContext) {
         let bounds = cx.bounds();
-        cx.register_hit_region(self.id, bounds);
+        cx.register_hit_region(self.id.get(), bounds);
 
         let colors = self.theme.control_colors(self.variant, self.state.into());
         let border_widths = if matches!(self.variant, ControlVariant::Outline) {
@@ -218,12 +212,15 @@ impl Element for Button {
         &self,
         cx: &AccessibilityContext,
     ) -> Result<Option<AccessibilityNode>, AccessibilityError> {
-        let mut node =
-            AccessibilityNode::label_required(self.id, AccessibilityRole::Button, &self.label)?
-                .with_enabled(!self.state.disabled())
-                .with_read_only(self.state.read_only())
-                .with_invalid(self.state.invalid())
-                .with_focused(cx.a11y_has_focus(self.id));
+        let mut node = AccessibilityNode::label_required(
+            self.id.get(),
+            AccessibilityRole::Button,
+            &self.label,
+        )?
+        .with_enabled(!self.state.disabled())
+        .with_read_only(self.state.read_only())
+        .with_invalid(self.state.invalid())
+        .with_focused(cx.a11y_has_focus(self.id.get()));
         if self.state.can_activate() {
             node = node.with_action(AccessibilityAction::Activate);
         }
@@ -244,7 +241,10 @@ impl Element for Button {
                     if let Some(handler) = &self.on_click {
                         handler();
                     }
-                    cx.announce_accessibility_action(self.id, format!("{} activated", self.label));
+                    cx.announce_accessibility_action(
+                        self.id.get(),
+                        format!("{} activated", self.label),
+                    );
                     true
                 } else {
                     false
@@ -254,7 +254,7 @@ impl Element for Button {
     }
 
     fn handle_action(&mut self, cx: &mut EventContext, action: &ActionId) -> ActionOutcome {
-        if !cx.is_focused(Some(self.id)) || !self.state.can_activate() {
+        if !cx.is_focused(Some(self.id.get())) || !self.state.can_activate() {
             return ActionOutcome::Ignored;
         }
 
@@ -263,7 +263,10 @@ impl Element for Button {
                 if let Some(handler) = &self.on_click {
                     handler();
                 }
-                cx.announce_accessibility_action(self.id, format!("{} activated", self.label));
+                cx.announce_accessibility_action(
+                    self.id.get(),
+                    format!("{} activated", self.label),
+                );
                 cx.request_redraw();
                 ActionOutcome::handled("advanced_ui.button")
             }

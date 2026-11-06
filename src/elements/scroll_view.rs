@@ -16,7 +16,7 @@ use crate::core::style::{Corners, Overflow, Style};
 use crate::core::text_editing::{TextInputCommand, TextInputEvent};
 use crate::elements::element::{
     AnyElement, Element, EventContext, LayoutContext, PaintContext, PointerEvent, PointerEventKind,
-    style_to_taffy,
+    StableId, style_to_taffy,
 };
 use crate::renderer::Primitive;
 use crate::renderer::text::TextMeasureCache;
@@ -150,9 +150,7 @@ impl ScrollState {
 
 /// ScrollView component
 pub struct ScrollView {
-    id: Option<ElementId>,
-    /// `id` was set by the application, so layout keeps it.
-    explicit_id: bool,
+    id: StableId,
     accessibility_label: Option<String>,
     disabled: bool,
     read_only: bool,
@@ -174,8 +172,7 @@ impl ScrollView {
         style.overflow_y = Overflow::Scroll;
 
         Self {
-            id: Some(ElementId::new()),
-            explicit_id: false,
+            id: StableId::new(),
             accessibility_label: None,
             disabled: false,
             read_only: false,
@@ -192,8 +189,7 @@ impl ScrollView {
     }
 
     pub fn id(mut self, id: ElementId) -> Self {
-        self.id = Some(id);
-        self.explicit_id = true;
+        self.id = StableId::explicit(id);
         self
     }
 
@@ -381,13 +377,11 @@ impl Default for ScrollView {
 
 impl Element for ScrollView {
     fn id(&self) -> Option<ElementId> {
-        self.id
+        Some(self.id.get())
     }
 
-    fn adopt_stable_id(&mut self, id: ElementId) {
-        if !self.explicit_id {
-            self.id = Some(id);
-        }
+    fn stable_id_mut(&mut self) -> Option<&mut StableId> {
+        Some(&mut self.id)
     }
 
     fn style(&self) -> &Style {
@@ -413,9 +407,7 @@ impl Element for ScrollView {
 
     fn paint(&mut self, cx: &mut PaintContext) {
         let bounds = cx.bounds();
-        if let Some(id) = self.id {
-            cx.register_accessibility_region(id, bounds);
-        }
+        cx.register_accessibility_region(self.id.get(), bounds);
 
         // Update viewport size
         self.state.viewport_size = bounds.size;
@@ -548,9 +540,7 @@ impl Element for ScrollView {
         &self,
         cx: &AccessibilityContext,
     ) -> Result<Option<AccessibilityNode>, AccessibilityError> {
-        let Some(id) = self.id else {
-            return Ok(None);
-        };
+        let id = self.id.get();
         let mut node = AccessibilityNode::new(id, AccessibilityRole::ScrollArea)
             .with_enabled(!self.disabled)
             .with_read_only(self.read_only)
@@ -680,7 +670,7 @@ impl Element for ScrollView {
     }
 
     fn dispatch_action(&mut self, cx: &mut EventContext, action: &ActionId) -> ActionOutcome {
-        if self.id.is_some() && cx.focused_id() == self.id {
+        if cx.focused_id() == Some(self.id.get()) {
             let forward = match action {
                 ActionId::Custom(name) if name == ACCESSIBILITY_SCROLL_FORWARD_ACTION => Some(true),
                 ActionId::Custom(name) if name == ACCESSIBILITY_SCROLL_BACKWARD_ACTION => {

@@ -4,7 +4,9 @@ use crate::core::entity::EntityId;
 use crate::core::geometry::{Bounds, Size};
 use crate::core::presenter::Presenter;
 use crate::elements::Element;
-use crate::elements::element::{LayoutContext, LayoutNodes, PaintContext};
+use crate::elements::element::{
+    LayoutContext, LayoutNodes, PaintContext, reconcile, refresh_views,
+};
 use crate::renderer::RendererDiagnostics;
 use crate::renderer::Scene;
 use crate::renderer::text::TextMeasureCache;
@@ -90,13 +92,13 @@ impl FramePipeline {
             let (mut next, reads) = context.recording_reads(|context| build_root(context));
             context.frame.root_reads = reads.into_iter().collect();
             // Unchanged parts of the previous tree are kept, with their layout
-            // and paint; see `Element::reconcile`.
-            if !next.reconcile(root) {
+            // and paint; see `reconcile`.
+            if !reconcile(&mut next, root) {
                 *root = next;
             }
         }
         // Views new to the tree render, and so do the ones notified.
-        root.refresh_views(context, &dirty);
+        refresh_views(root, context, &dirty);
         if !context.frame.pending_updates.is_empty() {
             context.frame.needs_rebuild = true;
         }
