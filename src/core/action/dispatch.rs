@@ -1,3 +1,4 @@
+use crate::core::action::ActionId;
 use crate::core::app::AppContext;
 use crate::core::event::{KeyCode, KeyEvent};
 use crate::elements::Element;
@@ -11,17 +12,9 @@ pub(crate) fn route_key_event<E: Element>(
 ) -> bool {
     let action = app.keymap().action_for_event(event).cloned();
     if let Some(action) = action {
-        cx.set_clipboard(app.clipboard());
-        let outcome = root.dispatch_action(cx, &action);
-        if outcome.is_handled() {
+        if route_action(root, app, cx, &action) {
             return true;
         }
-
-        let outcome = app.dispatch_app_action(&action);
-        if outcome.is_handled() {
-            return true;
-        }
-
         return root.handle_key_event(cx, event);
     }
 
@@ -30,6 +23,18 @@ pub(crate) fn route_key_event<E: Element>(
     }
 
     false
+}
+
+/// Run `action` on the focused element, then the app's action handlers, as a
+/// key binding or a menu item does. Returns whether one of them handled it.
+pub(crate) fn route_action<E: Element>(
+    root: &mut E,
+    app: &mut AppContext,
+    cx: &mut EventContext,
+    action: &ActionId,
+) -> bool {
+    cx.set_clipboard(app.clipboard());
+    root.dispatch_action(cx, action).is_handled() || app.dispatch_app_action(action).is_handled()
 }
 
 fn key_event_has_text_editing_details(event: &KeyEvent) -> bool {

@@ -16,6 +16,7 @@ pub mod foreground;
 pub mod frame_pipeline;
 pub mod geometry;
 pub mod geometry_ops;
+pub mod menu;
 pub mod presenter;
 pub mod style;
 pub mod text_editing;

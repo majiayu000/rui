@@ -2,6 +2,8 @@
 
 use crate::core::app::AppContext;
 use crate::core::entity::{Entity, EntityId};
+use crate::core::geometry::Point;
+use crate::core::menu::Menu;
 use crate::core::text_editing::{ClipboardError, ClipboardItem};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -194,6 +196,16 @@ impl<'a, T: 'static> ViewContext<'a, T> {
     /// See [`AppContext::read_from_clipboard`].
     pub fn read_from_clipboard(&self) -> Result<Option<ClipboardItem>, ClipboardError> {
         self.app.read_from_clipboard()
+    }
+
+    /// See [`AppContext::set_menus`].
+    pub fn set_menus(&mut self, menus: Vec<Menu>) {
+        self.app.set_menus(menus);
+    }
+
+    /// See [`AppContext::show_context_menu`].
+    pub fn show_context_menu(&mut self, menu: Menu, position: Point) {
+        self.app.show_context_menu(menu, position);
     }
 
     /// Create a notifier that can be moved into event callbacks.

@@ -7,6 +7,7 @@ use crate::core::accessibility::{AccessibilityContext, AccessibilityError, Acces
 use crate::core::action::route_key_event;
 use crate::core::app::{AppContext, RuntimeView};
 use crate::core::drag::FileDragEvent;
+use crate::core::menu::{ContextMenuRequest, Menu};
 use crate::core::entity::Entity;
 use crate::core::event::{Event, KeyEvent, MouseButton, ScrollEvent};
 use crate::core::frame_pipeline::{FramePipeline, FramePresentation, IdlePolicy};
@@ -287,6 +288,28 @@ where
             }
             dispatch.stopped
         })
+    }
+
+    /// Choose the item labelled `label` in `menu` or its submenus, as a click
+    /// on it in a native menu does: its action is routed to the focused
+    /// element, then the app's handlers. Returns false, choosing nothing, when
+    /// there is no such item or it is disabled.
+    pub fn choose_menu_item(&mut self, menu: &Menu, label: &str) -> bool {
+        let Some(item) = menu.find(label).filter(|item| item.is_enabled()) else {
+            return false;
+        };
+        self.context.queue_menu_action(item.action().clone());
+        self.dispatch_frame(|presenter, context| {
+            if presenter.dispatch_menu_actions(context) {
+                context.request_redraw();
+            }
+        });
+        true
+    }
+
+    /// The context menu the app asked to show, which a platform would show now.
+    pub fn take_context_menu(&mut self) -> Option<ContextMenuRequest> {
+        self.context.take_context_menu()
     }
 
     /// Whether a drag in this window is past its threshold.

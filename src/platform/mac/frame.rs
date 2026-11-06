@@ -83,6 +83,10 @@ where
         }
     }
 
+    if presenter.dispatch_menu_actions(context) {
+        schedule_platform_redraw(window, context, RedrawSource::PlatformInput);
+    }
+
     for event in &events.ordered_input_events {
         let (handled, redraw_requested, redraw_source) = match event {
             OrderedInputEvent::Pointer(event) => {

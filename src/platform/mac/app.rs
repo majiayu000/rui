@@ -18,6 +18,7 @@ use crate::devtools::RenderSample;
 use crate::elements::element::{Element, PointerEvent, PointerEventKind};
 use crate::platform::mac::accessibility::MacAccessibilityActionRequest;
 use crate::platform::mac::clipboard::MacPasteboard;
+use crate::platform::mac::menus::MacMenus;
 use crate::platform::mac::events::{
     MAC_REDRAW_EVENT_DATA, MacWindowEvent, post_application_event_from_any_thread,
 };
@@ -94,6 +95,7 @@ where
     let profile_enabled = RendererTelemetryRecorder::enabled_from_env().is_some();
     let mut frame_ticker = FrameTicker::new(APP_EVENT_WINDOW_NUMBER);
     let mut held_events = HeldEvents::default();
+    let mut menus = MacMenus::new(mtm);
     loop {
         open_pending_windows(&mut context, &mut windows, mtm);
 
@@ -177,6 +179,11 @@ where
         if !context.is_running() {
             break;
         }
+        menus.sync(
+            &app,
+            &mut context,
+            windows.iter().map(|window| (window.id(), window.mac_window())),
+        );
         run_between_frames(
             &mut context,
             &mut frame_ticker,

@@ -2,7 +2,8 @@
 
 use crate::core::ElementId;
 use crate::core::color::Color;
-use crate::core::geometry::{Bounds, Edges, Size};
+use crate::core::event::MouseButton;
+use crate::core::geometry::{Bounds, Edges, Point, Size};
 use crate::core::style::{
     AlignItems, Background, BorderStyle, Corners, Dimension as StyleDimension, Display,
     FlexDirection, JustifyContent, Overflow, Position, Shadow, Style,
@@ -27,6 +28,7 @@ pub struct Div {
     children: SmallVec<[AnyElement; 4]>,
     on_click: Option<Box<dyn Fn()>>,
     on_hover: Option<Box<dyn Fn(bool)>>,
+    on_context_menu: Option<Box<dyn Fn(Point)>>,
     /// Drag source and drop target handlers, when it has any.
     drag: Option<Box<drag::DragHandlers>>,
     hovered: bool,
@@ -43,6 +45,7 @@ impl Div {
             children: SmallVec::new(),
             on_click: None,
             on_hover: None,
+            on_context_menu: None,
             drag: None,
             hovered: false,
             layout_node: None,
@@ -447,6 +450,13 @@ impl Div {
         self
     }
 
+    /// Called with the position of a right press inside, which neither clicks
+    /// nor drags: show a menu there with `cx.show_context_menu`.
+    pub fn on_context_menu(mut self, handler: impl Fn(Point) + 'static) -> Self {
+        self.on_context_menu = Some(Box::new(handler));
+        self
+    }
+
     pub fn on_hover(mut self, handler: impl Fn(bool) + 'static) -> Self {
         self.on_hover = Some(Box::new(handler));
         self
@@ -480,6 +490,7 @@ impl Element for Div {
             pure: true,
             pointer_inert: self.on_click.is_none()
                 && self.on_hover.is_none()
+                && self.on_context_menu.is_none()
                 && self.drag.is_none(),
         }
     }
@@ -491,9 +502,11 @@ impl Element for Div {
         // Handlers cannot be compared, so a div with any keeps the new instance.
         self.on_click.is_none()
             && self.on_hover.is_none()
+            && self.on_context_menu.is_none()
             && self.drag.is_none()
             && previous.on_click.is_none()
             && previous.on_hover.is_none()
+            && previous.on_context_menu.is_none()
             && previous.drag.is_none()
             && self.id == previous.id
             && self.style == previous.style
@@ -628,6 +641,14 @@ impl Element for Div {
 
         if !handled && matches!(event.kind, PointerEventKind::Down) && !inside {
             cx.clear_focus();
+        }
+
+        if event.button == Some(MouseButton::Right) {
+            if !handled && is_press && inside && let Some(handler) = &self.on_context_menu {
+                handler(event.position);
+                handled = true;
+            }
+            return handled;
         }
 
         if let Some(drag) = &mut self.drag
