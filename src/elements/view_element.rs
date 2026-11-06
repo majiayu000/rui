@@ -7,13 +7,14 @@ use crate::core::entity::{Entity, EntityId};
 use crate::core::event::{KeyEvent, ScrollEvent};
 use crate::core::style::Style;
 use crate::core::text_editing::{TextInputCommand, TextInputEvent, TextInputSnapshot};
-use crate::core::view::View;
+use crate::core::view::{View, ViewPlacement};
 use crate::elements::element::{
     AnyElement, Capabilities, Element, EventContext, LayoutContext, PaintContext, PointerEvent,
 };
 use crate::renderer::text::TextMeasureCache;
 use std::any::Any;
 use std::collections::HashSet;
+use std::rc::Rc;
 use taffy::prelude::NodeId;
 
 /// Where a view made with [`AppContext::new_view`] shows. Placing it renders
@@ -24,11 +25,16 @@ use taffy::prelude::NodeId;
 /// A view must sit where the frame can reach it before layout: in a div or
 /// another element that lists its children. Inside a virtual list's rows, which
 /// are built during layout, it fails to lay out.
+///
+/// Siblings that move keep their views by entity: reordering views in a div
+/// renders none of them. Once no window's tree places a view, it is released.
 pub struct ViewElement {
     view: EntityId,
     style: Style,
     /// What the view last rendered; `None` until it renders here.
     content: Option<AnyElement>,
+    /// Keeps the view alive while this element shows it.
+    placement: Option<Rc<ViewPlacement>>,
 }
 
 /// Place the view `entity` here.
@@ -37,7 +43,15 @@ pub fn view<V: View>(entity: Entity<V>) -> ViewElement {
         view: entity.id(),
         style: Style::default(),
         content: None,
+        placement: None,
     }
+}
+
+/// The view `element` shows, when it is a [`ViewElement`].
+pub(crate) fn view_of(element: &dyn Element) -> Option<EntityId> {
+    (element as &dyn Any)
+        .downcast_ref::<ViewElement>()
+        .map(|element| element.view)
 }
 
 impl ViewElement {
@@ -57,6 +71,9 @@ impl ViewElement {
     pub(crate) fn refresh(&mut self, app: &mut AppContext, dirty: &HashSet<EntityId>) -> bool {
         let mut changed = false;
         if self.content.is_none() || dirty.contains(&self.view) {
+            if self.placement.is_none() {
+                self.placement = Some(app.place_view(self.view));
+            }
             let mut next = app.render_child_view(self.view);
             if let Some(previous) = &mut self.content {
                 // Keeps the parts that did not change, with their layout and paint.

@@ -21,6 +21,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use taffy::prelude::*;
 
+mod reconcile;
+pub(crate) use reconcile::reconcile_children;
+
 /// Source of [`LayoutNodes`] epochs: a new one whenever the kept nodes are
 /// started over, so layout recorded against old nodes is never reused.
 static NEXT_LAYOUT_EPOCH: AtomicU64 = AtomicU64::new(1);
@@ -1203,6 +1206,9 @@ struct PaintSlot {
     index: u32,
     /// The subtree holds a view, so a frame that renders views visits it.
     contains_views: bool,
+    /// The element has a key to pair it with when its siblings move, so
+    /// unkeyed siblings pair without asking.
+    keyed: bool,
 }
 
 impl PaintSlot {
@@ -1241,7 +1247,8 @@ struct LayoutRecord {
 /// for the previous ones, with the layout and paint they already did.
 ///
 /// Only [`Capabilities::pure`] elements are compared, through
-/// [`Element::same_props`] and their children paired by position.
+/// [`Element::same_props`] and their children paired as
+/// [`reconcile_children`] does.
 pub fn reconcile(next: &mut dyn Element, previous: &mut dyn Element) -> bool {
     let kind = (*next).type_id();
     if kind != (*previous).type_id() {
@@ -1263,10 +1270,9 @@ pub fn reconcile(next: &mut dyn Element, previous: &mut dyn Element) -> bool {
         return props;
     }
     let (children, old_children) = (next.children_mut(), previous.children_mut());
-    let mut same = props && children.len() == old_children.len();
-    for (child, old) in children.iter_mut().zip(old_children.iter_mut()) {
-        same &= child.reconcile(old);
-    }
+    // Children are paired whether or not the props match, so the ones that
+    // match are kept either way.
+    let same = reconcile_children(children, old_children) && props;
     if same {
         // `previous` is kept whole, so it gets its own children back.
         for (child, old) in children.iter_mut().zip(old_children.iter_mut()) {
@@ -1296,7 +1302,10 @@ pub(crate) fn refresh_views(
 
 impl AnyElement {
     pub fn new<E: Element>(element: E) -> Self {
+        let is_view = TypeId::of::<E>() == TypeId::of::<crate::elements::ViewElement>();
         let mut inner: Box<dyn Element> = Box::new(element);
+        // Read from the box: reading the element before boxing copies it.
+        let keyed = is_view || inner.id().is_some_and(|id| !id.is_ephemeral());
         debug_assert_eq!(
             inner.children().len(),
             inner.children_mut().len(),
@@ -1304,7 +1313,7 @@ impl AnyElement {
             std::any::type_name::<E>()
         );
         // `children_mut` lists hidden children too, which may show later.
-        let contains_views = TypeId::of::<E>() == TypeId::of::<crate::elements::ViewElement>()
+        let contains_views = is_view
             || inner
                 .children_mut()
                 .iter()
@@ -1317,6 +1326,7 @@ impl AnyElement {
                 frame: 0,
                 index: 0,
                 contains_views,
+                keyed,
             },
         }
     }

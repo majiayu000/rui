@@ -7,11 +7,12 @@ use super::frame::{
     KIND_QUAD, KIND_SHADOW, Pages,
 };
 use super::glyph::{GlyphPages, GpuGlyph};
-use super::image_primitive::{GpuImage, calculate_fit_bounds};
+use super::image_primitive::GpuImage;
 use super::order::Rect;
 use super::path::{GpuPathTile, PathGeometry, PathSprites, PathTiles, SpriteLookup};
 use super::retained::{RetainedPipelines, RetainedTarget, damage_scissor, intersect_scissors};
 use crate::core::geometry::{Bounds, Size};
+use crate::elements::fit_bounds;
 use crate::renderer::primitives::{GpuQuad, GpuShadow, Primitive};
 use crate::renderer::text::{SUBPIXEL_VARIANTS, TextGlyphCache, TextRequest};
 use crate::renderer::{
@@ -215,6 +216,11 @@ pub struct MetalRenderer {
     frame_stats: MetalFrameStats,
     /// GPU time of the last frame that waited for completion.
     gpu_time: Option<std::time::Duration>,
+    /// Time what the profiler shows: GPU time of frames found finished, and
+    /// the wait for a presented frame's commands to be scheduled.
+    profiling: bool,
+    completed_gpu_time: Option<std::time::Duration>,
+    scheduled_wait: Option<std::time::Duration>,
 }
 
 /// A pipeline drawing into the target format with source-over blending.
@@ -363,6 +369,9 @@ impl MetalRenderer {
             frames_in_flight: Vec::new(),
             frame_stats: MetalFrameStats::default(),
             gpu_time: None,
+            profiling: false,
+            completed_gpu_time: None,
+            scheduled_wait: None,
         })
     }
 
@@ -383,6 +392,29 @@ impl MetalRenderer {
     /// GPU time of the last frame, when it waited for the GPU (captures).
     pub fn last_gpu_time(&self) -> Option<std::time::Duration> {
         self.gpu_time
+    }
+
+    /// Whether to time frames for [`Self::completed_gpu_time`] and
+    /// [`Self::scheduled_wait`]. Off by default.
+    pub fn set_profiling(&mut self, on: bool) {
+        self.profiling = on;
+        if !on {
+            self.completed_gpu_time = None;
+            self.scheduled_wait = None;
+        }
+    }
+
+    /// GPU time of the latest frame the GPU finished, while
+    /// [`Self::set_profiling`] is on. Frames are found finished when a later
+    /// one begins, so this is a frame or more behind.
+    pub fn completed_gpu_time(&self) -> Option<std::time::Duration> {
+        self.completed_gpu_time
+    }
+
+    /// How long the last presented frame waited for its commands to be
+    /// scheduled before presenting, while [`Self::set_profiling`] is on.
+    pub fn scheduled_wait(&self) -> Option<std::time::Duration> {
+        self.scheduled_wait
     }
 
     /// How many paths are drawn from the atlas.
@@ -650,12 +682,22 @@ impl MetalRenderer {
         self.image_cache.begin_frame();
         self.text_cache.begin_frame();
         // Atlas pages only finished frames drew from may be evicted.
+        let time_completed = self.profiling;
+        let mut completed_gpu_time = None;
         self.frames_in_flight.retain(|(_, command_buffer)| {
+            let status = command_buffer.status();
+            if time_completed && status == MTLCommandBufferStatus::Completed {
+                // Oldest first, so the newest finished frame is kept.
+                completed_gpu_time = Some(gpu_time(command_buffer));
+            }
             !matches!(
-                command_buffer.status(),
+                status,
                 MTLCommandBufferStatus::Completed | MTLCommandBufferStatus::Error
             )
         });
+        if completed_gpu_time.is_some() {
+            self.completed_gpu_time = completed_gpu_time;
+        }
         let oldest_in_flight = self.frames_in_flight.iter().map(|(frame, _)| *frame).min();
         self.text_cache.set_completed_frame(
             oldest_in_flight.map_or(self.text_cache.frame() - 1, |frame| frame - 1),
@@ -1145,7 +1187,9 @@ impl MetalRenderer {
         // A layer that presents with its transaction needs the drawable presented
         // after its commands are scheduled; any other layer accepts the same.
         if let Some(drawable) = present_drawable {
+            let waited_at = self.profiling.then(std::time::Instant::now);
             command_buffer.wait_until_scheduled();
+            self.scheduled_wait = waited_at.map(|waited_at| waited_at.elapsed());
             drawable.present();
         }
         self.instances.retire(command_buffer, instances);
@@ -1307,7 +1351,7 @@ impl MetalRenderer {
 
         let texture = self.ensure_texture(entry.handle.id.as_u32(), entry.size, &entry.pixels)?;
 
-        let dest_bounds = calculate_fit_bounds(*bounds, entry.size, fit);
+        let dest_bounds = fit_bounds(*bounds, entry.size, fit);
 
         // Clip to container for cover/contain
         let container_clip = if let Some(prev) = current_clip {

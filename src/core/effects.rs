@@ -117,9 +117,11 @@ impl AppContext {
         ));
     }
 
-    /// Remove `entity`, and with it every observer and subscriber of it.
+    /// Remove `entity`, and with it every observer and subscriber of it. A
+    /// view made with [`AppContext::new_view`] is dropped with what it read
+    /// and its queued listener updates.
     pub fn release<T: 'static>(&mut self, entity: Entity<T>) -> bool {
-        self.entities.remove(entity.id())
+        self.release_view(entity.id()) || self.entities.remove(entity.id())
     }
 
     /// Run queued notifications and events, including ones they cause.

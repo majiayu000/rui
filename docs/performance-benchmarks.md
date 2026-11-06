@@ -2,7 +2,7 @@
 
 ## Performance gate (CI)
 
-`perf_gate` fails when a frame costs more than `benchmarks/perf_budgets.json` allows. CI runs it after the tests:
+`perf_gate` fails when a frame costs more than `benchmarks/perf_budgets/` allows: one `<case>.json` per case and `shared.json` for the footprint, churn, damage, scaling and pixel checksum budgets and the calibration note. CI runs it after the tests:
 
 ```sh
 cargo bench --bench perf_gate
