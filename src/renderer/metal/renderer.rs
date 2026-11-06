@@ -1141,10 +1141,13 @@ impl MetalRenderer {
             copy.draw_primitives(MTLPrimitiveType::Triangle, 0, 3);
             copy.end_encoding();
         }
-        if let Some(drawable) = present_drawable {
-            command_buffer.present_drawable(drawable);
-        }
         command_buffer.commit();
+        // A layer that presents with its transaction needs the drawable presented
+        // after its commands are scheduled; any other layer accepts the same.
+        if let Some(drawable) = present_drawable {
+            command_buffer.wait_until_scheduled();
+            drawable.present();
+        }
         self.instances.retire(command_buffer, instances);
         for staging in [staging, color_staging].into_iter().flatten() {
             self.instances.retire(command_buffer, staging);
