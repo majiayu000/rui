@@ -1032,7 +1032,7 @@ impl StableId {
         self.explicit
     }
 
-    fn adopt(&mut self, id: ElementId) {
+    pub(crate) fn adopt(&mut self, id: ElementId) {
         if !self.explicit {
             self.id = id;
         }

@@ -4,6 +4,7 @@ use crate::core::ElementId;
 use crate::core::geometry::{Bounds, Edges};
 use crate::core::style::{Corners, Style};
 use crate::core::text_editing::{TextInputCommand, TextInputEvent, TextInputSnapshot};
+use crate::elements::element::StableId;
 use crate::elements::element::{
     AnyElement, Element, EventContext, LayoutContext, PaintContext, PointerEvent, PointerEventKind,
 };
@@ -12,7 +13,7 @@ use crate::renderer::text::TextMeasureCache;
 use taffy::prelude::NodeId;
 
 pub struct Tooltip {
-    id: ElementId,
+    id: StableId,
     child: AnyElement,
     content: String,
     theme: Theme,
@@ -25,7 +26,7 @@ impl Tooltip {
         require_non_empty(&content, "tooltip content must not be empty");
 
         Self {
-            id: ElementId::new(),
+            id: StableId::new(),
             child: child.into(),
             content,
             theme: Theme::default(),
@@ -34,7 +35,7 @@ impl Tooltip {
     }
 
     pub fn id(mut self, id: ElementId) -> Self {
-        self.id = id;
+        self.id = StableId::explicit(id);
         self
     }
 
@@ -64,7 +65,11 @@ impl Tooltip {
 
 impl Element for Tooltip {
     fn id(&self) -> Option<ElementId> {
-        Some(self.id)
+        Some(self.id.get())
+    }
+
+    fn stable_id_mut(&mut self) -> Option<&mut StableId> {
+        Some(&mut self.id)
     }
 
     fn style(&self) -> &Style {
@@ -77,7 +82,7 @@ impl Element for Tooltip {
 
     fn paint(&mut self, cx: &mut PaintContext) {
         let bounds = cx.bounds();
-        cx.register_hit_region(self.id, bounds);
+        cx.register_hit_region(self.id.get(), bounds);
         self.child.paint(cx);
 
         if self.state.hovered() {
@@ -181,7 +186,7 @@ impl Element for Tooltip {
     }
 
     fn contains_id(&self, id: ElementId) -> bool {
-        self.id == id || self.child.contains_id(id)
+        self.id.get() == id || self.child.contains_id(id)
     }
 }
 

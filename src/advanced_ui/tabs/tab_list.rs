@@ -11,17 +11,19 @@ use crate::core::color::Color;
 use crate::core::event::{KeyCode, KeyEvent};
 use crate::core::geometry::{Bounds, Edges, Point};
 use crate::core::style::{Corners, Style};
+use crate::elements::element::StableId;
 use crate::elements::element::{
     Element, EventContext, LayoutContext, PaintContext, PointerEvent, PointerEventKind,
     style_to_taffy,
 };
 use crate::renderer::Primitive;
+use std::any::TypeId;
 use taffy::prelude::*;
 
 type TabChangeHandler = Box<dyn Fn(&str)>;
 
 pub struct TabList {
-    id: ElementId,
+    id: StableId,
     tabs: Vec<Tab>,
     selected: String,
     accessibility_label: Option<String>,
@@ -48,7 +50,7 @@ impl TabList {
         style.border.radius = Corners::top(theme.control_radius());
 
         Self {
-            id: ElementId::new(),
+            id: StableId::new(),
             tabs,
             selected,
             accessibility_label: None,
@@ -62,7 +64,7 @@ impl TabList {
     }
 
     pub fn id(mut self, id: ElementId) -> Self {
-        self.id = id;
+        self.id = StableId::explicit(id);
         self
     }
 
@@ -184,20 +186,20 @@ impl TabList {
 
         let focus_was_on_tab = cx
             .focused_id()
-            .is_some_and(|focused| self.tabs.iter().any(|tab| tab.id == focused));
+            .is_some_and(|focused| self.tabs.iter().any(|tab| tab.id.get() == focused));
         if self.tabs[index].value != self.selected {
             self.selected = self.tabs[index].value.clone();
             if let Some(handler) = &self.on_change {
                 handler(&self.selected);
             }
             cx.announce_accessibility_action(
-                self.tabs[index].id,
+                self.tabs[index].id.get(),
                 format!("{} tab selected", self.tabs[index].label),
             );
             cx.request_redraw();
         }
         if focus_was_on_tab {
-            cx.request_focus(Some(self.tabs[index].id));
+            cx.request_focus(Some(self.tabs[index].id.get()));
         }
         true
     }
@@ -227,14 +229,18 @@ impl TabList {
 
     fn handles_keyboard(&self, cx: &EventContext) -> bool {
         cx.focused_id()
-            .map(|id| id == self.id || self.tabs.iter().any(|tab| tab.id == id))
+            .map(|id| id == self.id.get() || self.tabs.iter().any(|tab| tab.id.get() == id))
             .unwrap_or(false)
     }
 }
 
 impl Element for TabList {
     fn id(&self) -> Option<ElementId> {
-        Some(self.id)
+        Some(self.id.get())
+    }
+
+    fn stable_id_mut(&mut self) -> Option<&mut StableId> {
+        Some(&mut self.id)
     }
 
     fn style(&self) -> &Style {
@@ -242,6 +248,15 @@ impl Element for TabList {
     }
 
     fn layout(&mut self, cx: &mut LayoutContext) -> NodeId {
+        // Tab ids the app did not set follow the list's stable id.
+        let parent = self.id.get();
+        for (index, tab) in self.tabs.iter_mut().enumerate() {
+            tab.id.adopt(ElementId::derived(
+                parent,
+                index as u64,
+                TypeId::of::<Tab>(),
+            ));
+        }
         let mut style = style_to_taffy(&self.style);
         style.size.width = Dimension::Length(self.tab_width() * self.tabs.len() as f32);
         style.size.height = Dimension::Length(self.theme.control_height(self.size));
@@ -254,12 +269,12 @@ impl Element for TabList {
 
     fn paint(&mut self, cx: &mut PaintContext) {
         let bounds = cx.bounds();
-        cx.register_hit_region(self.id, bounds);
+        cx.register_hit_region(self.id.get(), bounds);
         paint_tab_list_rule(cx, bounds, self.state.invalid(), self.theme);
 
         for (index, tab) in self.tabs.iter().enumerate() {
             let tab_bounds = self.tab_bounds(bounds, index);
-            cx.register_hit_region(tab.id, tab_bounds);
+            cx.register_hit_region(tab.id.get(), tab_bounds);
             self.paint_tab(cx, tab, index, tab_bounds);
         }
     }
@@ -275,23 +290,26 @@ impl Element for TabList {
                     role: AccessibilityRole::TabList,
                 })?;
         let mut node =
-            AccessibilityNode::label_required(self.id, AccessibilityRole::TabList, label)?
+            AccessibilityNode::label_required(self.id.get(), AccessibilityRole::TabList, label)?
                 .value_required(&self.selected)?
                 .with_enabled(!self.state.disabled())
                 .with_read_only(self.state.read_only())
                 .with_invalid(self.state.invalid())
-                .with_focused(cx.a11y_has_focus(self.id));
+                .with_focused(cx.a11y_has_focus(self.id.get()));
 
         for tab in &self.tabs {
             let tab_enabled = !self.state.disabled() && !tab.disabled;
-            let mut child =
-                AccessibilityNode::label_required(tab.id, AccessibilityRole::Tab, &tab.label)?
-                    .value_required(&tab.value)?
-                    .with_selected(tab.value == self.selected)
-                    .with_enabled(tab_enabled)
-                    .with_read_only(self.state.read_only())
-                    .with_invalid(self.state.invalid())
-                    .with_focused(cx.a11y_has_focus(tab.id));
+            let mut child = AccessibilityNode::label_required(
+                tab.id.get(),
+                AccessibilityRole::Tab,
+                &tab.label,
+            )?
+            .value_required(&tab.value)?
+            .with_selected(tab.value == self.selected)
+            .with_enabled(tab_enabled)
+            .with_read_only(self.state.read_only())
+            .with_invalid(self.state.invalid())
+            .with_focused(cx.a11y_has_focus(tab.id.get()));
             if self.state.can_activate() && !tab.disabled {
                 child = child.with_action(AccessibilityAction::Activate);
             }
@@ -316,7 +334,7 @@ impl Element for TabList {
             }
             PointerEventKind::Down => {
                 if index.is_some() && self.state.can_activate() {
-                    cx.request_focus(Some(self.id));
+                    cx.request_focus(Some(self.id.get()));
                 }
                 self.indexed_state.press(index, cx, self.state)
             }
@@ -363,7 +381,7 @@ impl Element for TabList {
         }
         let Some(index) = cx
             .focused_id()
-            .and_then(|focused| self.tabs.iter().position(|tab| tab.id == focused))
+            .and_then(|focused| self.tabs.iter().position(|tab| tab.id.get() == focused))
         else {
             return ActionOutcome::Ignored;
         };
@@ -375,7 +393,7 @@ impl Element for TabList {
     }
 
     fn contains_id(&self, id: ElementId) -> bool {
-        self.id == id || self.tabs.iter().any(|tab| tab.id == id)
+        self.id.get() == id || self.tabs.iter().any(|tab| tab.id.get() == id)
     }
 }
 

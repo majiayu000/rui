@@ -154,3 +154,84 @@ fn focus_on_an_input_without_an_id_survives_a_rebuild() {
         "the rebuilt input must keep the id focus points at"
     );
 }
+
+/// Ids of every accessibility node, in tree order.
+fn accessibility_ids(
+    nodes: &[rui::core::accessibility::AccessibilityNode],
+    out: &mut Vec<ElementId>,
+) {
+    for node in nodes {
+        out.push(node.a11y_id());
+        accessibility_ids(node.a11y_children(), out);
+    }
+}
+
+fn composites() -> Div {
+    use rui::advanced_ui::{
+        DataListItem, data_list, menu, segmented_control, tab_panel, tabs, text, toolbar,
+    };
+    div()
+        .flex_col()
+        .child(toolbar("Tools").child(text("Ready")))
+        .child(menu("File", [("new", "New"), ("open", "Open")]))
+        .child(
+            segmented_control([("day", "Day"), ("week", "Week")], "day")
+                .accessibility_label("Range"),
+        )
+        .child(
+            tabs([("one", "One"), ("two", "Two")], "one")
+                .accessibility_label("Pages")
+                .panel(tab_panel("one", rui::elements::text("First"))),
+        )
+        .child(
+            data_list([
+                DataListItem::new("a", "Alpha"),
+                DataListItem::new("b", "Beta"),
+            ])
+            .accessibility_label("Letters"),
+        )
+}
+
+#[test]
+fn advanced_ui_composites_keep_their_ids_across_rebuilds() {
+    let ids = || {
+        let mut presenter = Presenter::with_root(VIEWPORT, composites());
+        if let Err(err) = presenter.layout(VIEWPORT) {
+            panic!("layout failed: {err}");
+        }
+        presenter.paint();
+        let tree = match presenter.accessibility_tree() {
+            Ok(tree) => tree,
+            Err(err) => panic!("accessibility tree failed: {err}"),
+        };
+        let mut out = Vec::new();
+        accessibility_ids(tree.roots(), &mut out);
+        out
+    };
+    let (first, second) = (ids(), ids());
+    // Toolbar, its text, menu with 2 items, control with 2 options, tabs,
+    // tab list with 2 tabs, panel, data list with 2 items.
+    assert_eq!(first.len(), 15, "{first:?}");
+    assert_eq!(first, second, "a rebuild must keep every node's id");
+    assert!(first.iter().all(|id| !id.is_ephemeral()));
+}
+
+#[test]
+fn only_accessible_text_adds_an_accessibility_node() {
+    let nodes = |root: Div| {
+        let mut presenter = Presenter::with_root(VIEWPORT, root);
+        if let Err(err) = presenter.layout(VIEWPORT) {
+            panic!("layout failed: {err}");
+        }
+        presenter.paint();
+        match presenter.accessibility_tree() {
+            Ok(tree) => tree.roots().len(),
+            Err(err) => panic!("accessibility tree failed: {err}"),
+        }
+    };
+    assert_eq!(nodes(div().child(rui::elements::text("plain"))), 0);
+    assert_eq!(
+        nodes(div().child(rui::elements::text("read").accessible())),
+        1
+    );
+}
