@@ -8,7 +8,7 @@ use random_tree::{Incremental, Node, Rng};
 use rui::renderer::metal::{MetalRenderer, RetainedTarget};
 use rui::renderer::text::TextMeasureCache;
 use rui::renderer::{Reach, RendererError};
-use rui::{Bounds, Color, Div, Size, div, text};
+use rui::{Bounds, Color, Div, Image, ImageFit, Size, div, text};
 
 const SCALE: f32 = 2.0;
 
@@ -284,5 +284,176 @@ fn rows_scrolled_out_and_back_redraw_correctly() {
             viewport,
             &format!("round {round}"),
         );
+    }
+}
+
+/// A `width` by `height` image with a different color in every pixel, so a
+/// misplaced or stale sample shows.
+fn gradient(width: u32, height: u32) -> Vec<u8> {
+    (0..width * height)
+        .flat_map(|index| {
+            let (x, y) = (index % width, index / width);
+            [
+                (x * 255 / width) as u8,
+                (y * 255 / height) as u8,
+                0x80,
+                0xff,
+            ]
+        })
+        .collect()
+}
+
+const FITS: [ImageFit; 5] = [
+    ImageFit::Fill,
+    ImageFit::Contain,
+    ImageFit::Cover,
+    ImageFit::None,
+    ImageFit::ScaleDown,
+];
+
+/// Rows of images in every fit mode, wide and tall, from data and from a
+/// file, under a colored strip and above a list with one edited row.
+fn gallery(file: &str, spacer: f32, shift: usize, edited: usize, strip: u32) -> Div {
+    let images = (0..FITS.len()).map(move |index| {
+        let fit = FITS[(index + shift) % FITS.len()];
+        let row = div().flex_row().gap(4.0);
+        // Wide, tall, and larger than the box, so cover and none overflow it.
+        let row = [(12, 5), (3, 9), (90, 70)]
+            .into_iter()
+            .fold(row, |row, (width, height)| {
+                row.child(
+                    Image::from_data(gradient(width, height), width, height)
+                        .fit(fit)
+                        .size(Size::new(44.0, 30.0)),
+                )
+            });
+        row.child(
+            Image::from_file(file)
+                .fit(fit)
+                .rounded(6.0)
+                .size(Size::new(30.0, 44.0)),
+        )
+    });
+    // Right over the images: its antialiased edge reaches a pixel into the
+    // first row, which must be drawn again with it.
+    let strip = div().h(6.0).bg(Color::hex(0x406080 + strip * 0x0a0a0a));
+    div()
+        .w(320.0)
+        .flex_col()
+        .child(div().h(spacer))
+        .child(strip)
+        .children(images)
+        .child(list(edited, edited))
+}
+
+#[test]
+fn images_in_every_fit_mode_redraw_only_their_damage() {
+    let Some(mut renderer) = renderer() else {
+        return;
+    };
+    let dir = std::env::temp_dir().join(format!("rui-damage-images-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("create image dir");
+    let file = dir.join("tall.png");
+    image::RgbaImage::from_raw(6, 16, gradient(6, 16))
+        .expect("image size matches its pixels")
+        .save(&file)
+        .expect("write image file");
+    let file = file.to_str().expect("utf-8 temp path").to_string();
+
+    let mut measurer = TextMeasureCache::new();
+    let viewport = Size::new(320.0, 600.0);
+    let total = (320.0 * SCALE * 600.0 * SCALE) as u64;
+    let mut incremental = Incremental::new();
+    let mut target = RetainedTarget::new();
+    // The strip recolored, rows edited, the images moved down and back, and
+    // their fits changed; the last element is the most of the target the frame
+    // may draw again.
+    let rounds = [
+        (0.0, 0, 10, 0, 1.0),
+        (0.0, 0, 10, 1, 0.05),
+        (0.0, 0, 11, 1, 0.7),
+        (7.5, 0, 11, 1, 1.0),
+        (7.5, 2, 12, 2, 1.0),
+        (0.0, 4, 13, 2, 1.0),
+        (0.0, 1, 13, 2, 0.5),
+        (0.0, 1, 13, 2, 0.0),
+    ];
+    for (round, (spacer, shift, edited, strip, most)) in rounds.into_iter().enumerate() {
+        incremental.rebuild(gallery(&file, spacer, shift, edited, strip));
+        incremental.frame(&mut measurer, viewport);
+        let damage = incremental
+            .scene
+            .damage(Bounds::from_xywh(0.0, 0.0, 320.0, 600.0));
+        let redrawn = assert_same_pixels(
+            &mut renderer,
+            &mut target,
+            &incremental,
+            viewport,
+            &format!("round {round}"),
+        );
+        if round > 0 {
+            assert!(
+                !matches!(damage, Reach::Unbounded),
+                "round {round}: images made the damage unbounded"
+            );
+        }
+        eprintln!(
+            "round {round}: redrew {:.3} of the target",
+            redrawn as f64 / total as f64
+        );
+        assert!(
+            redrawn as f64 <= total as f64 * most,
+            "round {round} redrew {redrawn} of {total} pixels"
+        );
+    }
+    std::fs::remove_dir_all(&dir).expect("remove image dir");
+}
+
+#[test]
+fn an_edit_away_from_the_images_leaves_them_out_of_the_damage() {
+    let Some(mut renderer) = renderer() else {
+        return;
+    };
+    let mut measurer = TextMeasureCache::new();
+    let viewport = Size::new(320.0, 600.0);
+    let images = |round: usize| {
+        div()
+            .w(320.0)
+            .flex_col()
+            .child(list(29, round))
+            .children(FITS.map(|fit| {
+                div().flex_row().child(
+                    Image::from_data(gradient(5, 3), 5, 3)
+                        .fit(fit)
+                        .size(Size::new(60.0, 20.0)),
+                )
+            }))
+    };
+    let mut incremental = Incremental::new();
+    let mut target = RetainedTarget::new();
+    for round in 0..3 {
+        incremental.rebuild(images(round));
+        incremental.frame(&mut measurer, viewport);
+        let damage = incremental
+            .scene
+            .damage(Bounds::from_xywh(0.0, 0.0, 320.0, 600.0));
+        assert_same_pixels(
+            &mut renderer,
+            &mut target,
+            &incremental,
+            viewport,
+            &format!("round {round}"),
+        );
+        if round > 0 {
+            // The edited row is the 30th, 580 px down; the images sit at 600 and
+            // below, past the window, and are not drawn.
+            let Reach::Within(damage) = damage else {
+                panic!("round {round}: damage {damage:?}");
+            };
+            assert!(
+                damage.y() > 500.0,
+                "round {round}: damage {damage:?} reaches the top rows"
+            );
+        }
     }
 }

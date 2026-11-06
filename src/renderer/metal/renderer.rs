@@ -7,11 +7,12 @@ use super::frame::{
     KIND_QUAD, KIND_SHADOW, Pages,
 };
 use super::glyph::{GlyphPages, GpuGlyph};
-use super::image_primitive::{GpuImage, calculate_fit_bounds};
+use super::image_primitive::GpuImage;
 use super::order::Rect;
 use super::path::{GpuPathTile, PathGeometry, PathSprites, PathTiles, SpriteLookup};
 use super::retained::{RetainedPipelines, RetainedTarget, damage_scissor, intersect_scissors};
 use crate::core::geometry::{Bounds, Size};
+use crate::elements::fit_bounds;
 use crate::renderer::primitives::{GpuQuad, GpuShadow, Primitive};
 use crate::renderer::text::{SUBPIXEL_VARIANTS, TextGlyphCache, TextRequest};
 use crate::renderer::{
@@ -1307,7 +1308,7 @@ impl MetalRenderer {
 
         let texture = self.ensure_texture(entry.handle.id.as_u32(), entry.size, &entry.pixels)?;
 
-        let dest_bounds = calculate_fit_bounds(*bounds, entry.size, fit);
+        let dest_bounds = fit_bounds(*bounds, entry.size, fit);
 
         // Clip to container for cover/contain
         let container_clip = if let Some(prev) = current_clip {
