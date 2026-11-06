@@ -30,6 +30,9 @@ jobs:
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
 
+      - name: Compare runner regression (no GPU workload)
+        run: python3 benchmarks/gpui_compare/test_runner.py
+
       - name: cargo check
         run: cargo check
 
