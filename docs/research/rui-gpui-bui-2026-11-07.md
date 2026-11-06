@@ -122,3 +122,14 @@ GPUI 有多个桌面平台后端；BUI 也有 Windows/Linux 路径，但 macOS �
 | 真机IME/VoiceOver、跨平台 | 独立后续验收/投入 | 当前没有测试结论，不宣称产品成熟 |
 
 本轮选定可复现运行时缺陷与安装入口形成实现 PR；更大能力留下可审查规格，不塞入同一个修复。采用现有架构上的边界修正，否定无证据重写。报告、规格、实现和真实应用验收是四个不同状态。
+
+## 本批交付与实现验收
+
+- [PR #289](https://github.com/majiayu000/rui/pull/289)：本报告、两份能力规格和安装基线修正；关闭 #286，#287/#288 仍为规格待实现。
+- [PR #290](https://github.com/majiayu000/rui/pull/290)：实现 #284/#285，包含[任务边界 Spec](https://github.com/majiayu000/rui/blob/29f6eca2d121ae80e1e839c4c1a8e50fb5946eda/docs/specs/runtime-task-boundaries.md)与[边界回归测试](https://github.com/majiayu000/rui/blob/29f6eca2d121ae80e1e839c4c1a8e50fb5946eda/src/core/executor_boundaries_tests.rs)。
+
+四个基线回归先失败后通过。完整 runtime 已确认取消且外部 waker 保留时，推进执行器会释放 future；不再只依靠原机制片段。默认特性下重新运行 executor 和开启 RUI_VERIFY_REPLAY 的 spawn 集成测试：异主回调不执行且 A/B 保持10/20、应用移动后合法update仍成功、捕获panic后任务外update被拒绝、后续合法任务写入7、自唤醒触发原有10000轮诊断、线程中正在poll时cancel不阻塞、后台接力最终显示 step 9。
+
+已验：这些行为对应的断言与实际测试输出、两个外部消费者编译、独立代码和文档审查。没验：Miri、穷尽并发交错、原生GUI/IME/VoiceOver及三方性能；GitHub完整CI状态以PR页面为准。相邻情况：嵌套update、detach、首次poll前取消、FIFO和真实后台线程均覆盖。取消不能抢占一个永不返回的同步poll；panic恢复不承诺自动重试原来未完成的任务。
+
+这些提交处于PR阶段，本报告不表示已合并、发布或完成真实用户验收。
