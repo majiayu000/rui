@@ -125,6 +125,20 @@ impl Popover {
 }
 
 impl Element for Popover {
+    fn accessibility_nodes(
+        &self,
+        cx: &AccessibilityContext,
+    ) -> Result<Vec<AccessibilityNode>, AccessibilityError> {
+        let mut nodes = Vec::new();
+        for child in &self.children[..self.visible_child_count()] {
+            nodes.extend(child.accessibility_nodes(cx)?);
+        }
+        Ok(match self.accessibility(cx)? {
+            Some(node) => vec![node.with_children(nodes)],
+            None => nodes,
+        })
+    }
+
     fn id(&self) -> Option<ElementId> {
         Some(self.id.get())
     }
@@ -289,7 +303,7 @@ impl Element for Popover {
     }
 
     fn children(&self) -> &[AnyElement] {
-        &self.children[..self.visible_child_count()]
+        &self.children
     }
 
     fn children_mut(&mut self) -> &mut [AnyElement] {
@@ -409,6 +423,20 @@ impl Dialog {
 }
 
 impl Element for Dialog {
+    fn accessibility_nodes(
+        &self,
+        cx: &AccessibilityContext,
+    ) -> Result<Vec<AccessibilityNode>, AccessibilityError> {
+        if !self.open {
+            return Ok(Vec::new());
+        }
+        let nodes = self.content[0].accessibility_nodes(cx)?;
+        Ok(self
+            .accessibility(cx)?
+            .map(|node| vec![node.with_children(nodes)])
+            .unwrap_or_default())
+    }
+
     fn id(&self) -> Option<ElementId> {
         Some(self.id.get())
     }
@@ -582,7 +610,7 @@ impl Element for Dialog {
     }
 
     fn children(&self) -> &[AnyElement] {
-        if self.open { &self.content } else { &[] }
+        &self.content
     }
 
     fn children_mut(&mut self) -> &mut [AnyElement] {

@@ -540,6 +540,13 @@ impl Hoverable {
 }
 
 impl Element for Hoverable {
+    fn children(&self) -> &[AnyElement] {
+        std::slice::from_ref(&self.inner)
+    }
+    fn children_mut(&mut self) -> &mut [AnyElement] {
+        std::slice::from_mut(&mut self.inner)
+    }
+
     fn id(&self) -> Option<ElementId> {
         Some(self.id.get())
     }

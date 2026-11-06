@@ -37,15 +37,19 @@ fn layout(element: &mut impl Element) -> (TaffyTree<ElementId>, NodeId) {
 
 #[test]
 fn advanced_ui_popover_hides_content_when_closed() {
-    let popover = Popover::new("Inspector", button("Open"), text("Details"));
+    let mut popover = Popover::new("Inspector", button("Open"), text("Details"));
     let nodes = popover
         .accessibility_nodes(&AccessibilityContext::default())
         .expect("closed popover accessibility should build");
 
     assert!(!popover.is_open());
-    assert_eq!(popover.children().len(), 1);
+    assert_eq!(popover.children().len(), 2, "hidden content remains owned");
+    assert_eq!(popover.children_mut().len(), 2);
+    let (taffy, root) = layout(&mut popover);
+    assert_eq!(taffy.child_count(root), 1, "only the anchor is laid out");
     assert_eq!(nodes.len(), 1);
     assert_eq!(nodes[0].a11y_role(), AccessibilityRole::Button);
+    assert_eq!(nodes[0].a11y_label(), Some("Open"));
 }
 
 #[test]

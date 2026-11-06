@@ -444,9 +444,23 @@ where
             return Err(self.pressure_error(byte_size));
         }
 
+        // Check feasibility before evicting: callers only receive eviction keys
+        // on success, so an error must preserve every existing allocation.
+        if self.entries.len() >= self.max_entries || self.live_bytes > self.max_bytes - byte_size {
+            let (active_entries, active_bytes) = self
+                .entries
+                .values()
+                .filter(|record| record.active)
+                .fold((0, 0), |(count, bytes), record| {
+                    (count + 1, bytes + record.byte_size)
+                });
+            if active_entries >= self.max_entries || active_bytes > self.max_bytes - byte_size {
+                self.pressure_events += 1;
+                return Err(self.pressure_error(byte_size));
+            }
+        }
         let mut evicted = Vec::new();
-        while self.entries.len() + 1 > self.max_entries
-            || self.live_bytes + byte_size > self.max_bytes
+        while self.entries.len() >= self.max_entries || self.live_bytes > self.max_bytes - byte_size
         {
             let Some(key) = self.next_evictable_key() else {
                 self.pressure_events += 1;
@@ -513,7 +527,16 @@ impl ImageResourceKey {
                 width,
                 height,
             } => {
-                let expected_len = (*width as usize) * (*height as usize) * 4;
+                let expected_len = (*width as usize)
+                    .checked_mul(*height as usize)
+                    .and_then(|pixels| pixels.checked_mul(4))
+                    .filter(|bytes| *bytes > 0)
+                    .ok_or_else(|| {
+                        RendererResourceError::invalid(
+                            RendererResourceKind::Image,
+                            "RGBA dimensions must be nonzero and fit in addressable memory",
+                        )
+                    })?;
                 if data.len() != expected_len {
                     return Err(RendererResourceError::invalid(
                         RendererResourceKind::Image,
