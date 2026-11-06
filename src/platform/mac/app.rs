@@ -98,6 +98,9 @@ where
     // The first open window's delegate is also the application's.
     parts.window.install_application_delegate(&app);
     let mut windows = vec![native_window(&mut context, parts, build_root)];
+    // Our custom event loop does not call NSApplication::run, which normally
+    // completes launch and makes the app available to accessibility clients.
+    app.finishLaunching();
     app.activate();
 
     let profile_enabled = RendererTelemetryRecorder::enabled_from_env().is_some();

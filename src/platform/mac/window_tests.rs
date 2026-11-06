@@ -188,3 +188,9 @@ fn native_composition_cancel_suppresses_the_raw_escape_key() {
         [MacWindowEvent::Text(TextInputCommand::CancelComposition)]
     ));
 }
+
+#[test]
+fn appkit_backtab_maps_to_tab_for_reverse_focus_navigation() {
+    assert_eq!(keycode_from_char('\u{19}'), KeyCode::Tab);
+    assert_eq!(keycode_from_char('\t'), KeyCode::Tab);
+}
