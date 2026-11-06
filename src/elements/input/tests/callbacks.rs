@@ -134,7 +134,7 @@ fn test_on_cancel_routed_escape_is_handled_once() {
     let mut inp = Input::new().value("draft").on_cancel(move || {
         *count_clone.borrow_mut() += 1;
     });
-    let input_id = inp.id;
+    let input_id = Some(inp.id.get());
     let taffy = TaffyTree::new();
     let mut focused = input_id;
     let mut cx = focused_context(&taffy, &mut focused);

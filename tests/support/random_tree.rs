@@ -3,8 +3,8 @@
 #![allow(dead_code)]
 
 use rui::core::frame_pipeline::FramePipeline;
-use rui::elements::element::LayoutNodes;
-use rui::elements::{Div, Element, div, span, styled_text, text};
+use rui::elements::element::{LayoutNodes, reconcile};
+use rui::elements::{Div, div, span, styled_text, text};
 use rui::renderer::Scene;
 use rui::renderer::text::TextMeasureCache;
 use rui::{Color, ElementId, Size};
@@ -213,7 +213,7 @@ impl Incremental {
 
     /// Rebuild as the frame pipeline does: keep what reconciles.
     pub fn rebuild(&mut self, mut next: Div) {
-        if !next.reconcile(&mut self.root) {
+        if !reconcile(&mut next, &mut self.root) {
             self.root = next;
         }
     }
