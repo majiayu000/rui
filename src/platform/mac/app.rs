@@ -19,6 +19,7 @@ use crate::elements::element::{Element, PointerEvent, PointerEventKind};
 use crate::platform::mac::accessibility::MacAccessibilityActionRequest;
 use crate::platform::mac::clipboard::MacPasteboard;
 use crate::platform::mac::menus::MacMenus;
+use crate::platform::mac::prompts::run_path_prompts;
 use crate::platform::mac::events::{
     MAC_REDRAW_EVENT_DATA, MacWindowEvent, post_application_event_from_any_thread,
 };
@@ -191,6 +192,7 @@ where
             &mut context,
             windows.iter().map(|window| (window.id(), window.mac_window())),
         );
+        run_path_prompts(&mut context);
         run_between_frames(
             &mut context,
             &mut frame_ticker,

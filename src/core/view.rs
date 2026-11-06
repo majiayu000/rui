@@ -3,9 +3,12 @@
 use crate::core::app::AppContext;
 use crate::core::entity::{Entity, EntityId};
 use crate::core::geometry::Point;
+use crate::core::executor::Task;
 use crate::core::menu::Menu;
+use crate::core::prompt::{PathPromptOptions, PromptDismissed};
 use crate::core::text_editing::{ClipboardError, ClipboardItem};
 use std::cell::{Cell, RefCell};
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 /// Views notified from event handlers, which have no context to notify with;
@@ -206,6 +209,22 @@ impl<'a, T: 'static> ViewContext<'a, T> {
     /// See [`AppContext::show_context_menu`].
     pub fn show_context_menu(&mut self, menu: Menu, position: Point) {
         self.app.show_context_menu(menu, position);
+    }
+
+    /// See [`AppContext::prompt_for_paths`].
+    pub fn prompt_for_paths(
+        &mut self,
+        options: PathPromptOptions,
+    ) -> Task<Result<Option<Vec<PathBuf>>, PromptDismissed>> {
+        self.app.prompt_for_paths(options)
+    }
+
+    /// See [`AppContext::prompt_for_new_path`].
+    pub fn prompt_for_new_path(
+        &mut self,
+        directory: &Path,
+    ) -> Task<Result<Option<PathBuf>, PromptDismissed>> {
+        self.app.prompt_for_new_path(directory)
     }
 
     /// Create a notifier that can be moved into event callbacks.

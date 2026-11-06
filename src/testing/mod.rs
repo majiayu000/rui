@@ -8,6 +8,7 @@ use crate::core::action::route_key_event;
 use crate::core::app::{AppContext, RuntimeView};
 use crate::core::drag::FileDragEvent;
 use crate::core::menu::{ContextMenuRequest, Menu};
+use crate::core::prompt::PathPrompt;
 use crate::core::entity::Entity;
 use crate::core::event::{Event, KeyEvent, MouseButton, ScrollEvent};
 use crate::core::frame_pipeline::{FramePipeline, FramePresentation, IdlePolicy};
@@ -310,6 +311,13 @@ where
     /// The context menu the app asked to show, which a platform would show now.
     pub fn take_context_menu(&mut self) -> Option<ContextMenuRequest> {
         self.context.take_context_menu()
+    }
+
+    /// The file dialogs the app asked for since the last call, which a
+    /// platform would show now. Answer each with its `answer`; one dropped
+    /// unanswered fails its task with `PromptDismissed`.
+    pub fn take_path_prompts(&mut self) -> Vec<PathPrompt> {
+        self.context.take_path_prompts()
     }
 
     /// Whether a drag in this window is past its threshold.

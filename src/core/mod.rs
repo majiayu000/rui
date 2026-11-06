@@ -18,6 +18,7 @@ pub mod geometry;
 pub mod geometry_ops;
 pub mod menu;
 pub mod presenter;
+pub mod prompt;
 pub mod style;
 pub mod text_editing;
 pub mod view;

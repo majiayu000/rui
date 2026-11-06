@@ -148,6 +148,29 @@ changed. On macOS the first menu is the application menu. A right press runs
 choose items with `choose_menu_item(&menu, label)` and read requested context
 menus with `take_context_menu()`.
 
+#### File Dialogs
+
+`cx.prompt_for_paths(options)` and `cx.prompt_for_new_path(directory)` ask the
+user for paths and return a `Task` that finishes with them, or `None` when the
+user cancels. On macOS they show `NSOpenPanel` / `NSSavePanel`.
+
+```rust
+use rui::core::prompt::PathPromptOptions;
+
+let paths = cx.prompt_for_paths(PathPromptOptions { files: true, directories: false, multiple: true });
+cx.app_mut()
+    .spawn(move |cx| async move {
+        if let Ok(Some(paths)) = paths.await {
+            cx.update(|cx| open_files(cx, paths));
+        }
+    })
+    .detach();
+```
+
+A prompt dropped without an answer fails its task with `PromptDismissed`.
+Headless sessions take the waiting prompts with `take_path_prompts()` and
+answer each `PathPrompt` with `answer.send(..)`.
+
 ---
 
 ### Geometry Types
