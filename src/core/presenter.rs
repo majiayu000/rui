@@ -19,6 +19,7 @@ use std::rc::Rc;
 use taffy::prelude::TaffyTree;
 
 mod drag;
+mod focus;
 mod menus;
 
 #[derive(Debug, Clone, PartialEq)]

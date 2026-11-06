@@ -12,6 +12,7 @@ pub mod effects;
 pub mod entity;
 pub mod event;
 pub mod executor;
+pub mod focus;
 pub mod foreground;
 pub mod frame_pipeline;
 pub mod geometry;

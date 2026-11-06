@@ -13,6 +13,7 @@ use crate::core::view::{
 };
 
 mod clipboard;
+mod focus;
 mod images;
 mod menus;
 mod prompts;
@@ -22,6 +23,7 @@ mod rows;
 pub use rows::Row;
 
 pub(crate) use clipboard::SharedClipboard;
+pub(crate) use focus::FocusRequest;
 pub use images::ImageAsset;
 
 #[cfg(all(target_os = "macos", feature = "metal"))]
@@ -133,6 +135,9 @@ pub(crate) struct WindowFrameState {
     pub(crate) explicit_rebuild: bool,
     /// Entities the last build of the root read.
     pub(crate) root_reads: HashSet<EntityId>,
+    /// The window's focus after its last dispatch, and a change app code asked for.
+    pub(crate) focused: Option<crate::core::ElementId>,
+    pub(crate) focus_request: Option<focus::FocusRequest>,
 }
 
 impl WindowFrameState {
@@ -146,6 +151,8 @@ impl WindowFrameState {
             redraw_scheduler: RedrawScheduler::default(),
             viewport_size,
             runtime_view_notifier: None,
+            focused: None,
+            focus_request: None,
         }
     }
 

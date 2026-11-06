@@ -1,4 +1,5 @@
-use crate::core::action::ActionId;
+use super::focus::move_focus;
+use crate::core::action::{ActionId, StandardAction};
 use crate::core::app::AppContext;
 use crate::core::event::{KeyCode, KeyEvent};
 use crate::elements::Element;
@@ -34,7 +35,15 @@ pub(crate) fn route_action<E: Element>(
     action: &ActionId,
 ) -> bool {
     cx.set_clipboard(app.clipboard());
-    root.dispatch_action(cx, action).is_handled() || app.dispatch_app_action(action).is_handled()
+    if root.dispatch_action(cx, action).is_handled() || app.dispatch_app_action(action).is_handled()
+    {
+        return true;
+    }
+    match action {
+        ActionId::Standard(StandardAction::FocusNext) => move_focus(root, cx, true),
+        ActionId::Standard(StandardAction::FocusPrevious) => move_focus(root, cx, false),
+        _ => false,
+    }
 }
 
 fn key_event_has_text_editing_details(event: &KeyEvent) -> bool {

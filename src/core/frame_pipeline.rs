@@ -482,9 +482,11 @@ impl FramePipeline {
                 }
                 FrameStage::DispatchEvents => {
                     let started_at = Instant::now();
+                    presenter.apply_focus_request(context);
                     if let Some(dispatch) = dispatch_events.take() {
                         dispatch(presenter, context)?;
                     }
+                    context.record_focus(presenter.focused_element());
                     durations.dispatch_ns = started_at.elapsed().as_nanos();
                 }
                 FrameStage::Paint => {

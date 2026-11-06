@@ -9,7 +9,7 @@ use crate::elements::element::{
     AnyElement, Element, EventContext, LayoutContext, PaintContext, PointerEvent, PointerEventKind,
 };
 use crate::renderer::Primitive;
-use crate::renderer::text::TextMeasureCache;
+use crate::renderer::text::{TextMeasureCache, TextRequest};
 use taffy::prelude::NodeId;
 
 pub struct Tooltip {
@@ -18,6 +18,8 @@ pub struct Tooltip {
     content: String,
     theme: Theme,
     state: InteractionState,
+    /// The content's width in the tooltip font, measured before paint.
+    content_width: Option<f32>,
 }
 
 impl Tooltip {
@@ -31,6 +33,7 @@ impl Tooltip {
             content,
             theme: Theme::default(),
             state: InteractionState::default(),
+            content_width: None,
         }
     }
 
@@ -85,10 +88,12 @@ impl Element for Tooltip {
         cx.register_hit_region(self.id.get(), bounds);
         self.child.paint(cx);
 
-        if self.state.hovered() {
+        if self.state.hovered()
+            && let Some(content_width) = self.content_width
+        {
             let font_size = self.theme.text_size(ControlSize::Small);
             let padding = self.theme.control_gap();
-            let width = self.content.chars().count() as f32 * font_size * 0.58 + padding * 2.0;
+            let width = content_width.ceil() + padding * 2.0;
             let height = (font_size * self.theme.typography.line_height + padding).max(20.0);
             let tooltip_bounds = Bounds::from_xywh(
                 bounds.x(),
@@ -119,6 +124,24 @@ impl Element for Tooltip {
 
     fn refresh_text_geometry(&mut self, text_measurer: &mut TextMeasureCache) {
         self.child.refresh_text_geometry(text_measurer);
+        if !self.state.hovered() {
+            return;
+        }
+        let request = TextRequest::new(
+            &self.content,
+            self.theme.text_size(ControlSize::Small),
+            self.theme.typography.label_weight,
+            None,
+            self.theme.typography.line_height,
+        );
+        self.content_width = match text_measurer.measure_single_line(request) {
+            Ok(metrics) => Some(metrics.size.width),
+            Err(err) => {
+                // Not shown at a guessed size: a box too small for its text.
+                log::error!("tooltip {:?} text could not be measured: {err:?}", self.content);
+                None
+            }
+        };
     }
 
     fn handle_pointer_event(&mut self, cx: &mut EventContext, event: &PointerEvent) -> bool {
