@@ -1,5 +1,5 @@
-//! Performance gate: fails when a frame costs more than `benchmarks/perf_budgets.json`
-//! allows. Run by CI.
+//! Performance gate: fails when a frame costs more than `benchmarks/perf_budgets/`
+//! allows: `<case>.json` per case, `shared.json` for the rest. Run by CI.
 //!
 //! `cargo bench --bench perf_gate`
 //!
@@ -12,6 +12,9 @@
 //! `PERF_GATE_PIXELS=1` also compares the long list's rendered pixels with the
 //! committed checksum. Different GPUs antialias differently, so that is for local
 //! runs before and after a renderer change, not for CI.
+mod perf_budgets;
+
+use perf_budgets::{CaseBudget, load_budgets};
 use rui::core::entity::Entity;
 use rui::core::event::MouseButton;
 use rui::core::frame_pipeline::FramePipeline;
@@ -24,7 +27,6 @@ use rui::renderer::text::TextMeasureCache;
 use rui::{
     AppContext, Color, Div, ElementId, Point, Presenter, Size, View, ViewContext, div, text,
 };
-use serde::Deserialize;
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, VecDeque};
@@ -33,7 +35,6 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use taffy::prelude::TaffyTree;
 
-const BUDGETS_JSON: &str = include_str!("../benchmarks/perf_budgets.json");
 const VIEWPORT: (f32, f32) = (1440.0, 900.0);
 const ROW_HEIGHT: f32 = 28.0;
 const EDITED_ROW: usize = 1_000;
@@ -87,30 +88,6 @@ fn rusage() -> [u64; 64] {
     let status = unsafe { proc_pid_rusage(std::process::id() as i32, 4, words.as_mut_ptr()) };
     assert_eq!(status, 0, "proc_pid_rusage failed");
     words
-}
-
-#[derive(Debug, Deserialize)]
-struct Budgets {
-    /// Where and when the budgets were measured; read by people, not checked.
-    #[allow(dead_code)]
-    calibration: String,
-    /// Most instructions per frame, in millions, by case.
-    instructions_m: BTreeMap<String, f64>,
-    /// Most heap allocations per frame, by case.
-    allocations: BTreeMap<String, f64>,
-    /// Most the 100 000-row virtual list may cost relative to 1 000 rows.
-    virtual_list_scaling_max: f64,
-    /// Footprint before any renderer exists: what RUI's own data costs, the same on
-    /// any machine.
-    footprint_cpu_mb_max: f64,
-    /// Footprint once the long list has been rendered. GPU driver memory is part of
-    /// it, so this varies with the GPU: hosted CI VMs measure about 20 MB more.
-    footprint_mb_max: f64,
-    /// Most of the window one changed row may draw again (#175).
-    one_row_damage_max: f64,
-    /// Most the heap may grow over `CHURN_FRAMES` frames of `views.churn`, in KB.
-    churn_growth_kb_max: f64,
-    pixel_checksum: String,
 }
 
 #[derive(Clone, Copy)]
@@ -404,10 +381,10 @@ fn pixel_checksum(scene: &Scene) -> Result<String, String> {
 }
 
 fn main() -> ExitCode {
-    let budgets: Budgets = match serde_json::from_str(BUDGETS_JSON) {
+    let budgets = match load_budgets() {
         Ok(budgets) => budgets,
         Err(err) => {
-            eprintln!("perf_gate: benchmarks/perf_budgets.json is invalid: {err}");
+            eprintln!("perf_gate: invalid budget: {err}");
             return ExitCode::FAILURE;
         }
     };
@@ -649,12 +626,14 @@ fn main() -> ExitCode {
         "case", "instructions", "budget", "allocations", "budget"
     );
     for (name, cost) in &costs {
-        let instruction_budget = budgets.instructions_m.get(*name).copied();
-        let allocation_budget = budgets.allocations.get(*name).copied();
-        let (Some(instruction_budget), Some(allocation_budget)) =
-            (instruction_budget, allocation_budget)
+        let Some(&CaseBudget {
+            instructions_m: instruction_budget,
+            allocations: allocation_budget,
+        }) = budgets.cases.get(*name)
         else {
-            failures.push(format!("{name}: no budget in benchmarks/perf_budgets.json"));
+            failures.push(format!(
+                "{name}: no budget, add benchmarks/perf_budgets/{name}.json"
+            ));
             continue;
         };
         println!(
