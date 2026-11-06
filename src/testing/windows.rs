@@ -3,11 +3,14 @@
 use super::HeadlessError;
 use crate::core::ElementId;
 use crate::core::accessibility::{AccessibilityContext, AccessibilityTree};
+use crate::core::action::route_key_event;
 use crate::core::app::{AppContext, RedrawSource};
+use crate::core::event::KeyEvent;
 use crate::core::event::MouseButton;
 use crate::core::frame_pipeline::{FramePipeline, FramePresentation, IdlePolicy};
 use crate::core::geometry::{Point, Size};
 use crate::core::presenter::Presenter;
+use crate::core::text_editing::TextInputEvent;
 use crate::core::view::View;
 use crate::core::window::{WindowId, WindowOptions};
 use crate::elements::element::{Element, PointerEvent, PointerEventKind};
@@ -21,6 +24,16 @@ pub(crate) trait HeadlessWindowDriver {
         cx: &mut AppContext,
         idle_policy: IdlePolicy,
         pointer: Option<PointerEvent>,
+    ) -> Result<bool, HeadlessError>;
+    fn dispatch_key_event(
+        &mut self,
+        cx: &mut AppContext,
+        event: &KeyEvent,
+    ) -> Result<bool, HeadlessError>;
+    fn dispatch_text_input_event(
+        &mut self,
+        cx: &mut AppContext,
+        event: &TextInputEvent,
     ) -> Result<bool, HeadlessError>;
     fn accessibility_tree(&self) -> Result<AccessibilityTree, HeadlessError>;
     fn scene(&self) -> &Scene;
@@ -48,6 +61,40 @@ where
         build_root,
         presenter: Presenter::with_root(cx.viewport_size(), root),
     })
+}
+
+impl<F, E> HeadlessWindow<F, E>
+where
+    F: FnMut(&mut AppContext) -> E,
+    E: Element,
+{
+    fn dispatch_frame(
+        &mut self,
+        cx: &mut AppContext,
+        dispatch: impl FnOnce(&mut Presenter<E>, &mut AppContext) -> bool,
+    ) -> Result<bool, HeadlessError> {
+        let mut handled = false;
+        let viewport = cx.viewport_size();
+        FramePipeline::run_frame(
+            cx,
+            &mut self.presenter,
+            &mut self.build_root,
+            viewport,
+            IdlePolicy::AlwaysDraw,
+            |presenter, cx| {
+                handled = dispatch(presenter, cx);
+                if cx.consume_runtime_view_notification() {
+                    cx.mark_redraw_from(RedrawSource::ViewNotification);
+                }
+                Ok(())
+            },
+            |_, _| Ok(FramePresentation::Presented(None)),
+        )
+        .map_err(|err| HeadlessError::Layout {
+            message: err.to_string(),
+        })?;
+        Ok(handled)
+    }
 }
 
 impl<F, E> HeadlessWindowDriver for HeadlessWindow<F, E>
@@ -85,6 +132,36 @@ where
             message: err.to_string(),
         })?;
         Ok(outcome.is_some())
+    }
+
+    fn dispatch_key_event(
+        &mut self,
+        cx: &mut AppContext,
+        event: &KeyEvent,
+    ) -> Result<bool, HeadlessError> {
+        self.dispatch_frame(cx, |presenter, cx| {
+            let (handled, redraw) = presenter
+                .with_event_context(|root, event_cx| route_key_event(root, cx, event_cx, event));
+            if handled || redraw {
+                cx.mark_redraw_from(RedrawSource::PlatformInput);
+            }
+            handled
+        })
+    }
+
+    fn dispatch_text_input_event(
+        &mut self,
+        cx: &mut AppContext,
+        event: &TextInputEvent,
+    ) -> Result<bool, HeadlessError> {
+        self.dispatch_frame(cx, |presenter, cx| {
+            let (handled, redraw) = presenter
+                .with_event_context(|root, event_cx| root.handle_text_input_event(event_cx, event));
+            if handled || redraw {
+                cx.mark_redraw_from(RedrawSource::PlatformInput);
+            }
+            handled
+        })
     }
 
     fn accessibility_tree(&self) -> Result<AccessibilityTree, HeadlessError> {
@@ -230,8 +307,7 @@ impl HeadlessApp {
         window: WindowId,
         event: PointerEvent,
     ) -> Result<(), HeadlessError> {
-        let index = self.index_of(window)?;
-        self.context.activate_window(window);
+        let index = self.activate_window(window)?;
         self.windows[index]
             .driver
             .frame(&mut self.context, IdlePolicy::AlwaysDraw, Some(event))?;
@@ -239,10 +315,37 @@ impl HeadlessApp {
         Ok(())
     }
 
+    /// Route a key through the specified window in a frame of its own.
+    pub fn dispatch_key_event(
+        &mut self,
+        window: WindowId,
+        event: &KeyEvent,
+    ) -> Result<bool, HeadlessError> {
+        let index = self.activate_window(window)?;
+        let handled = self.windows[index]
+            .driver
+            .dispatch_key_event(&mut self.context, event)?;
+        self.windows[index].frames_drawn += 1;
+        Ok(handled)
+    }
+
+    /// Deliver text to the specified window's focused input in a frame of its own.
+    pub fn dispatch_text_input_event(
+        &mut self,
+        window: WindowId,
+        event: &TextInputEvent,
+    ) -> Result<bool, HeadlessError> {
+        let index = self.activate_window(window)?;
+        let handled = self.windows[index]
+            .driver
+            .dispatch_text_input_event(&mut self.context, event)?;
+        self.windows[index].frames_drawn += 1;
+        Ok(handled)
+    }
+
     /// Resize `window`; it redraws on the next [`Self::frame`].
     pub fn resize(&mut self, window: WindowId, size: Size) -> Result<(), HeadlessError> {
-        self.index_of(window)?;
-        self.context.activate_window(window);
+        self.activate_window(window)?;
         self.context.set_viewport_size(size);
         self.context.request_window_rebuild();
         Ok(())
@@ -267,6 +370,14 @@ impl HeadlessApp {
         Ok(self.windows[self.index_of(window)?]
             .driver
             .focused_element())
+    }
+
+    fn activate_window(&mut self, window: WindowId) -> Result<usize, HeadlessError> {
+        // App code can close windows directly through app_context_mut().
+        self.sync_windows();
+        let index = self.index_of(window)?;
+        self.context.activate_window(window);
+        Ok(index)
     }
 
     fn index_of(&self, window: WindowId) -> Result<usize, HeadlessError> {

@@ -260,3 +260,132 @@ fn a_view_notified_outside_input_redraws_only_its_window() {
         before
     );
 }
+
+#[test]
+fn keyboard_focus_text_and_activation_stay_in_the_target_window() {
+    use rui::core::event::{KeyCode, KeyEvent, Modifiers};
+    use rui::core::text_editing::TextInputEvent;
+    use rui::elements::input;
+    use std::{cell::RefCell, rc::Rc};
+
+    // Deliberately reuse IDs: element identity is scoped to the window.
+    const FIELD: ElementId = ElementId(42_001);
+    const SAVE: ElementId = ElementId(42_002);
+    let mut app = headless_app();
+    let values = Rc::new(RefCell::new([String::new(), String::new()]));
+    let clicks = Rc::new(RefCell::new([0, 0]));
+    let windows = [0, 1].map(|index| {
+        let values = Rc::clone(&values);
+        let clicks = Rc::clone(&clicks);
+        app.open_window(WindowOptions::new().size(300.0, 200.0), move |_| {
+            let changed = Rc::clone(&values);
+            let clicked = Rc::clone(&clicks);
+            div()
+                .flex_col()
+                .child(
+                    input()
+                        .id(FIELD)
+                        .accessibility_label("Draft")
+                        .value(values.borrow()[index].clone())
+                        .on_change(move |value| changed.borrow_mut()[index] = value.to_owned()),
+                )
+                .child(
+                    Button::new("Save")
+                        .id(SAVE)
+                        .on_click(move || clicked.borrow_mut()[index] += 1),
+                )
+        })
+        .expect("open editor")
+    });
+    let [left, right] = windows;
+    let tab = KeyEvent::new(KeyCode::Tab, Modifiers::none());
+    let backtab = KeyEvent::new(KeyCode::Tab, Modifiers::shift());
+    let enter = KeyEvent::new(KeyCode::Enter, Modifiers::none());
+
+    assert!(app.frame().expect("settle both windows").is_empty());
+    let right_frames = app.frames_drawn(right).expect("right window");
+    assert!(app.dispatch_key_event(left, &tab).expect("left Tab"));
+    app.frame().expect("frame after left key");
+    assert_eq!(
+        app.frames_drawn(right).expect("right window"),
+        right_frames,
+        "a key in the left window must not redraw the idle right window"
+    );
+    assert_eq!(app.focused_element(left).unwrap(), Some(FIELD));
+    assert_eq!(app.focused_element(right).unwrap(), None);
+    assert!(
+        app.dispatch_text_input_event(left, &TextInputEvent::InsertText("left".into()))
+            .unwrap()
+    );
+    app.frame().expect("frame after left text");
+    assert_eq!(
+        app.frames_drawn(right).expect("right window"),
+        right_frames,
+        "text in the left window must not redraw the idle right window"
+    );
+    assert_eq!(*values.borrow(), ["left", ""]);
+
+    assert!(
+        app.dispatch_key_event(right, &backtab)
+            .expect("right reverse wrap")
+    );
+    assert_eq!(app.focused_element(right).unwrap(), Some(SAVE));
+    assert_eq!(app.focused_element(left).unwrap(), Some(FIELD));
+    assert!(app.dispatch_key_event(right, &enter).unwrap());
+    assert_eq!(*clicks.borrow(), [0, 1]);
+    assert!(
+        !app.dispatch_text_input_event(right, &TextInputEvent::InsertText("ignored".into()))
+            .unwrap()
+    );
+    assert_eq!(*values.borrow(), ["left", ""]);
+
+    assert!(app.dispatch_key_event(right, &backtab).unwrap());
+    assert!(
+        app.dispatch_text_input_event(right, &TextInputEvent::InsertText("右".into()))
+            .unwrap()
+    );
+    assert_eq!(*values.borrow(), ["left", "右"]);
+    assert!(app.dispatch_key_event(left, &tab).unwrap());
+    assert_eq!(app.focused_element(left).unwrap(), Some(SAVE));
+    assert_eq!(app.focused_element(right).unwrap(), Some(FIELD));
+    assert!(app.dispatch_key_event(left, &enter).unwrap());
+    assert_eq!(*clicks.borrow(), [1, 1]);
+    assert!(app.dispatch_key_event(left, &tab).unwrap());
+    assert_eq!(app.focused_element(left).unwrap(), Some(FIELD));
+
+    // Closing a focused text owner must not steal or clear the survivor's owner.
+    app.frame().expect("settle before closing");
+    let right_frames = app.frames_drawn(right).expect("surviving window");
+    assert!(app.app_context_mut().close_window(left));
+    assert!(app.dispatch_key_event(left, &tab).is_err());
+    assert!(
+        app.dispatch_text_input_event(left, &TextInputEvent::InsertText("closed".into()))
+            .is_err()
+    );
+    assert!(app.click(left, Point::new(5.0, 5.0)).is_err());
+    assert!(app.resize(left, Size::new(1.0, 1.0)).is_err());
+    app.frame()
+        .expect("frame after rejected closed-window events");
+    assert_eq!(
+        app.frames_drawn(right).expect("surviving window"),
+        right_frames
+    );
+    assert_eq!(*values.borrow(), ["left", "右"]);
+    assert_eq!(app.window_ids(), [right]);
+    assert!(app.app_context().is_running());
+    assert_eq!(app.focused_element(right).unwrap(), Some(FIELD));
+    assert!(
+        app.dispatch_text_input_event(right, &TextInputEvent::InsertText("!".into()))
+            .unwrap()
+    );
+    assert_eq!(*values.borrow(), ["left", "右!"]);
+    assert!(app.dispatch_key_event(right, &tab).unwrap());
+    assert!(app.dispatch_key_event(right, &enter).unwrap());
+    assert_eq!(*clicks.borrow(), [1, 2]);
+    assert!(app.dispatch_key_event(left, &tab).is_err());
+    assert!(
+        app.dispatch_text_input_event(left, &TextInputEvent::InsertText("closed".into()))
+            .is_err()
+    );
+    assert_eq!(*values.borrow(), ["left", "右!"]);
+}
