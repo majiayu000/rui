@@ -1,11 +1,13 @@
 //! Typed actions and keymap routing.
 
 mod dispatch;
+mod focus;
 mod keymap;
 mod router;
 mod types;
 
 pub(crate) use dispatch::{route_action, route_key_event};
+pub(crate) use focus::sync_focus;
 pub(crate) const ACCESSIBILITY_SCROLL_BACKWARD_ACTION: &str = "__rui_accessibility_scroll_backward";
 pub(crate) const ACCESSIBILITY_SCROLL_FORWARD_ACTION: &str = "__rui_accessibility_scroll_forward";
 pub(crate) const SYNC_ACCESSIBILITY_FOCUS_ACTION: &str = "__rui_sync_accessibility_focus";

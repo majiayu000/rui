@@ -171,6 +171,30 @@ A prompt dropped without an answer fails its task with `PromptDismissed`.
 Headless sessions take the waiting prompts with `take_path_prompts()` and
 answer each `PathPrompt` with `answer.send(..)`.
 
+#### Focus
+
+Tab and Shift-Tab move keyboard focus through enabled buttons, checkboxes,
+text fields, segmented controls, tab lists and menus in tree order, wrapping
+around, when the focused element does not take the key itself.
+
+App code moves focus with `cx.focus(id)` and `cx.blur()` and reads it with
+`cx.focused()`, on `AppContext` and `ViewContext`. A `FocusHandle` keeps an
+id for one element:
+
+```rust
+use rui::core::focus::FocusHandle;
+
+struct Search { field: FocusHandle }
+
+input().id(self.field.id()).accessibility_label("Search");
+div().on_click(cx.listener(|this, cx| this.field.focus(cx.app_mut())));
+```
+
+The change applies in the window's next frame: the old element's `on_blur`
+runs, then the new one's `on_focus`. `focused()` already reports a change
+that has been asked for. Focusing an id that is not in the window logs an
+error and changes nothing.
+
 ---
 
 ### Geometry Types

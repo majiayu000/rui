@@ -1,5 +1,6 @@
 //! View system - declarative UI components
 
+use crate::core::ElementId;
 use crate::core::app::AppContext;
 use crate::core::entity::{Entity, EntityId};
 use crate::core::geometry::Point;
@@ -225,6 +226,21 @@ impl<'a, T: 'static> ViewContext<'a, T> {
         directory: &Path,
     ) -> Task<Result<Option<PathBuf>, PromptDismissed>> {
         self.app.prompt_for_new_path(directory)
+    }
+
+    /// See [`AppContext::focus`].
+    pub fn focus(&mut self, id: ElementId) {
+        self.app.focus(id);
+    }
+
+    /// See [`AppContext::blur`].
+    pub fn blur(&mut self) {
+        self.app.blur();
+    }
+
+    /// See [`AppContext::focused`].
+    pub fn focused(&self) -> Option<ElementId> {
+        self.app.focused()
     }
 
     /// Create a notifier that can be moved into event callbacks.
