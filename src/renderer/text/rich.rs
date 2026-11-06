@@ -27,7 +27,8 @@ pub struct RichSpan {
     pub len: usize,
     pub font_size: f32,
     pub font_weight: u16,
-    pub font_family: Option<String>,
+    /// Shared, so the spans of one paragraph do not each copy it.
+    pub font_family: Option<Arc<str>>,
     pub line_height: f32,
 }
 

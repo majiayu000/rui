@@ -11,25 +11,56 @@ use crate::elements::element::{
 use crate::renderer::Primitive;
 use crate::renderer::text::{RichPieceText, RichSpan};
 use std::any::Any;
+use std::ops::Range;
+use std::sync::Arc;
 use taffy::prelude::*;
 
 /// A run of a [`StyledText`]: its text and the style properties it sets over
 /// what the paragraph inherits.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct TextSpan {
-    content: String,
+    content: SpanText,
     refinement: TextStyleRefinement,
+}
+
+/// A span's text: its own, or bytes of the text [`shared_styled_text`] shares.
+#[derive(Debug, Clone, PartialEq)]
+enum SpanText {
+    Own(String),
+    Bytes(Range<usize>),
+}
+
+impl Default for SpanText {
+    fn default() -> Self {
+        Self::Own(String::new())
+    }
 }
 
 /// A run of text for [`styled_text`].
 pub fn span(content: impl Into<String>) -> TextSpan {
     TextSpan {
-        content: content.into(),
+        content: SpanText::Own(content.into()),
+        refinement: TextStyleRefinement::default(),
+    }
+}
+
+/// A run of the bytes `bytes` of the text given to [`shared_styled_text`].
+pub fn span_range(bytes: Range<usize>) -> TextSpan {
+    TextSpan {
+        content: SpanText::Bytes(bytes),
         refinement: TextStyleRefinement::default(),
     }
 }
 
 impl TextSpan {
+    /// Bytes of the paragraph's text the span covers.
+    fn len(&self) -> usize {
+        match &self.content {
+            SpanText::Own(text) => text.len(),
+            SpanText::Bytes(bytes) => bytes.len(),
+        }
+    }
+
     pub fn color(mut self, color: impl Into<Color>) -> Self {
         self.refinement.color = Some(color.into());
         self
@@ -80,43 +111,122 @@ impl TextSpan {
 pub struct StyledText {
     id: Option<ElementId>,
     style: Style,
+    /// Every span as bytes of `content`, in order, covering it.
     spans: Vec<TextSpan>,
-    content: String,
+    content: Arc<str>,
     align: TextAlign,
     max_lines: Option<usize>,
-    /// Each span's style once inherited, set in layout.
-    resolved: Vec<TextStyle>,
+    /// The style the spans refine, set in layout.
+    inherited: TextStyle,
     lines: RichLines,
     layout_node: Option<NodeId>,
 }
 
 /// A paragraph of differently styled spans.
+///
+/// # Panics
+///
+/// When a span was made with [`span_range`]; those belong to
+/// [`shared_styled_text`].
 pub fn styled_text(spans: impl IntoIterator<Item = TextSpan>) -> StyledText {
-    let spans: Vec<TextSpan> = spans.into_iter().collect();
-    let content = spans.iter().map(|span| span.content.as_str()).collect();
-    StyledText {
-        id: None,
-        style: Style::new(),
-        spans,
-        content,
-        align: TextAlign::Left,
-        max_lines: None,
-        resolved: Vec::new(),
-        lines: RichLines::default(),
-        layout_node: None,
+    let mut content = String::new();
+    let spans = spans
+        .into_iter()
+        .map(|span| {
+            let start = content.len();
+            match &span.content {
+                SpanText::Own(text) => content.push_str(text),
+                SpanText::Bytes(bytes) => panic!(
+                    "span_range({bytes:?}) has no text of its own; place it with shared_styled_text"
+                ),
+            }
+            TextSpan {
+                content: SpanText::Bytes(start..content.len()),
+                refinement: span.refinement,
+            }
+        })
+        .collect();
+    StyledText::new(content.into(), spans)
+}
+
+/// A paragraph of spans made with [`span_range`] over one shared `text`, such
+/// as a line an editor keeps: the text is not copied, and spans need no text
+/// of their own.
+///
+/// # Panics
+///
+/// When the spans do not cover `text` in order, from its first byte to its
+/// last, each starting and ending on a character boundary, or when a span was
+/// made with [`span`].
+pub fn shared_styled_text(
+    text: impl Into<Arc<str>>,
+    spans: impl IntoIterator<Item = TextSpan>,
+) -> StyledText {
+    let text = text.into();
+    let mut end = 0;
+    let spans: Vec<TextSpan> = spans
+        .into_iter()
+        .inspect(|span| {
+            let SpanText::Bytes(bytes) = &span.content else {
+                panic!("shared_styled_text takes spans made with span_range, not span");
+            };
+            if bytes.start != end
+                || bytes.end < bytes.start
+                || !text.is_char_boundary(bytes.start)
+                || !text.is_char_boundary(bytes.end)
+            {
+                panic!(
+                    "span_range({bytes:?}) does not follow byte {end} of a {}-byte text on character boundaries",
+                    text.len()
+                );
+            }
+            end = bytes.end;
+        })
+        .collect();
+    if end != text.len() {
+        panic!(
+            "the spans of shared_styled_text cover {end} of its {} bytes",
+            text.len()
+        );
     }
+    StyledText::new(text, spans)
 }
 
 impl StyledText {
+    fn new(content: Arc<str>, spans: Vec<TextSpan>) -> Self {
+        Self {
+            id: None,
+            style: Style::new(),
+            spans,
+            content,
+            align: TextAlign::Left,
+            max_lines: None,
+            inherited: TextStyle::default(),
+            lines: RichLines::default(),
+            layout_node: None,
+        }
+    }
+
     pub fn id(mut self, id: ElementId) -> Self {
         self.id = Some(id);
         self
     }
 
     /// Add `span` after the others.
+    ///
+    /// # Panics
+    ///
+    /// When `span` was made with [`span_range`].
     pub fn span(mut self, span: TextSpan) -> Self {
-        self.content.push_str(&span.content);
-        self.spans.push(span);
+        let SpanText::Own(text) = &span.content else {
+            panic!("StyledText::span takes a span with its own text, made with span");
+        };
+        let start = self.content.len();
+        self.content = format!("{}{text}", self.content).into();
+        self.spans.push(TextSpan {
+            content: SpanText::Bytes(start..self.content.len()),
+            refinement: span.refinement,
+        });
         self
     }
 
@@ -178,30 +288,37 @@ impl Element for StyledText {
         };
         self.id == previous.id
             && self.spans == previous.spans
+            && self.content == previous.content
             && self.style == previous.style
             && self.align == previous.align
             && self.max_lines == previous.max_lines
     }
 
     fn layout(&mut self, cx: &mut LayoutContext) -> NodeId {
-        let inherited = cx.text_style();
-        self.resolved = self
-            .spans
-            .iter()
-            .map(|span| inherited.refined(&span.refinement))
-            .collect();
+        self.inherited = cx.text_style().clone();
+        let inherited = &self.inherited;
+        // Copied once for every span that does not set its own.
+        let inherited_family: Option<Arc<str>> = inherited.font_family.as_deref().map(Arc::from);
         let request = RichWrapRequest {
-            content: self.content.clone(),
+            content: Arc::clone(&self.content),
             spans: self
                 .spans
                 .iter()
-                .zip(&self.resolved)
-                .map(|(span, style)| RichSpan {
-                    len: span.content.len(),
-                    font_size: style.font_size,
-                    font_weight: style.font_weight.to_value(),
-                    font_family: style.font_family.clone(),
-                    line_height: style.line_height,
+                .map(|span| {
+                    let refinement = &span.refinement;
+                    RichSpan {
+                        len: span.len(),
+                        font_size: refinement.font_size.unwrap_or(inherited.font_size),
+                        font_weight: refinement
+                            .font_weight
+                            .unwrap_or(inherited.font_weight)
+                            .to_value(),
+                        font_family: match &refinement.font_family {
+                            Some(family) => Some(Arc::from(family.as_str())),
+                            None => inherited_family.clone(),
+                        },
+                        line_height: refinement.line_height.unwrap_or(inherited.line_height),
+                    }
                 })
                 .collect(),
             max_lines: self.max_lines,
@@ -232,7 +349,8 @@ impl Element for StyledText {
                 TextAlign::Right => bounds.width() - line.width,
             };
             for piece in &line.pieces {
-                let style = &self.resolved[piece.span];
+                let refinement = &self.spans[piece.span].refinement;
+                let inherited = &self.inherited;
                 let content = match &piece.text {
                     RichPieceText::Content(bytes) => self.content[bytes.clone()].to_string(),
                     RichPieceText::Ellipsis => "\u{2026}".to_string(),
@@ -245,11 +363,18 @@ impl Element for StyledText {
                         piece.height,
                     ),
                     content,
-                    color: style.color.to_rgba(),
-                    font_size: style.font_size,
-                    font_weight: style.font_weight.to_value(),
-                    font_family: style.font_family.clone(),
-                    line_height: style.line_height,
+                    color: refinement.color.unwrap_or(inherited.color).to_rgba(),
+                    font_size: refinement.font_size.unwrap_or(inherited.font_size),
+                    font_weight: refinement
+                        .font_weight
+                        .unwrap_or(inherited.font_weight)
+                        .to_value(),
+                    font_family: refinement
+                        .font_family
+                        .as_ref()
+                        .or(inherited.font_family.as_ref())
+                        .cloned(),
+                    line_height: refinement.line_height.unwrap_or(inherited.line_height),
                     align: TextAlign::Left,
                 });
             }

@@ -98,7 +98,7 @@ pub(crate) type RichLines = Rc<RefCell<Option<Arc<RichWrapped>>>>;
 /// What a rich text leaf needs to be measured at any width.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct RichWrapRequest {
-    pub(crate) content: String,
+    pub(crate) content: Arc<str>,
     pub(crate) spans: Vec<RichSpan>,
     pub(crate) max_lines: Option<usize>,
 }

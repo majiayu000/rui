@@ -51,8 +51,8 @@ to Metal without waiting for the GPU.
 | `resize_full` | the 2000-row list | width alternates 1440 / 1280 | new viewport size | `window.resize` + `window.bounds_changed`, as the platform resize callback does |
 | `resize_virtual` | the 1000-row virtual list | width alternates 1440 / 1280 | same | same |
 | `startup` | the 2000-row list | none | see below | see below |
-| `editor_scroll` | a 10 000-line code view: 20 px lines of 13 px SF Mono, a 64 px gutter of line numbers, 11 colored tokens per line (a comment every ninth line), the cursor's line highlighted; starts at line 5001 | scrolls down one line; the cursor moves with it | `virtual_list` of rows: gutter `text` + `styled_text` of `span(..).color(..)` | `uniform_list` of rows: gutter string + `StyledText::with_highlights` |
-| `editor_edit` | same, not scrolling | the cursor line's first identifier ends in a new letter | the line's tokens change in place | the line's tokens change and its `SharedString` and highlights are rebuilt |
+| `editor_scroll` | a 10 000-line code view: 20 px lines of 13 px SF Mono, a 64 px gutter of line numbers, 11 colored tokens per line (a comment every ninth line), the cursor's line highlighted; starts at line 5001 | scrolls down one line; the cursor moves with it | `virtual_list` of rows: gutter `text` + `shared_styled_text` of `span_range(..).color(..)` over the line's `Arc<str>` (the editor run below used `styled_text` of `span(..)`, a `String` per token) | `uniform_list` of rows: gutter string + `StyledText::with_highlights` |
+| `editor_edit` | same, not scrolling | the cursor line's first identifier ends in a new letter | the line's tokens change and its `Arc<str>` and ranges are rebuilt | the line's tokens change and its `SharedString` and highlights are rebuilt |
 
 The editor cases use the same font file on both sides,
 `/System/Library/Fonts/SFNSMono.ttf`. RUI calls it "SF Mono"; Core Text hides it from
