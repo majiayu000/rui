@@ -258,6 +258,23 @@ Why scrolling costs RUI twice what an edit does: in a sample of `editor_scroll`,
 on every span. Another ~4% is `FrameLru::evict`, which sorts the whole measure cache
 each frame once new lines keep arriving. Neither is fixed here.
 
+### After the text follow-ups (#260 and shared spans)
+
+This run is on main plus #253, #256, #260 and the shared-spans change, with the editor
+fixture's RUI side using `shared_styled_text`. Three rounds, load average 33–35.
+
+| Case | Side | Instructions (M) / frame | Allocations / frame | Verdict by instructions |
+|---|---|---|---|---|
+| editor_scroll | RUI | 5.62–5.64 (was 7.79–7.80) | 2 819 (was 4 456) | RUI ahead 1.5x (was 1.1x) |
+| editor_scroll | GPUI | 8.48–8.76 | 1 636–1 638 | |
+| editor_edit | RUI | 2.60–2.67 (was 3.57–3.60) | 1 667 (was 3 283) | RUI ahead 3.3x (was 2.4x) |
+| editor_edit | GPUI | 8.49–8.68 | 1 636 | |
+
+- **Edit:** allocations are now level with GPUI's (1.02x).
+- **Scroll:** still 1.7x GPUI's allocations. Each `Primitive::Text` the renderer
+  receives owns its piece's text and family name, which is renderer work left to lane G.
+  Measuring the line that scrolls in also allocates.
+
 ## Run on `ec7660d` (before the remaining lanes)
 
 Apple M2 Max (12 cores, 96 GB), macOS 26.5.2. RUI `ec7660d` (main, with the text caches
