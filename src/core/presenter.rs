@@ -377,13 +377,20 @@ where
 
     /// Lays the presented tree out and stores the resulting root bounds.
     pub fn layout(&mut self, viewport_size: Size) -> Result<Bounds, FramePipelineError> {
-        let root_bounds = FramePipeline::layout_root_retained(
+        let root_bounds = FramePipeline::layout_root_retained_with_focus(
             &mut self.root,
             &mut self.taffy,
             &mut self.layout_nodes,
             &mut self.text_measurer,
             viewport_size,
+            &mut self.focused_element,
         )?;
+        if self
+            .focused_element
+            .is_some_and(|id| !self.root.contains_id(id))
+        {
+            self.focused_element = None;
+        }
         self.scene_dirty = true;
         self.root_bounds = root_bounds;
         self.laid_out_viewport = viewport_size;

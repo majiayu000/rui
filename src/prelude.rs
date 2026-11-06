@@ -34,3 +34,5 @@ pub use crate::advanced_ui;
 pub use crate::advanced_ui::{Button, ControlSize, ControlVariant, Theme, button};
 
 pub use std::time::Duration;
+
+pub use crate::elements::{VariableList, VariableListHandle, variable_list};

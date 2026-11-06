@@ -15,6 +15,7 @@ fn next_layout_epoch() -> u64 {
 pub struct LayoutContext<'a> {
     pub(crate) taffy: &'a mut TaffyTree<ElementId>,
     pub(crate) available_space: Size,
+    pub(crate) focused: Option<ElementId>,
     text_measurer: LayoutTextMeasurer<'a>,
     pub(super) retained: Option<RetainedPass<'a>>,
     /// Text style inherited by the element being laid out. Shared, so layout
@@ -225,6 +226,7 @@ impl<'a> LayoutContext<'a> {
         Self {
             taffy,
             available_space,
+            focused: None,
             text_measurer,
             retained,
             text_style: Rc::default(),
@@ -278,6 +280,27 @@ impl<'a> LayoutContext<'a> {
         available_space: taffy::Size<AvailableSpace>,
     ) -> taffy::TaffyResult<()> {
         let kept = self.retained.take().map(|pass| pass.finish(self.taffy));
+        self.compute_subtree(root, available_space)?;
+        let measurer = match &mut self.text_measurer {
+            LayoutTextMeasurer::Owned(cache) => cache,
+            LayoutTextMeasurer::Borrowed(cache) => &mut **cache,
+        };
+        for (node, text) in &self.measured_text {
+            text.break_lines(measurer, self.taffy.unrounded_layout(*node).size.width);
+        }
+        if let Some(kept) = kept {
+            kept.measured_text = std::mem::take(&mut self.measured_text);
+        }
+        Ok(())
+    }
+
+    /// Measure a subtree without ending the retained pass. Final root layout
+    /// remains responsible for reclamation and final wrapped-text geometry.
+    pub(crate) fn compute_subtree(
+        &mut self,
+        root: NodeId,
+        available_space: taffy::Size<AvailableSpace>,
+    ) -> taffy::TaffyResult<()> {
         let measured = &self.measured_text;
         if measured.is_empty() {
             self.taffy.compute_layout(root, available_space)?;
@@ -305,15 +328,6 @@ impl<'a> LayoutContext<'a> {
                     }
                 },
             )?;
-            // Break each text at its final width; the unrounded one is what
-            // the measure above saw.
-            for (node, text) in measured {
-                let width = self.taffy.unrounded_layout(*node).size.width;
-                text.break_lines(measurer, width);
-            }
-        }
-        if let Some(kept) = kept {
-            kept.measured_text = std::mem::take(&mut self.measured_text);
         }
         Ok(())
     }

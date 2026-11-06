@@ -92,6 +92,16 @@ pub fn reconcile(next: &mut dyn Element, previous: &mut dyn Element) -> bool {
     if kind == TypeId::of::<crate::elements::ViewElement>() {
         return props;
     }
+    if kind == TypeId::of::<crate::elements::VariableList>() {
+        let next = (next as &mut dyn std::any::Any)
+            .downcast_mut::<crate::elements::VariableList>()
+            .unwrap();
+        let previous = (previous as &mut dyn std::any::Any)
+            .downcast_mut::<crate::elements::VariableList>()
+            .unwrap();
+        next.take_rows_from(previous);
+        return false;
+    }
     let (children, old_children) = (next.children_mut(), previous.children_mut());
     // Children are paired whether or not the props match, so the ones that
     // match are kept either way.

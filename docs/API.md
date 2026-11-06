@@ -876,3 +876,40 @@ Border radius for each corner.
 let corners = Corners::all(8.0);
 let corners = Corners::new(tl: 8.0, tr: 8.0, br: 0.0, bl: 0.0);
 ```
+
+### Variable-height lists
+
+```rust
+use rui::prelude::*;
+let handle = VariableListHandle::new(); // retain in your view
+let rows = variable_list(&handle, (1..1000).map(ElementId::from), |id| {
+    div().flex_col().p(8.0).child(text(format!("Log {}: wrapped content", id.0)).wrap())
+}).w(420.0).h(300.0);
+handle.invalidate(ElementId::from(12u64));
+handle.scroll_to_item(ElementId::from(500u64));
+```
+
+IDs must be unique stable `ElementId`s and rows must measure to a finite positive
+height. Explicit finite positive width and height are required; there is no
+`w_full`/`h_full` contract. Keep one handle per list. Content changes require
+`invalidate(id)` and a subsequent layout/frame request. Width changes remeasure
+the visible neighborhood. Prepending, appending, and changing earlier row heights
+preserve the surviving anchor ID and intra-item pixel offset; deleting it picks
+the next surviving old successor, then predecessor. Appending does not follow the
+bottom. `scroll_to_item` aligns the ID to the top without building intermediate
+rows. Item jumps and resize/data edits preserve the item anchor even when the
+remaining tail becomes shorter than the viewport and leaves space below; ordinary
+pixel/wheel scrolling fills the measured tail. `anchor()` reports its ID and pixel offset; `offset()` and
+`estimated_total_height()` include estimates for unmeasured rows.
+
+Building/measuring is bounded by the visible neighborhood plus 80px overscan and
+one focused row; metadata work remains O(N). A focused editor remains mounted
+when scrolled offscreen; explicit invalidation cancels its composition, clears focus, and rebuilds it. Deleting it
+cancels active composition before removal. A new handle on the same reconciled list rebuilds rows and cancels old
+composition. During editing, keep the nested list and its ancestors present with
+stable container IDs: whole-list/ancestor unmount or keyed nested-list identity
+replacement is outside this row-virtualization cancellation contract. Custom editors must honor
+`CancelComposition`. Native IME candidate behavior is not verified by headless
+layout tests. See [the contract](specs/variable-height-list.md) and
+`cargo run --example variable_list`. Existing equal-height `VirtualList` remains
+available independently.
