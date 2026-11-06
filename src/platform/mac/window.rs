@@ -218,6 +218,14 @@ impl MacWindow {
         event: &NSEvent,
         events: &mut Vec<MacWindowEvent>,
     ) -> Result<bool, PlatformWindowError> {
+        // File drags are recorded while AppKit runs the poll; each one posts
+        // a wake to this window, which lands here.
+        events.extend(
+            self.content_view
+                .drain_file_drags()
+                .into_iter()
+                .map(MacWindowEvent::FileDrag),
+        );
         let event_type = event.r#type();
         if event_type == NSEventType::ApplicationDefined {
             match application_event(event.data1()) {

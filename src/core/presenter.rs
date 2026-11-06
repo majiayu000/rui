@@ -3,6 +3,7 @@ use crate::core::accessibility::{
     AccessibilityAnnouncement, AccessibilityContext, AccessibilityError, AccessibilityTree,
 };
 use crate::core::app::AppContext;
+use crate::core::drag::SharedDrag;
 use crate::core::event::Event;
 use crate::core::frame_pipeline::FrameStageDurations;
 use crate::core::frame_pipeline::{FramePipeline, FramePipelineError};
@@ -14,7 +15,10 @@ use crate::renderer::RendererDiagnostics;
 use crate::renderer::Scene;
 use crate::renderer::text::TextMeasureCache;
 use std::collections::HashMap;
+use std::rc::Rc;
 use taffy::prelude::TaffyTree;
+
+mod drag;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct PresenterFrame {
@@ -61,6 +65,7 @@ pub struct Presenter<E = ()> {
     last_frame: Option<PresenterFrame>,
     /// Only while the profiling overlay is on.
     devtools: Option<Box<WindowDevtools>>,
+    drag: SharedDrag,
 }
 
 impl<E> Presenter<E> {
@@ -90,6 +95,7 @@ impl<E> Presenter<E> {
             },
             last_frame: None,
             devtools: None,
+            drag: SharedDrag::default(),
         }
     }
 
@@ -361,6 +367,7 @@ where
             self.root_bounds,
             self.laid_out_viewport,
         );
+        self.paint_drag_preview();
         self.prepared_frame = PresenterFrame {
             viewport_size: self.laid_out_viewport,
             root_bounds: self.root_bounds,
@@ -406,6 +413,7 @@ where
     ) -> (R, bool) {
         let mut event_cx =
             EventContext::new(self.root_bounds, &self.taffy, &mut self.focused_element);
+        event_cx.set_drag(Rc::clone(&self.drag));
         let value = dispatch(&mut self.root, &mut event_cx);
         let redraw_requested = event_cx.redraw_requested();
         let announcements = event_cx.take_accessibility_announcements();
@@ -421,18 +429,20 @@ where
         let hit_target = self.hit_test(event.position);
         let dispatch_target = self.pointer_dispatch_target(hit_target);
         let previous_target = self.previous_pointer_target(event.kind);
+        let preview_moved = self.drag_follow_pointer(event);
 
         let (stopped, redraw_requested) = self.with_event_context(|root, event_cx| {
             event_cx.set_hit_target(dispatch_target);
             event_cx.set_previous_hit_target(previous_target);
             root.dispatch_pointer_event(event_cx, event).is_stopped()
         });
+        let preview_ended = self.drag_end_on_release(event);
 
         self.update_pointer_tracking(event.kind, stopped, dispatch_target, hit_target);
 
         PointerDispatch {
             stopped,
-            redraw_requested,
+            redraw_requested: redraw_requested || preview_moved || preview_ended,
         }
     }
 
