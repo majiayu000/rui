@@ -174,6 +174,14 @@ impl Keymap {
             .map(|(_, action)| action)
     }
 
+    /// The first chord bound to `action`, as a menu item shows it.
+    pub fn chord_for_action(&self, action: &ActionId) -> Option<KeyChord> {
+        self.bindings
+            .iter()
+            .find(|(_, bound)| bound == action)
+            .map(|(chord, _)| *chord)
+    }
+
     pub fn action_for_event(&self, event: &KeyEvent) -> Option<&ActionId> {
         self.action_for_chord(KeyChord::from(event))
     }

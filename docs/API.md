@@ -118,6 +118,36 @@ let pasted = cx.read_from_clipboard()?.map(|item| item.text().to_owned());
 it on the `Copy` / `Cut` / `Paste` standard actions, bound to Cmd+C / Cmd+X /
 Cmd+V in the standard keymap.
 
+#### Menus
+
+`cx.set_menus` sets the application menu bar from a tree of `Menu`s whose
+items run actions. Choosing an item routes its action like a key binding: to
+the focused element, then the app's action handlers. Each item shows the
+keymap shortcut bound to its action.
+
+```rust
+use rui::core::menu::{Menu, MenuAction};
+
+cx.set_menus(vec![
+    Menu::new("App").item(MenuAction::new("Quit", ActionId::custom("app.quit"))),
+    Menu::new("Edit")
+        .item(MenuAction::new("Copy", StandardAction::Copy))
+        .item(MenuAction::new("Paste", StandardAction::Paste).enabled(can_paste))
+        .separator()
+        .submenu(Menu::new("View").item(MenuAction::new("Wrap", wrap).checked(self.wrap))),
+]);
+
+div().on_context_menu(cx.listener_with(|_, position, cx| {
+    cx.show_context_menu(Menu::new("Card").item(MenuAction::new("Delete", delete)), position)
+}))
+```
+
+A render may call `set_menus` every time; the bar is rebuilt only when it
+changed. On macOS the first menu is the application menu. A right press runs
+`Div::on_context_menu` and neither clicks nor starts a drag. Headless sessions
+choose items with `choose_menu_item(&menu, label)` and read requested context
+menus with `take_context_menu()`.
+
 ---
 
 ### Geometry Types

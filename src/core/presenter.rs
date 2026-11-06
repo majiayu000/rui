@@ -19,6 +19,7 @@ use std::rc::Rc;
 use taffy::prelude::TaffyTree;
 
 mod drag;
+mod menus;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct PresenterFrame {
