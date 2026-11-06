@@ -12,8 +12,7 @@
 //! 3. **Renderer Adapter** - Backend-neutral scenes to GPU or recording targets
 //! 4. **Platform Adapter** - Native windows, events, clipboard, DPI, targets
 //!
-//! See `docs/runtime-architecture-foundation.md` for the runtime boundary
-//! design.
+//! See `docs/ARCHITECTURE.md` for the architecture.
 //!
 //! # Example
 //!

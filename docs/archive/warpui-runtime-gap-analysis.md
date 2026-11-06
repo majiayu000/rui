@@ -1,3 +1,5 @@
+> Archived 2026-11-06: the issue #87 comparison with WarpUI, superseded by the shipped runtime described in [ARCHITECTURE.md](../ARCHITECTURE.md).
+
 # WarpUI Runtime Gap Analysis
 
 This document tracks the runtime gaps behind issue #87. It uses public Warp

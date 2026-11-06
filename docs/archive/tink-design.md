@@ -1,3 +1,5 @@
+> Archived 2026-11-06: design notes for a separate terminal UI framework; RUI no longer has terminal support.
+
 # Tink - Terminal Ink for Rust
 
 > A GPU-less, terminal-native UI framework inspired by [ink](https://github.com/vadimdemedes/ink)

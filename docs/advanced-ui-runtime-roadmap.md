@@ -8,12 +8,11 @@ are made.
 
 Related runtime planning docs:
 
-- [Runtime architecture foundation](runtime-architecture-foundation.md) defines
-  the canonical RUI runtime boundaries and source-of-truth map.
-- [WarpUI runtime gap analysis](warpui-runtime-gap-analysis.md) compares the
+- [Architecture](ARCHITECTURE.md) describes the runtime boundaries as built.
+- [WarpUI runtime gap analysis](archive/warpui-runtime-gap-analysis.md) compares the
   current RUI baseline with public WarpUI runtime anchors and maps the remaining
   gaps to owning issues.
-- [WarpUI-aligned runtime implementation spec](warpui-runtime-implementation-spec.md)
+- [WarpUI-aligned runtime implementation spec](archive/warpui-runtime-implementation-spec.md)
   defines the implementation rules, workstream order, and validation policy for
   issue #87 and its child issues.
 
@@ -42,7 +41,7 @@ Related runtime planning docs:
 
 The target runtime keeps the current layering and strengthens the contracts
 between layers. The canonical boundary design lives in
-`docs/runtime-architecture-foundation.md`; this roadmap tracks maturity gates
+`docs/ARCHITECTURE.md`; this roadmap tracks maturity gates
 and workstream order.
 
 | Layer | Contract |

@@ -12,7 +12,7 @@ runtime claims.
 
 - Define the product-facing readiness contract for post-foundation runtime work.
 - Keep `Presenter` and `FramePipeline` work aligned with
-  `docs/runtime-architecture-foundation.md`.
+  `docs/archive/runtime-architecture-foundation.md`.
 - Keep unsupported platform, renderer, accessibility, and dogfood gaps explicit.
 - Link every child issue back to a concrete validation command and acceptance
   surface.
@@ -36,7 +36,7 @@ runtime claims.
 - `#124` extracts a shared `FramePipeline` or explicitly models native/headless
   differences.
 - Runtime readiness language remains consistent with
-  `docs/runtime-architecture-foundation.md` and
+  `docs/archive/runtime-architecture-foundation.md` and
   `docs/advanced-ui-runtime-roadmap.md`.
 
 ## Done When

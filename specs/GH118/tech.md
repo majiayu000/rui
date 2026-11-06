@@ -2,7 +2,7 @@
 
 ## Source Of Truth
 
-- `docs/runtime-architecture-foundation.md` owns the runtime boundary.
+- `docs/archive/runtime-architecture-foundation.md` owns the runtime boundary.
 - `docs/advanced-ui-runtime-roadmap.md` owns maturity gates and verification
   language.
 - `docs/platform-window-boundary.md` owns platform backend readiness behavior.
