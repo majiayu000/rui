@@ -4,10 +4,13 @@
 //! the stored key, so a hit allocates nothing. Every access stamps the entry with
 //! a tick. [`FrameLru::begin_frame`] trims the map back to its target size, but
 //! only from entries older than the previous frame, so text that is still on
-//! screen is never evicted for being numerous. The hard limits hold at all times:
-//! past them the least recently used entries go, whatever frame used them.
+//! screen is never evicted for being numerous. A trim goes below the target by
+//! an eighth, so text that keeps arriving, as in a scrolling view, is trimmed
+//! every few hundred entries rather than every frame. The hard limits hold at
+//! all times: past them the least recently used entries go, whatever frame used
+//! them.
 
-use std::collections::HashMap;
+use super::hash::FastMap;
 
 struct Slot<K, V> {
     key: K,
@@ -17,7 +20,8 @@ struct Slot<K, V> {
 }
 
 pub(super) struct FrameLru<K, V> {
-    entries: HashMap<u64, Slot<K, V>>,
+    /// By the key's hash, which the map uses as it is.
+    entries: FastMap<u64, Slot<K, V>>,
     bytes: usize,
     tick: u64,
     /// First tick of the frame in progress.
@@ -36,7 +40,7 @@ impl<K, V> FrameLru<K, V> {
         max_bytes: usize,
     ) -> Self {
         Self {
-            entries: HashMap::new(),
+            entries: FastMap::default(),
             bytes: 0,
             tick: 0,
             frame_start: 0,
@@ -69,11 +73,16 @@ impl<K, V> FrameLru<K, V> {
         self.bytes = 0;
     }
 
-    /// Trim to the target size from entries no frame since the previous one used.
+    /// Past the target size, trim to an eighth below it, from entries no frame
+    /// since the previous one used.
     pub(super) fn begin_frame(&mut self) {
         let previous_frame = self.frame_start;
         if self.entries.len() > self.target_entries || self.bytes > self.target_bytes {
-            self.evict(self.target_entries, self.target_bytes, previous_frame);
+            self.evict(
+                self.target_entries - self.target_entries / 8,
+                self.target_bytes - self.target_bytes / 8,
+                previous_frame,
+            );
         }
         self.frame_start = self.tick;
     }
@@ -193,6 +202,26 @@ mod tests {
         for key in 2..6 {
             assert!(touch(&mut cache, key), "{key} was used most recently");
         }
+    }
+
+    #[test]
+    fn text_that_keeps_arriving_is_trimmed_every_few_frames() {
+        let mut cache: FrameLru<u64, ()> = FrameLru::new(16, usize::MAX, 64, usize::MAX);
+        for key in 0..20 {
+            touch(&mut cache, key);
+        }
+        cache.begin_frame();
+        cache.begin_frame();
+        assert_eq!(cache.len(), 14, "an eighth below the target");
+        // One new entry per frame, as a view scrolling a line at a time.
+        for key in 20..22 {
+            touch(&mut cache, key);
+            cache.begin_frame();
+            assert_eq!(cache.len(), key as usize - 5, "under the target: no trim");
+        }
+        touch(&mut cache, 22);
+        cache.begin_frame();
+        assert_eq!(cache.len(), 14, "past the target: trimmed again");
     }
 
     #[test]

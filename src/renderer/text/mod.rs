@@ -12,12 +12,13 @@ use crate::renderer::system_fonts::{
 use crate::renderer::text_shaping::{
     ShapedParts, TextShapingFont, best_face, rasterize_with_plan, shape_parts, shape_with_fonts,
 };
-use std::collections::hash_map::DefaultHasher;
+use hash::FastHasher;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 mod atlas;
+mod hash;
 mod lru;
 mod rich;
 mod wrap;
@@ -128,8 +129,8 @@ impl TextMeasureKey {
             && self.font_family == resolved_family
     }
 
-    fn hasher(&self) -> DefaultHasher {
-        let mut hasher = DefaultHasher::new();
+    fn hasher(&self) -> FastHasher {
+        let mut hasher = FastHasher::default();
         self.content.hash(&mut hasher);
         self.size_bits.hash(&mut hasher);
         self.line_height_bits.hash(&mut hasher);
@@ -144,8 +145,8 @@ impl TextMeasureKey {
 }
 
 /// Hashes like [`TextMeasureKey::hasher`] without copying the text.
-fn request_hasher(request: &TextRequest<'_>, resolved_family: &str) -> DefaultHasher {
-    let mut hasher = DefaultHasher::new();
+fn request_hasher(request: &TextRequest<'_>, resolved_family: &str) -> FastHasher {
+    let mut hasher = FastHasher::default();
     request.content.hash(&mut hasher);
     request.font_size.to_bits().hash(&mut hasher);
     request.line_height.to_bits().hash(&mut hasher);

@@ -131,3 +131,138 @@ fn scrolling_past_either_end_is_not_handled() {
     let (mut session, _, _) = mount(50, &handle);
     assert!(!scroll(&mut session, -10.0));
 }
+
+/// The scrollbar's track and thumb, as painted: quads along the list's right
+/// edge, the 200 px list's x 192 to 200.
+fn scrollbar(session: &Session) -> Option<(rui::Bounds, rui::Bounds)> {
+    let quads: Vec<rui::Bounds> = session
+        .primitives()
+        .iter()
+        .filter_map(|primitive| match primitive {
+            rui::renderer::Primitive::Quad { bounds, .. }
+                if bounds.x() == 192.0 && bounds.width() == 8.0 =>
+            {
+                Some(*bounds)
+            }
+            _ => None,
+        })
+        .collect();
+    match quads.as_slice() {
+        [] => None,
+        [track, thumb] => Some((*track, *thumb)),
+        other => panic!("unexpected scrollbar quads: {other:?}"),
+    }
+}
+
+fn press(session: &mut Session, position: Point) {
+    assert!(session.pointer_down(position));
+}
+
+#[test]
+fn the_scrollbar_shows_position_and_size_and_hides_when_rows_fit() {
+    let handle = VirtualListHandle::new();
+    let (mut session, _, _) = mount(40, &handle);
+    // 200 px of 800: the thumb is a quarter of the track, at the top.
+    let (track, thumb) = scrollbar(&session).expect("rows overflow");
+    assert_eq!((track.y(), track.height()), (0.0, 200.0));
+    assert_eq!((thumb.y(), thumb.height()), (0.0, 50.0));
+
+    handle.scroll_to(300.0);
+    session.frame().expect("frame");
+    let (_, thumb) = scrollbar(&session).expect("rows overflow");
+    // 300 of 600 scrolled: halfway along the 150 px the thumb can travel.
+    assert_eq!(thumb.y(), 75.0);
+
+    let (session, _, _) = mount(5, &VirtualListHandle::new());
+    assert!(scrollbar(&session).is_none(), "five rows fit");
+}
+
+#[test]
+fn a_long_list_keeps_a_thumb_that_can_be_grabbed() {
+    let handle = VirtualListHandle::new();
+    let (mut session, _, _) = mount(100_000, &handle);
+    let (_, thumb) = scrollbar(&session).expect("rows overflow");
+    assert_eq!(thumb.height(), 20.0, "a tenth of the track at least");
+
+    // Dragging the thumb to the bottom reaches the last row.
+    press(&mut session, Point::new(196.0, 5.0));
+    session.pointer_move(Point::new(196.0, 400.0));
+    session.pointer_up(Point::new(196.0, 400.0));
+    session.frame().expect("frame");
+    assert_eq!(handle.offset(), 100_000.0 * ROW - 200.0);
+    assert!(has_row(&session, 99_999));
+}
+
+#[test]
+fn dragging_the_thumb_scrolls_and_clicks_no_row() {
+    let handle = VirtualListHandle::new();
+    let (mut session, _, clicked) = mount(40, &handle);
+    // Take the 50 px thumb 10 px from its top and move it down 75 px.
+    press(&mut session, Point::new(196.0, 10.0));
+    assert!(handle.is_dragging());
+    session.pointer_move(Point::new(196.0, 85.0));
+    session.frame().expect("frame while dragging");
+    assert_eq!(handle.offset(), 300.0);
+    let (_, thumb) = scrollbar(&session).expect("rows overflow");
+    assert_eq!(thumb.y(), 75.0, "the thumb follows the pointer");
+
+    // The drag goes on outside the list, and ends at the release.
+    session.pointer_move(Point::new(300.0, 500.0));
+    assert_eq!(handle.offset(), 600.0);
+    session.pointer_up(Point::new(300.0, 500.0));
+    assert!(!handle.is_dragging());
+    session.pointer_move(Point::new(196.0, 10.0));
+    assert_eq!(handle.offset(), 600.0);
+    assert_eq!(clicked.get(), None);
+}
+
+#[test]
+fn a_press_on_the_track_moves_a_page_toward_it() {
+    let handle = VirtualListHandle::new();
+    let (mut session, _, clicked) = mount(40, &handle);
+    press(&mut session, Point::new(196.0, 150.0));
+    session.pointer_up(Point::new(196.0, 150.0));
+    session.frame().expect("frame");
+    assert_eq!(handle.offset(), 200.0);
+    assert!(has_row(&session, 15));
+
+    // Above the thumb, now at 50 to 100: back a page.
+    press(&mut session, Point::new(196.0, 20.0));
+    session.pointer_up(Point::new(196.0, 20.0));
+    session.frame().expect("frame");
+    assert_eq!(handle.offset(), 0.0);
+    assert_eq!(clicked.get(), None, "the rows under the track see nothing");
+
+    // Left of the track, the row gets the click.
+    press(&mut session, Point::new(100.0, 30.0));
+    session.pointer_up(Point::new(100.0, 30.0));
+    assert_eq!(clicked.get(), Some(1));
+}
+
+#[test]
+fn scroll_to_item_moves_as_little_as_it_needs() {
+    let handle = VirtualListHandle::new();
+    let (mut session, _, _) = mount(1_000, &handle);
+
+    // Below the view: the row comes to its bottom.
+    handle.scroll_to_item(500);
+    session.frame().expect("frame");
+    assert_eq!(handle.offset(), 501.0 * ROW - 200.0);
+    assert!(has_row(&session, 500));
+
+    // Already in view: nothing moves.
+    handle.scroll_to_item(495);
+    session.frame().expect("frame");
+    assert_eq!(handle.offset(), 501.0 * ROW - 200.0);
+
+    // Above the view: the row comes to its top.
+    handle.scroll_to_item(10);
+    session.frame().expect("frame");
+    assert_eq!(handle.offset(), 10.0 * ROW);
+
+    // Past the end: the last row.
+    handle.scroll_to_item(5_000);
+    session.frame().expect("frame");
+    assert_eq!(handle.offset(), 1_000.0 * ROW - 200.0);
+    assert!(has_row(&session, 999));
+}

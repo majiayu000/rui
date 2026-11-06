@@ -21,10 +21,12 @@ pub(crate) use image::fit_bounds;
 pub use image::{Image, ImageFit, ImageSource, image};
 pub use input::{Input, InputType, input};
 pub use list::{List, ListItem, ListStyle, list, ordered_list, unordered_list};
-pub use scroll_view::{ScrollDirection, ScrollView, scroll_view};
+pub use scroll_view::{ScrollDirection, ScrollView, ScrollbarVisibility, scroll_view};
 pub use spinner::{Spinner, SpinnerType, spinner};
 pub use table::{Table, TableCell, TableRow, cell, header_row, row, table};
-pub use text::{StyledText, Text, TextSpan, span, styled_text, text};
+pub use text::{
+    StyledText, Text, TextSpan, shared_styled_text, span, span_range, styled_text, text,
+};
 pub use text_area::{TextArea, TextAreaState, text_area};
 pub use view_element::{ViewElement, view};
 pub use virtual_list::{VirtualList, VirtualListHandle, virtual_list};

@@ -27,7 +27,7 @@ pub use crate::core::{
 pub use crate::elements::{
     Canvas, Div, Element, EventResult, Image, ImageFit, Input, InputType, IntoElement, Render,
     ScrollDirection, ScrollView, StyledText, Text, TextArea, TextAreaState, TextSpan, canvas, div,
-    image, input, scroll_view, span, styled_text, text, text_area,
+    image, input, scroll_view, shared_styled_text, span, span_range, styled_text, text, text_area,
 };
 
 pub use crate::advanced_ui;

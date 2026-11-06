@@ -1,13 +1,18 @@
-//! Developer tools: a profiling overlay drawn into each window's scene.
+//! Developer tools drawn into each window's scene: a profiling overlay and a
+//! damage and replay visualizer.
 //!
-//! Everything here is off unless `RUI_DEVTOOLS=1` is set or the app calls
+//! Everything here is off unless `RUI_DEVTOOLS` names a tool or the app turns
+//! one on, such as with
 //! [`AppContext::toggle_profiler`](crate::AppContext::toggle_profiler). Off, a
 //! frame pays one branch per stage and nothing is allocated. See
 //! `docs/devtools.md`.
 
+mod damage;
 mod profiler;
+mod window;
 
 pub use profiler::{FrameSample, Profiler, RenderSample};
+pub(crate) use window::WindowDevtools;
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -18,13 +23,43 @@ pub const RUI_DEVTOOLS_ENV: &str = "RUI_DEVTOOLS";
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct DevtoolsFlags {
     pub(crate) profiler: bool,
+    pub(crate) damage: bool,
 }
 
 impl DevtoolsFlags {
     pub(crate) fn from_env() -> Self {
-        let on = std::env::var(RUI_DEVTOOLS_ENV)
-            .is_ok_and(|value| !matches!(value.as_str(), "" | "0" | "false" | "off"));
-        Self { profiler: on }
+        match std::env::var(RUI_DEVTOOLS_ENV) {
+            Ok(value) => match Self::parse(&value) {
+                Ok(flags) => flags,
+                Err(tool) => panic!(
+                    "{RUI_DEVTOOLS_ENV}: unknown tool `{tool}`; expected a comma-separated \
+                     list of profiler, damage, all, or 1 for the profiler"
+                ),
+            },
+            Err(_) => Self::default(),
+        }
+    }
+
+    /// `1` or `profiler`, `damage`, `all`, comma-separated; empty, `0`,
+    /// `false` and `off` turn everything off.
+    fn parse(value: &str) -> Result<Self, &str> {
+        let mut flags = Self::default();
+        if matches!(value, "" | "0" | "false" | "off") {
+            return Ok(flags);
+        }
+        for tool in value.split(',').map(str::trim) {
+            match tool {
+                "1" | "profiler" => flags.profiler = true,
+                "damage" => flags.damage = true,
+                "all" => (flags.profiler, flags.damage) = (true, true),
+                tool => return Err(tool),
+            }
+        }
+        Ok(flags)
+    }
+
+    pub(crate) fn any(self) -> bool {
+        self.profiler || self.damage
     }
 }
 
@@ -85,4 +120,21 @@ fn profiler_stopped() {
 /// global allocator, since the profiler's own drawing always allocates.
 fn allocations() -> u64 {
     ALLOCATIONS.load(Ordering::Relaxed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DevtoolsFlags;
+
+    #[test]
+    fn rui_devtools_names_the_tools_to_turn_on() {
+        let flags = |profiler, damage| Ok(DevtoolsFlags { profiler, damage });
+        assert_eq!(DevtoolsFlags::parse(""), flags(false, false));
+        assert_eq!(DevtoolsFlags::parse("0"), flags(false, false));
+        assert_eq!(DevtoolsFlags::parse("1"), flags(true, false));
+        assert_eq!(DevtoolsFlags::parse("damage"), flags(false, true));
+        assert_eq!(DevtoolsFlags::parse("profiler, damage"), flags(true, true));
+        assert_eq!(DevtoolsFlags::parse("all"), flags(true, true));
+        assert_eq!(DevtoolsFlags::parse("profiler,inspect"), Err("inspect"));
+    }
 }

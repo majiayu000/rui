@@ -16,14 +16,16 @@
 //! GPUI's side uses too: each committed command buffer's `GPUEndTime - GPUStartTime`.
 use rui::core::frame_pipeline::FramePipeline;
 use rui::elements::element::{Element, LayoutNodes};
-use rui::elements::{TextSpan, VirtualListHandle, canvas, span, styled_text, virtual_list};
+use rui::elements::{VirtualListHandle, canvas, shared_styled_text, span_range, virtual_list};
 use rui::renderer::metal::MetalRenderer;
 use rui::renderer::text::TextMeasureCache;
 use rui::renderer::{RendererResourceLimits, Scene};
 use rui::{Bounds, Color, ElementId, Size, div, text};
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::RefCell;
+use std::ops::Range;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 use taffy::prelude::TaffyTree;
@@ -260,17 +262,48 @@ fn edit_line(line: &mut [(String, Token)], turn: usize) {
     token.0.push(letter);
 }
 
-type Document = Rc<RefCell<Vec<Vec<(String, Token)>>>>;
+/// A line as an editor keeps it: one string and its tokens as byte ranges.
+struct CodeLine {
+    text: Arc<str>,
+    tokens: Vec<(Range<usize>, Token)>,
+}
+
+impl CodeLine {
+    fn new(tokens: &[(String, Token)]) -> Self {
+        let mut text = String::new();
+        let tokens = tokens
+            .iter()
+            .map(|(content, token)| {
+                let start = text.len();
+                text.push_str(content);
+                (start..text.len(), *token)
+            })
+            .collect();
+        Self {
+            text: text.into(),
+            tokens,
+        }
+    }
+}
+
+/// The document as tokens, which edits change, and as the lines drawn from them.
+struct Document {
+    tokens: Vec<Vec<(String, Token)>>,
+    lines: Vec<CodeLine>,
+}
+
+type SharedDocument = Rc<RefCell<Document>>;
 
 /// A 10 000-line code view: a gutter of line numbers, per-token colors as styled
 /// runs in a monospace font, and the cursor's line highlighted.
-fn code_view(handle: &VirtualListHandle, document: &Document, cursor: usize) -> impl Element {
+fn code_view(handle: &VirtualListHandle, document: &SharedDocument, cursor: usize) -> impl Element {
     let document = Rc::clone(document);
     let lines = virtual_list(handle, EDITOR_LINES, EDITOR_LINE_HEIGHT, move |index| {
-        let document = document.borrow();
-        let spans = document[index]
+        let line = &document.borrow().lines[index];
+        let spans = line
+            .tokens
             .iter()
-            .map(|(content, token)| span(content.as_str()).color(Color::hex(token.color())));
+            .map(|(bytes, token)| span_range(bytes.clone()).color(Color::hex(token.color())));
         div()
             .w_full()
             .h(EDITOR_LINE_HEIGHT)
@@ -288,7 +321,7 @@ fn code_view(handle: &VirtualListHandle, document: &Document, cursor: usize) -> 
                     .justify_end()
                     .child(text((index + 1).to_string()).color(Color::hex(0x636d83))),
             )
-            .child(styled_text(spans.collect::<Vec<TextSpan>>()))
+            .child(shared_styled_text(Arc::clone(&line.text), spans))
     })
     .w_full()
     .h_full();
@@ -306,8 +339,10 @@ fn scrolled_top(turn: usize) -> usize {
     EDITOR_TOP + turn % (EDITOR_LINES - EDITOR_TOP - 100)
 }
 
-fn document() -> Document {
-    Rc::new(RefCell::new((0..EDITOR_LINES).map(code_line).collect()))
+fn document() -> SharedDocument {
+    let tokens: Vec<_> = (0..EDITOR_LINES).map(code_line).collect();
+    let lines = tokens.iter().map(|line| CodeLine::new(line)).collect();
+    Rc::new(RefCell::new(Document { tokens, lines }))
 }
 
 fn cell_color(row: usize, column: usize) -> u32 {
@@ -553,7 +588,10 @@ fn run(case: &str) -> Result<(), Box<dyn std::error::Error>> {
             let document = document();
             let cursor = EDITOR_TOP + CURSOR_ROW;
             measure(case, &mut harness, |harness, turn| {
-                edit_line(&mut document.borrow_mut()[cursor], turn);
+                let mut edited = document.borrow_mut();
+                edit_line(&mut edited.tokens[cursor], turn);
+                edited.lines[cursor] = CodeLine::new(&edited.tokens[cursor]);
+                drop(edited);
                 harness.frame(code_view(&handle, &document, cursor), viewport)
             })?;
         }

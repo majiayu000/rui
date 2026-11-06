@@ -100,7 +100,7 @@ pub(crate) type RichLines = Rc<RefCell<Option<Arc<RichWrapped>>>>;
 /// What a rich text leaf needs to be measured at any width.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct RichWrapRequest {
-    pub(crate) content: String,
+    pub(crate) content: Arc<str>,
     pub(crate) spans: Vec<RichSpan>,
     pub(crate) max_lines: Option<usize>,
 }
@@ -1538,6 +1538,7 @@ impl AnyElement {
                 let index = cx.scene.record(PaintRecord {
                     // A subtree left out has no range to replay next time.
                     painted: seen,
+                    replayed: true,
                     start: primitives.start as u32,
                     end: primitives.end as u32,
                     origin,
@@ -1569,6 +1570,7 @@ impl AnyElement {
         if replayable {
             let index = cx.scene.record(PaintRecord {
                 painted: true,
+                replayed: false,
                 start: start as u32,
                 end: cx.scene.len() as u32,
                 origin,

@@ -69,8 +69,6 @@ pub struct Profiler {
     dropped: u64,
     allocations_at_start: u64,
     overlay_allocations: u64,
-    /// Where this window's overlay starts in the scene it was drawn into.
-    overlay_start: Option<usize>,
     current: FrameSample,
     last: Option<FrameSample>,
 }
@@ -85,7 +83,6 @@ impl Profiler {
             dropped: 0,
             allocations_at_start: 0,
             overlay_allocations: 0,
-            overlay_start: None,
             current: FrameSample::default(),
             last: None,
         }
@@ -130,21 +127,21 @@ impl Profiler {
         self.current.render = Some(render);
     }
 
-    /// Record what the scene holds after paint, then draw the overlay over it,
-    /// showing the last complete frame.
-    pub(crate) fn paint_overlay(&mut self, scene: &mut Scene, viewport: Size) {
-        let allocations_before = allocations();
-        // The previous overlay is redrawn by this one, which covers the same
-        // panel, so it is not part of what the app changed.
-        if let Some(start) = self.overlay_start {
-            scene.truncate_previous(start);
-        }
-        let window = Bounds::from_xywh(0.0, 0.0, viewport.width, viewport.height);
-        self.current.damage_fraction = damage_fraction(scene.damage(window), window);
+    /// Record what the app painted: `damage` is the scene's, without the
+    /// devtools overlay.
+    pub(crate) fn record_scene(&mut self, scene: &Scene, damage: Reach, window: Bounds) {
+        self.current.damage_fraction = damage_fraction(damage, window);
         self.current.primitives = scene.len();
         self.current.replayed_primitives = scene.replayed_len();
+    }
 
-        self.overlay_start = Some(scene.len());
+    /// Leave out of this frame's count allocations the devtools made.
+    pub(crate) fn exclude_allocations(&mut self, count: u64) {
+        self.overlay_allocations += count;
+    }
+
+    /// Draw the panel over the scene, showing the last complete frame.
+    pub(crate) fn paint_panel(&mut self, scene: &mut Scene, viewport: Size) {
         let panel = Bounds::from_xywh(
             (viewport.width - PANEL_WIDTH - MARGIN).max(0.0),
             MARGIN,
@@ -176,7 +173,6 @@ impl Profiler {
                 align: TextAlign::Left,
             });
         }
-        self.overlay_allocations = allocations() - allocations_before;
     }
 
     /// Close the frame `durations` timed. `next_frame_expected` when an

@@ -466,7 +466,7 @@ pub fn text(content: impl Into<String>) -> Text {
 
 mod styled;
 
-pub use styled::{StyledText, TextSpan, span, styled_text};
+pub use styled::{StyledText, TextSpan, shared_styled_text, span, span_range, styled_text};
 
 #[cfg(test)]
 mod tests;
