@@ -6,7 +6,7 @@ use crate::core::color::Color;
 use crate::core::geometry::Bounds;
 use crate::core::style::Style;
 use crate::elements::element::{
-    Element, LayoutContext, PaintContext, RichLines, RichWrapRequest, style_to_taffy,
+    Capabilities, Element, LayoutContext, PaintContext, RichLines, RichWrapRequest, style_to_taffy,
 };
 use crate::renderer::Primitive;
 use crate::renderer::text::{RichPieceText, RichSpan};
@@ -165,19 +165,15 @@ impl Element for StyledText {
         &self.style
     }
 
-    fn memoizable(&self) -> bool {
-        true
-    }
-
-    fn ignores_pointer(&self) -> bool {
-        true
+    fn capabilities(&self) -> Capabilities {
+        Capabilities::PURE_INERT
     }
 
     /// Kept when every span sets the same text and style properties. What
     /// the spans inherit is compared in layout, against the style the kept
     /// text resolved them from.
-    fn reconcile(&mut self, previous: &mut dyn Element) -> bool {
-        let Some(previous) = (previous as &mut dyn Any).downcast_ref::<StyledText>() else {
+    fn same_props(&self, previous: &dyn Element) -> bool {
+        let Some(previous) = (previous as &dyn Any).downcast_ref::<StyledText>() else {
             return false;
         };
         self.id == previous.id

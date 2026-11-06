@@ -37,7 +37,7 @@ impl Input {
         cx: &mut EventContext,
         command: &TextInputCommand,
     ) -> bool {
-        if !cx.is_focused(self.id) && !self.state.focused {
+        if !cx.is_focused(Some(self.id.get())) && !self.state.focused {
             return false;
         }
         match self.apply_text_input_command(command.clone()) {
@@ -146,7 +146,7 @@ impl Input {
         &self,
         focused: ElementId,
     ) -> Option<TextInputSnapshot> {
-        (self.id == Some(focused)).then(|| {
+        (self.id.get() == focused).then(|| {
             TextInputSnapshot::new(
                 self.state.value.clone(),
                 self.state_selection(),
@@ -217,7 +217,7 @@ impl Input {
     }
 
     pub(super) fn sync_focus_from_context(&mut self, cx: &mut EventContext<'_>) -> bool {
-        let focused = cx.is_focused(self.id);
+        let focused = cx.is_focused(Some(self.id.get()));
         if self.state.focused == focused {
             return false;
         }

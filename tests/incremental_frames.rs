@@ -1,7 +1,7 @@
 //! Incremental frames must draw exactly what a full frame draws.
 //!
 //! Each frame rebuilds a randomly edited tree. The incremental side keeps the
-//! unchanged parts of the previous tree (`Element::reconcile`), their layout
+//! unchanged parts of the previous tree (`rui::elements::element::reconcile`), their layout
 //! nodes and their paint; the full side lays out and paints a fresh tree from
 //! scratch. Their scenes must match primitive for primitive.
 
