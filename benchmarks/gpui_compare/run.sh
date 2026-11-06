@@ -28,6 +28,8 @@ if [ "$(git -C "$ZED_DIR" rev-parse HEAD)" != "$ZED_REV" ]; then
 fi
 
 cp "$ROOT/benchmarks/gpui_compare/fixtures.rs" "$ZED_DIR/crates/gpui_platform/benches/rui_compare.rs"
+# Both sides read GPU time through the same hook; the bench declares `mod gpu_time;`.
+cp "$ROOT/benchmarks/gpui_compare/gpu_time.rs" "$ZED_DIR/crates/gpui_platform/benches/gpu_time.rs"
 manifest="$ZED_DIR/crates/gpui_platform/Cargo.toml"
 if ! grep -q 'name = "rui_compare"' "$manifest"; then
   printf '\n[[bench]]\nname = "rui_compare"\nharness = false\nrequired-features = ["bench-support"]\n' >> "$manifest"

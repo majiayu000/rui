@@ -21,8 +21,9 @@
 //!
 //! The benches are registered as `#[gpui::bench(fps = 120)]` registers them, but with
 //! the headless renderer wrapped by [`CountingRenderer`], which counts draw calls.
-//! GPU time is not reported: the headless renderer commits its command buffer
-//! inside `render_scene` and does not expose it.
+//! GPU time comes from [`gpu_time`]: the headless renderer commits its command buffer
+//! inside `render_scene` and does not expose it, so this process replaces `-commit`
+//! of Metal's command buffer class with one that first adds a completed handler.
 
 use std::ops::Range;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -638,6 +639,8 @@ fn editor_edit(cx: &mut BenchAppContext) {
     });
 }
 
+mod gpu_time;
+
 /// Batches and instances of each scene rendered since the last [`take_draws`].
 static SCENES: std::sync::Mutex<Vec<(u64, u64)>> = std::sync::Mutex::new(Vec::new());
 /// Scenes with at least one glyph since the last check in [`counted`].
@@ -715,7 +718,9 @@ fn counted(
     body: fn(&mut BenchAppContext),
 ) {
     let report = gpui::BenchReport::with_fps(120);
+    gpu_time::install();
     take_draws();
+    gpu_time::take();
     FRAMES_WITH_GLYPHS.store(0, Ordering::Relaxed);
     criterion.bench_function(name, {
         let report = report.clone();
@@ -743,13 +748,29 @@ fn counted(
     if SCENES.lock().unwrap().is_empty() {
         return;
     }
+    let scenes = SCENES.lock().unwrap().len();
     let (draw_calls, instances) = take_draws();
     // Every fixture but the grid draws text, which must reach the scene as glyphs.
     // Built without `font-kit`, GPUI uses `NoopTextSystem` and draws none.
     if name != "quad_grid" && FRAMES_WITH_GLYPHS.load(Ordering::Relaxed) == 0 {
         panic!("{name}: GPUI drew no glyphs; build gpui_platform with the font-kit feature");
     }
-    eprintln!("gpui {name} draw_calls={draw_calls} instances={instances}");
+    // Let the last frames' completed handlers run.
+    std::thread::sleep(Duration::from_millis(100));
+    let mut gpu_ms = gpu_time::take();
+    if gpu_ms.len() != scenes {
+        panic!(
+            "{name}: {} command buffers completed for {scenes} scenes; GPU time per frame needs one each",
+            gpu_ms.len()
+        );
+    }
+    gpu_ms.sort_by(f64::total_cmp);
+    let percentile = |fraction: f64| gpu_ms[((gpu_ms.len() - 1) as f64 * fraction).round() as usize];
+    eprintln!(
+        "gpui {name} draw_calls={draw_calls} instances={instances} gpu_ms_p50={:.3} gpu_ms_p95={:.3}",
+        percentile(0.5),
+        percentile(0.95)
+    );
 }
 
 macro_rules! counted_benches {

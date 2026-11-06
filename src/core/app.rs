@@ -15,6 +15,9 @@ use crate::core::view::{
 mod clipboard;
 mod images;
 mod release;
+mod rows;
+
+pub use rows::Row;
 
 pub(crate) use clipboard::SharedClipboard;
 pub use images::ImageAsset;
@@ -63,6 +66,8 @@ pub struct AppContext {
     observers: HashMap<EntityId, HashSet<EntityId>>,
     /// What each child view read in its last render.
     view_reads: HashMap<EntityId, Vec<EntityId>>,
+    /// The views [`Self::rows`] made.
+    row_views: rows::RowViews,
     pub(crate) devtools: DevtoolsFlags,
     images: images::ImageAssets,
 }
@@ -216,6 +221,7 @@ impl AppContext {
             reads: RefCell::default(),
             observers: HashMap::new(),
             view_reads: HashMap::new(),
+            row_views: rows::RowViews::default(),
             devtools: DevtoolsFlags::from_env(),
             images: images::ImageAssets::default(),
         }
@@ -386,6 +392,17 @@ impl AppContext {
 
     pub fn profiler_enabled(&self) -> bool {
         self.devtools.profiler
+    }
+
+    /// Show or hide the damage and replay visualizer in every window.
+    /// `RUI_DEVTOOLS=damage` starts with it shown. See `docs/devtools.md`.
+    pub fn toggle_damage_visualizer(&mut self) {
+        self.devtools.damage = !self.devtools.damage;
+        self.request_redraw();
+    }
+
+    pub fn damage_visualizer_enabled(&self) -> bool {
+        self.devtools.damage
     }
 
     /// Rebuild only the window whose frame runs now, such as after it resized.

@@ -3,9 +3,12 @@
 use crate::core::ElementId;
 use crate::core::color::Color;
 use crate::core::event::{KeyEvent, ScrollEvent};
-use crate::core::geometry::Bounds;
-use crate::core::style::{Background, Dimension as StyleDimension, FlexDirection, Overflow, Style};
+use crate::core::geometry::{Bounds, Edges};
+use crate::core::style::{
+    Background, Corners, Dimension as StyleDimension, FlexDirection, Overflow, Style,
+};
 use crate::core::text_editing::{TextInputCommand, TextInputEvent};
+use crate::elements::ScrollbarVisibility;
 use crate::elements::element::{
     AnyElement, Element, EventContext, LayoutContext, PaintContext, PointerEvent, PointerEventKind,
     StableId, dispatch_action_to_children, style_to_taffy,
@@ -19,12 +22,20 @@ use taffy::prelude::*;
 
 /// Rows built beyond each edge of the view, so a short scroll shows built rows.
 const OVERSCAN_ROWS: usize = 2;
+/// Width of the scrollbar track along the list's right edge, as ScrollView's.
+const SCROLLBAR_WIDTH: f32 = 8.0;
+/// Smallest thumb, as a share of the track, so a long list's thumb can be grabbed.
+const MIN_THUMB: f32 = 0.1;
 
 #[derive(Debug, Default)]
 struct ScrollState {
     offset: f32,
     /// Height the list had when it was last painted; 0 before the first paint.
     viewport_height: f32,
+    /// While the thumb is dragged: where in the thumb the pointer took it.
+    drag: Option<f32>,
+    /// A row to bring into view at the next layout.
+    pending_item: Option<usize>,
 }
 
 /// The scroll position of a [`VirtualList`].
@@ -46,7 +57,39 @@ impl VirtualListHandle {
 
     /// Scroll to `offset`; the list clamps it to its content when laid out.
     pub fn scroll_to(&self, offset: f32) {
-        self.0.borrow_mut().offset = offset.max(0.0);
+        let mut state = self.0.borrow_mut();
+        state.offset = offset.max(0.0);
+        state.pending_item = None;
+    }
+
+    /// Scroll as little as needed to show row `index` whole at the next layout:
+    /// a row above the view comes to its top, one below it to its bottom.
+    pub fn scroll_to_item(&self, index: usize) {
+        self.0.borrow_mut().pending_item = Some(index);
+    }
+
+    /// Whether the scrollbar thumb is being dragged.
+    pub fn is_dragging(&self) -> bool {
+        self.0.borrow().drag.is_some()
+    }
+}
+
+/// The scrollbar of a list at `bounds`: its track and thumb.
+#[derive(Clone, Copy)]
+struct Scrollbar {
+    track: Bounds,
+    thumb: Bounds,
+    max_offset: f32,
+}
+
+impl Scrollbar {
+    /// Offset that puts the thumb's top at `thumb_top`.
+    fn offset_for(&self, thumb_top: f32) -> f32 {
+        let travel = self.track.height() - self.thumb.height();
+        if travel <= 0.0 {
+            return 0.0;
+        }
+        ((thumb_top - self.track.y()) / travel * self.max_offset).clamp(0.0, self.max_offset)
     }
 }
 
@@ -61,6 +104,7 @@ pub struct VirtualList {
     count: usize,
     row_height: f32,
     row: RowBuilder,
+    scrollbar_visibility: ScrollbarVisibility,
     first_row: usize,
     rows: Vec<AnyElement>,
     row_nodes: Vec<NodeId>,
@@ -87,6 +131,7 @@ pub fn virtual_list<E: Into<AnyElement>>(
         count,
         row_height: row_height.max(1.0),
         row: Box::new(move |index| row(index).into()),
+        scrollbar_visibility: ScrollbarVisibility::default(),
         first_row: 0,
         rows: Vec::new(),
         row_nodes: Vec::new(),
@@ -131,6 +176,12 @@ impl VirtualList {
         self
     }
 
+    /// When the scrollbar shows: by default only while the rows overflow.
+    pub fn scrollbar(mut self, visibility: ScrollbarVisibility) -> Self {
+        self.scrollbar_visibility = visibility;
+        self
+    }
+
     /// Rows built in the last layout.
     pub fn built_rows(&self) -> Range<usize> {
         self.first_row..self.first_row + self.rows.len()
@@ -145,6 +196,87 @@ impl VirtualList {
 
     fn max_offset(&self, viewport_height: f32) -> f32 {
         (self.count as f32 * self.row_height - viewport_height).max(0.0)
+    }
+
+    /// The scrollbar of the list at `bounds`, when it shows.
+    fn scrollbar_at(&self, bounds: Bounds) -> Option<Scrollbar> {
+        let content = self.count as f32 * self.row_height;
+        let shown = match self.scrollbar_visibility {
+            ScrollbarVisibility::Always => true,
+            ScrollbarVisibility::Never => false,
+            ScrollbarVisibility::Auto | ScrollbarVisibility::Hover => content > bounds.height(),
+        };
+        if !shown || bounds.height() <= 0.0 {
+            return None;
+        }
+        let track = Bounds::from_xywh(
+            bounds.max_x() - SCROLLBAR_WIDTH,
+            bounds.y(),
+            SCROLLBAR_WIDTH,
+            bounds.height(),
+        );
+        let max_offset = self.max_offset(bounds.height());
+        let share = if content > 0.0 {
+            (bounds.height() / content).clamp(MIN_THUMB, 1.0)
+        } else {
+            1.0
+        };
+        let thumb_height = share * track.height();
+        let progress = if max_offset > 0.0 {
+            (self.handle.offset() / max_offset).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let thumb = Bounds::from_xywh(
+            track.x(),
+            track.y() + progress * (track.height() - thumb_height),
+            SCROLLBAR_WIDTH,
+            thumb_height,
+        );
+        Some(Scrollbar {
+            track,
+            thumb,
+            max_offset,
+        })
+    }
+
+    /// Drag the thumb, or move a page toward a press on the track. Returns
+    /// whether the scrollbar took the event.
+    fn handle_scrollbar_event(&mut self, cx: &mut EventContext, event: &PointerEvent) -> bool {
+        let drag = self.handle.0.borrow().drag;
+        if drag.is_some() && matches!(event.kind, PointerEventKind::Up) {
+            self.handle.0.borrow_mut().drag = None;
+            cx.request_redraw();
+            return true;
+        }
+        let Some(scrollbar) = self.scrollbar_at(cx.layout_bounds()) else {
+            return false;
+        };
+        let y = event.position.y;
+        let offset = match (drag, event.kind) {
+            (Some(grab), PointerEventKind::Move) => scrollbar.offset_for(y - grab),
+            (None, PointerEventKind::Down) if cx.contains_pointer(event.position) => {
+                if !scrollbar.track.contains(event.position) {
+                    return false;
+                }
+                if scrollbar.thumb.contains(event.position) {
+                    self.handle.0.borrow_mut().drag = Some(y - scrollbar.thumb.y());
+                    cx.request_redraw();
+                    return true;
+                }
+                let page = scrollbar.track.height();
+                let step = if y < scrollbar.thumb.y() { -page } else { page };
+                (self.handle.offset() + step).clamp(0.0, scrollbar.max_offset)
+            }
+            _ => return false,
+        };
+        let mut state = self.handle.0.borrow_mut();
+        if state.offset != offset {
+            state.offset = offset;
+            state.pending_item = None;
+            cx.request_redraw();
+        }
+        true
     }
 
     /// Where row `index` of the built rows sits for a list at `bounds`.
@@ -182,8 +314,21 @@ impl Element for VirtualList {
                 cx.available_space.height
             }
         };
-        let offset = self.handle.offset().min(self.max_offset(viewport_height));
-        self.handle.0.borrow_mut().offset = offset;
+        let offset = {
+            let mut state = self.handle.0.borrow_mut();
+            if let Some(index) = state.pending_item.take()
+                && self.count > 0
+            {
+                let top = index.min(self.count - 1) as f32 * self.row_height;
+                if top < state.offset {
+                    state.offset = top;
+                } else if top + self.row_height > state.offset + viewport_height {
+                    state.offset = top + self.row_height - viewport_height;
+                }
+            }
+            state.offset = state.offset.min(self.max_offset(viewport_height)).max(0.0);
+            state.offset
+        };
 
         let range = self.rows_in_view(offset, viewport_height);
         // Rows still in view keep their instance, and with it element state such as
@@ -239,6 +384,19 @@ impl Element for VirtualList {
             self.rows[built_index].paint(&mut row_cx);
         }
         cx.scene.pop_layer();
+
+        if let Some(scrollbar) = self.scrollbar_at(bounds) {
+            let thumb_alpha = if self.handle.is_dragging() { 0.5 } else { 0.2 };
+            for (bounds, alpha) in [(scrollbar.track, 0.05), (scrollbar.thumb, thumb_alpha)] {
+                cx.paint(Primitive::Quad {
+                    bounds,
+                    background: Color::hex(0x000000).with_alpha(alpha).to_rgba(),
+                    border_color: crate::core::color::Rgba::TRANSPARENT,
+                    border_widths: Edges::ZERO,
+                    corner_radii: Corners::all(SCROLLBAR_WIDTH / 2.0),
+                });
+            }
+        }
     }
 
     fn refresh_text_geometry(&mut self, text_measurer: &mut TextMeasureCache) {
@@ -248,6 +406,10 @@ impl Element for VirtualList {
     }
 
     fn handle_pointer_event(&mut self, cx: &mut EventContext, event: &PointerEvent) -> bool {
+        // The scrollbar sits over the rows, so it sees the pointer first.
+        if self.handle_scrollbar_event(cx, event) {
+            return true;
+        }
         let bounds = cx.layout_bounds();
         let is_move = matches!(event.kind, PointerEventKind::Move);
         let mut handled = false;

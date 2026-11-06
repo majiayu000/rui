@@ -12,13 +12,13 @@
 //! evicted page is emptied and reused; its glyphs are rasterized again when next
 //! drawn, and the renderer clears its texture ([`TextGlyphCache::take_cleared_pages`]).
 
+use super::hash::{FastHasher, FastMap};
 use super::{TextError, TextMeasureCache, TextMetrics, TextRequest, font_io_text_error};
 use crate::renderer::resources::{
     RendererResourceError, RendererResourceKind, RendererResourceStats,
 };
 use rusttype::{GlyphId, Scale, point};
-use std::collections::HashMap;
-use std::hash::{BuildHasherDefault, Hash, Hasher};
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 /// Side of a new atlas page in pixels. A glyph larger than this gets a page of its own.
@@ -337,59 +337,6 @@ impl ShapedEntry {
             && self.line_height.to_bits() == request.line_height.to_bits()
     }
 }
-
-/// A multiply-rotate hash, as rustc's FxHash: far cheaper than the default
-/// SipHash for the small keys looked up for every glyph drawn. Not resistant to
-/// chosen collisions, which only cost time here: entries are compared in full.
-#[derive(Default, Clone, Copy)]
-struct FastHasher(u64);
-
-impl FastHasher {
-    fn add(&mut self, word: u64) {
-        self.0 = (self.0.rotate_left(5) ^ word).wrapping_mul(0x51_7c_c1_b7_27_22_0a_95);
-    }
-}
-
-impl Hasher for FastHasher {
-    fn finish(&self) -> u64 {
-        self.0
-    }
-
-    fn write(&mut self, bytes: &[u8]) {
-        let mut chunks = bytes.chunks_exact(8);
-        for chunk in &mut chunks {
-            self.add(u64::from_le_bytes(chunk.try_into().expect("eight bytes")));
-        }
-        let rest = chunks.remainder();
-        if !rest.is_empty() {
-            let mut word = [0u8; 8];
-            word[..rest.len()].copy_from_slice(rest);
-            self.add(u64::from_le_bytes(word));
-        }
-    }
-
-    fn write_u8(&mut self, value: u8) {
-        self.add(u64::from(value));
-    }
-
-    fn write_u16(&mut self, value: u16) {
-        self.add(u64::from(value));
-    }
-
-    fn write_u32(&mut self, value: u32) {
-        self.add(u64::from(value));
-    }
-
-    fn write_u64(&mut self, value: u64) {
-        self.add(value);
-    }
-
-    fn write_usize(&mut self, value: usize) {
-        self.add(value as u64);
-    }
-}
-
-type FastMap<K, V> = HashMap<K, V, BuildHasherDefault<FastHasher>>;
 
 /// Hashes a request without copying its text, so a hit allocates nothing.
 fn shape_hash(request: &TextRequest<'_>) -> u64 {

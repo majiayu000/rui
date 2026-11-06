@@ -218,6 +218,11 @@ impl<'a, T: 'static> ViewContext<'a, T> {
     pub fn toggle_profiler(&mut self) {
         self.app.toggle_profiler();
     }
+
+    /// See [`AppContext::toggle_damage_visualizer`].
+    pub fn toggle_damage_visualizer(&mut self) {
+        self.app.toggle_damage_visualizer();
+    }
 }
 
 /// A view rendered inside other views' trees, kept between renders.
