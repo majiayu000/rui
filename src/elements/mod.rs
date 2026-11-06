@@ -21,7 +21,7 @@ pub(crate) use image::fit_bounds;
 pub use image::{Image, ImageFit, ImageSource, image};
 pub use input::{Input, InputType, input};
 pub use list::{List, ListItem, ListStyle, list, ordered_list, unordered_list};
-pub use scroll_view::{ScrollDirection, ScrollView, scroll_view};
+pub use scroll_view::{ScrollDirection, ScrollView, ScrollbarVisibility, scroll_view};
 pub use spinner::{Spinner, SpinnerType, spinner};
 pub use table::{Table, TableCell, TableRow, cell, header_row, row, table};
 pub use text::{
