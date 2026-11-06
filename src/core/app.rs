@@ -15,6 +15,7 @@ use crate::core::view::{
 mod clipboard;
 mod images;
 mod menus;
+mod prompts;
 mod release;
 mod rows;
 
@@ -46,6 +47,7 @@ pub struct AppContext {
     /// In memory until a native runner installs the system clipboard.
     clipboard: SharedClipboard,
     menus: menus::MenuState,
+    path_prompts: Vec<crate::core::prompt::PathPrompt>,
     app_action_handlers: Vec<Box<dyn ActionHandler>>,
     update_queue: Arc<AppUpdateQueue>,
     pub(crate) effects: Effects,
@@ -209,6 +211,7 @@ impl AppContext {
             keymap,
             clipboard: Rc::new(RefCell::new(MemoryClipboard::new())),
             menus: menus::MenuState::default(),
+            path_prompts: Vec::new(),
             app_action_handlers: Vec::new(),
             update_queue: Arc::default(),
             effects: Effects::default(),
