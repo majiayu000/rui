@@ -221,7 +221,7 @@ impl TextArea {
         Ok(outcome)
     }
 
-    pub fn copy_selection_to<C: Clipboard>(
+    pub fn copy_selection_to<C: Clipboard + ?Sized>(
         &mut self,
         clipboard: &mut C,
     ) -> Result<bool, TextEditError> {
@@ -232,7 +232,7 @@ impl TextArea {
         self.editor.copy_selection_to(clipboard)
     }
 
-    pub fn cut_selection_to<C: Clipboard>(
+    pub fn cut_selection_to<C: Clipboard + ?Sized>(
         &mut self,
         clipboard: &mut C,
     ) -> Result<TextEditOutcome, TextEditError> {
@@ -247,7 +247,7 @@ impl TextArea {
         Ok(outcome)
     }
 
-    pub fn paste_from<C: Clipboard>(
+    pub fn paste_from<C: Clipboard + ?Sized>(
         &mut self,
         clipboard: &mut C,
     ) -> Result<TextEditOutcome, TextEditError> {
@@ -260,6 +260,39 @@ impl TextArea {
         self.sync_state_from_editor();
         self.emit_change_if_needed(outcome.changed);
         Ok(outcome)
+    }
+
+    /// Copy, cut or paste through the clipboard that key dispatch attached to `cx`.
+    fn run_clipboard_action(
+        &mut self,
+        cx: &mut EventContext,
+        action: StandardAction,
+    ) -> ActionOutcome {
+        let Some(mut clipboard) = cx.clipboard() else {
+            log::error!("text_area {action:?} ran without a clipboard in its event context");
+            return ActionOutcome::Ignored;
+        };
+        let result = match action {
+            StandardAction::Copy => self.copy_selection_to(&mut *clipboard),
+            StandardAction::Cut => self
+                .cut_selection_to(&mut *clipboard)
+                .map(|outcome| outcome.changed),
+            _ => self
+                .paste_from(&mut *clipboard)
+                .map(|outcome| outcome.changed),
+        };
+        drop(clipboard);
+        match result {
+            Ok(true) => {
+                cx.request_redraw();
+                ActionOutcome::handled("text_area")
+            }
+            Ok(false) => ActionOutcome::Ignored,
+            Err(err) => {
+                log::error!("text_area {action:?} failed: {err}");
+                ActionOutcome::Ignored
+            }
+        }
     }
 
     fn can_edit(&self) -> bool {
@@ -607,6 +640,13 @@ impl Element for TextArea {
         let ActionId::Standard(action) = action else {
             return ActionOutcome::Ignored;
         };
+
+        if matches!(
+            action,
+            StandardAction::Copy | StandardAction::Cut | StandardAction::Paste
+        ) {
+            return self.run_clipboard_action(cx, *action);
+        }
 
         if *action == StandardAction::SelectAll {
             self.visual_caret = None;

@@ -17,6 +17,7 @@ use crate::core::window::{WindowId, WindowOptions};
 use crate::devtools::RenderSample;
 use crate::elements::element::{Element, PointerEvent, PointerEventKind};
 use crate::platform::mac::accessibility::MacAccessibilityActionRequest;
+use crate::platform::mac::clipboard::MacPasteboard;
 use crate::platform::mac::events::{
     MAC_REDRAW_EVENT_DATA, MacWindowEvent, post_application_event_from_any_thread,
 };
@@ -63,6 +64,7 @@ where
 {
     let mut context = context;
     context.use_background_threads();
+    context.set_clipboard(MacPasteboard);
     let mtm = MainThreadMarker::new().expect("Must be called from main thread");
     let app = NSApplication::sharedApplication(mtm);
     app.setActivationPolicy(NSApplicationActivationPolicy::Regular);

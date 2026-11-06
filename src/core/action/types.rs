@@ -23,6 +23,8 @@ impl ActionId {
                     | StandardAction::DeleteForward
                     | StandardAction::DeleteWordBackward
                     | StandardAction::DeleteWordForward
+                    | StandardAction::Cut
+                    | StandardAction::Paste
             )
         )
     }
@@ -45,6 +47,9 @@ pub enum StandardAction {
     SelectLeft,
     SelectRight,
     SelectAll,
+    Copy,
+    Cut,
+    Paste,
     FocusNext,
     FocusPrevious,
     DeleteBackward,

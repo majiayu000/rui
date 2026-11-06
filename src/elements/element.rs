@@ -6,15 +6,16 @@ use crate::core::accessibility::{
     AccessibilityError, AccessibilityNode,
 };
 use crate::core::action::{ActionId, ActionOutcome};
+use crate::core::app::SharedClipboard;
 use crate::core::event::{Cursor, KeyEvent, MouseButton, ScrollEvent};
 use crate::core::geometry::{Bounds, Point, Size};
 use crate::core::style::{Dimension as StyleDimension, Style};
-use crate::core::text_editing::{TextInputCommand, TextInputEvent, TextInputSnapshot};
+use crate::core::text_editing::{Clipboard, TextInputCommand, TextInputEvent, TextInputSnapshot};
 use crate::elements::text::{TextStyle, TextStyleRefinement};
 use crate::renderer::text::{RichSpan, RichWrapped, TextMeasureCache, TextRequest, WrappedText};
 use crate::renderer::{PaintRecord, Primitive, Scene};
 use std::any::{Any, TypeId};
-use std::cell::{Cell, RefCell};
+use std::cell::{Cell, RefCell, RefMut};
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -685,6 +686,8 @@ pub struct EventContext<'a> {
     cursor: Rc<Cell<Option<Cursor>>>,
     redraw_requested: Rc<Cell<bool>>,
     accessibility_announcements: Rc<RefCell<Vec<AccessibilityAnnouncement>>>,
+    /// The app clipboard, attached while key actions run.
+    clipboard: Option<SharedClipboard>,
 }
 
 impl<'a> EventContext<'a> {
@@ -706,6 +709,7 @@ impl<'a> EventContext<'a> {
             cursor: Rc::new(Cell::new(None)),
             redraw_requested: Rc::new(Cell::new(false)),
             accessibility_announcements: Rc::new(RefCell::new(Vec::new())),
+            clipboard: None,
         }
     }
 
@@ -847,6 +851,15 @@ impl<'a> EventContext<'a> {
         self.cursor.get()
     }
 
+    pub(crate) fn set_clipboard(&mut self, clipboard: SharedClipboard) {
+        self.clipboard = Some(clipboard);
+    }
+
+    /// The app clipboard, present while a key action is dispatched.
+    pub fn clipboard(&self) -> Option<RefMut<'_, dyn Clipboard + 'static>> {
+        self.clipboard.as_deref().map(RefCell::borrow_mut)
+    }
+
     pub fn announce_accessibility(&self, announcement: AccessibilityAnnouncement) {
         self.accessibility_announcements
             .borrow_mut()
@@ -902,6 +915,7 @@ impl<'a> EventContext<'a> {
             cursor: Rc::clone(&self.cursor),
             redraw_requested: Rc::clone(&self.redraw_requested),
             accessibility_announcements: Rc::clone(&self.accessibility_announcements),
+            clipboard: self.clipboard.clone(),
         }
     }
 
@@ -932,6 +946,7 @@ impl<'a> EventContext<'a> {
             cursor: Rc::clone(&self.cursor),
             redraw_requested: Rc::clone(&self.redraw_requested),
             accessibility_announcements: Rc::clone(&self.accessibility_announcements),
+            clipboard: self.clipboard.clone(),
         }
     }
 
@@ -972,6 +987,7 @@ impl<'a> EventContext<'a> {
             cursor: Rc::clone(&self.cursor),
             redraw_requested: Rc::clone(&self.redraw_requested),
             accessibility_announcements: Rc::clone(&self.accessibility_announcements),
+            clipboard: self.clipboard.clone(),
         }
     }
 }

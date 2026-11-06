@@ -101,6 +101,22 @@ App::new().run(|cx: &mut AppContext| {
 | `new()` | Create new application instance |
 | `run(callback)` | Start the application with a root view builder |
 
+#### Clipboard
+
+`AppContext` and `ViewContext` read and write plain text on the app clipboard:
+the general pasteboard on macOS, an in-memory clipboard in headless sessions.
+
+```rust
+cx.write_to_clipboard(ClipboardItem::new_string("rui://link"))?;
+let pasted = cx.read_from_clipboard()?.map(|item| item.text().to_owned());
+```
+
+`read_from_clipboard` returns `Ok(None)` when the clipboard holds no text.
+`AppContext::set_clipboard` replaces the clipboard, for example with a
+`MemoryClipboard` in tests. `Input` and `TextArea` copy, cut and paste through
+it on the `Copy` / `Cut` / `Paste` standard actions, bound to Cmd+C / Cmd+X /
+Cmd+V in the standard keymap.
+
 ---
 
 ### Geometry Types

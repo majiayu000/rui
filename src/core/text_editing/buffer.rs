@@ -571,7 +571,7 @@ impl TextEditBuffer {
         event.modifiers.ctrl || event.modifiers.alt || event.modifiers.meta
     }
 
-    pub fn copy_selection_to<C: Clipboard>(
+    pub fn copy_selection_to<C: Clipboard + ?Sized>(
         &self,
         clipboard: &mut C,
     ) -> Result<bool, TextEditError> {
@@ -582,7 +582,7 @@ impl TextEditBuffer {
         Ok(true)
     }
 
-    pub fn cut_selection_to<C: Clipboard>(
+    pub fn cut_selection_to<C: Clipboard + ?Sized>(
         &mut self,
         clipboard: &mut C,
     ) -> Result<TextEditOutcome, TextEditError> {
@@ -592,12 +592,14 @@ impl TextEditBuffer {
         self.insert_text("")
     }
 
-    pub fn paste_from<C: Clipboard>(
+    pub fn paste_from<C: Clipboard + ?Sized>(
         &mut self,
         clipboard: &mut C,
     ) -> Result<TextEditOutcome, TextEditError> {
-        let text = clipboard.read_text()?;
-        self.insert_text(&text)
+        match clipboard.read_text()? {
+            Some(text) => self.insert_text(&text),
+            None => Ok(TextEditOutcome::default()),
+        }
     }
 
     fn insert_char_from_event(
