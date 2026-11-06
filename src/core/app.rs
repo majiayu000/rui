@@ -7,7 +7,11 @@ use crate::core::entity::{Entity, EntityId, EntityStore};
 use crate::core::executor::{BackgroundExecutor, ForegroundExecutor};
 use crate::core::foreground::{AnimationFrameRequests, ForegroundQueue, FrameTiming};
 use crate::core::geometry::Size;
-use crate::core::view::{ChildView, NotifiedViews, View, ViewContext, ViewNotifier, ViewUpdates};
+use crate::core::view::{
+    ChildView, NotifiedViews, View, ViewContext, ViewNotifier, ViewPlacement, ViewUpdates,
+};
+
+mod release;
 #[cfg(all(target_os = "macos", feature = "metal"))]
 use crate::core::window::WindowId;
 use crate::core::window::WindowOptions;
@@ -15,6 +19,7 @@ use crate::core::windows::Windows;
 use crate::elements::Element;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::rc::Weak;
 use std::sync::Arc;
 
 /// The main application context - owns all state
@@ -38,6 +43,10 @@ pub struct AppContext {
     child_views: HashMap<EntityId, Box<dyn ChildView>>,
     /// Child views their listeners notified since the last frame.
     notified_views: NotifiedViews,
+    /// The placement shared by the elements that show each placed view.
+    placements: HashMap<EntityId, Weak<ViewPlacement>>,
+    /// Views whose last placement was dropped, released unless placed again.
+    unplaced_views: NotifiedViews,
     /// Entities read by the renders in progress, innermost last.
     reads: RefCell<Vec<Vec<EntityId>>>,
     /// The child views that read each entity in their last render, or are it.
@@ -189,6 +198,8 @@ impl AppContext {
             frame_timing: FrameTiming::default(),
             child_views: HashMap::new(),
             notified_views: NotifiedViews::default(),
+            placements: HashMap::new(),
+            unplaced_views: NotifiedViews::default(),
             reads: RefCell::default(),
             observers: HashMap::new(),
             view_reads: HashMap::new(),
@@ -256,6 +267,10 @@ impl AppContext {
     /// Keep `view` to be placed in trees with [`crate::elements::view`]. It
     /// renders where it is placed, and again only when it or an entity its
     /// last render read is notified; the tree around it is not rebuilt then.
+    ///
+    /// The view lives until [`Self::release`] or until, after it was placed,
+    /// no window's tree places it any more. It is then dropped with its state
+    /// and queued listener updates, and placing it again panics.
     pub fn new_view<V: View>(&mut self, view: V) -> Entity<V> {
         let marker = self.create(());
         let entity = Entity::<V>::new(marker.id());
@@ -274,7 +289,9 @@ impl AppContext {
     /// Render the child view `id`, recording what it reads.
     pub(crate) fn render_child_view(&mut self, id: EntityId) -> crate::elements::AnyElement {
         let Some(mut view) = self.child_views.remove(&id) else {
-            panic!("view {id:?} is placed in a tree but was never created with new_view");
+            panic!(
+                "view {id:?} is placed in a tree but was released, or never created with new_view"
+            );
         };
         let (element, reads) = self.recording_reads(|app| view.render_any(app));
         self.child_views.insert(id, view);
@@ -316,7 +333,10 @@ impl AppContext {
     pub(crate) fn notify_queued_views(&mut self) {
         let notified = std::mem::take(&mut *self.notified_views.borrow_mut());
         for id in notified {
-            self.notify(id);
+            // A released view's listeners can still fire from a tree that shows it.
+            if self.child_views.contains_key(&id) {
+                self.notify(id);
+            }
         }
     }
 
