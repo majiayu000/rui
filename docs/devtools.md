@@ -23,7 +23,8 @@ What it shows, for the frame before the one on screen:
 | `interval`, `fps` | Time since the previous drawn frame began. Idle windows draw no frames, so this is only a rate while something redraws. |
 | `dropped` | Display refreshes missed while an animation asked for every refresh: a frame more than 1.5 refresh intervals after one that asked for the next refresh dropped the refreshes in between. |
 | `prepare`, `rebuild`, `layout`, `paint` | Wall time of those `FrameStage`s. |
-| `present`, `wait`, `render` | The whole present stage; of it, waiting for a drawable and encoding the frame. Headless runners show `(no backend)`. |
+| `present`, `drawable` | The whole present stage, and of it the wait for a drawable. Headless runners show `(no backend)`. |
+| `encode`, `scheduled` | Encoding and committing the frame, and waiting for its commands to be scheduled before the drawable is presented with the Core Animation transaction. |
 | `gpu` | GPU time of the latest frame the GPU finished (a frame or two behind), from the command buffer's `GPUStartTime`/`GPUEndTime`. |
 | `draws`, `instances` | `MetalRenderer::last_frame_stats()`. |
 | `damage` | Share of the window `Scene::damage` reported changed, the overlay itself left out. |
@@ -48,12 +49,12 @@ The same counters can be read in code: `Presenter::profiler()` (and
 
 ### What it costs when on
 
-- Nine primitives at the end of the scene, and their strings each frame.
+- Ten primitives at the end of the scene, and their strings each frame.
 - Text may reach past its bounds horizontally (see `Primitive::reach`), so the
   renderer redraws a full-width band about 140 px tall at the top of the window
   every frame, in addition to the app's own damage, which it joins into one
   rectangle. Render times with the overlay on include that.
-- The renderer reads the GPU time of each finished command buffer.
+- The renderer reads the GPU time of each finished command buffer and times the wait for scheduling.
 
 ### Relation to `RUI_PROFILE`
 

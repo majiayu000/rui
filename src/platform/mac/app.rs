@@ -538,7 +538,7 @@ where
                         .saturating_duration_since(observed_at)
                         .as_nanos()
                 });
-                renderer.set_time_completed_frames(presenter.profiler().is_some());
+                renderer.set_profiling(presenter.profiler().is_some());
                 let presentation = match metal_drawable {
                     Some(metal_drawable) => {
                         if let Some((frame_index, event_observed_at)) = present_profile {
@@ -569,6 +569,9 @@ where
                     profiler.record_render(RenderSample {
                         drawable_wait_ns: phases.drawable_wait_ns,
                         render_ns: phases.render_ns,
+                        scheduled_wait_ns: renderer
+                            .scheduled_wait()
+                            .map_or(0, |time| time.as_nanos()),
                         draw_calls: stats.draw_calls,
                         instances: stats.instances,
                         redrawn_pixels: stats.redrawn_pixels,

@@ -16,7 +16,7 @@ const MARGIN: f32 = 8.0;
 const PADDING: f32 = 8.0;
 const FONT_SIZE: f32 = 11.0;
 const LINE_HEIGHT: f32 = 15.0;
-const LINES: usize = 8;
+const LINES: usize = 9;
 const FONT_FAMILY: &str = "SF Mono";
 /// A frame later than this many expected intervals dropped the ones between.
 const LATE_FACTOR: f64 = 1.5;
@@ -27,8 +27,11 @@ const LATE_FACTOR: f64 = 1.5;
 pub struct RenderSample {
     /// Waiting for a drawable to draw into.
     pub drawable_wait_ns: u128,
-    /// Encoding and committing the frame's GPU work.
+    /// Encoding and committing the frame's GPU work, then presenting it.
     pub render_ns: u128,
+    /// Of `render_ns`, waiting for the committed work to be scheduled, which
+    /// a layer presenting with its Core Animation transaction needs.
+    pub scheduled_wait_ns: u128,
     pub draw_calls: u32,
     pub instances: u32,
     /// Device pixels drawn again.
@@ -222,25 +225,32 @@ impl Profiler {
         let _ = match frame.render {
             Some(render) => write!(
                 lines[4],
-                "present {}  wait {}  render {}",
+                "present {}  drawable {}",
                 ms(d.present_ns),
-                ms(render.drawable_wait_ns),
-                ms(render.render_ns)
+                ms(render.drawable_wait_ns)
             ),
             None => write!(lines[4], "present {}  (no backend)", ms(d.present_ns)),
         };
+        if let Some(render) = frame.render {
+            let _ = write!(
+                lines[5],
+                "encode {}  scheduled {}",
+                ms(render.render_ns.saturating_sub(render.scheduled_wait_ns)),
+                ms(render.scheduled_wait_ns)
+            );
+        }
         let _ = match frame.render {
             Some(render) => write!(
-                lines[5],
+                lines[6],
                 "gpu {}  draws {}  instances {}",
                 render.gpu_ns.map_or_else(|| String::from("-"), ms),
                 render.draw_calls,
                 render.instances
             ),
-            None => write!(lines[5], "gpu -  draws -"),
+            None => write!(lines[6], "gpu -  draws -"),
         };
         let _ = write!(
-            lines[6],
+            lines[7],
             "damage {:.1}%  redrawn {}",
             frame.damage_fraction * 100.0,
             frame.render.map_or_else(
@@ -249,7 +259,7 @@ impl Profiler {
             )
         );
         let _ = write!(
-            lines[7],
+            lines[8],
             "prims {} (replayed {})  allocs {}",
             frame.primitives,
             frame.replayed_primitives,
