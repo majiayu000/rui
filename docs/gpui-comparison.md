@@ -81,11 +81,20 @@ examples and GPUI's `primitives` bench paint this way.
   received, counting one draw per `Scene::batches()` entry, which is what its Metal
   renderer encodes for the primitives these fixtures use (paths and surfaces would add
   draws; no fixture has them).
-- GPU ms / frame (RUI only): a separate pass of 30 frames after the CPU samples, whose
-  frames wait for the command buffer and report `GPUEndTime - GPUStartTime`. Waiting
-  never happens in the CPU samples. GPUI's headless renderer commits its command
-  buffer inside `render_scene` and returns nothing, so its GPU time cannot be read
-  without changing Zed; it is not reported.
+- GPU ms / frame, both sides, through one hook,
+  `benchmarks/gpui_compare/gpu_time.rs`. RUI's bench includes it and `run.sh` copies
+  it next to GPUI's.
+  - GPUI's headless renderer commits its command buffer inside `render_scene` and
+    keeps it. So the hook replaces `-commit` on the device's Metal command buffer
+    class with one that adds a completed handler, then commits as before. Zed itself
+    is unchanged.
+  - Neither side waits for the GPU in the sampled frames. A frame's buffer can
+    therefore start before the previous one ends, so each frame counts from the later
+    of its `GPUStartTime` and the previous frame's `GPUEndTime`: the GPU busy time it
+    added.
+  - Both benches fail unless exactly one command buffer completed per frame.
+  - Before this, RUI's GPU column came from a separate pass that waited for every
+    frame, and GPUI had none.
 - Footprint: `ri_phys_footprint`. RUI: after its 70 frames. GPUI: after the first call
   of the bench function (Criterion calls it many times, each with a new window), and
   again at the end, after thousands of frames.
@@ -164,12 +173,51 @@ and its footprint is lower in every case. That is the claim, and its limits:
   rebuilds the list from the root. With rows as views (#234), the same edit costs
   23 allocations and 2.0 M instructions (perf_gate `list.one_row_changed_views`), but
   that path is not in this fixture. On `quad_grid` the two are equal (16 vs 14).
-- **GPU time** is reported for RUI only (0.16–0.51 ms); GPUI's headless renderer
-  exposes none.
+- **GPU time** was reported for RUI only in this run. Both sides are now measured; see
+  [GPU time on both sides](#gpu-time-on-both-sides-rui-a5cae0b). There RUI is behind on
+  the virtual lists and the resized long list.
 - **One fixture set, one machine, one GPUI revision.** It says nothing about
   Linux, Windows or the web, where GPUI runs and RUI does not.
 - **Fonts differ:** RUI's default is Arial, GPUI's SF Pro.
 
+
+## GPU time on both sides (RUI `a5cae0b`)
+
+All eleven cases, three rounds, with the hook above. Load average 26 at the start and
+43 at the end. The CPU columns of this run agree with the final results and the editor
+run: RUI is ahead on every case by instructions (1.1x to 15.5x). Its startup is ahead
+3.8x. Only GPU time is new here.
+
+| Case | RUI GPU ms p50 | GPUI GPU ms p50 | RUI p95 | GPUI p95 | RUI vs GPUI |
+|---|---|---|---|---|---|
+| list_full | 0.28–0.51 | 0.31 | 0.37–0.64 | 0.32–0.42 | tie (ranges overlap) |
+| list_full_one_row | 0.51 | 6.43–6.90 | 0.51–0.64 | 11.3–12.5 | RUI ahead 13x |
+| list_virtual_1k | 0.22–0.34 | 0.097 | 0.35–0.47 | 0.10–0.13 | RUI behind 2.9x |
+| list_virtual_100k | 0.22 | 0.097 | 0.26–0.51 | 0.10–0.13 | RUI behind 2.2x |
+| text_paragraphs | 0.13–0.27 | 0.20 | 0.16–0.44 | 0.20–0.91 | tie (ranges overlap) |
+| quad_grid | 0.31 | 0.38 | 0.67–0.75 | 0.44–0.76 | RUI ahead 1.2x |
+| resize_full | 0.51 | 0.28 | 0.51–0.89 | 0.32–0.52 | RUI behind 1.8x |
+| resize_virtual | 0.24–0.47 | 0.22–0.28 | 0.34–1.11 | 0.30–0.51 | tie (ranges overlap) |
+| editor_scroll | 0.24–0.25 | 0.30 | 0.29–0.52 | 0.31–0.60 | RUI ahead 1.2x |
+| editor_edit | 0.24–0.26 | 0.30 | 0.48–0.55 | 0.31–0.64 | RUI ahead 1.2x |
+
+What this shows:
+
+- **The GPU is not where RUI wins.** Its CPU lead is 1.1x to 15x. On the GPU it is
+  ahead only where GPUI's `.cached()` replay splits a frame into 3 983 draws (13x),
+  and slightly on the grid and the editor (1.2x).
+- **RUI is behind** on the virtual lists (2.2–2.9x) and on the resized long list
+  (1.8x). Their instance counts are close: 1 056 vs 1 217 and 1 033 vs 1 683.
+- **The cause is unknown**, and nothing here measures it. One shader draws every
+  primitive on RUI's side, with per-fragment clip edges, where GPUI has a shader per
+  primitive kind.
+- **RUI's virtual list is GPU-bound** in this bench. Its buffers overlap and each ends
+  about 0.22 ms after the previous one. The CPU frame (0.21–0.33 ms wall) waits
+  whenever three frames are in flight. Its isolated frame, from the old waiting pass,
+  was 0.16 ms, still 1.7x GPUI's.
+- **RUI's ranges are wider** between rounds, for example `list_full` at 0.28 or 0.51
+  ms. GPU clock state between processes is the likely cause; this run does not
+  isolate it.
 
 ## Editor-scale fixture (RUI `a31e116`)
 
@@ -357,16 +405,13 @@ Where RUI is still behind:
 
 ## Measurement hook in RUI
 
-GPU time needed one addition to `src/`: `MetalRenderer::render_offscreen_gpu_time`
-renders like `render_offscreen`, waits for the command buffer, and returns
-`GPUEndTime - GPUStartTime`. The command buffer never leaves the renderer, and
-metal-rs 0.31 does not wrap those two properties, so a bench cannot read them from
-outside. The existing paths are unchanged apart from sharing the offscreen-target
-lookup.
+The comparison reads GPU time through `benchmarks/gpui_compare/gpu_time.rs` on both
+sides and needs nothing from `src/`. `MetalRenderer::render_offscreen_gpu_time`, which
+waits for a frame and returns its `GPUEndTime - GPUStartTime`, is still used by
+`perf_gate` and `renderer_frame` for isolated single-frame GPU time.
 
 ## Not measured yet
 
-- GPU time on GPUI (see above).
 - Startup to a presented frame in a real on-screen window.
 - Input latency against GPUI. RUI's own is measured natively since #244
   (`frame_pacing` latency mode: 24–25 ms event to photon at 120 Hz).
