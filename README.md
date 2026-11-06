@@ -42,10 +42,10 @@ Add this repository as a Git dependency in `Cargo.toml`:
 
 ```toml
 [dependencies]
-rui = { git = "https://github.com/majiayu000/rui", rev = "99d08da9f092e8af098a3dd261262e40d7b611e6" }
+rui = { git = "https://github.com/majiayu000/rui", rev = "1311a1d6b98a601de603d215ebc1d21f408fd7a3" }
 ```
 
-This pins the source baseline containing the unreleased native IME and font-cache changes; it is not a new release. This is `majiayu000/rui`. The [separate `audulus/rui` project](https://github.com/audulus/rui) also uses the name `rui`; installing `rui` from crates.io does not select this repository. Use the Git URL above for the API shown here.
+This pins the source baseline checked by both installation guides, including the listener and native input changes; it is not a new release. This is `majiayu000/rui`. The [separate `audulus/rui` project](https://github.com/audulus/rui) also uses the name `rui`; installing `rui` from crates.io does not select this repository. Use the Git URL above for the API shown here.
 
 Replace `src/main.rs` with:
 
