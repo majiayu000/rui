@@ -4,8 +4,10 @@ use crate::core::accessibility::{
 };
 use crate::core::app::AppContext;
 use crate::core::event::Event;
+use crate::core::frame_pipeline::FrameStageDurations;
 use crate::core::frame_pipeline::{FramePipeline, FramePipelineError};
 use crate::core::geometry::{Bounds, Point, Size};
+use crate::devtools::Profiler;
 use crate::elements::Element;
 use crate::elements::element::{EventContext, LayoutNodes, PointerEvent, PointerEventKind};
 use crate::renderer::RendererDiagnostics;
@@ -57,6 +59,8 @@ pub struct Presenter<E = ()> {
     laid_out_viewport: Size,
     prepared_frame: PresenterFrame,
     last_frame: Option<PresenterFrame>,
+    /// Only while the profiling overlay is on.
+    profiler: Option<Box<Profiler>>,
 }
 
 impl<E> Presenter<E> {
@@ -85,6 +89,7 @@ impl<E> Presenter<E> {
                 primitive_count: 0,
             },
             last_frame: None,
+            profiler: None,
         }
     }
 
@@ -202,6 +207,45 @@ impl<E> Presenter<E> {
 
     pub fn last_frame(&self) -> Option<&PresenterFrame> {
         self.last_frame.as_ref()
+    }
+
+    /// This window's profiler, while the profiling overlay is on.
+    pub fn profiler(&self) -> Option<&Profiler> {
+        self.profiler.as_deref()
+    }
+
+    pub fn profiler_mut(&mut self) -> Option<&mut Profiler> {
+        self.profiler.as_deref_mut()
+    }
+
+    /// Start or stop this window's profiler as the app asks, and start timing
+    /// a frame that will be drawn.
+    pub(crate) fn begin_devtools_frame(&mut self, context: &AppContext) {
+        if !context.devtools.profiler {
+            // The last overlay stays in the scene, so the next frame's damage
+            // covers it and it is painted over.
+            self.profiler = None;
+            return;
+        }
+        self.profiler
+            .get_or_insert_with(|| Box::new(Profiler::new()))
+            .begin_frame(context.frame_interval());
+    }
+
+    pub(crate) fn paint_devtools_overlay(&mut self) {
+        if let Some(profiler) = self.profiler.as_mut() {
+            profiler.paint_overlay(&mut self.scene, self.laid_out_viewport);
+        }
+    }
+
+    pub(crate) fn end_devtools_frame(
+        &mut self,
+        context: &AppContext,
+        durations: FrameStageDurations,
+    ) {
+        if let Some(profiler) = self.profiler.as_mut() {
+            profiler.end_frame(durations, context.animation_frame_requested());
+        }
     }
 
     pub fn pointer_dispatch_target(&self, hit_target: Option<ElementId>) -> Option<ElementId> {

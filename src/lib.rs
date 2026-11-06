@@ -32,6 +32,7 @@
 
 pub mod advanced_ui;
 pub mod core;
+pub mod devtools;
 pub mod elements;
 pub mod renderer;
 pub mod testing;

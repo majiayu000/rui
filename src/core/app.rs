@@ -19,6 +19,7 @@ pub use rows::Row;
 use crate::core::window::WindowId;
 use crate::core::window::WindowOptions;
 use crate::core::windows::Windows;
+use crate::devtools::DevtoolsFlags;
 use crate::elements::Element;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -58,6 +59,7 @@ pub struct AppContext {
     view_reads: HashMap<EntityId, Vec<EntityId>>,
     /// The views [`Self::rows`] made.
     row_views: rows::RowViews,
+    pub(crate) devtools: DevtoolsFlags,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -209,6 +211,7 @@ impl AppContext {
             observers: HashMap::new(),
             view_reads: HashMap::new(),
             row_views: rows::RowViews::default(),
+            devtools: DevtoolsFlags::from_env(),
         }
     }
 
@@ -366,6 +369,17 @@ impl AppContext {
     /// Request a redraw of every window without rebuilding the UI tree
     pub fn request_redraw(&mut self) {
         self.for_each_window_frame(|frame| frame.mark_redraw(RedrawSource::Explicit));
+    }
+
+    /// Show or hide the profiling overlay in every window. `RUI_DEVTOOLS=1`
+    /// starts with it shown. See `docs/devtools.md`.
+    pub fn toggle_profiler(&mut self) {
+        self.devtools.profiler = !self.devtools.profiler;
+        self.request_redraw();
+    }
+
+    pub fn profiler_enabled(&self) -> bool {
+        self.devtools.profiler
     }
 
     /// Rebuild only the window whose frame runs now, such as after it resized.

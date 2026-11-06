@@ -197,6 +197,11 @@ impl<'a, T: 'static> ViewContext<'a, T> {
     pub fn request_animation_frame(&mut self) {
         self.app.request_animation_frame_for(self.view.id());
     }
+
+    /// See [`AppContext::toggle_profiler`].
+    pub fn toggle_profiler(&mut self) {
+        self.app.toggle_profiler();
+    }
 }
 
 /// A view rendered inside other views' trees, kept between renders.

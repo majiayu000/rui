@@ -322,6 +322,8 @@ impl FrameStage {
 /// Wall-clock cost of the stages a runner cares about timing.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct FrameStageDurations {
+    pub prepare_ns: u128,
+    pub rebuild_ns: u128,
     pub layout_ns: u128,
     pub dispatch_ns: u128,
     pub paint_ns: u128,
@@ -459,13 +461,20 @@ impl FramePipeline {
         for stage in FrameStage::ORDER {
             match stage {
                 FrameStage::Prepare => {
+                    let started_at = Instant::now();
                     Self::prepare_frame(context);
                     if matches!(idle_policy, IdlePolicy::SkipWhenIdle) && !context.has_frame_work()
                     {
                         return Ok(None);
                     }
+                    durations.prepare_ns = started_at.elapsed().as_nanos();
+                    presenter.begin_devtools_frame(context);
                 }
-                FrameStage::Rebuild => presenter.rebuild_if_needed(context, build_root),
+                FrameStage::Rebuild => {
+                    let started_at = Instant::now();
+                    presenter.rebuild_if_needed(context, build_root);
+                    durations.rebuild_ns = started_at.elapsed().as_nanos();
+                }
                 FrameStage::Layout => {
                     let started_at = Instant::now();
                     presenter.layout(viewport_size)?;
@@ -482,6 +491,7 @@ impl FramePipeline {
                     let started_at = Instant::now();
                     presenter.paint();
                     durations.paint_ns = started_at.elapsed().as_nanos();
+                    presenter.paint_devtools_overlay();
                 }
                 FrameStage::Present => {
                     let started_at = Instant::now();
@@ -504,6 +514,7 @@ impl FramePipeline {
                             ));
                         }
                     }
+                    presenter.end_devtools_frame(context, durations);
                 }
             }
         }

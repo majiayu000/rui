@@ -488,6 +488,12 @@ impl Scene {
         reach.unwrap_or(Bounds::from_xywh(0.0, 0.0, 0.0, 0.0))
     }
 
+    /// Drop the previous frame's primitives from `len` on, so they are not
+    /// damage. For content painted again over the same place every frame.
+    pub(crate) fn truncate_previous(&mut self, len: usize) {
+        self.previous_primitives.truncate(len);
+    }
+
     /// Primitives this frame replayed from the previous one instead of painting.
     pub fn replayed_len(&self) -> usize {
         self.replayed
