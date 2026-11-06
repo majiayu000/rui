@@ -84,6 +84,12 @@ impl ElementId {
     pub fn is_ephemeral(self) -> bool {
         self.0 & (GENERATED_BIT | DERIVED_BIT) == GENERATED_BIT
     }
+
+    /// Whether layout derived this id from the element's place in the tree,
+    /// rather than the application setting it.
+    pub fn is_derived(self) -> bool {
+        self.0 & (GENERATED_BIT | DERIVED_BIT) == GENERATED_BIT | DERIVED_BIT
+    }
 }
 
 /// Mixes the words a `TypeId` hashes into the seed. Not a general-purpose

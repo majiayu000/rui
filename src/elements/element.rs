@@ -133,6 +133,11 @@ pub trait Element: Any {
         None
     }
 
+    /// The element's Rust type, for the inspector.
+    fn type_name(&self) -> &'static str {
+        std::any::type_name::<Self>()
+    }
+
     /// Get the element's style
     fn style(&self) -> &Style;
 

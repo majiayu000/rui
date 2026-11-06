@@ -1,5 +1,5 @@
-//! Developer tools drawn into each window's scene: a profiling overlay and a
-//! damage and replay visualizer.
+//! Developer tools drawn into each window's scene: a profiling overlay, a
+//! damage and replay visualizer and an element inspector.
 //!
 //! Everything here is off unless `RUI_DEVTOOLS` names a tool or the app turns
 //! one on, such as with
@@ -8,9 +8,12 @@
 //! `docs/devtools.md`.
 
 mod damage;
+mod inspector;
 mod profiler;
 mod window;
 
+pub(crate) use inspector::Inspection;
+pub use inspector::{InspectedElement, Inspector, PaintState};
 pub use profiler::{FrameSample, Profiler, RenderSample};
 pub(crate) use window::WindowDevtools;
 
@@ -24,6 +27,7 @@ pub const RUI_DEVTOOLS_ENV: &str = "RUI_DEVTOOLS";
 pub(crate) struct DevtoolsFlags {
     pub(crate) profiler: bool,
     pub(crate) damage: bool,
+    pub(crate) inspector: bool,
 }
 
 impl DevtoolsFlags {
@@ -33,14 +37,14 @@ impl DevtoolsFlags {
                 Ok(flags) => flags,
                 Err(tool) => panic!(
                     "{RUI_DEVTOOLS_ENV}: unknown tool `{tool}`; expected a comma-separated \
-                     list of profiler, damage, all, or 1 for the profiler"
+                     list of profiler, damage, inspector, all, or 1 for the profiler"
                 ),
             },
             Err(_) => Self::default(),
         }
     }
 
-    /// `1` or `profiler`, `damage`, `all`, comma-separated; empty, `0`,
+    /// `1` or `profiler`, `damage`, `inspector`, `all`, comma-separated; empty, `0`,
     /// `false` and `off` turn everything off.
     fn parse(value: &str) -> Result<Self, &str> {
         let mut flags = Self::default();
@@ -51,7 +55,10 @@ impl DevtoolsFlags {
             match tool {
                 "1" | "profiler" => flags.profiler = true,
                 "damage" => flags.damage = true,
-                "all" => (flags.profiler, flags.damage) = (true, true),
+                "inspector" => flags.inspector = true,
+                "all" => {
+                    (flags.profiler, flags.damage, flags.inspector) = (true, true, true);
+                }
                 tool => return Err(tool),
             }
         }
@@ -59,7 +66,7 @@ impl DevtoolsFlags {
     }
 
     pub(crate) fn any(self) -> bool {
-        self.profiler || self.damage
+        self.profiler || self.damage || self.inspector
     }
 }
 
@@ -128,13 +135,23 @@ mod tests {
 
     #[test]
     fn rui_devtools_names_the_tools_to_turn_on() {
-        let flags = |profiler, damage| Ok(DevtoolsFlags { profiler, damage });
-        assert_eq!(DevtoolsFlags::parse(""), flags(false, false));
-        assert_eq!(DevtoolsFlags::parse("0"), flags(false, false));
-        assert_eq!(DevtoolsFlags::parse("1"), flags(true, false));
-        assert_eq!(DevtoolsFlags::parse("damage"), flags(false, true));
-        assert_eq!(DevtoolsFlags::parse("profiler, damage"), flags(true, true));
-        assert_eq!(DevtoolsFlags::parse("all"), flags(true, true));
+        let flags = |profiler, damage, inspector| {
+            Ok(DevtoolsFlags {
+                profiler,
+                damage,
+                inspector,
+            })
+        };
+        assert_eq!(DevtoolsFlags::parse(""), flags(false, false, false));
+        assert_eq!(DevtoolsFlags::parse("0"), flags(false, false, false));
+        assert_eq!(DevtoolsFlags::parse("1"), flags(true, false, false));
+        assert_eq!(DevtoolsFlags::parse("damage"), flags(false, true, false));
+        assert_eq!(DevtoolsFlags::parse("inspector"), flags(false, false, true));
+        assert_eq!(
+            DevtoolsFlags::parse("profiler, damage"),
+            flags(true, true, false)
+        );
+        assert_eq!(DevtoolsFlags::parse("all"), flags(true, true, true));
         assert_eq!(DevtoolsFlags::parse("profiler,inspect"), Err("inspect"));
     }
 }

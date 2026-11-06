@@ -1,6 +1,7 @@
 //! Paint: the context elements paint into.
 
 use super::*;
+use crate::devtools::Inspection;
 
 /// Paint context passed during paint phase
 pub struct PaintContext<'a> {
@@ -20,6 +21,8 @@ pub struct PaintContext<'a> {
     /// it and the active clip are not painted. `None` paints everything.
     pub(super) viewport: Option<Bounds>,
     focused: Option<ElementId>,
+    /// Collects every element painted, for the inspector. Only without replay.
+    pub(super) inspection: Option<&'a Inspection>,
 }
 
 /// A node's layout before taffy rounds it.
@@ -44,6 +47,7 @@ impl<'a> PaintContext<'a> {
             last_child: Cell::new(None),
             viewport: None,
             focused: None,
+            inspection: None,
         }
     }
 
@@ -85,6 +89,19 @@ impl<'a> PaintContext<'a> {
 
     pub fn is_focused(&self, id: ElementId) -> bool {
         self.focused == Some(id)
+    }
+
+    /// [`Self::without_replay`], telling `inspection` of every element painted.
+    pub(crate) fn inspecting(
+        scene: &'a mut Scene,
+        bounds: Bounds,
+        taffy: &'a TaffyTree<ElementId>,
+        inspection: &'a Inspection,
+    ) -> Self {
+        Self {
+            inspection: Some(inspection),
+            ..Self::without_replay(scene, bounds, taffy)
+        }
     }
 
     /// Add a primitive to the scene
@@ -145,6 +162,7 @@ impl<'a> PaintContext<'a> {
             last_child: Cell::new(None),
             viewport: self.viewport,
             focused: self.focused,
+            inspection: self.inspection,
         }
     }
 }

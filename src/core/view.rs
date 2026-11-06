@@ -270,6 +270,11 @@ impl<'a, T: 'static> ViewContext<'a, T> {
     pub fn toggle_damage_visualizer(&mut self) {
         self.app.toggle_damage_visualizer();
     }
+
+    /// See [`AppContext::toggle_inspector`].
+    pub fn toggle_inspector(&mut self) {
+        self.app.toggle_inspector();
+    }
 }
 
 /// A view rendered inside other views' trees, kept between renders.

@@ -275,6 +275,12 @@ impl AnyElement {
 
     pub fn paint(&mut self, cx: &mut PaintContext) {
         if !cx.memo {
+            if let Some(inspection) = cx.inspection {
+                inspection.enter(self, cx.bounds);
+                self.inner.paint(cx);
+                inspection.exit();
+                return;
+            }
             self.inner.paint(cx);
             return;
         }
@@ -361,6 +367,15 @@ impl AnyElement {
             });
             self.paint_record.set(Some((frame, index)));
         }
+    }
+
+    /// Frame and index of the [`PaintRecord`] this element last left.
+    pub(crate) fn paint_record_slot(&self) -> Option<(u64, u32)> {
+        self.paint_record.get()
+    }
+
+    pub(crate) fn type_name(&self) -> &'static str {
+        self.inner.type_name()
     }
 
     pub fn refresh_text_geometry(&mut self, text_measurer: &mut TextMeasureCache) {

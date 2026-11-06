@@ -13,6 +13,7 @@ use crate::core::view::{
 };
 
 mod clipboard;
+mod devtools;
 mod focus;
 mod images;
 mod menus;
@@ -394,28 +395,6 @@ impl AppContext {
     /// Request a redraw of every window without rebuilding the UI tree
     pub fn request_redraw(&mut self) {
         self.for_each_window_frame(|frame| frame.mark_redraw(RedrawSource::Explicit));
-    }
-
-    /// Show or hide the profiling overlay in every window. `RUI_DEVTOOLS=1`
-    /// starts with it shown. See `docs/devtools.md`.
-    pub fn toggle_profiler(&mut self) {
-        self.devtools.profiler = !self.devtools.profiler;
-        self.request_redraw();
-    }
-
-    pub fn profiler_enabled(&self) -> bool {
-        self.devtools.profiler
-    }
-
-    /// Show or hide the damage and replay visualizer in every window.
-    /// `RUI_DEVTOOLS=damage` starts with it shown. See `docs/devtools.md`.
-    pub fn toggle_damage_visualizer(&mut self) {
-        self.devtools.damage = !self.devtools.damage;
-        self.request_redraw();
-    }
-
-    pub fn damage_visualizer_enabled(&self) -> bool {
-        self.devtools.damage
     }
 
     /// Rebuild only the window whose frame runs now, such as after it resized.
