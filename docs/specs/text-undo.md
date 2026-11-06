@@ -1,6 +1,6 @@
 # Local text Undo and Redo
 
-Status: design only; not implemented by the runtime-correctness PR. Tracking: [#288](https://github.com/majiayu000/rui/issues/288). Background: [source comparison](../research/rui-gpui-bui-2026-11-07.md).
+Status: implemented in [PR #291](https://github.com/majiayu000/rui/pull/291); native physical IME candidate acceptance remains pending. Tracking: [#288](https://github.com/majiayu000/rui/issues/288). Background: [source comparison](../research/rui-gpui-bui-2026-11-07.md).
 
 ## Scope
 
@@ -34,4 +34,45 @@ Route Undo/Redo through the existing action/text command path to the current tex
 
 ## Decision
 
-Adopt local editing transactions, not BUI's cross-widget history or interaction-count merge rules. History size is a concrete initial policy, not a general undo framework. Implementation remains pending; the design must not be presented as an existing API.
+Adopt local editing transactions, not BUI's cross-widget history or interaction-count merge rules. History size is a concrete initial policy, not a general undo framework. Input and TextArea now implement these local transactions through TextInputCommand::Undo/Redo and StandardAction::Undo/Redo.
+
+
+## Implemented ownership and rebuild contract
+
+`TextEditBuffer` owns before/after text and directed selection snapshots. Insert,
+replacement, delete, cut, paste and composition commit converge on its edit
+boundary; nested helpers do not double-record. Each field retains at most 100
+committed entries across undo/redo. Snapshots own their strings; eviction drops
+both strings. The count limit is not a byte limit: a 1 MiB document edited 100
+times can retain roughly 200 MiB in snapshots. This is not a large editor claim.
+
+An uncontrolled rebuild (no `.value(...)`) transfers the existing editor at the
+same identity. A controlled rebuild retains history only when `.value(...)`
+echoes the current editor text. A different supplied value resets text and
+history, including a parent reset to the initial empty value. Calling `.value`
+on an existing component always creates a fresh editor. Detached fields and
+roots whose explicit IDs change do not transfer history. These rules avoid
+interpreting the original bound value as an implicit promise to retain edits.
+
+Cmd-Z and Shift-Cmd-Z are keymap fallbacks; an explicit binding for either chord
+wins. AppKit raw key events are collected before native dispatch. The content
+view skips IME key interpretation for Cmd-Z, so it cannot commit marked text or
+suppress the raw action before the app keymap sees it. After composition Undo,
+snapshot synchronization discards native marked text and clears its logical
+owner. Redo during composition changes neither text nor history.
+
+## Evidence and remaining acceptance
+
+`tests/text_undo.rs` drives real Input and TextArea commands/actions and headless
+key routing, covering Unicode selection replacement, composition grouping and
+cancellation, native UTF-16 replacement, bounded history, paste/cut, independent
+fields, rebuilds, controlled reset and explicit app bindings. A focused history
+unit test inspects eviction and retained byte counts. Physical keyboard input,
+IME candidate-window behavior and platform memory profiling remain unverified.
+
+Local verification (2026-11-07):
+
+- `CARGO_TARGET_DIR=/tmp/rui-text-undo-target cargo test --test text_undo --test text_editing --test text_area --test action_keymap`: 71 passed. Assertions observe restored text and directed selections, controlled parent reset, keyboard paste/cut, focus isolation and rebuilt identity.
+- `cargo test --lib history::tests`: retained entries and owned text bytes checked directly; 1 passed.
+- `cargo test --lib input::`: existing Input and macOS text-input adapter regressions; 146 passed. These are unit tests, not physical IME acceptance.
+- Logs: `/Users/lifcc/Documents/reports/rui/2026-11-07/feature-implementation/undo-acceptance.log`, `undo-history.log`, `undo-input-native-unit.log`.

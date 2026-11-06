@@ -115,8 +115,8 @@ GPUI 有多个桌面平台后端；BUI 也有 Windows/Linux 路径，但 macOS �
 | #284 上下文归属与panic恢复 | 本批实施 | 异主拒绝、unwind恢复、后续合法task仍可运行 |
 | #285 inline进度与取消释放 | 本批实施 | 自唤醒触达现有上限，取消无需外部wake释放资源 |
 | #286 入门基线 | 本批实施 | 两份文档的外部消费者构建一致 |
-| [变高列表 #287](https://github.com/majiayu000/rui/issues/287) | 独立 Issue + Spec，待实现 | 测量契约、稳定锚点、命中与retained/fresh一致 |
-| [文本撤销 #288](https://github.com/majiayu000/rui/issues/288) | 独立 Issue + Spec，待实现 | 文本/选区、IME事务、redo分支、控件隔离 |
+| [变高列表 #287](https://github.com/majiayu000/rui/issues/287) | 独立 Issue + Spec，已实现并提交审查 | 测量契约、稳定锚点、命中与retained/fresh一致 |
+| [文本撤销 #288](https://github.com/majiayu000/rui/issues/288) | 独立 Issue + Spec，已实现并提交审查 | 文本/选区、IME事务、redo分支、控件隔离 |
 | #280–#283 | 已有PR继续验收 | 不把开放PR计入主线，不重复建设 |
 | #177 shader预编译、#191调度优先级 | 已有Issue按profiling推进 | 有收益证据才实现，不从竞品宣传反推瓶颈 |
 | 真机IME/VoiceOver、跨平台 | 独立后续验收/投入 | 当前没有测试结论，不宣称产品成熟 |
@@ -125,7 +125,7 @@ GPUI 有多个桌面平台后端；BUI 也有 Windows/Linux 路径，但 macOS �
 
 ## 本批交付与实现验收
 
-- [PR #289](https://github.com/majiayu000/rui/pull/289)：本报告、两份能力规格和安装基线修正；关闭 #286，#287/#288 仍为规格待实现。
+- [PR #289](https://github.com/majiayu000/rui/pull/289)：本报告、两份能力规格和安装基线修正；关闭 #286，#287/#288 的后续实现见下方更新。
 - [PR #290](https://github.com/majiayu000/rui/pull/290)：实现 #284/#285，包含[任务边界 Spec](https://github.com/majiayu000/rui/blob/29f6eca2d121ae80e1e839c4c1a8e50fb5946eda/docs/specs/runtime-task-boundaries.md)与[边界回归测试](https://github.com/majiayu000/rui/blob/29f6eca2d121ae80e1e839c4c1a8e50fb5946eda/src/core/executor_boundaries_tests.rs)。
 
 四个基线回归先失败后通过。完整 runtime 已确认取消且外部 waker 保留时，推进执行器会释放 future；不再只依靠原机制片段。默认特性下重新运行 executor 和开启 RUI_VERIFY_REPLAY 的 spawn 集成测试：异主回调不执行且 A/B 保持10/20、应用移动后合法update仍成功、捕获panic后任务外update被拒绝、后续合法任务写入7、自唤醒触发原有10000轮诊断、线程中正在poll时cancel不阻塞、后台接力最终显示 step 9。
@@ -133,3 +133,16 @@ GPUI 有多个桌面平台后端；BUI 也有 Windows/Linux 路径，但 macOS �
 已验：这些行为对应的断言与实际测试输出、两个外部消费者编译、独立代码和文档审查。没验：Miri、穷尽并发交错、原生GUI/IME/VoiceOver及三方性能；GitHub完整CI状态以PR页面为准。相邻情况：嵌套update、detach、首次poll前取消、FIFO和真实后台线程均覆盖。取消不能抢占一个永不返回的同步poll；panic恢复不承诺自动重试原来未完成的任务。
 
 这些提交处于PR阶段，本报告不表示已合并、发布或完成真实用户验收。
+
+## 2026-11-07 实现补充
+
+用户要求继续执行后，变高列表和局部 Undo/Redo 已分别实现，两条工作线独立测试并交叉 review。上述源码比较仍对应固定基线，不应把当时缺口误读为新分支状态。
+
+- 文本撤销：[PR #291](https://github.com/majiayu000/rui/pull/291)。覆盖文本和方向选区恢复、组合提交/取消、受控值回显与重置、独立字段历史、显式应用快捷键优先。审查修复了显式根身份变化和派生身份重建的状态转移问题。
+- 变高列表：[PR #292](https://github.com/majiayu000/rui/pull/292)，规格见 [variable-height-list.md](../specs/variable-height-list.md)。100k 行跳转并改变宽度仅实际构建/测量9行；覆盖稳定锚点、文字换行、命中裁切、屏外焦点行和连续滚轮事件。审查修复了尾部回填、caret几何、focused invalidate和pure retained测量对照。
+
+决定：采用这两个最小实现，保留等高列表快路径和单编辑状态历史；不引入通用事务框架或可插拔测量平台。变高列表metadata仍为O(N)，resize/编辑优先保锚点可能留尾部空白，整嵌套列表/祖先卸载不在本轮取消契约内。Undo最多保留100次编辑，完整文本快照没有字节上限。
+
+已验：对应行为断言、独立源码审查及相邻输入/焦点/retained回归。没验：真实键盘Cmd-Z、IME候选窗口、VoiceOver、三方性能；原生Undo验收程序已构建启动，但桌面自动化通道启动失败，不能算窗口验收通过。相邻情况：只读/禁用后的组合取消、不同控件身份、等高列表、连续滚轮已覆盖。新能力仍处PR阶段，未合并或发布。
+
+组合验收：将 #291 与 #292 干净组合到独立工作树，启用 `RUI_VERIFY_REPLAY=1` 运行 `variable_list`、`text_undo`、`action_keymap`、`retained_layout`，相应行为断言全部通过。独立审查复核了组合树的type专用状态转移与取消路径。
