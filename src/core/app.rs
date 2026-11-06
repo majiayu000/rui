@@ -12,6 +12,9 @@ use crate::core::view::{
 };
 
 mod release;
+mod rows;
+
+pub use rows::Row;
 #[cfg(all(target_os = "macos", feature = "metal"))]
 use crate::core::window::WindowId;
 use crate::core::window::WindowOptions;
@@ -53,6 +56,8 @@ pub struct AppContext {
     observers: HashMap<EntityId, HashSet<EntityId>>,
     /// What each child view read in its last render.
     view_reads: HashMap<EntityId, Vec<EntityId>>,
+    /// The views [`Self::rows`] made.
+    row_views: rows::RowViews,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -203,6 +208,7 @@ impl AppContext {
             reads: RefCell::default(),
             observers: HashMap::new(),
             view_reads: HashMap::new(),
+            row_views: rows::RowViews::default(),
         }
     }
 

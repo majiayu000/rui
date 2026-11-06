@@ -1,5 +1,5 @@
 {
-  "calibration": "M2 Max, macOS 26.5.2, main 78da070 plus memoized subtrees (#173 step 2), two runs: list.frame_cpu 13.8 M / 10019 allocs, list.layout_retained 10.6 M / 2002, list.full_frame 65.6 M / 36094, list.one_row_changed 17.9 M / 14017 (0.27 of a full frame; #173's target is 0.10), text.paragraphs 6.3 M / 901 with shaping that keeps no per-cluster strings, virtual_list 0.4 M / 298 at 1k and 100k, footprint 50 MB with the previous frame's primitives kept for replay. The list, edit and paragraph cases rebuild through Element::reconcile as the frame pipeline does. Damage (#175): one changed row in view draws 0.087 of the window again (one_row_damage_max 0.12, exact and machine independent; one paragraph 0.130), GPU 0.18 ms against 0.50 ms for a full redraw, not gated. Instruction budgets carry 25% headroom for other CPUs and compilers, allocation budgets 10%. Recalibrate with the same run after an intended cost change. Step 4 (#174, #190), two runs on 7384732 plus this branch: frames paint only what the window can show (list.frame_cpu 13.3 M / 10013, list.one_row_changed 17.1 M / 14012, list.full_frame 66.8 M / 36069, footprint 50 MB), and list.pointer_move, a move over the 2000 rows without handlers, costs 0.03 M / 3 (1.56 M before). Views (#186): list.one_row_changed_views, the same list with its rows as views and one row's label entity notified per frame, costs 2.0 M / 23 on 956fb2b plus this branch: 0.029 of list.full_frame, under #173's 0.10. The other cases are unchanged by it. Footprint (#178 follow-up): before the renderer 43.9–44.2 MB locally, budget 55 MB with 25% headroom, gated on every machine. With the renderer 49.5–49.7 MB locally but 70.4–74.8 MB on GitHub's macOS VMs, whose paravirtual GPU driver allocates more; budget 84 MB covers both, so RUI's own memory is held by the tighter budget before the renderer. View release (#236): views.churn, 200 row views with the 20 oldest replaced by new ones per frame (the kept rows move and render none), costs 4.7 M / 2061 on c2e3596 plus this branch; over 300 churn frames after 300 to warm up, the heap grows 2.9 KB (5.2 MB when views are never released), gated by churn_growth_kb_max.",
+  "calibration": "M2 Max, macOS 26.5.2, main 78da070 plus memoized subtrees (#173 step 2), two runs: list.frame_cpu 13.8 M / 10019 allocs, list.layout_retained 10.6 M / 2002, list.full_frame 65.6 M / 36094, list.one_row_changed 17.9 M / 14017 (0.27 of a full frame; #173's target is 0.10), text.paragraphs 6.3 M / 901 with shaping that keeps no per-cluster strings, virtual_list 0.4 M / 298 at 1k and 100k, footprint 50 MB with the previous frame's primitives kept for replay. The list, edit and paragraph cases rebuild through Element::reconcile as the frame pipeline does. Damage (#175): one changed row in view draws 0.087 of the window again (one_row_damage_max 0.12, exact and machine independent; one paragraph 0.130), GPU 0.18 ms against 0.50 ms for a full redraw, not gated. Instruction budgets carry 25% headroom for other CPUs and compilers, allocation budgets 10%. Recalibrate with the same run after an intended cost change. Step 4 (#174, #190), two runs on 7384732 plus this branch: frames paint only what the window can show (list.frame_cpu 13.3 M / 10013, list.one_row_changed 17.1 M / 14012, list.full_frame 66.8 M / 36069, footprint 50 MB), and list.pointer_move, a move over the 2000 rows without handlers, costs 0.03 M / 3 (1.56 M before). Views (#186): list.one_row_changed_views, the same list with its rows as views and one row's label entity notified per frame, costs 2.0 M / 23 on 956fb2b plus this branch: 0.029 of list.full_frame, under #173's 0.10. The other cases are unchanged by it. Footprint (#178 follow-up): before the renderer 43.9–44.2 MB locally, budget 55 MB with 25% headroom, gated on every machine. With the renderer 49.5–49.7 MB locally but 70.4–74.8 MB on GitHub's macOS VMs, whose paravirtual GPU driver allocates more; budget 84 MB covers both, so RUI's own memory is held by the tighter budget before the renderer. View release (#236): views.churn, 200 row views with the 20 oldest replaced by new ones per frame (the kept rows move and render none), costs 4.7 M / 2061 on c2e3596 plus this branch; over 300 churn frames after 300 to warm up, the heap grows 2.9 KB (5.2 MB when views are never released), gated by churn_growth_kb_max. Rows (ADR 0001): list.one_row_changed_rows, the same list written with AppContext::rows and one row's item entity notified per frame, costs 2.1 M / 23 on b97cca2 plus this branch, two runs: 0.031 of list.full_frame, gated at one_row_changed_rows_max 0.05.",
   "instructions_m": {
     "list.frame_cpu": 16.6,
     "list.layout_retained": 13.3,
@@ -10,7 +10,8 @@
     "virtual_list.100k": 0.5,
     "list.pointer_move": 0.05,
     "list.one_row_changed_views": 2.5,
-    "views.churn": 5.9
+    "views.churn": 5.9,
+    "list.one_row_changed_rows": 2.6
   },
   "allocations": {
     "list.frame_cpu": 11000,
@@ -22,12 +23,14 @@
     "virtual_list.100k": 330,
     "list.pointer_move": 5,
     "list.one_row_changed_views": 26,
-    "views.churn": 2270
+    "views.churn": 2270,
+    "list.one_row_changed_rows": 26
   },
   "virtual_list_scaling_max": 1.2,
   "footprint_cpu_mb_max": 55.0,
   "footprint_mb_max": 84.0,
   "one_row_damage_max": 0.12,
+  "one_row_changed_rows_max": 0.05,
   "churn_growth_kb_max": 64.0,
   "pixel_checksum": "f1417f13bbce01f9"
 }

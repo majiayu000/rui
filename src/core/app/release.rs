@@ -43,6 +43,7 @@ impl AppContext {
             return false;
         };
         self.placements.remove(&id);
+        self.forget_row(id);
         self.observers.remove(&id);
         for read in self.view_reads.remove(&id).unwrap_or_default() {
             if let Some(views) = self.observers.get_mut(&read) {
