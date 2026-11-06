@@ -44,6 +44,7 @@ pub(crate) const TARGET_PIXEL_FORMAT: MTLPixelFormat = MTLPixelFormat::BGRA8Unor
 #[derive(Clone, Copy)]
 struct Uniforms {
     viewport_size: [f32; 2],
+    drawable_size: [f32; 2],
 }
 
 /// What the last rendered frame asked of the GPU.

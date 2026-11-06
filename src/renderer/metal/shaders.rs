@@ -49,9 +49,10 @@ float3 oklab_to_linear(float3 lab) {
 /// instance is a reference: the top three bits of `index` pick the kind and the
 /// rest index that kind's buffer, so draws of different kinds share a call while each kind keeps
 /// its own compact layout. `clip` indexes device pixel clip rectangles, applied
-/// per fragment as a scissor rectangle would be.
+/// per fragment as a scissor rectangle would be; sprites inside theirs skip the test.
 ///
-/// Quads are rounded rectangles with borders and solid or oklab gradient fills.
+/// Quads are rounded rectangles with borders and solid or oklab gradient fills;
+/// plain ones, solid with square corners and no border, take a shorter path.
 /// Shadows are a rounded rectangle blurred by a Gaussian with sigma =
 /// blur_radius / 2, as CSS box shadows are: separable for square corners and
 /// integrated numerically along y for rounded ones (Evan Wallace, "Fast Rounded
@@ -72,6 +73,12 @@ constant uint KIND_GLYPH = 2;
 constant uint KIND_PATH = 3;
 constant uint KIND_PATH_SPRITE = 4;
 constant uint KIND_COLOR_GLYPH = 5;
+// `VertexOut::kind` holds the kind in its low bits and these flags above.
+constant uint KIND_MASK = 7;
+// The sprite crosses its clip, so its fragments are tested against it.
+constant uint CROSSES_CLIP = 8;
+// A quad with a solid fill, square corners and no border.
+constant uint PLAIN_QUAD = 16;
 
 struct SpriteRef {
     uint index;              // kind << 29 | index into that kind's buffer
@@ -112,13 +119,14 @@ struct PathInstance {
 };
 
 struct Uniforms {
-    float2 viewport_size;
+    float2 viewport_size;    // logical pixels
+    float2 drawable_size;    // device pixels
 };
 
 // Fields are shared between kinds where their meaning matches.
 struct VertexOut {
     float4 position [[position]];
-    uint kind [[flat]];
+    uint kind [[flat]];      // kind and flags
     float4 clip [[flat]];    // x0, y0, x1, y1 in device pixels
     float2 uv;               // quad: unit position; glyph: atlas position
     float4 color;            // quad: background; shadow and glyph: color
@@ -141,16 +149,32 @@ float4 to_clip_space(float2 position, float2 viewport_size) {
     return float4(ndc, 0.0, 1.0);
 }
 
+// The corner `unit_pos` of the rectangle at `origin` of `size`. Marks the sprite
+// CROSSES_CLIP unless the rectangle lies inside `clip` (x0, y0, x1, y1 in logical
+// pixels), where no fragment needs the clip test: covered pixel centers are inside
+// the rectangle, and they sit half a pixel from the clip's whole pixel edges.
+float2 corner(thread VertexOut& out, float2 origin, float2 size, float2 unit_pos, float4 clip) {
+    float2 low = min(origin, origin + size);
+    float2 high = max(origin, origin + size);
+    if (any(low < clip.xy) || any(high > clip.zw)) {
+        out.kind |= CROSSES_CLIP;
+    }
+    return origin + unit_pos * size;
+}
+
 void quad_vertex(thread VertexOut& out, QuadInstance instance, float2 unit_pos,
-                 float2 viewport_size) {
-    // Calculate pixel position
+                 float4 clip, float2 viewport_size) {
     float2 origin = instance.bounds.xy;
     float2 size = instance.bounds.zw;
-    float2 pixel_pos = origin + unit_pos * size;
+    float2 pixel_pos = corner(out, origin, size, unit_pos, clip);
 
     out.position = to_clip_space(pixel_pos, viewport_size);
     out.uv = unit_pos;
     out.color = linear_color(instance.background);
+    if (all(instance.corner_radii == 0.0) && all(instance.border_widths == 0.0) &&
+        instance.gradient_params.x < 0.5) {
+        out.kind |= PLAIN_QUAD;
+    }
     out.border_color = linear_color(instance.border_color);
     out.border_widths = instance.border_widths;
     out.corner_radii = instance.corner_radii;
@@ -164,14 +188,15 @@ void quad_vertex(thread VertexOut& out, QuadInstance instance, float2 unit_pos,
 }
 
 void shadow_vertex(thread VertexOut& out, ShadowInstance instance, float2 unit_pos,
-                   float2 viewport_size) {
+                   float4 clip, float2 viewport_size) {
     // Past three sigma the blur adds nothing visible. One more pixel keeps the
     // antialiased edge of an unblurred shadow.
     float sigma = max(instance.params.x, 0.0) * 0.5;
     float margin = 3.0 * sigma + 1.0;
     float2 half_size = instance.bounds.zw * 0.5;
     float2 center = instance.bounds.xy + half_size;
-    float2 pixel_pos = center - half_size - margin + unit_pos * (instance.bounds.zw + 2.0 * margin);
+    float2 pixel_pos = corner(out, center - half_size - margin,
+                              instance.bounds.zw + 2.0 * margin, unit_pos, clip);
 
     out.position = to_clip_space(pixel_pos, viewport_size);
     out.point = pixel_pos - center;
@@ -182,18 +207,18 @@ void shadow_vertex(thread VertexOut& out, ShadowInstance instance, float2 unit_p
 }
 
 void glyph_vertex(thread VertexOut& out, GlyphInstance instance, float2 unit_pos,
-                  float2 viewport_size) {
-    out.position = to_clip_space(instance.bounds.xy + unit_pos * instance.bounds.zw,
-                                 viewport_size);
+                  float4 clip, float2 viewport_size) {
+    out.position = to_clip_space(
+        corner(out, instance.bounds.xy, instance.bounds.zw, unit_pos, clip), viewport_size);
     out.uv = instance.uv.xy + unit_pos * instance.uv.zw;
     out.color = linear_color(instance.color);
     out.scalar = dot(saturate(instance.color.rgb), float3(0.2126, 0.7152, 0.0722));
 }
 
 void path_vertex(thread VertexOut& out, constant PathInstance& instance, uint index,
-                 float2 unit_pos, float2 viewport_size) {
-    out.position = to_clip_space(instance.bounds.xy + unit_pos * instance.bounds.zw,
-                                 viewport_size);
+                 float2 unit_pos, float4 clip, float2 viewport_size) {
+    out.position = to_clip_space(
+        corner(out, instance.bounds.xy, instance.bounds.zw, unit_pos, clip), viewport_size);
     out.color = linear_color(instance.color);
     out.path = index;
 }
@@ -223,14 +248,16 @@ vertex VertexOut sprite_vertex(
     VertexOut out = {};
     out.kind = kind;
     out.clip = clips[sprite.clip];
+    float2 viewport_size = uniforms.viewport_size;
+    float4 clip = out.clip * (viewport_size / uniforms.drawable_size).xyxy;
     if (kind == KIND_QUAD) {
-        quad_vertex(out, quads[index], unit_pos, uniforms.viewport_size);
+        quad_vertex(out, quads[index], unit_pos, clip, viewport_size);
     } else if (kind == KIND_SHADOW) {
-        shadow_vertex(out, shadows[index], unit_pos, uniforms.viewport_size);
+        shadow_vertex(out, shadows[index], unit_pos, clip, viewport_size);
     } else if (kind == KIND_PATH) {
-        path_vertex(out, paths[index], index, unit_pos, uniforms.viewport_size);
+        path_vertex(out, paths[index], index, unit_pos, clip, viewport_size);
     } else {
-        glyph_vertex(out, glyphs[index], unit_pos, uniforms.viewport_size);
+        glyph_vertex(out, glyphs[index], unit_pos, clip, viewport_size);
     }
     return out;
 }
@@ -276,6 +303,21 @@ float4 resolve_fill(VertexOut in) {
         t = clamp(t, 0.0, 1.0);
         return mix_oklab(in.gradient_start, in.gradient_end, t);
     }
+}
+
+// `quad_fragment` for a PLAIN_QUAD: the same arithmetic, without the work its
+// corners, border and gradient would need.
+float4 plain_quad_fragment(VertexOut in) {
+    float2 half_size = in.size / 2.0;
+    float2 rel_point = in.uv * in.size - half_size;
+    float corner_radius = min(0.0, min(half_size.x, half_size.y));
+    float dist = rounded_rect_sdf(rel_point, half_size, corner_radius);
+    float aa = fwidth(dist);
+    float alpha = 1.0 - smoothstep(-aa, aa, dist);
+    if (alpha < 0.001) {
+        discard_fragment();
+    }
+    return float4(in.color.rgb, in.color.a * alpha);
 }
 
 float4 quad_fragment(VertexOut in) {
@@ -441,15 +483,18 @@ fragment float4 sprite_fragment(VertexOut in [[stage_in]],
                                 constant float4* edges [[buffer(0)]],
                                 constant PathInstance* paths [[buffer(1)]]) {
     float4 color;
-    if (in.kind == KIND_QUAD) {
+    uint kind = in.kind & KIND_MASK;
+    if ((in.kind & PLAIN_QUAD) != 0) {
+        color = plain_quad_fragment(in);
+    } else if (kind == KIND_QUAD) {
         color = quad_fragment(in);
-    } else if (in.kind == KIND_SHADOW) {
+    } else if (kind == KIND_SHADOW) {
         color = shadow_fragment(in);
-    } else if (in.kind == KIND_GLYPH) {
+    } else if (kind == KIND_GLYPH) {
         color = glyph_fragment(in, atlas, samp);
-    } else if (in.kind == KIND_PATH) {
+    } else if (kind == KIND_PATH) {
         color = float4(in.color.rgb, in.color.a * path_coverage(in, edges, paths));
-    } else if (in.kind == KIND_PATH_SPRITE) {
+    } else if (kind == KIND_PATH_SPRITE) {
         color = float4(in.color.rgb, in.color.a * atlas.sample(samp, in.uv).r);
     } else {
         // A color glyph keeps its own colors, read as linear from the sRGB
@@ -460,7 +505,8 @@ fragment float4 sprite_fragment(VertexOut in [[stage_in]],
     // Pixel centers sit on half pixels, so this keeps exactly the pixels a
     // scissor rectangle of the same integer edges would.
     float2 pixel = in.position.xy;
-    if (pixel.x < in.clip.x || pixel.y < in.clip.y || pixel.x >= in.clip.z || pixel.y >= in.clip.w) {
+    if ((in.kind & CROSSES_CLIP) != 0 &&
+        (pixel.x < in.clip.x || pixel.y < in.clip.y || pixel.x >= in.clip.z || pixel.y >= in.clip.w)) {
         discard_fragment();
     }
     return color;
