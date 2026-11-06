@@ -4,7 +4,7 @@ RUI's developer tools live in `src/devtools/`. They are off by default, and a
 frame with them off pays one branch per stage and allocates nothing for them.
 
 `RUI_DEVTOOLS` names the tools to start with, comma-separated: `profiler` (or
-`1`), `damage`, or `all`. An unknown name panics at startup rather than being
+`1`), `damage`, `inspector`, or `all`. An unknown name panics at startup rather than being
 ignored.
 
 ## Profiling overlay
@@ -90,3 +90,29 @@ the app's subtrees replay. Each frame's tints are drawn again by the next
 frame, so with it on the renderer also redraws the previous frame's damage
 rectangle, and a frame with a replayed subtree on screen redraws that subtree's
 area.
+
+
+## Element inspector
+
+Start with `RUI_DEVTOOLS=inspector cargo run --example animation_demo`, or call
+`cx.toggle_inspector()`; `cx.inspector_enabled()` reads the state. The toggle
+applies to every window and combines with other tools through `all`.
+
+Move the pointer to highlight an element in blue; press to pin it in orange,
+and press it again to unpin. While enabled, pointer moves and presses pick
+instead of reaching the app. Scroll events still reach the app. Picking uses
+the visible intersection of all ancestor clips and the window, so clipped-away
+content cannot be selected.
+
+The panel shows the element's type, stable ID, painted bounds, non-default
+style, accessibility role/label and paint state (`repainted`, `replayed`,
+`kept`, `skipped` or `painted`), followed by nearby rows of the element tree.
+
+`Presenter::inspector()` and `HeadlessSession::inspector()` expose the same
+snapshot. Use `elements()`, `find(id)`, `element_at(point)`, `hovered()` and
+`selected()` to inspect it. `InspectedElement::bounds` retains the full painted
+bounds; `visible_bounds` is their clipped portion, or `None` when hidden.
+
+The inspector collects a snapshot by painting into a scratch scene without
+replay each drawn frame. This adds work while enabled; measure application
+performance with it disabled. The snapshot describes the last inspected frame.
