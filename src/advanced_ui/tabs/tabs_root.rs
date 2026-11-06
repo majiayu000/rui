@@ -8,14 +8,16 @@ use crate::core::event::ScrollEvent;
 use crate::core::geometry::Size;
 use crate::core::style::{AlignItems, FlexDirection, Style};
 use crate::core::text_editing::{TextInputCommand, TextInputEvent, TextInputSnapshot};
+use crate::elements::element::StableId;
 use crate::elements::element::{
     Element, EventContext, LayoutContext, PaintContext, PointerEvent, style_to_taffy,
 };
 use crate::renderer::text::TextMeasureCache;
+use std::any::TypeId;
 use taffy::prelude::NodeId;
 
 pub struct Tabs {
-    id: ElementId,
+    id: StableId,
     tab_list: TabList,
     panels: Vec<TabPanel>,
     theme: Theme,
@@ -38,7 +40,7 @@ impl Tabs {
         style.gap = theme.control_gap();
 
         Self {
-            id: ElementId::new(),
+            id: StableId::new(),
             tab_list: TabList::new(tabs, selected).theme(theme),
             panels: Vec::new(),
             theme,
@@ -50,7 +52,7 @@ impl Tabs {
     }
 
     pub fn id(mut self, id: ElementId) -> Self {
-        self.id = id;
+        self.id = StableId::explicit(id);
         self
     }
 
@@ -163,7 +165,11 @@ impl Tabs {
 
 impl Element for Tabs {
     fn id(&self) -> Option<ElementId> {
-        Some(self.id)
+        Some(self.id.get())
+    }
+
+    fn stable_id_mut(&mut self) -> Option<&mut StableId> {
+        Some(&mut self.id)
     }
 
     fn style(&self) -> &Style {
@@ -171,6 +177,21 @@ impl Element for Tabs {
     }
 
     fn layout(&mut self, cx: &mut LayoutContext) -> NodeId {
+        // The list and panels are laid out here, not as children, so they
+        // take their stable ids from this one.
+        let parent = self.id.get();
+        if let Some(id) = self.tab_list.stable_id_mut() {
+            id.adopt(ElementId::derived(parent, 0, TypeId::of::<TabList>()));
+        }
+        for (index, panel) in self.panels.iter_mut().enumerate() {
+            if let Some(id) = panel.stable_id_mut() {
+                id.adopt(ElementId::derived(
+                    parent,
+                    index as u64 + 1,
+                    TypeId::of::<TabPanel>(),
+                ));
+            }
+        }
         let tab_list_node = self.tab_list.layout(cx);
         let selected_panel_index = self
             .panels
@@ -315,7 +336,7 @@ impl Element for Tabs {
     }
 
     fn contains_id(&self, id: ElementId) -> bool {
-        self.id == id
+        self.id.get() == id
             || self.tab_list.contains_id(id)
             || self
                 .selected_panel()

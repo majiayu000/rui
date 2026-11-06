@@ -358,7 +358,7 @@ fn text_editing_clipboard_copy_cut_paste_and_errors_are_explicit() {
     must(buffer.set_selection(TextSelection::new(0, 5)));
 
     assert!(must(buffer.copy_selection_to(&mut clipboard)));
-    assert_eq!(clipboard.text(), "alpha");
+    assert_eq!(clipboard.text(), Some("alpha"));
 
     let outcome = must(buffer.cut_selection_to(&mut clipboard));
     assert!(outcome.changed);

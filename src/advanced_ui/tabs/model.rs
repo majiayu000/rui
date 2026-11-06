@@ -1,10 +1,11 @@
 use crate::advanced_ui::state::require_non_empty;
 use crate::core::ElementId;
+use crate::elements::element::StableId;
 use std::collections::HashSet;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Tab {
-    pub(crate) id: ElementId,
+    pub(crate) id: StableId,
     pub(crate) value: String,
     pub(crate) label: String,
     pub(crate) disabled: bool,
@@ -18,7 +19,7 @@ impl Tab {
         require_non_empty(&label, "tab label must not be empty");
 
         Self {
-            id: ElementId::new(),
+            id: StableId::new(),
             value,
             label,
             disabled: false,
@@ -26,7 +27,7 @@ impl Tab {
     }
 
     pub fn id(mut self, id: ElementId) -> Self {
-        self.id = id;
+        self.id = StableId::explicit(id);
         self
     }
 
@@ -36,7 +37,7 @@ impl Tab {
     }
 
     pub fn tab_id(&self) -> ElementId {
-        self.id
+        self.id.get()
     }
 
     pub fn value(&self) -> &str {

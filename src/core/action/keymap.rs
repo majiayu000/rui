@@ -130,6 +130,9 @@ impl Keymap {
         keymap.bind(KeyCode::Enter, Modifiers::meta(), StandardAction::Submit)?;
         keymap.bind(KeyCode::Escape, Modifiers::none(), StandardAction::Cancel)?;
         keymap.bind(KeyCode::A, Modifiers::meta(), StandardAction::SelectAll)?;
+        keymap.bind(KeyCode::C, Modifiers::meta(), StandardAction::Copy)?;
+        keymap.bind(KeyCode::X, Modifiers::meta(), StandardAction::Cut)?;
+        keymap.bind(KeyCode::V, Modifiers::meta(), StandardAction::Paste)?;
         keymap.bind(
             KeyCode::P,
             Modifiers::meta(),

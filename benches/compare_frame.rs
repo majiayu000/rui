@@ -11,23 +11,24 @@
 //! as GPUI's `BENCH_MEASUREMENT=instructions` counts; allocations are counted by this
 //! binary's allocator, as `gpui::bench_main!` installs one.
 //!
-//! Draw calls and instances come from `MetalRenderer::last_frame_stats`. GPU time is
-//! read in a separate pass after the CPU samples, whose frames wait for the command
-//! buffer to finish and report `GPUEndTime - GPUStartTime`, so waiting never shows in
-//! the CPU numbers.
+//! Draw calls and instances come from `MetalRenderer::last_frame_stats`. GPU time comes
+//! from the same sampled frames through `benchmarks/gpui_compare/gpu_time.rs`, which
+//! GPUI's side uses too: each committed command buffer's `GPUEndTime - GPUStartTime`.
 use rui::core::frame_pipeline::FramePipeline;
 use rui::elements::element::{Element, LayoutNodes};
-use rui::elements::{VirtualListHandle, canvas, virtual_list};
+use rui::elements::{TextSpan, VirtualListHandle, canvas, span, styled_text, virtual_list};
 use rui::renderer::metal::MetalRenderer;
 use rui::renderer::text::TextMeasureCache;
 use rui::renderer::{RendererResourceLimits, Scene};
 use rui::{Bounds, Color, ElementId, Size, div, text};
 use std::alloc::{GlobalAlloc, Layout, System};
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 use taffy::prelude::TaffyTree;
 
-const CASES: [&str; 9] = [
+const CASES: [&str; 11] = [
     "startup",
     "list_full",
     "list_virtual_1k",
@@ -37,11 +38,16 @@ const CASES: [&str; 9] = [
     "resize_full",
     "resize_virtual",
     "list_full_one_row",
+    "editor_scroll",
+    "editor_edit",
 ];
+#[path = "../benchmarks/gpui_compare/gpu_time.rs"]
+mod gpu_time;
+
 const WARMUP: usize = 10;
+/// Long enough for the last frames' command buffers to complete.
+const GPU_SETTLE: std::time::Duration = std::time::Duration::from_millis(100);
 const SAMPLES: usize = 60;
-/// Frames of the separate pass that waits for the GPU to read its time.
-const GPU_SAMPLES: usize = 30;
 const VIEWPORT: (f32, f32) = (1440.0, 900.0);
 /// The second width of the resize cases; the height stays.
 const RESIZED_WIDTH: f32 = 1280.0;
@@ -70,6 +76,20 @@ const WORDS: [&str; 16] = [
     "retained",
     "text",
     "atlas",
+];
+const EDITOR_LINES: usize = 10_000;
+const EDITOR_LINE_HEIGHT: f32 = 20.0;
+const EDITOR_FONT_SIZE: f32 = 13.0;
+const EDITOR_FONT: &str = "SF Mono";
+const GUTTER_WIDTH: f32 = 64.0;
+/// The first line on screen when an editor case starts.
+const EDITOR_TOP: usize = 5_000;
+/// The cursor's line, counted from the first line on screen.
+const CURSOR_ROW: usize = 10;
+const KEYWORDS: [&str; 8] = ["fn", "let", "pub", "if", "match", "return", "for", "impl"];
+const IDENTS: [&str; 12] = [
+    "frame", "layout", "glyph", "scene", "cursor", "buffer", "row", "offset", "width", "atlas",
+    "span", "view",
 ];
 const GRID: (usize, usize) = (200, 60);
 const CELL: (f32, f32) = (7.0, 15.0);
@@ -181,6 +201,115 @@ fn paragraphs(revision: usize) -> impl Element {
         }))
 }
 
+#[derive(Clone, Copy)]
+enum Token {
+    Plain,
+    Keyword,
+    Ident,
+    Number,
+    Str,
+    Comment,
+}
+
+impl Token {
+    fn color(self) -> u32 {
+        match self {
+            Token::Plain => 0xabb2bf,
+            Token::Keyword => 0xc678dd,
+            Token::Ident => 0xe5c07b,
+            Token::Number => 0xd19a66,
+            Token::Str => 0x98c379,
+            Token::Comment => 0x7f848e,
+        }
+    }
+}
+
+/// Line `index` of the code view as colored tokens, the same on both sides:
+/// a comment every ninth line, otherwise a statement of eleven tokens.
+fn code_line(index: usize) -> Vec<(String, Token)> {
+    let indent = " ".repeat(index % 4 * 4);
+    let ident = |n: usize| IDENTS[(index * 7 + n * 5) % IDENTS.len()];
+    if index.is_multiple_of(9) {
+        let words = (0..4).map(ident).collect::<Vec<_>>().join(" ");
+        return vec![(format!("{indent}// {words}"), Token::Comment)];
+    }
+    vec![
+        (indent, Token::Plain),
+        (KEYWORDS[index % KEYWORDS.len()].to_string(), Token::Keyword),
+        (" ".to_string(), Token::Plain),
+        (ident(0).to_string(), Token::Ident),
+        (" = ".to_string(), Token::Plain),
+        (ident(1).to_string(), Token::Ident),
+        ("(".to_string(), Token::Plain),
+        ((index * 31 % 1000).to_string(), Token::Number),
+        (", ".to_string(), Token::Plain),
+        (format!("\"{}\"", ident(2)), Token::Str),
+        (");".to_string(), Token::Plain),
+    ]
+}
+
+/// The one-character edit of frame `turn`: the line's first identifier, or its
+/// comment, ends in a letter that changes every frame.
+fn edit_line(line: &mut [(String, Token)], turn: usize) {
+    let letter = char::from(b'a' + (turn % 26) as u8);
+    let token = match line.get_mut(3) {
+        Some(token) => token,
+        None => &mut line[0],
+    };
+    token.0.pop();
+    token.0.push(letter);
+}
+
+type Document = Rc<RefCell<Vec<Vec<(String, Token)>>>>;
+
+/// A 10 000-line code view: a gutter of line numbers, per-token colors as styled
+/// runs in a monospace font, and the cursor's line highlighted.
+fn code_view(handle: &VirtualListHandle, document: &Document, cursor: usize) -> impl Element {
+    let document = Rc::clone(document);
+    let lines = virtual_list(handle, EDITOR_LINES, EDITOR_LINE_HEIGHT, move |index| {
+        let document = document.borrow();
+        let spans = document[index]
+            .iter()
+            .map(|(content, token)| span(content.as_str()).color(Color::hex(token.color())));
+        div()
+            .w_full()
+            .h(EDITOR_LINE_HEIGHT)
+            .flex_row()
+            .bg(Color::hex(if index == cursor {
+                0x2c313c
+            } else {
+                0x21252b
+            }))
+            .child(
+                div()
+                    .w(GUTTER_WIDTH)
+                    .pr(12.0)
+                    .flex_row()
+                    .justify_end()
+                    .child(text((index + 1).to_string()).color(Color::hex(0x636d83))),
+            )
+            .child(styled_text(spans.collect::<Vec<TextSpan>>()))
+    })
+    .w_full()
+    .h_full();
+    div()
+        .w_full()
+        .h_full()
+        .font_family(EDITOR_FONT)
+        .text_size(EDITOR_FONT_SIZE)
+        .line_height(1.5)
+        .child(lines)
+}
+
+/// The first line on screen at frame `turn` of `editor_scroll`, wrapping before the end.
+fn scrolled_top(turn: usize) -> usize {
+    EDITOR_TOP + turn % (EDITOR_LINES - EDITOR_TOP - 100)
+}
+
+fn document() -> Document {
+    Rc::new(RefCell::new((0..EDITOR_LINES).map(code_line).collect()))
+}
+
 fn cell_color(row: usize, column: usize) -> u32 {
     (((column * 255 / GRID.0) as u32) << 16) | (((row * 255 / GRID.1) as u32) << 8) | 0x60
 }
@@ -216,9 +345,6 @@ struct Harness {
     scene: Scene,
     measurer: TextMeasureCache,
     renderer: MetalRenderer,
-    /// Wait for each frame's GPU work and keep its GPU time in `gpu_ms`.
-    wait_for_gpu: bool,
-    gpu_ms: f64,
 }
 
 impl Harness {
@@ -229,8 +355,6 @@ impl Harness {
             scene: Scene::new(),
             measurer: TextMeasureCache::new(),
             renderer: MetalRenderer::new()?,
-            wait_for_gpu: false,
-            gpu_ms: 0.0,
         })
     }
 
@@ -257,15 +381,8 @@ impl Harness {
             viewport,
         )?;
         FramePipeline::paint_root(root, &self.taffy, &mut self.scene, bounds);
-        if self.wait_for_gpu {
-            let gpu =
-                self.renderer
-                    .render_offscreen_gpu_time(&self.scene, viewport, SCALE_FACTOR)?;
-            self.gpu_ms = gpu.as_secs_f64() * 1e3;
-        } else {
-            self.renderer
-                .render_offscreen(&self.scene, viewport, SCALE_FACTOR)?;
-        }
+        self.renderer
+            .render_offscreen(&self.scene, viewport, SCALE_FACTOR)?;
         Ok(())
     }
 }
@@ -275,16 +392,20 @@ fn percentile(values: &mut [f64], fraction: f64) -> f64 {
     values[((values.len() - 1) as f64 * fraction).round() as usize]
 }
 
-/// Runs `frame(harness, turn)` after warm-up and prints the per-frame costs. CPU
-/// costs come from frames that do not wait; GPU time from a later pass that does.
+/// Runs `frame(harness, turn)` after warm-up and prints the per-frame costs. No frame
+/// waits for the GPU; GPU time is read from each frame's command buffer once done.
 fn measure(
     case: &str,
     harness: &mut Harness,
     mut frame: impl FnMut(&mut Harness, usize) -> Result<(), Box<dyn std::error::Error>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    gpu_time::install();
     for turn in 0..WARMUP {
         frame(harness, turn)?;
     }
+    // Let the warm-up frames' completed handlers run.
+    std::thread::sleep(GPU_SETTLE);
+    gpu_time::take();
     let (mut ms, mut instructions, mut allocations) = (Vec::new(), Vec::new(), Vec::new());
     let (mut draw_calls, mut instances) = (Vec::new(), Vec::new());
     for turn in WARMUP..WARMUP + SAMPLES {
@@ -299,13 +420,15 @@ fn measure(
         instances.push(f64::from(stats.instances));
     }
     let footprint = footprint_mb();
-    harness.wait_for_gpu = true;
-    let mut gpu_ms = Vec::new();
-    for turn in WARMUP + SAMPLES..WARMUP + SAMPLES + GPU_SAMPLES {
-        frame(harness, turn)?;
-        gpu_ms.push(harness.gpu_ms);
+    std::thread::sleep(GPU_SETTLE);
+    let mut gpu_ms = gpu_time::take();
+    if gpu_ms.len() != SAMPLES {
+        return Err(format!(
+            "{case}: {} command buffers completed for {SAMPLES} frames; GPU time per frame needs one each",
+            gpu_ms.len()
+        )
+        .into());
     }
-    harness.wait_for_gpu = false;
     println!(
         "rui {case} instructions_m={:.2} ms_p50={:.3} ms_p95={:.3} allocations={:.0} footprint_mb={footprint:.1} draw_calls={:.0} instances={:.0} gpu_ms_p50={:.3} gpu_ms_p95={:.3}",
         percentile(&mut instructions, 0.5),
@@ -409,6 +532,29 @@ fn run(case: &str) -> Result<(), Box<dyn std::error::Error>> {
             handle.scroll_to(500.0 * ROW_HEIGHT);
             measure(case, &mut harness, |harness, turn| {
                 harness.frame(virtual_rows(&handle, 1_000, 500), resized(turn))
+            })?;
+        }
+        // The view scrolls down one line per frame; the cursor moves with it.
+        "editor_scroll" => {
+            let mut harness = Harness::new()?;
+            let handle = VirtualListHandle::new();
+            let document = document();
+            measure(case, &mut harness, |harness, turn| {
+                let top = scrolled_top(turn);
+                handle.scroll_to(top as f32 * EDITOR_LINE_HEIGHT);
+                harness.frame(code_view(&handle, &document, top + CURSOR_ROW), viewport)
+            })?;
+        }
+        // One character of the cursor's line changes each frame.
+        "editor_edit" => {
+            let mut harness = Harness::new()?;
+            let handle = VirtualListHandle::new();
+            handle.scroll_to(EDITOR_TOP as f32 * EDITOR_LINE_HEIGHT);
+            let document = document();
+            let cursor = EDITOR_TOP + CURSOR_ROW;
+            measure(case, &mut harness, |harness, turn| {
+                edit_line(&mut document.borrow_mut()[cursor], turn);
+                harness.frame(code_view(&handle, &document, cursor), viewport)
             })?;
         }
         _ => return Err(format!("unknown case {case}; cases: {}", CASES.join(" ")).into()),

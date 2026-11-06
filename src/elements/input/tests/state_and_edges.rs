@@ -276,7 +276,7 @@ fn input_clipboard_operations_surface_explicit_errors() {
         Ok(copied) => assert!(copied),
         Err(err) => panic!("copy failed: {err}"),
     }
-    assert_eq!(clipboard.text(), "alpha");
+    assert_eq!(clipboard.text(), Some("alpha"));
 
     let outcome = match inp.cut_selection_to(&mut clipboard) {
         Ok(outcome) => outcome,

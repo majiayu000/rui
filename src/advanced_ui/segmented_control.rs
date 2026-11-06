@@ -8,11 +8,13 @@ use crate::core::accessibility::{
 use crate::core::action::{ActionId, ActionOutcome, StandardAction};
 use crate::core::geometry::{Bounds, Edges};
 use crate::core::style::{Corners, Style};
+use crate::elements::element::StableId;
 use crate::elements::element::{
     Element, EventContext, LayoutContext, PaintContext, PointerEvent, PointerEventKind,
     style_to_taffy,
 };
 use crate::renderer::Primitive;
+use std::any::TypeId;
 use taffy::prelude::*;
 
 type SegmentChangeHandler = Box<dyn Fn(&str)>;
@@ -49,7 +51,7 @@ impl From<(&str, &str)> for SegmentedOption {
 }
 
 pub struct SegmentedControl {
-    id: ElementId,
+    id: StableId,
     options: Vec<SegmentedOption>,
     option_ids: Vec<ElementId>,
     selected: String,
@@ -78,7 +80,7 @@ impl SegmentedControl {
         style.border.radius = Corners::all(theme.control_radius());
 
         Self {
-            id: ElementId::new(),
+            id: StableId::new(),
             options,
             option_ids,
             selected,
@@ -93,7 +95,7 @@ impl SegmentedControl {
     }
 
     pub fn id(mut self, id: ElementId) -> Self {
-        self.id = id;
+        self.id = StableId::explicit(id);
         self
     }
 
@@ -206,7 +208,7 @@ impl SegmentedControl {
         if let Some(handler) = &self.on_change {
             handler(&self.selected);
         }
-        cx.announce_accessibility_action(self.id, format!("{label} selected"));
+        cx.announce_accessibility_action(self.id.get(), format!("{label} selected"));
         cx.request_redraw();
         ActionOutcome::handled("advanced_ui.segmented_control")
     }
@@ -214,7 +216,11 @@ impl SegmentedControl {
 
 impl Element for SegmentedControl {
     fn id(&self) -> Option<ElementId> {
-        Some(self.id)
+        Some(self.id.get())
+    }
+
+    fn stable_id_mut(&mut self) -> Option<&mut StableId> {
+        Some(&mut self.id)
     }
 
     fn style(&self) -> &Style {
@@ -222,6 +228,11 @@ impl Element for SegmentedControl {
     }
 
     fn layout(&mut self, cx: &mut LayoutContext) -> NodeId {
+        // Option ids follow the control's stable id, which layout has given it.
+        let parent = self.id.get();
+        for (index, id) in self.option_ids.iter_mut().enumerate() {
+            *id = ElementId::derived(parent, index as u64, TypeId::of::<SegmentedOption>());
+        }
         let mut style = style_to_taffy(&self.style);
         style.size.width = Dimension::Length(self.option_width() * self.options.len() as f32);
         style.size.height = Dimension::Length(self.theme.control_height(self.size));
@@ -237,7 +248,7 @@ impl Element for SegmentedControl {
 
     fn paint(&mut self, cx: &mut PaintContext) {
         let bounds = cx.bounds();
-        cx.register_hit_region(self.id, bounds);
+        cx.register_hit_region(self.id.get(), bounds);
         let container_state = self.state.into();
 
         cx.paint(Primitive::Quad {
@@ -330,13 +341,16 @@ impl Element for SegmentedControl {
                 .ok_or(AccessibilityError::MissingLabel {
                     role: AccessibilityRole::SegmentedControl,
                 })?;
-        let mut node =
-            AccessibilityNode::label_required(self.id, AccessibilityRole::SegmentedControl, label)?
-                .value_required(&self.selected)?
-                .with_enabled(!self.state.disabled())
-                .with_read_only(self.state.read_only())
-                .with_invalid(self.state.invalid())
-                .with_focused(cx.a11y_has_focus(self.id));
+        let mut node = AccessibilityNode::label_required(
+            self.id.get(),
+            AccessibilityRole::SegmentedControl,
+            label,
+        )?
+        .value_required(&self.selected)?
+        .with_enabled(!self.state.disabled())
+        .with_read_only(self.state.read_only())
+        .with_invalid(self.state.invalid())
+        .with_focused(cx.a11y_has_focus(self.id.get()));
 
         for (option, id) in self.options.iter().zip(self.option_ids.iter().copied()) {
             let mut child = AccessibilityNode::label_required(
@@ -387,7 +401,7 @@ impl Element for SegmentedControl {
                             handler(&self.selected);
                         }
                         cx.announce_accessibility_action(
-                            self.id,
+                            self.id.get(),
                             format!("{} selected", self.options[released].label),
                         );
                     }
@@ -412,7 +426,7 @@ impl Element for SegmentedControl {
             return self.select_index(index, cx);
         }
 
-        if !cx.is_focused(Some(self.id)) {
+        if !cx.is_focused(Some(self.id.get())) {
             return ActionOutcome::Ignored;
         }
 
