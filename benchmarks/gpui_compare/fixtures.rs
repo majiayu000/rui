@@ -14,20 +14,26 @@
 //! - `quad_grid`: a 200x60 grid of 7x15 cells painted by one `canvas`; one cell changes.
 //! - `resize_*`: the window width alternates between 1440 and 1280 each frame.
 //! - `startup`: process start to the first long-list frame submitted.
+//! - `editor_scroll` / `editor_edit`: a 10 000-line code view in `uniform_list`: a
+//!   gutter of line numbers, per-token colors as `StyledText` highlights in SF Mono (loaded from RUI's file),
+//!   the cursor's line highlighted. It scrolls one line per frame, or one character
+//!   of the cursor's line changes per frame.
 //!
 //! The benches are registered as `#[gpui::bench(fps = 120)]` registers them, but with
 //! the headless renderer wrapped by [`CountingRenderer`], which counts draw calls.
 //! GPU time is not reported: the headless renderer commits its command buffer
 //! inside `render_scene` and does not expose it.
 
+use std::ops::Range;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use gpui::{
-    AnyView, AppContext as _, BenchAppContext, Bounds, Context, DevicePixels, Entity, IntoElement,
-    ParentElement, PlatformAtlas, PlatformHeadlessRenderer, PrimitiveBatch, Render, Scene,
-    ScrollStrategy, Styled, UniformListScrollHandle, Window, canvas, div, fill, point, px,
-    relative, rgb, size, uniform_list,
+    AnyView, AppContext as _, BenchAppContext, Bounds, Context, DevicePixels, Entity,
+    HighlightStyle, IntoElement, ParentElement, PlatformAtlas, PlatformHeadlessRenderer,
+    PrimitiveBatch, Render, Scene, ScrollStrategy, SharedString, Styled, StyledText,
+    UniformListScrollHandle, Window, canvas, div, fill, point, px, relative, rgb, size,
+    uniform_list,
 };
 
 const LIST_ROWS: usize = 2_000;
@@ -53,6 +59,22 @@ const WORDS: [&str; 16] = [
     "retained",
     "text",
     "atlas",
+];
+const EDITOR_LINES: usize = 10_000;
+const EDITOR_LINE_HEIGHT: f32 = 20.;
+const EDITOR_FONT_SIZE: f32 = 13.;
+/// The family name inside the file RUI calls "SF Mono".
+const EDITOR_FONT: &str = ".SF NS Mono";
+const EDITOR_FONT_PATH: &str = "/System/Library/Fonts/SFNSMono.ttf";
+const GUTTER_WIDTH: f32 = 64.;
+/// The first line on screen when an editor case starts.
+const EDITOR_TOP: usize = 5_000;
+/// The cursor's line, counted from the first line on screen.
+const CURSOR_ROW: usize = 10;
+const KEYWORDS: [&str; 8] = ["fn", "let", "pub", "if", "match", "return", "for", "impl"];
+const IDENTS: [&str; 12] = [
+    "frame", "layout", "glyph", "scene", "cursor", "buffer", "row", "offset", "width", "atlas",
+    "span", "view",
 ];
 const GRID: (usize, usize) = (200, 60);
 const CELL: (f32, f32) = (7., 15.);
@@ -184,6 +206,186 @@ impl Render for Paragraphs {
                 }
                 content
             }))
+    }
+}
+
+#[derive(Clone, Copy)]
+enum Token {
+    Plain,
+    Keyword,
+    Ident,
+    Number,
+    Str,
+    Comment,
+}
+
+impl Token {
+    fn color(self) -> u32 {
+        match self {
+            Token::Plain => 0xabb2bf,
+            Token::Keyword => 0xc678dd,
+            Token::Ident => 0xe5c07b,
+            Token::Number => 0xd19a66,
+            Token::Str => 0x98c379,
+            Token::Comment => 0x7f848e,
+        }
+    }
+}
+
+/// Line `index` of the code view as colored tokens, the same on both sides:
+/// a comment every ninth line, otherwise a statement of eleven tokens.
+fn code_line(index: usize) -> Vec<(String, Token)> {
+    let indent = " ".repeat(index % 4 * 4);
+    let ident = |n: usize| IDENTS[(index * 7 + n * 5) % IDENTS.len()];
+    if index.is_multiple_of(9) {
+        let words = (0..4).map(ident).collect::<Vec<_>>().join(" ");
+        return vec![(format!("{indent}// {words}"), Token::Comment)];
+    }
+    vec![
+        (indent, Token::Plain),
+        (KEYWORDS[index % KEYWORDS.len()].to_string(), Token::Keyword),
+        (" ".to_string(), Token::Plain),
+        (ident(0).to_string(), Token::Ident),
+        (" = ".to_string(), Token::Plain),
+        (ident(1).to_string(), Token::Ident),
+        ("(".to_string(), Token::Plain),
+        ((index * 31 % 1000).to_string(), Token::Number),
+        (", ".to_string(), Token::Plain),
+        (format!("\"{}\"", ident(2)), Token::Str),
+        (");".to_string(), Token::Plain),
+    ]
+}
+
+/// The one-character edit of frame `turn`: the line's first identifier, or its
+/// comment, ends in a letter that changes every frame.
+fn edit_line(line: &mut [(String, Token)], turn: usize) {
+    let letter = char::from(b'a' + (turn % 26) as u8);
+    let token = match line.get_mut(3) {
+        Some(token) => token,
+        None => &mut line[0],
+    };
+    token.0.pop();
+    token.0.push(letter);
+}
+
+/// A line as GPUI's editor keeps it: one string and its highlighted ranges.
+struct CodeLine {
+    text: SharedString,
+    highlights: Vec<(Range<usize>, HighlightStyle)>,
+}
+
+impl CodeLine {
+    fn new(tokens: &[(String, Token)]) -> Self {
+        let mut text = String::new();
+        let mut highlights = Vec::with_capacity(tokens.len());
+        for (content, token) in tokens {
+            let start = text.len();
+            text.push_str(content);
+            highlights.push((
+                start..text.len(),
+                HighlightStyle {
+                    color: Some(rgb(token.color()).into()),
+                    ..Default::default()
+                },
+            ));
+        }
+        Self {
+            text: text.into(),
+            highlights,
+        }
+    }
+}
+
+struct Editor {
+    tokens: Vec<Vec<(String, Token)>>,
+    lines: Vec<CodeLine>,
+    cursor: usize,
+    turn: usize,
+    scroll: UniformListScrollHandle,
+}
+
+impl Editor {
+    fn new(cx: &mut Context<Self>) -> Self {
+        // Fail rather than measure a fallback font.
+        let text_system = cx.text_system();
+        // CoreText hides SF Mono from apps; load the file RUI reads it from.
+        let sf_mono = match std::fs::read(EDITOR_FONT_PATH) {
+            Ok(bytes) => bytes,
+            Err(err) => panic!("failed to read {EDITOR_FONT_PATH}: {err}"),
+        };
+        if let Err(err) = text_system.add_fonts(vec![sf_mono.into()]) {
+            panic!("GPUI failed to load {EDITOR_FONT_PATH}: {err}");
+        }
+        let resolved = text_system.get_font_for_id(text_system.resolve_font(&gpui::font(EDITOR_FONT)));
+        if resolved.as_ref().map(|font| font.family.as_ref()) != Some(EDITOR_FONT) {
+            panic!("GPUI resolved {EDITOR_FONT} to {resolved:?}");
+        }
+        let tokens: Vec<_> = (0..EDITOR_LINES).map(code_line).collect();
+        let lines = tokens.iter().map(|line| CodeLine::new(line)).collect();
+        let editor = Self {
+            tokens,
+            lines,
+            cursor: EDITOR_TOP + CURSOR_ROW,
+            turn: 0,
+            scroll: UniformListScrollHandle::new(),
+        };
+        editor.scroll_to(EDITOR_TOP);
+        editor
+    }
+
+    fn scroll_to(&self, top: usize) {
+        self.scroll
+            .0
+            .borrow()
+            .base_handle
+            .set_offset(point(px(0.), px(-(top as f32) * EDITOR_LINE_HEIGHT)));
+    }
+}
+
+impl Render for Editor {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let lines = uniform_list(
+            "code",
+            EDITOR_LINES,
+            cx.processor(|editor, range: Range<usize>, _, _| {
+                range
+                    .map(|index| {
+                        let line = &editor.lines[index];
+                        div()
+                            .w_full()
+                            .h(px(EDITOR_LINE_HEIGHT))
+                            .flex()
+                            .flex_row()
+                            .bg(rgb(if index == editor.cursor {
+                                0x2c313c
+                            } else {
+                                0x21252b
+                            }))
+                            .child(
+                                div()
+                                    .w(px(GUTTER_WIDTH))
+                                    .pr(px(12.))
+                                    .flex()
+                                    .justify_end()
+                                    .text_color(rgb(0x636d83))
+                                    .child((index + 1).to_string()),
+                            )
+                            .child(
+                                StyledText::new(line.text.clone())
+                                    .with_highlights(line.highlights.iter().cloned()),
+                            )
+                    })
+                    .collect::<Vec<_>>()
+            }),
+        )
+        .track_scroll(&self.scroll)
+        .size_full();
+        div()
+            .size_full()
+            .font_family(EDITOR_FONT)
+            .text_size(px(EDITOR_FONT_SIZE))
+            .line_height(relative(1.5))
+            .child(lines)
     }
 }
 
@@ -411,6 +613,31 @@ fn resize_virtual(cx: &mut BenchAppContext) {
     );
 }
 
+/// The first line on screen at frame `turn` of `editor_scroll`, wrapping before the end.
+fn scrolled_top(turn: usize) -> usize {
+    EDITOR_TOP + turn % (EDITOR_LINES - EDITOR_TOP - 100)
+}
+
+fn editor_scroll(cx: &mut BenchAppContext) {
+    bench_view(cx, "editor_scroll", Editor::new, |editor, _, cx| {
+        editor.turn += 1;
+        let top = scrolled_top(editor.turn);
+        editor.scroll_to(top);
+        editor.cursor = top + CURSOR_ROW;
+        cx.notify();
+    });
+}
+
+fn editor_edit(cx: &mut BenchAppContext) {
+    bench_view(cx, "editor_edit", Editor::new, |editor, _, cx| {
+        editor.turn += 1;
+        let cursor = editor.cursor;
+        edit_line(&mut editor.tokens[cursor], editor.turn);
+        editor.lines[cursor] = CodeLine::new(&editor.tokens[cursor]);
+        cx.notify();
+    });
+}
+
 /// Batches and instances of each scene rendered since the last [`take_draws`].
 static SCENES: std::sync::Mutex<Vec<(u64, u64)>> = std::sync::Mutex::new(Vec::new());
 /// Scenes with at least one glyph since the last check in [`counted`].
@@ -545,6 +772,8 @@ counted_benches!(
     bench_quad_grid => quad_grid,
     bench_resize_full => resize_full,
     bench_resize_virtual => resize_virtual,
+    bench_editor_scroll => editor_scroll,
+    bench_editor_edit => editor_edit,
 );
 
 gpui::bench_group!(
@@ -555,6 +784,6 @@ gpui::bench_group!(
         .sample_size(20);
     targets = bench_startup, bench_list_full, bench_list_full_one_row, bench_list_virtual_1k,
         bench_list_virtual_100k, bench_text_paragraphs, bench_quad_grid, bench_resize_full,
-        bench_resize_virtual
+        bench_resize_virtual, bench_editor_scroll, bench_editor_edit
 );
 gpui::bench_main!(benches);

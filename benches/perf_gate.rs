@@ -22,7 +22,7 @@ use rui::core::event::MouseButton;
 use rui::core::frame_pipeline::FramePipeline;
 use rui::elements::element::{Element, LayoutNodes, PointerEvent, PointerEventKind, reconcile};
 use rui::elements::view;
-use rui::elements::{VirtualListHandle, virtual_list};
+use rui::elements::{VirtualListHandle, span, styled_text, virtual_list};
 use rui::renderer::Scene;
 use rui::renderer::metal::{MetalRenderer, RetainedTarget};
 use rui::renderer::text::TextMeasureCache;
@@ -42,6 +42,7 @@ const ROW_HEIGHT: f32 = 28.0;
 const EDITED_ROW: usize = 1_000;
 /// A row in view at the top of the list, for the damage case.
 const VISIBLE_EDITED_ROW: usize = 10;
+const CODE_LINE_HEIGHT: f32 = 20.0;
 const WARMUP: usize = 3;
 /// Rows of `views.churn`, and how many of them are replaced per frame.
 const CHURN_ROWS: usize = 200;
@@ -150,6 +151,22 @@ impl View for ListRow {
         let label = cx.app().get(self.label).map(|label| label.clone());
         row(self.index, usize::MAX).child(text(label.expect("row label")))
     }
+}
+
+/// Line `index` of a code view: its number, then colored tokens as styled runs.
+fn code_line(index: usize) -> Div {
+    div()
+        .w_full()
+        .h(CODE_LINE_HEIGHT)
+        .flex_row()
+        .child(div().w(64.0).child(text((index + 1).to_string())))
+        .child(styled_text([
+            span("let ").color(Color::hex(0xc678dd)),
+            span(format!("value_{} ", index % 97)).color(Color::hex(0xe5c07b)),
+            span("= ").color(Color::hex(0xabb2bf)),
+            span((index * 31 % 1000).to_string()).color(Color::hex(0xd19a66)),
+            span(";").color(Color::hex(0xabb2bf)),
+        ]))
 }
 
 /// Row views with their label entities, oldest first.
@@ -446,6 +463,20 @@ fn main() -> ExitCode {
             }),
         );
     }
+
+    // A 10 000-line code view of styled runs, scrolled one line per frame.
+    let handle = VirtualListHandle::new();
+    let mut surfaces = Surfaces::new();
+    costs.insert(
+        "virtual_list.code_scroll",
+        measure(|round| {
+            handle.scroll_to((5_000 + round) as f32 * CODE_LINE_HEIGHT);
+            let mut root = virtual_list(&handle, 10_000, CODE_LINE_HEIGHT, code_line)
+                .w_full()
+                .h_full();
+            surfaces.frame(&mut root, &mut measurer);
+        }),
+    );
 
     let mut failures = Vec::new();
     // RUI's own memory, before a renderer and its driver allocations exist.
