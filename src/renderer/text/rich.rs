@@ -5,6 +5,7 @@
 //! line breaks between runs like anywhere else. Results are kept by width range
 //! exactly like single-style wraps.
 
+use super::hash::FastHasher;
 use super::lru::FrameLru;
 use super::wrap::{
     BreakCluster, BreakParagraph, ELLIPSIS, KEPT_RESULTS, LineSpan, WidthRange, WrapResult,
@@ -16,7 +17,6 @@ use super::{
 };
 use crate::core::geometry::Size;
 use rusttype::Scale;
-use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
 use std::sync::Arc;
@@ -42,7 +42,7 @@ impl RichSpan {
         )
     }
 
-    fn hash(&self, hasher: &mut DefaultHasher) {
+    fn hash(&self, hasher: &mut FastHasher) {
         self.len.hash(hasher);
         self.font_size.to_bits().hash(hasher);
         self.font_weight.hash(hasher);
@@ -185,7 +185,7 @@ impl TextMeasureCache {
                 size: Size::ZERO,
             })));
         }
-        let mut hasher = DefaultHasher::new();
+        let mut hasher = FastHasher::default();
         content.hash(&mut hasher);
         spans.iter().for_each(|span| span.hash(&mut hasher));
         max_lines.hash(&mut hasher);
