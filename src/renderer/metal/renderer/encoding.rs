@@ -75,6 +75,7 @@ impl MetalRenderer {
 
         let uniforms = Uniforms {
             viewport_size: [viewport_size.width, viewport_size.height],
+            drawable_size: [drawable_size.width, drawable_size.height],
         };
         let full = frame.scissors[0];
         encoder.set_scissor_rect(full);
