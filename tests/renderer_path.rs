@@ -57,3 +57,18 @@ fn stroked_path_covers_the_line_and_nothing_else() {
     assert!(!is_green(&pixels, 40, 20), "beyond the width");
     assert!(!is_green(&pixels, 75, 30), "past the end");
 }
+
+#[test]
+fn an_edge_on_a_tile_boundary_crossing_no_column_is_drawn() {
+    // Too large for one instance, so drawn as tiles; its left edge lies on the
+    // boundary of the second column of 16 px tiles.
+    let Some(pixels) = draw(
+        &[(16.0, 2.0), (90.0, 2.0), (90.0, 58.0), (16.0, 58.0)],
+        None,
+    ) else {
+        return;
+    };
+    assert!(is_green(&pixels, 16, 30), "just right of the edge");
+    assert!(!is_green(&pixels, 15, 30), "just left of it");
+    assert!(is_green(&pixels, 60, 30), "inside");
+}
