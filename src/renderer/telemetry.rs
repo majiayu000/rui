@@ -157,6 +157,11 @@ impl RendererTelemetryRecorder {
         }
     }
 
+    /// Index the next captured frame will carry.
+    pub fn next_frame_index(&self) -> u64 {
+        self.frame_index
+    }
+
     pub fn capture_telemetry(
         &mut self,
         backend: impl Into<String>,
