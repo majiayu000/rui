@@ -1,5 +1,5 @@
-//! Performance gate: fails when a frame costs more than `benchmarks/perf_budgets.json`
-//! allows. Run by CI.
+//! Performance gate: fails when a frame costs more than `benchmarks/perf_budgets/`
+//! allows: `<case>.json` per case, `shared.json` for the rest. Run by CI.
 //!
 //! `cargo bench --bench perf_gate`
 //!
@@ -12,6 +12,9 @@
 //! `PERF_GATE_PIXELS=1` also compares the long list's rendered pixels with the
 //! committed checksum. Different GPUs antialias differently, so that is for local
 //! runs before and after a renderer change, not for CI.
+mod perf_budgets;
+
+use perf_budgets::{CaseBudget, load_budgets};
 use rui::core::entity::Entity;
 use rui::core::event::MouseButton;
 use rui::core::frame_pipeline::FramePipeline;
@@ -24,14 +27,14 @@ use rui::renderer::text::TextMeasureCache;
 use rui::{
     AppContext, Color, Div, ElementId, Point, Presenter, Size, View, ViewContext, div, text,
 };
-use serde::Deserialize;
 use std::alloc::{GlobalAlloc, Layout, System};
-use std::collections::BTreeMap;
+use std::cell::RefCell;
+use std::collections::{BTreeMap, VecDeque};
 use std::process::ExitCode;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::rc::Rc;
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use taffy::prelude::TaffyTree;
 
-const BUDGETS_JSON: &str = include_str!("../benchmarks/perf_budgets.json");
 const VIEWPORT: (f32, f32) = (1440.0, 900.0);
 const ROW_HEIGHT: f32 = 28.0;
 const EDITED_ROW: usize = 1_000;
@@ -39,25 +42,35 @@ const EDITED_ROW: usize = 1_000;
 const VISIBLE_EDITED_ROW: usize = 10;
 const CODE_LINE_HEIGHT: f32 = 20.0;
 const WARMUP: usize = 3;
+/// Rows of `views.churn`, and how many of them are replaced per frame.
+const CHURN_ROWS: usize = 200;
+const CHURN_PER_FRAME: usize = 20;
+/// Frames of `views.churn` the heap must stay flat over.
+const CHURN_FRAMES: usize = 300;
 const SAMPLES: usize = 15;
 
 struct CountingAllocator;
 
 static ALLOCATIONS: AtomicU64 = AtomicU64::new(0);
+/// Bytes allocated and not yet freed.
+static LIVE_BYTES: AtomicI64 = AtomicI64::new(0);
 
 // SAFETY: forwards every call to `System` unchanged; only counts allocations.
 unsafe impl GlobalAlloc for CountingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+        LIVE_BYTES.fetch_add(layout.size() as i64, Ordering::Relaxed);
         unsafe { System.alloc(layout) }
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        LIVE_BYTES.fetch_sub(layout.size() as i64, Ordering::Relaxed);
         unsafe { System.dealloc(ptr, layout) }
     }
 
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
         ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+        LIVE_BYTES.fetch_add(new_size as i64 - layout.size() as i64, Ordering::Relaxed);
         unsafe { System.realloc(ptr, layout, new_size) }
     }
 }
@@ -76,28 +89,6 @@ fn rusage() -> [u64; 64] {
     let status = unsafe { proc_pid_rusage(std::process::id() as i32, 4, words.as_mut_ptr()) };
     assert_eq!(status, 0, "proc_pid_rusage failed");
     words
-}
-
-#[derive(Debug, Deserialize)]
-struct Budgets {
-    /// Where and when the budgets were measured; read by people, not checked.
-    #[allow(dead_code)]
-    calibration: String,
-    /// Most instructions per frame, in millions, by case.
-    instructions_m: BTreeMap<String, f64>,
-    /// Most heap allocations per frame, by case.
-    allocations: BTreeMap<String, f64>,
-    /// Most the 100 000-row virtual list may cost relative to 1 000 rows.
-    virtual_list_scaling_max: f64,
-    /// Footprint before any renderer exists: what RUI's own data costs, the same on
-    /// any machine.
-    footprint_cpu_mb_max: f64,
-    /// Footprint once the long list has been rendered. GPU driver memory is part of
-    /// it, so this varies with the GPU: hosted CI VMs measure about 20 MB more.
-    footprint_mb_max: f64,
-    /// Most of the window one changed row may draw again (#175).
-    one_row_damage_max: f64,
-    pixel_checksum: String,
 }
 
 #[derive(Clone, Copy)]
@@ -174,6 +165,71 @@ fn code_line(index: usize) -> Div {
             span((index * 31 % 1000).to_string()).color(Color::hex(0xd19a66)),
             span(";").color(Color::hex(0xabb2bf)),
         ]))
+}
+
+/// Row views with their label entities, oldest first.
+type ChurnRows = Rc<RefCell<VecDeque<(Entity<ListRow>, Entity<String>)>>>;
+
+/// A list of row views whose oldest rows are replaced by new ones each frame.
+struct Churn {
+    rows: ChurnRows,
+    made: usize,
+    root: Div,
+    surfaces: Surfaces,
+}
+
+impl Churn {
+    fn new(context: &mut AppContext) -> Self {
+        let mut churn = Self {
+            rows: Rc::default(),
+            made: 0,
+            root: div(),
+            surfaces: Surfaces::new(),
+        };
+        for _ in 0..CHURN_ROWS {
+            churn.push_row(context);
+        }
+        churn
+    }
+
+    fn push_row(&mut self, context: &mut AppContext) {
+        // Labels repeat, so the text caches stay warm and the same size.
+        let label = context.create(format!("row {}", self.made % CHURN_ROWS));
+        let row = context.new_view(ListRow {
+            index: self.made,
+            label,
+        });
+        self.rows.borrow_mut().push_back((row, label));
+        self.made += 1;
+    }
+
+    fn frame(&mut self, context: &mut AppContext, measurer: &mut TextMeasureCache) {
+        for _ in 0..CHURN_PER_FRAME {
+            let (_, label) = self.rows.borrow_mut().pop_front().expect("a row");
+            // The view goes once no tree places it; its label is ours to release.
+            context.release(label);
+            self.push_row(context);
+        }
+        context.request_rebuild();
+        let rows = Rc::clone(&self.rows);
+        let mut build = move |_: &mut AppContext| {
+            div()
+                .w_full()
+                .flex_col()
+                .children(rows.borrow().iter().map(|(row, _)| view(*row)))
+        };
+        FramePipeline::build_frame_retained(
+            context,
+            &mut self.root,
+            &mut build,
+            &mut self.surfaces.taffy,
+            &mut self.surfaces.nodes,
+            &mut self.surfaces.scene,
+            measurer,
+            Size::new(VIEWPORT.0, VIEWPORT.1),
+        )
+        .expect("churn frame");
+    }
 }
 
 fn list(rows: usize, selected: usize) -> Div {
@@ -342,10 +398,10 @@ fn pixel_checksum(scene: &Scene) -> Result<String, String> {
 }
 
 fn main() -> ExitCode {
-    let budgets: Budgets = match serde_json::from_str(BUDGETS_JSON) {
+    let budgets = match load_budgets() {
         Ok(budgets) => budgets,
         Err(err) => {
-            eprintln!("perf_gate: benchmarks/perf_budgets.json is invalid: {err}");
+            eprintln!("perf_gate: invalid budget: {err}");
             return ExitCode::FAILURE;
         }
     };
@@ -547,6 +603,24 @@ fn main() -> ExitCode {
     );
     drop(viewed_root);
 
+    // Row views made and dropped every frame: the oldest rows leave the list
+    // and new ones join it. The rows that stay move up and render again none.
+    let mut churn = Churn::new(&mut context);
+    costs.insert(
+        "views.churn",
+        measure(|_| churn.frame(&mut context, &mut measurer)),
+    );
+    // Caches and arenas reach their size over the first frames.
+    for _ in 0..CHURN_FRAMES {
+        churn.frame(&mut context, &mut measurer);
+    }
+    let before = LIVE_BYTES.load(Ordering::Relaxed);
+    for _ in 0..CHURN_FRAMES {
+        churn.frame(&mut context, &mut measurer);
+    }
+    let growth_kb = (LIVE_BYTES.load(Ordering::Relaxed) - before) as f64 / 1024.0;
+    drop(churn);
+
     // #175: how much of the window one change in view draws again, and the GPU
     // time of that frame against a full redraw.
     let damage = match MetalRenderer::new() {
@@ -566,18 +640,31 @@ fn main() -> ExitCode {
     };
     drop(edited);
 
+    println!(
+        "views.churn heap growth over {CHURN_FRAMES} frames: {growth_kb:.1} KB (max {:.1})",
+        budgets.churn_growth_kb_max
+    );
+    if growth_kb > budgets.churn_growth_kb_max {
+        failures.push(format!(
+            "views.churn: the heap grew {growth_kb:.1} KB over {CHURN_FRAMES} frames, max {:.1} KB",
+            budgets.churn_growth_kb_max
+        ));
+    }
+
     let counters = costs.values().any(|cost| cost.instructions_m > 0.0);
     println!(
         "{:<24} {:>14} {:>10} {:>14} {:>10}",
         "case", "instructions", "budget", "allocations", "budget"
     );
     for (name, cost) in &costs {
-        let instruction_budget = budgets.instructions_m.get(*name).copied();
-        let allocation_budget = budgets.allocations.get(*name).copied();
-        let (Some(instruction_budget), Some(allocation_budget)) =
-            (instruction_budget, allocation_budget)
+        let Some(&CaseBudget {
+            instructions_m: instruction_budget,
+            allocations: allocation_budget,
+        }) = budgets.cases.get(*name)
         else {
-            failures.push(format!("{name}: no budget in benchmarks/perf_budgets.json"));
+            failures.push(format!(
+                "{name}: no budget, add benchmarks/perf_budgets/{name}.json"
+            ));
             continue;
         };
         println!(

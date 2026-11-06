@@ -116,7 +116,8 @@ fn random_scene(seed: u64) -> Scene {
                         ImageFit::Contain,
                         ImageFit::Cover,
                         ImageFit::None,
-                    ][rng.below(4) as usize],
+                        ImageFit::ScaleDown,
+                    ][rng.below(5) as usize],
                     corner_radii: Corners::all(rng.range(0.0, 8.0)),
                     opacity: rng.range(0.3, 1.0),
                 }

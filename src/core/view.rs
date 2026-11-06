@@ -9,6 +9,25 @@ use std::rc::Rc;
 /// the next frame notifies them.
 pub(crate) type NotifiedViews = Rc<RefCell<Vec<EntityId>>>;
 
+/// Shared by every element that shows a view. When the last one is dropped,
+/// the view is queued to be released unless a tree places it again first.
+pub(crate) struct ViewPlacement {
+    view: EntityId,
+    unplaced: NotifiedViews,
+}
+
+impl ViewPlacement {
+    pub(crate) fn new(view: EntityId, unplaced: NotifiedViews) -> Self {
+        Self { view, unplaced }
+    }
+}
+
+impl Drop for ViewPlacement {
+    fn drop(&mut self) {
+        self.unplaced.borrow_mut().push(self.view);
+    }
+}
+
 /// Cloneable rebuild signal for callbacks created while rendering a view.
 #[derive(Clone, Debug)]
 pub struct ViewNotifier {
@@ -177,6 +196,11 @@ impl<'a, T: 'static> ViewContext<'a, T> {
     /// frames once no render asks.
     pub fn request_animation_frame(&mut self) {
         self.app.request_animation_frame_for(self.view.id());
+    }
+
+    /// See [`AppContext::toggle_profiler`].
+    pub fn toggle_profiler(&mut self) {
+        self.app.toggle_profiler();
     }
 }
 

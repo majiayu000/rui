@@ -4,8 +4,11 @@ use crate::core::ElementId;
 use crate::core::color::Color;
 use crate::core::geometry::{Bounds, Edges, Size};
 use crate::core::style::{Corners, Style};
-use crate::elements::element::{Element, LayoutContext, PaintContext, style_to_taffy};
+use crate::elements::element::{
+    Capabilities, Element, LayoutContext, PaintContext, style_to_taffy,
+};
 use crate::renderer::Primitive;
+use std::any::Any;
 use taffy::prelude::*;
 
 /// Image fit mode
@@ -49,7 +52,7 @@ pub struct Image {
 }
 
 /// Image source
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ImageSource {
     /// Path to local file
     File(String),
@@ -171,51 +174,34 @@ impl Image {
 
     /// Calculate the destination bounds based on fit mode
     fn calculate_dest_bounds(&self, container: Bounds, image_size: Size) -> Bounds {
-        match self.fit {
-            ImageFit::Fill => container,
-            ImageFit::Contain => {
-                let scale_x = container.width() / image_size.width;
-                let scale_y = container.height() / image_size.height;
-                let scale = scale_x.min(scale_y);
-                let width = image_size.width * scale;
-                let height = image_size.height * scale;
-                let x = container.x() + (container.width() - width) / 2.0;
-                let y = container.y() + (container.height() - height) / 2.0;
-                Bounds::from_xywh(x, y, width, height)
-            }
-            ImageFit::Cover => {
-                let scale_x = container.width() / image_size.width;
-                let scale_y = container.height() / image_size.height;
-                let scale = scale_x.max(scale_y);
-                let width = image_size.width * scale;
-                let height = image_size.height * scale;
-                let x = container.x() + (container.width() - width) / 2.0;
-                let y = container.y() + (container.height() - height) / 2.0;
-                Bounds::from_xywh(x, y, width, height)
-            }
-            ImageFit::None => {
-                let x = container.x() + (container.width() - image_size.width) / 2.0;
-                let y = container.y() + (container.height() - image_size.height) / 2.0;
-                Bounds::from_xywh(x, y, image_size.width, image_size.height)
-            }
-            ImageFit::ScaleDown => {
-                if image_size.width <= container.width() && image_size.height <= container.height()
-                {
-                    // No scaling needed
-                    let x = container.x() + (container.width() - image_size.width) / 2.0;
-                    let y = container.y() + (container.height() - image_size.height) / 2.0;
-                    Bounds::from_xywh(x, y, image_size.width, image_size.height)
-                } else {
-                    // Scale down like contain
-                    let scale_x = container.width() / image_size.width;
-                    let scale_y = container.height() / image_size.height;
-                    let scale = scale_x.min(scale_y);
-                    let width = image_size.width * scale;
-                    let height = image_size.height * scale;
-                    let x = container.x() + (container.width() - width) / 2.0;
-                    let y = container.y() + (container.height() - height) / 2.0;
-                    Bounds::from_xywh(x, y, width, height)
-                }
+        fit_bounds(container, image_size, self.fit)
+    }
+}
+
+/// Where an `image_size` image lands in `container` under `fit`. Cover and
+/// None can land past the container; the renderer clips them to it.
+pub(crate) fn fit_bounds(container: Bounds, image_size: Size, fit: ImageFit) -> Bounds {
+    if image_size.width <= 0.0 || image_size.height <= 0.0 {
+        return container;
+    }
+    let centered = |width: f32, height: f32| {
+        let x = container.x() + (container.width() - width) / 2.0;
+        let y = container.y() + (container.height() - height) / 2.0;
+        Bounds::from_xywh(x, y, width, height)
+    };
+    let scale_x = container.width() / image_size.width;
+    let scale_y = container.height() / image_size.height;
+    let scaled = |scale: f32| centered(image_size.width * scale, image_size.height * scale);
+    match fit {
+        ImageFit::Fill => container,
+        ImageFit::Contain => scaled(scale_x.min(scale_y)),
+        ImageFit::Cover => scaled(scale_x.max(scale_y)),
+        ImageFit::None => centered(image_size.width, image_size.height),
+        ImageFit::ScaleDown => {
+            if image_size.width <= container.width() && image_size.height <= container.height() {
+                centered(image_size.width, image_size.height)
+            } else {
+                scaled(scale_x.min(scale_y))
             }
         }
     }
@@ -228,6 +214,31 @@ impl Element for Image {
 
     fn style(&self) -> &Style {
         &self.style
+    }
+
+    fn capabilities(&self) -> Capabilities {
+        Capabilities::PURE_INERT
+    }
+
+    /// The same when it shows the same thing. Handlers cannot be compared, so
+    /// an image with one is built again.
+    fn same_props(&self, previous: &dyn Element) -> bool {
+        let Some(previous) = (previous as &dyn Any).downcast_ref::<Image>() else {
+            return false;
+        };
+        self.on_load.is_none()
+            && self.on_error.is_none()
+            && previous.on_load.is_none()
+            && previous.on_error.is_none()
+            && self.id == previous.id
+            && self.source == previous.source
+            && self.fit == previous.fit
+            && self.style == previous.style
+            && self.state == previous.state
+            && self.alt_text == previous.alt_text
+            && self.placeholder_color == previous.placeholder_color
+            && self.texture_id == previous.texture_id
+            && self.intrinsic_size == previous.intrinsic_size
     }
 
     fn layout(&mut self, cx: &mut LayoutContext) -> NodeId {

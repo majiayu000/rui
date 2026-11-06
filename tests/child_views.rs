@@ -49,9 +49,14 @@ impl View for RowView {
 
 struct App {
     context: AppContext,
+    /// By creation order, as are `rows` and `renders`.
     models: Vec<Entity<RowModel>>,
     rows: Vec<Entity<RowView>>,
     renders: Vec<Rc<Cell<u32>>>,
+    /// The rows the root places, in order, by creation index.
+    placed: Vec<usize>,
+    /// Wraps each row's view in a div keyed by the row.
+    keyed_divs: bool,
     builds: Rc<Cell<u32>>,
     /// Read by the root, so notifying it rebuilds everything.
     title: Entity<String>,
@@ -66,49 +71,82 @@ struct App {
 
 impl App {
     fn new(count: usize) -> Self {
-        let mut context = AppContext::new();
-        let mut models = Vec::new();
-        let mut rows = Vec::new();
-        let mut renders = Vec::new();
-        for index in 0..count {
-            let model = context.create(RowModel {
-                label: format!("row {index}"),
-                color: 0x223344 + index as u32,
-            });
-            let count = Rc::new(Cell::new(0));
-            rows.push(context.new_view(RowView {
-                model,
-                renders: Rc::clone(&count),
-                clicks: 0,
-            }));
-            models.push(model);
-            renders.push(count);
-        }
-        let title = context.create(String::from("rows"));
-        Self {
+        let context = AppContext::new();
+        let mut app = Self {
             context,
-            models,
-            rows,
-            renders,
+            models: Vec::new(),
+            rows: Vec::new(),
+            renders: Vec::new(),
+            placed: Vec::new(),
+            keyed_divs: false,
             builds: Rc::new(Cell::new(0)),
-            title,
+            title: Entity::new(Default::default()),
             in_scroll_view: false,
             root: div(),
             taffy: TaffyTree::new(),
             nodes: LayoutNodes::new(),
             scene: Scene::new(),
             measurer: TextMeasureCache::new(),
+        };
+        app.title = app.context.create(String::from("rows"));
+        for _ in 0..count {
+            let row = app.new_row();
+            app.placed.push(row);
         }
+        app
+    }
+
+    /// Make another row view, not placed yet; returns its creation index.
+    fn new_row(&mut self) -> usize {
+        let index = self.rows.len();
+        let model = self.context.create(RowModel {
+            label: format!("row {index}"),
+            color: 0x223344 + index as u32,
+        });
+        let count = Rc::new(Cell::new(0));
+        self.rows.push(self.context.new_view(RowView {
+            model,
+            renders: Rc::clone(&count),
+            clicks: 0,
+        }));
+        self.models.push(model);
+        self.renders.push(count);
+        index
+    }
+
+    /// Place `placed` from the next frame on, rebuilding the root.
+    fn place(&mut self, placed: Vec<usize>) {
+        self.placed = placed;
+        self.context.request_rebuild();
+    }
+
+    /// Whether row `index`'s view was dropped: its render counter is no
+    /// longer shared with it.
+    fn dropped(&self, index: usize) -> bool {
+        Rc::strong_count(&self.renders[index]) == 1
     }
 
     fn build(&self) -> impl FnMut(&mut AppContext) -> Div + use<> {
-        let (rows, builds, title) = (self.rows.clone(), Rc::clone(&self.builds), self.title);
-        let in_scroll_view = self.in_scroll_view;
+        let rows: Vec<_> = self
+            .placed
+            .iter()
+            .map(|index| (*index, self.rows[*index]))
+            .collect();
+        let (builds, title) = (Rc::clone(&self.builds), self.title);
+        let (in_scroll_view, keyed_divs) = (self.in_scroll_view, self.keyed_divs);
         move |cx: &mut AppContext| {
             builds.set(builds.get() + 1);
             let heading = cx.get(title).map(|title| title.clone()).unwrap_or_default();
             let root = div().w(320.0).flex_col().child(text(heading));
-            let rows = rows.iter().map(|row| view(*row));
+            let rows = rows.iter().map(|(index, row)| {
+                if keyed_divs {
+                    rui::elements::element::AnyElement::new(
+                        div().id(ElementId(*index as u64)).child(view(*row)),
+                    )
+                } else {
+                    rui::elements::element::AnyElement::new(view(*row))
+                }
+            });
             if in_scroll_view {
                 root.child(scroll_view().h(400.0).children(rows))
             } else {
@@ -319,6 +357,178 @@ fn view_frames_match_full_frames_over_random_model_edits() {
             let kept = describe(app.scene.primitives());
             let full = app.full_frame();
             assert_eq!(kept, full, "seed {seed}, frame {frame}");
+        }
+    }
+}
+
+/// Every row's render count is still `count`, for the rows in `rows`.
+fn assert_renders(app: &App, rows: impl IntoIterator<Item = usize>, count: u32, what: &str) {
+    for row in rows {
+        assert_eq!(app.renders[row].get(), count, "row {row}: {what}");
+    }
+}
+
+#[test]
+fn reordering_views_renders_none_of_them() {
+    for keyed_divs in [false, true] {
+        let mut app = App::new(30);
+        app.keyed_divs = keyed_divs;
+        app.frame();
+        let mut order: Vec<usize> = (0..30).rev().collect();
+        order.rotate_left(7);
+        order.swap(3, 20);
+        app.place(order);
+        app.frame();
+        assert_eq!(app.builds.get(), 2);
+        assert_renders(&app, 0..30, 1, "moved, not rendered");
+        let kept = describe(app.scene.primitives());
+        assert_eq!(kept, app.full_frame(), "keyed divs: {keyed_divs}");
+    }
+}
+
+#[test]
+fn a_view_no_tree_places_is_released() {
+    let mut app = App::new(10);
+    app.frame();
+    assert_eq!(app.context.child_view_count(), 10);
+    app.place(vec![0, 1, 2, 4, 5, 6, 7, 8, 9]);
+    app.frame();
+    assert!(app.dropped(3), "the view and its state are dropped");
+    assert!(!app.dropped(4));
+    assert_eq!(app.context.child_view_count(), 9);
+    // Its model no longer renders anything.
+    app.set_label(3, "gone");
+    app.frame();
+    assert_renders(
+        &app,
+        (0..10).filter(|row| *row != 3),
+        1,
+        "nothing reads the model",
+    );
+    assert!(!format!("{:?}", app.scene.primitives()).contains("gone"));
+}
+
+#[test]
+fn a_view_not_placed_yet_stays() {
+    let mut app = App::new(3);
+    let later = app.new_row();
+    app.frame();
+    app.frame();
+    assert!(!app.dropped(later), "never placed, so never released");
+    app.place(vec![0, 1, 2, later]);
+    app.frame();
+    assert_eq!(app.renders[later].get(), 1);
+}
+
+#[test]
+fn a_released_view_drops_its_queued_listener_updates() {
+    let mut app = App::new(10);
+    app.frame();
+    // Clicks on rows 4 and 5 queue an update for each and notify them.
+    for row in [4.0, 5.0] {
+        let position = rui::Point::new(10.0, 20.0 * row + 30.0);
+        for kind in [
+            rui::elements::element::PointerEventKind::Down,
+            rui::elements::element::PointerEventKind::Up,
+        ] {
+            let event = rui::elements::element::PointerEvent {
+                kind,
+                position,
+                button: Some(rui::core::event::MouseButton::Left),
+            };
+            let bounds = Bounds::from_xywh(0.0, 0.0, VIEWPORT.width, VIEWPORT.height);
+            let mut focused = None;
+            let mut cx =
+                rui::elements::element::EventContext::new(bounds, &app.taffy, &mut focused);
+            rui::Element::handle_pointer_event(&mut app.root, &mut cx, &event);
+        }
+    }
+    assert!(app.context.release(app.rows[4]));
+    app.place((0..10).filter(|row| *row != 4).collect());
+    app.frame();
+    assert!(app.dropped(4));
+    assert_eq!(app.renders[4].get(), 1, "the queued update never ran");
+    assert_eq!(app.renders[5].get(), 2, "the row kept ran its update");
+    assert_eq!(app.context.child_view_count(), 9);
+}
+
+#[test]
+fn row_views_churned_every_frame_keep_the_footprint_flat() {
+    let mut app = App::new(40);
+    app.frame();
+    for frame in 0..200 {
+        // The oldest five rows go, five new ones come.
+        let mut placed = app.placed.split_off(5);
+        for _ in 0..5 {
+            placed.push(app.new_row());
+        }
+        app.place(placed);
+        app.frame();
+        assert_eq!(app.context.child_view_count(), 40, "frame {frame}");
+        let gone = app.rows.len() - 40;
+        assert!((0..gone).all(|row| app.dropped(row)), "frame {frame}");
+        assert_renders(&app, app.placed.clone(), 1, "kept rows do not render again");
+    }
+    assert_eq!(describe(app.scene.primitives()), app.full_frame());
+}
+
+#[test]
+fn view_frames_match_full_frames_over_random_reorders_and_churn() {
+    for seed in 1..=8u64 {
+        let mut rng = Rng(seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1);
+        let mut app = App::new(40);
+        app.keyed_divs = seed % 2 == 0;
+        app.frame();
+        let mut ever_placed = vec![true; 40];
+        for frame in 0..20 {
+            let mut placed = app.placed.clone();
+            for _ in 0..1 + rng.below(4) {
+                let len = placed.len() as u64;
+                match rng.below(5) {
+                    0 => placed.swap(rng.below(len) as usize, rng.below(len) as usize),
+                    1 if len > 1 => {
+                        placed.remove(rng.below(len) as usize);
+                    }
+                    2 => {
+                        let row = app.new_row();
+                        placed.insert(rng.below(len + 1) as usize, row);
+                    }
+                    3 => {
+                        let start = rng.below(len) as usize;
+                        let end = start + rng.below(len - start as u64) as usize;
+                        placed[start..=end].reverse();
+                    }
+                    _ => {
+                        let row = placed[rng.below(len) as usize];
+                        let model = app.models[row];
+                        if let Some(mut model) = app.context.get_mut(model) {
+                            model.label = format!("row {row} edit {frame}");
+                        }
+                        app.context.notify(model.id());
+                    }
+                }
+            }
+            let moved = placed != app.placed;
+            if moved {
+                app.place(placed);
+            }
+            app.frame();
+            let kept = describe(app.scene.primitives());
+            let full = app.full_frame();
+            assert_eq!(kept, full, "seed {seed}, frame {frame}");
+            ever_placed.resize(app.rows.len(), false);
+            for row in app.placed.iter() {
+                ever_placed[*row] = true;
+            }
+            for (row, ever) in ever_placed.iter().enumerate() {
+                // Rows made and removed before a frame placed them are kept.
+                let released = *ever && !app.placed.contains(&row);
+                assert_eq!(
+                    app.dropped(row),
+                    released,
+                    "seed {seed}, frame {frame}, row {row}"
+                );
+            }
         }
     }
 }
