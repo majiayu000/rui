@@ -7,14 +7,6 @@ use metal::{
     MTLStorageMode, MTLTextureType, MTLTextureUsage, Texture, TextureDescriptor,
 };
 
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub(super) struct GpuGlyph {
-    pub bounds: [f32; 4],
-    pub uv: [f32; 4],
-    pub color: [f32; 4],
-}
-
 /// Rows in the staging buffer start on this many bytes.
 const ROW_ALIGNMENT: usize = 4;
 

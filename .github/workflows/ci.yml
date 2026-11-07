@@ -22,6 +22,9 @@ jobs:
       - name: Check minimum Rust and acceptance examples
         run: cargo +1.88.0 check --locked --lib --example counter --example native_dogfood
 
+      - name: Check minimum Rust with the wgpu backend
+        run: cargo +1.88.0 check --locked --lib --features wgpu
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -38,6 +41,11 @@ jobs:
 
       - name: cargo clippy
         run: cargo clippy --all-targets
+
+      - name: wgpu backend against Metal
+        run: |
+          cargo clippy --all-targets --features wgpu
+          cargo test --features wgpu --lib renderer::wgpu
 
       - name: Performance gate
         run: cargo bench --bench perf_gate

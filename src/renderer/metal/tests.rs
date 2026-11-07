@@ -9,8 +9,8 @@ use crate::elements::text::TextAlign;
 use crate::renderer::{PathVertex, Primitive, RendererError, Scene};
 use crate::{ImageFit, ImageSource};
 
-const WIDTH: f32 = 160.0;
-const HEIGHT: f32 = 120.0;
+pub(crate) const WIDTH: f32 = 160.0;
+pub(crate) const HEIGHT: f32 = 120.0;
 
 /// xorshift64*, enough to vary scenes without a dependency.
 struct Rng(u64);
@@ -59,7 +59,7 @@ impl Rng {
     }
 }
 
-fn random_scene(seed: u64) -> Scene {
+pub(crate) fn random_scene(seed: u64) -> Scene {
     let mut rng = Rng(seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1);
     let mut scene = Scene::new();
     let mut clips = 0;

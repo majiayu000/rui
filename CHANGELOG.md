@@ -4,6 +4,14 @@ All notable project changes should be recorded here.
 
 ## Unreleased
 
+### Rendering
+
+- A `wgpu` cargo feature adds `renderer::wgpu::WgpuRenderer`, which draws the
+  same planned frames as Metal with WGSL ports of its shaders over Vulkan, DX12
+  or Metal, offscreen or into a caller's `Bgra8UnormSrgb` texture (ADR 0002).
+  Frame planning moved from `renderer/metal` to the backend-neutral
+  `renderer/plan`; Metal output is unchanged.
+
 ### Performance
 
 - System fonts are now parsed once per process and text measurement metrics

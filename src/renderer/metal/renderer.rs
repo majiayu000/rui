@@ -2,31 +2,19 @@
 
 use super::batch::{BufferLayout, InstancePool, bind_vertex_value, write_slice};
 use super::capture::{create_capture_texture, read_texture_rgba, texture_extent};
-use super::frame::{
-    Draw, FramePlan, ItemKind, KIND_COLOR_GLYPH, KIND_GLYPH, KIND_PATH, KIND_PATH_SPRITE,
-    KIND_QUAD, KIND_SHADOW, Pages,
-};
-use super::glyph::{GlyphPages, GpuGlyph};
-use super::image_primitive::GpuImage;
-use super::order::Rect;
-use super::path::{GpuPathTile, PathGeometry, PathSprites, PathTiles, SpriteLookup};
-use super::retained::{RetainedPipelines, RetainedTarget, damage_scissor, intersect_scissors};
+use super::glyph::GlyphPages;
+use super::retained::{RetainedPipelines, RetainedTarget};
 use crate::core::geometry::{Bounds, Size};
-use crate::elements::fit_bounds;
-use crate::renderer::primitives::{GpuQuad, GpuShadow, Primitive};
-use crate::renderer::text::{SUBPIXEL_VARIANTS, TextGlyphCache, TextRequest};
+use crate::renderer::plan::{Draw, FrameData, FramePlanner, ScissorRect, clear_linear};
 use crate::renderer::{
-    Renderer, RendererDeviceDiagnostics, RendererDiagnostics, RendererError, RendererImageCache,
-    RendererPrimitiveSupport, RendererResourceCache, RendererResourceError, RendererResourceKind,
-    RendererResourceLimits, Scene,
+    Renderer, RendererDeviceDiagnostics, RendererDiagnostics, RendererError,
+    RendererPrimitiveSupport, RendererResourceError, RendererResourceKind, RendererResourceLimits,
+    Scene,
 };
-use crate::{ImageFit, ImageSource};
 use metal::*;
-use std::collections::HashMap;
 
 mod encoding;
 mod offscreen;
-mod planning;
 mod resources;
 
 /// Offscreen frames the GPU may be behind by, as a window's drawables allow.
@@ -66,31 +54,15 @@ struct Retained<'a> {
     copy_to: &'a TextureRef,
 }
 
-struct ImageDraw {
-    texture: Texture,
-    instance: GpuImage,
-    clip: u32,
-}
-
-/// A frame's instance data and planned draws, kept to reuse their storage.
-#[derive(Default)]
-struct FrameData {
-    plan: FramePlan,
-    quads: Vec<GpuQuad>,
-    shadows: Vec<GpuShadow>,
-    glyphs: Vec<GpuGlyph>,
-    images: Vec<ImageDraw>,
-    path_tiles: Vec<GpuPathTile>,
-    /// `[x0, y0, x1, y1]` in device pixels, the edges each path tile reads.
-    path_edges: Vec<[f32; 4]>,
-    /// The path being built, kept to reuse its storage.
-    path: PathGeometry,
-    /// Clip rectangles in device pixels, as scissor rectangles and as the
-    /// `x0, y0, x1, y1` the sprite shader tests fragments against.
-    scissors: Vec<MTLScissorRect>,
-    clip_edges: Vec<[f32; 4]>,
-    /// The device pixels a retained frame draws again; every clip is cut to it.
-    damage: Option<MTLScissorRect>,
+impl From<ScissorRect> for MTLScissorRect {
+    fn from(rect: ScissorRect) -> Self {
+        Self {
+            x: rect.x,
+            y: rect.y,
+            width: rect.width,
+            height: rect.height,
+        }
+    }
 }
 
 /// A [`MetalRenderer`] being created on another thread; see
@@ -122,16 +94,12 @@ pub struct MetalRenderer {
     empty_page: Texture,
     /// Bound for sprite draws that sample no color atlas page.
     empty_color_page: Texture,
-    textures: HashMap<u32, Texture>,
-    texture_resources: RendererResourceCache<u32>,
-    image_cache: RendererImageCache,
-    text_cache: TextGlyphCache,
+    /// Glyph, image and path caches, and the image textures uploaded for them.
+    planner: FramePlanner<Texture>,
     glyph_pages: GlyphPages,
     color_pages: GlyphPages,
-    path_sprites: PathSprites,
-    path_tiles: PathTiles,
     offscreen_target: Option<Texture>,
-    frame: FrameData,
+    frame: FrameData<Texture>,
     instances: InstancePool,
     /// Command buffers the GPU has not finished, with the frame each drew.
     frames_in_flight: Vec<(u64, CommandBuffer)>,
@@ -267,25 +235,10 @@ impl MetalRenderer {
             sampler,
             empty_page,
             empty_color_page,
-            textures: HashMap::new(),
-            texture_resources: RendererResourceCache::new(
-                RendererResourceKind::Texture,
-                limits.texture_max_entries,
-                limits.texture_max_bytes,
-            ),
-            image_cache: RendererImageCache::with_limits(
-                limits.image_max_entries,
-                limits.image_max_bytes,
-            ),
+            planner: FramePlanner::new(&limits),
             offscreen_target: None,
-            text_cache: TextGlyphCache::with_limits(
-                limits.glyph_max_entries,
-                limits.glyph_max_bytes,
-            ),
             glyph_pages: GlyphPages::coverage(),
             color_pages: GlyphPages::color(),
-            path_sprites: PathSprites::default(),
-            path_tiles: PathTiles::default(),
             frame: FrameData::default(),
             instances: InstancePool::default(),
             frames_in_flight: Vec::new(),
@@ -342,7 +295,7 @@ impl MetalRenderer {
     /// How many paths are drawn from the atlas.
     #[cfg(test)]
     pub(super) fn placed_path_sprites(&self) -> usize {
-        self.path_sprites.placed()
+        self.planner.placed_path_sprites()
     }
 
     /// The kept offscreen texture.
@@ -442,16 +395,6 @@ impl MetalRenderer {
     ) -> Result<(), RendererError> {
         RendererPrimitiveSupport::metal().validate_scene(scene)?;
 
-        self.texture_resources.begin_frame();
-        self.image_cache.begin_frame();
-        for handle in self.image_cache.release_dropped()? {
-            let id = handle.id.as_u32();
-            self.textures.remove(&id);
-            if self.texture_resources.contains(&id) {
-                self.texture_resources.dispose(&id)?;
-            }
-        }
-        self.text_cache.begin_frame();
         // Atlas pages only finished frames drew from may be evicted.
         let time_completed = self.profiling;
         let mut completed_gpu_time = None;
@@ -470,47 +413,22 @@ impl MetalRenderer {
             self.completed_gpu_time = completed_gpu_time;
         }
         let oldest_in_flight = self.frames_in_flight.iter().map(|(frame, _)| *frame).min();
-        self.text_cache.set_completed_frame(
-            oldest_in_flight.map_or(self.text_cache.frame() - 1, |frame| frame - 1),
-        );
-        self.path_sprites.begin_frame(self.text_cache.epoch());
-        self.path_tiles.begin_frame();
+        self.planner.begin_frame(oldest_in_flight)?;
         self.frame_stats = MetalFrameStats::default();
         self.gpu_time = None;
 
-        let scale_factor = extent.0 as f32 / viewport_size.width.max(1.0);
         let drawable_size = Size::new(extent.0 as f32, extent.1 as f32);
 
         let mut frame = std::mem::take(&mut self.frame);
         let damage = retained.as_ref().and_then(|retained| retained.damage);
-        let epoch = self.text_cache.epoch();
-        let mut built = self.build_frame(
+        let built = self.planner.build(
             &mut frame,
             scene,
+            extent,
             viewport_size,
-            scale_factor,
-            drawable_size,
             damage,
+            &self.device,
         );
-        if built.is_ok() && self.text_cache.epoch() != epoch {
-            // A font loaded during the frame emptied the glyph atlas, so glyphs
-            // placed before then name slots that no longer hold them. The fonts
-            // are loaded now; place everything again.
-            let epoch = self.text_cache.epoch();
-            built = self.build_frame(
-                &mut frame,
-                scene,
-                viewport_size,
-                scale_factor,
-                drawable_size,
-                damage,
-            );
-            if built.is_ok() && self.text_cache.epoch() != epoch {
-                built = Err(RendererError::render_failed(
-                    "the glyph atlas was emptied twice while building one frame",
-                ));
-            }
-        }
         let result = built.and_then(|()| {
             self.encode_frame(
                 &mut frame,
@@ -530,14 +448,6 @@ impl MetalRenderer {
 /// Shader source with the shared color helpers in front.
 fn with_color(source: &str) -> String {
     [super::shaders::COLOR_SHADER, source].concat()
-}
-
-fn srgb_to_linear(c: f64) -> f64 {
-    if c <= 0.04045 {
-        c / 12.92
-    } else {
-        ((c + 0.055) / 1.055).powf(2.4)
-    }
 }
 
 impl Renderer for MetalRenderer {
@@ -564,9 +474,9 @@ impl Renderer for MetalRenderer {
                 ),
             },
             vec![
-                self.texture_resources.stats(),
-                self.image_cache.stats(),
-                self.text_cache.resource_stats(),
+                self.planner.textures.stats(),
+                self.planner.image_cache.stats(),
+                self.planner.text_cache.resource_stats(),
             ],
         )
         .with_unsupported_primitives(RendererPrimitiveSupport::metal().unsupported_primitives())

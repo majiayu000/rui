@@ -14,7 +14,9 @@ Related documents:
 - [`API.md`](API.md): the public API, checked by `tests/docs_api_drift.rs`.
 - [`adr/`](adr/): architecture decisions, starting with
   [ADR 0001](adr/0001-element-capabilities-and-defaults.md) on element
-  capabilities and the default fast path.
+  capabilities and the default fast path, and
+  [ADR 0002](adr/0002-renderer-backends.md) on the shared frame planner and
+  the Metal and wgpu backends.
 - [`platform-window-boundary.md`](platform-window-boundary.md): what the platform
   window layer must provide.
 - [`devtools.md`](devtools.md): the profiling overlay and the damage and replay
@@ -59,10 +61,13 @@ src/
 ├── renderer/
 │   ├── scene.rs, primitives.rs   # Scene, Primitive, Reach, damage
 │   ├── text/                 # measure cache, wrap, rich text, glyph atlas
-│   └── metal/
-│       ├── renderer.rs       # MetalRenderer
-│       ├── renderer/         # planning, encoding, resources, offscreen
-│       └── retained.rs, shaders.rs, path.rs, glyph.rs, order.rs, ...
+│   ├── plan/                 # FramePlanner: scene → instances and draws (ADR 0002)
+│   │   └── build.rs, frame.rs, order.rs, path.rs, retained.rs, instances.rs
+│   ├── metal/
+│   │   ├── renderer.rs       # MetalRenderer
+│   │   ├── renderer/         # encoding, resources, offscreen
+│   │   └── retained.rs, shaders.rs, glyph.rs, batch.rs, capture.rs
+│   └── wgpu/                 # WgpuRenderer, feature `wgpu`: WGSL ports, atlas, targets
 ├── platform/
 │   ├── window.rs             # the window contract
 │   └── mac/
@@ -202,16 +207,23 @@ stays correct through reconcile, but its cost grows with the size of the tree
   in frame-aware LRUs. `TextGlyphCache` rasterizes glyphs once at device scale
   into A8 atlas pages, plus RGBA pages for color emoji. Pages are evicted whole,
   and only once the GPU has finished every frame that drew from them.
-- **Metal.** A frame is planned before anything is encoded. The scene becomes
-  instance data in one pooled buffer, plus a plan of draws. Quads, shadows,
+- **Planning.** A frame is planned before anything is encoded, by code every
+  backend shares (`renderer/plan`, ADR 0002). The scene becomes instance data,
+  clip rectangles and a plan of draws.
+- **Metal.** The planned instance data goes in one pooled buffer. Quads, shadows,
   glyphs and paths share one sprite pipeline. Draws are ordered by overlap, so a
   frame is usually one draw call. Paths are drawn as analytic tiles, or from an
   atlas when they are small shapes drawn before. Images have their own pipeline.
   The sprite shader skips the per-fragment clip test for draws wholly inside
   their clip, and plain quads take a specialized path. The renderer is created
   off the main thread (`MetalRenderer::spawn`). `renderer.rs` holds
-  `MetalRenderer`; planning, encoding, resources and offscreen frames are its
-  child modules.
+  `MetalRenderer`; encoding, resources and offscreen frames are its child
+  modules.
+- **wgpu.** Behind the `wgpu` feature, `WgpuRenderer` draws the same planned
+  frames with WGSL ports of the Metal shaders over Vulkan, DX12 or Metal. It
+  renders offscreen, into a retained target, or into a caller's
+  `Bgra8UnormSrgb` texture; `renderer::wgpu::tests` checks its pixels against
+  Metal's.
 - **Offscreen.** Captures and offscreen frames, used by tests and benchmarks,
   render into a kept texture through the same planning and encoding code.
 
