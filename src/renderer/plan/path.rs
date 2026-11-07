@@ -61,7 +61,7 @@ const MARGIN: f32 = 1.0;
 /// A tile of a path, or a run of tiles, as the sprite shader reads it.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Pod, Zeroable)]
-pub(super) struct GpuPathTile {
+pub(crate) struct GpuPathTile {
     /// x, y, width, height in logical pixels.
     pub bounds: [f32; 4],
     pub color: [f32; 4],
@@ -773,7 +773,7 @@ impl PathSprites {
 
     /// How many paths have a slot.
     #[cfg(test)]
-    pub(super) fn placed(&self) -> usize {
+    pub(crate) fn placed(&self) -> usize {
         self.entries
             .values()
             .flatten()

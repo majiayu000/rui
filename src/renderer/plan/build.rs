@@ -1,8 +1,18 @@
 //! Planning a frame: the scene becomes instance data and a plan of draws.
 
+use super::frame::{ItemKind, Pages};
+use super::order::Rect;
+use super::path::{PathGeometry, SpriteLookup};
+use super::retained::{damage_scissor, intersect_scissors};
 use super::*;
+use crate::core::geometry::Bounds;
+use crate::elements::fit_bounds;
+use crate::renderer::Scene;
+use crate::renderer::primitives::Primitive;
+use crate::renderer::text::{SUBPIXEL_VARIANTS, TextRequest};
+use crate::{ImageFit, ImageSource};
 
-impl FrameData {
+impl<T> FrameData<T> {
     pub(super) fn clear(&mut self) {
         self.plan.clear();
         self.quads.clear();
@@ -16,7 +26,7 @@ impl FrameData {
     }
 
     /// Adds a clip rectangle and returns its index.
-    pub(super) fn push_clip(&mut self, scissor: MTLScissorRect) -> u32 {
+    pub(super) fn push_clip(&mut self, scissor: ScissorRect) -> u32 {
         let scissor = match self.damage {
             Some(damage) => intersect_scissors(scissor, damage),
             None => scissor,
@@ -92,9 +102,9 @@ pub(super) fn union(a: Rect, b: Rect) -> Rect {
 }
 
 /// The device pixels `clip` keeps, or the whole drawable without one.
-fn scissor_rect(clip: Option<Bounds>, scale_factor: f32, drawable_size: Size) -> MTLScissorRect {
+fn scissor_rect(clip: Option<Bounds>, scale_factor: f32, drawable_size: Size) -> ScissorRect {
     let Some(bounds) = clip else {
-        return MTLScissorRect {
+        return ScissorRect {
             x: 0,
             y: 0,
             width: drawable_size.width as u64,
@@ -102,7 +112,7 @@ fn scissor_rect(clip: Option<Bounds>, scale_factor: f32, drawable_size: Size) ->
         };
     };
     if bounds.is_empty() {
-        return MTLScissorRect {
+        return ScissorRect {
             x: 0,
             y: 0,
             width: 0,
@@ -125,7 +135,7 @@ fn scissor_rect(clip: Option<Bounds>, scale_factor: f32, drawable_size: Size) ->
         height = max_h.saturating_sub(y);
     }
 
-    MTLScissorRect {
+    ScissorRect {
         x,
         y,
         width,
@@ -133,17 +143,19 @@ fn scissor_rect(clip: Option<Bounds>, scale_factor: f32, drawable_size: Size) ->
     }
 }
 
-impl MetalRenderer {
+impl<T: Clone> FramePlanner<T> {
     /// Turns the scene into instance data and a plan of draws. With `damage`,
     /// only what can touch it, cut to it.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn build_frame(
         &mut self,
-        frame: &mut FrameData,
+        frame: &mut FrameData<T>,
         scene: &Scene,
         viewport_size: Size,
         scale_factor: f32,
         drawable_size: Size,
         damage: Option<Bounds>,
+        upload: &impl TextureUpload<Texture = T>,
     ) -> Result<(), RendererError> {
         frame.clear();
         frame.damage = damage.map(|damage| damage_scissor(damage, scale_factor, drawable_size));
@@ -266,6 +278,7 @@ impl MetalRenderer {
                         clip_stack.last().copied(),
                         scale_factor,
                         drawable_size,
+                        upload,
                     )?;
                 }
                 Primitive::Text {
@@ -357,7 +370,7 @@ impl MetalRenderer {
     /// analytic tiles otherwise.
     pub(super) fn build_path(
         &mut self,
-        frame: &mut FrameData,
+        frame: &mut FrameData<T>,
         path: &PathGeometry,
         color: crate::core::color::Rgba,
         clip: u32,
@@ -456,7 +469,7 @@ impl MetalRenderer {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn build_image(
         &mut self,
-        frame: &mut FrameData,
+        frame: &mut FrameData<T>,
         bounds: &Bounds,
         source: &ImageSource,
         fit: ImageFit,
@@ -466,11 +479,12 @@ impl MetalRenderer {
         current_clip: Option<Bounds>,
         scale_factor: f32,
         drawable_size: Size,
+        upload: &impl TextureUpload<Texture = T>,
     ) -> Result<(), RendererError> {
         if let ImageSource::Texture(id) = source {
             let texture = self
                 .textures
-                .get(id)
+                .get(*id)
                 .ok_or_else(|| RendererResourceError::missing(RendererResourceKind::Texture, *id))?
                 .clone();
             let instance = GpuImage::new(*bounds, corner_radii, [1.0, 1.0, 1.0, 1.0], opacity);
@@ -487,7 +501,9 @@ impl MetalRenderer {
 
         let entry = self.image_cache.resolve(source)?;
 
-        let texture = self.ensure_texture(entry.handle.id.as_u32(), entry.size, &entry.pixels)?;
+        let texture =
+            self.textures
+                .ensure(entry.handle.id.as_u32(), entry.size, &entry.pixels, upload)?;
 
         let dest_bounds = fit_bounds(*bounds, entry.size, fit);
 
@@ -519,7 +535,7 @@ impl MetalRenderer {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn build_text(
         &mut self,
-        frame: &mut FrameData,
+        frame: &mut FrameData<T>,
         bounds: &Bounds,
         content: &str,
         color: crate::core::color::Rgba,
@@ -572,7 +588,7 @@ impl MetalRenderer {
         // a glyph on another page, starts the next, ordered after it where they
         // overlap.
         let mut run: Option<(bool, u32, u32)> = None;
-        let flush = |frame: &mut FrameData, run: Option<(bool, u32, u32)>| {
+        let flush = |frame: &mut FrameData<T>, run: Option<(bool, u32, u32)>| {
             if let Some((color, page, start)) = run {
                 let (kind, pages) = if color {
                     (KIND_COLOR_GLYPH, Pages::color(page))

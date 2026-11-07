@@ -1,5 +1,7 @@
 //! Rendering subsystem
 
+#[cfg(any(all(target_os = "macos", feature = "metal"), feature = "wgpu"))]
+mod plan;
 mod primitives;
 mod resources;
 mod runtime;
@@ -16,6 +18,8 @@ mod text_shaping;
 
 #[cfg(all(target_os = "macos", feature = "metal"))]
 pub mod metal;
+#[cfg(feature = "wgpu")]
+pub mod wgpu;
 
 pub use primitives::{PathVertex, Primitive, PrimitiveKind, Reach};
 pub use resources::{
@@ -27,8 +31,8 @@ pub use resources::{
 pub use runtime::{
     RecordedScene, RecordingRenderer, Renderer, RendererError, RendererPrimitiveSupport,
 };
-pub use scene::{HitRegion, Layer, LayerId, Scene, ZIndex};
 pub(crate) use scene::PaintRecord;
+pub use scene::{HitRegion, Layer, LayerId, Scene, ZIndex};
 pub use telemetry::{
     RUI_PROFILE_ENV, RendererBatchDiagnostics, RendererFramePhaseDurations, RendererFrameTelemetry,
     RendererTelemetryRecorder,

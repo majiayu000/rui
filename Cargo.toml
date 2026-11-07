@@ -14,6 +14,8 @@ categories = ["gui"]
 [features]
 default = ["metal"]
 metal = ["dep:metal", "dep:objc2", "dep:objc2-foundation", "dep:objc2-app-kit", "dep:objc2-quartz-core"]
+# Cross-platform rendering through wgpu (ADR 0002): Vulkan, DX12 and Metal.
+wgpu = ["dep:wgpu", "dep:pollster"]
 
 [dependencies]
 # Math and geometry
@@ -40,6 +42,12 @@ objc2-app-kit = { version = "0.3", features = [
     "NSPasteboard",
 ], optional = true }
 objc2-quartz-core = { version = "0.3", features = ["CAMetalLayer", "CALayer"], optional = true }
+
+# wgpu rendering (feature `wgpu`). GLES and WebGPU are left out: the sprite
+# pipeline reads storage buffers in the vertex stage. pollster blocks on adapter,
+# device and readback futures.
+wgpu = { version = "29", default-features = false, features = ["std", "parking_lot", "wgsl", "metal", "vulkan", "dx12"], optional = true }
+pollster = { version = "0.4", optional = true }
 
 # Utilities
 smallvec = "1.13"

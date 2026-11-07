@@ -11,31 +11,31 @@
 
 use super::order::{OverlapOrder, Rect};
 
-pub(super) const KIND_QUAD: u32 = 0;
-pub(super) const KIND_SHADOW: u32 = 1;
-pub(super) const KIND_GLYPH: u32 = 2;
-pub(super) const KIND_PATH: u32 = 3;
-pub(super) const KIND_PATH_SPRITE: u32 = 4;
-pub(super) const KIND_COLOR_GLYPH: u32 = 5;
+pub(crate) const KIND_QUAD: u32 = 0;
+pub(crate) const KIND_SHADOW: u32 = 1;
+pub(crate) const KIND_GLYPH: u32 = 2;
+pub(crate) const KIND_PATH: u32 = 3;
+pub(crate) const KIND_PATH_SPRITE: u32 = 4;
+pub(crate) const KIND_COLOR_GLYPH: u32 = 5;
 
 /// The atlas pages a run of sprites samples: a coverage page and a color page,
 /// each bound to its own texture slot, so sprites on one page of each share a
 /// draw.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(super) struct Pages {
+pub(crate) struct Pages {
     pub coverage: Option<u32>,
     pub color: Option<u32>,
 }
 
 impl Pages {
-    pub(super) fn coverage(page: u32) -> Self {
+    pub(crate) fn coverage(page: u32) -> Self {
         Self {
             coverage: Some(page),
             color: None,
         }
     }
 
-    pub(super) fn color(page: u32) -> Self {
+    pub(crate) fn color(page: u32) -> Self {
         Self {
             coverage: None,
             color: Some(page),
@@ -59,14 +59,14 @@ impl Pages {
 /// One sprite instance as the shader reads it: `kind << 29 | index` into that
 /// kind's buffer, and the clip rectangle to apply.
 #[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct SpriteRef {
+#[derive(Clone, Copy, Debug, PartialEq, Eq, bytemuck::Pod, bytemuck::Zeroable)]
+pub(crate) struct SpriteRef {
     pub index: u32,
     pub clip: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum ItemKind {
+pub(crate) enum ItemKind {
     /// `count` instances of `kind` from `start`, all sampling atlas `pages`.
     Sprites {
         kind: u32,
@@ -86,7 +86,7 @@ struct Item {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Draw {
+pub(crate) enum Draw {
     /// Sprite references `start..start + count`, sampling atlas `pages`.
     Sprites {
         pages: Pages,
@@ -97,7 +97,7 @@ pub(super) enum Draw {
 }
 
 #[derive(Default)]
-pub(super) struct FramePlan {
+pub(crate) struct FramePlan {
     items: Vec<Item>,
     /// Whether scene order needs more than one draw.
     mixed: bool,
@@ -114,7 +114,7 @@ pub(super) struct FramePlan {
 }
 
 impl FramePlan {
-    pub(super) fn clear(&mut self) {
+    pub(crate) fn clear(&mut self) {
         self.items.clear();
         self.mixed = false;
         self.pages = Pages::default();
@@ -124,7 +124,7 @@ impl FramePlan {
 
     /// Adds an item that paints only within `rect`, logical pixels clipped to
     /// what can be seen. Without one, `plan` asks for it if it needs it.
-    pub(super) fn push(&mut self, kind: ItemKind, clip: u32, rect: Option<Rect>) {
+    pub(crate) fn push(&mut self, kind: ItemKind, clip: u32, rect: Option<Rect>) {
         match kind {
             ItemKind::Sprites { pages, .. } if self.pages.fits(pages) => {
                 self.pages = self.pages.with(pages);
@@ -136,7 +136,7 @@ impl FramePlan {
 
     /// Fills `refs` and `draws`. `width` and `height` bound every item's rect;
     /// `rect_of` gives those pushed without one, `None` when nothing is visible.
-    pub(super) fn plan(
+    pub(crate) fn plan(
         &mut self,
         width: f32,
         height: f32,

@@ -11,7 +11,7 @@
 const CELL: f32 = 64.0;
 
 /// `[x0, y0, x1, y1]`, half open: a pixel center on `x1` or `y1` is outside.
-pub(super) type Rect = [f32; 4];
+pub(crate) type Rect = [f32; 4];
 
 #[derive(Default)]
 struct Cell {
@@ -20,7 +20,7 @@ struct Cell {
 }
 
 #[derive(Default)]
-pub(super) struct OverlapOrder {
+pub(crate) struct OverlapOrder {
     columns: usize,
     rows: usize,
     cells: Vec<Cell>,
@@ -29,7 +29,7 @@ pub(super) struct OverlapOrder {
 
 impl OverlapOrder {
     /// Empties the index for a frame of `width` by `height` logical pixels.
-    pub(super) fn reset(&mut self, width: f32, height: f32) {
+    pub(crate) fn reset(&mut self, width: f32, height: f32) {
         let columns = ((width / CELL).ceil() as usize).max(1);
         let rows = ((height / CELL).ceil() as usize).max(1);
         if columns != self.columns || rows != self.rows {
@@ -48,7 +48,7 @@ impl OverlapOrder {
 
     /// The order of a primitive covering `rect`, which must lie within the frame
     /// passed to `reset`. Orders start at 1.
-    pub(super) fn insert(&mut self, rect: Rect) -> u32 {
+    pub(crate) fn insert(&mut self, rect: Rect) -> u32 {
         let (c0, r0, c1, r1) = self.cell_range(rect);
         let mut below = 0;
         for row in r0..=r1 {
@@ -87,7 +87,7 @@ impl OverlapOrder {
 
 /// Whether two half-open rectangles share any area. Rectangles that only touch
 /// share no pixel center, since the rasterizer gives an edge's pixels to one side.
-pub(super) fn overlaps(a: Rect, b: Rect) -> bool {
+pub(crate) fn overlaps(a: Rect, b: Rect) -> bool {
     a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3]
 }
 
