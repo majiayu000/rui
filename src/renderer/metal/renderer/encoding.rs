@@ -115,8 +115,10 @@ impl MetalRenderer {
         write_slice(&instances, sprite_data[3].1, &frame.clip_edges);
         write_slice(&instances, paths_at, &frame.path_tiles);
         write_slice(&instances, edges_at, &frame.path_edges);
+        // Fragments read quads, shadows and clips by the index their vertices pass.
         for (index, offset) in sprite_data {
             encoder.set_vertex_buffer(index, Some(&instances), offset as u64);
+            encoder.set_fragment_buffer(index, Some(&instances), offset as u64);
         }
         encoder.set_vertex_buffer(6, Some(&instances), paths_at as u64);
         encoder.set_fragment_buffer(0, Some(&instances), edges_at as u64);
