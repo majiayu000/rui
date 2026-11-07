@@ -1,14 +1,13 @@
 //! Redrawing only what changed into a texture kept across frames.
 //!
-//! A window's drawables rotate and do not keep their contents, so the frame is
-//! drawn into a [`RetainedTarget`] instead: only the primitives that touch the
-//! scene's damage are drawn again, scissored to it, over what the texture
-//! already shows. A render pass then copies the texture to the drawable; a blit
-//! encoder would make the driver allocate far more memory (#175).
+//! The frame is drawn into a [`RetainedTarget`], as `plan::retained` describes.
+//! A render pass then copies the texture to the drawable; a blit encoder would
+//! make the driver allocate far more memory (#175).
 
 use super::renderer::TARGET_PIXEL_FORMAT;
 use crate::core::geometry::{Bounds, Size};
-use crate::renderer::{Reach, RendererError, Scene};
+use crate::renderer::plan::RetainedFrame;
+use crate::renderer::{RendererError, Scene};
 use metal::*;
 
 pub(super) const RETAINED_SHADER: &str = r#"
@@ -86,8 +85,7 @@ impl RetainedPipelines {
 #[derive(Default)]
 pub struct RetainedTarget {
     texture: Option<Texture>,
-    /// [`Scene::frame`] of the scene the texture shows; 0 when it shows none.
-    frame: u64,
+    shown: RetainedFrame,
 }
 
 impl RetainedTarget {
@@ -111,83 +109,24 @@ impl RetainedTarget {
             }
             _ => None,
         };
-        let shows_previous = self.frame != 0 && self.frame == scene.previous_frame();
-        // Until this frame is drawn, the texture shows nothing reliable.
-        self.frame = 0;
-        let texture = match kept {
-            Some(texture) if shows_previous => {
-                let viewport =
-                    Bounds::from_xywh(0.0, 0.0, viewport_size.width, viewport_size.height);
-                let damage = match scene.damage(viewport) {
-                    Reach::Nothing => Some(Bounds::from_xywh(0.0, 0.0, 0.0, 0.0)),
-                    Reach::Within(bounds) => Some(
-                        bounds
-                            .intersection(&viewport)
-                            .unwrap_or(Bounds::from_xywh(0.0, 0.0, 0.0, 0.0)),
-                    ),
-                    Reach::Unbounded => None,
-                };
-                return (texture, damage);
-            }
-            Some(texture) => texture,
-            None => {
-                let desc = TextureDescriptor::new();
-                desc.set_texture_type(MTLTextureType::D2);
-                desc.set_pixel_format(TARGET_PIXEL_FORMAT);
-                desc.set_width(width);
-                desc.set_height(height);
-                desc.set_storage_mode(MTLStorageMode::Private);
-                desc.set_usage(MTLTextureUsage::RenderTarget | MTLTextureUsage::ShaderRead);
-                let texture = device.new_texture(&desc);
-                self.texture = Some(texture.clone());
-                texture
-            }
-        };
-        (texture, None)
+        let damage = self.shown.damage(kept.is_some(), scene, viewport_size);
+        let texture = kept.unwrap_or_else(|| {
+            let desc = TextureDescriptor::new();
+            desc.set_texture_type(MTLTextureType::D2);
+            desc.set_pixel_format(TARGET_PIXEL_FORMAT);
+            desc.set_width(width);
+            desc.set_height(height);
+            desc.set_storage_mode(MTLStorageMode::Private);
+            desc.set_usage(MTLTextureUsage::RenderTarget | MTLTextureUsage::ShaderRead);
+            let texture = device.new_texture(&desc);
+            self.texture = Some(texture.clone());
+            texture
+        });
+        (texture, damage)
     }
 
     /// Record that the texture now shows `scene`.
     pub(super) fn drew(&mut self, scene: &Scene) {
-        self.frame = scene.frame();
-    }
-}
-
-/// The device pixels covering `damage`, rounded outwards so every pixel it
-/// touches is redrawn, within a `drawable_size` target.
-pub(super) fn damage_scissor(
-    damage: Bounds,
-    scale_factor: f32,
-    drawable_size: Size,
-) -> MTLScissorRect {
-    let clamp = |value: f32, max: f32| value.clamp(0.0, max) as u64;
-    let x0 = clamp((damage.x() * scale_factor).floor(), drawable_size.width);
-    let y0 = clamp((damage.y() * scale_factor).floor(), drawable_size.height);
-    let x1 = clamp(
-        ((damage.x() + damage.width()) * scale_factor).ceil(),
-        drawable_size.width,
-    );
-    let y1 = clamp(
-        ((damage.y() + damage.height()) * scale_factor).ceil(),
-        drawable_size.height,
-    );
-    MTLScissorRect {
-        x: x0,
-        y: y0,
-        width: x1.saturating_sub(x0),
-        height: y1.saturating_sub(y0),
-    }
-}
-
-/// `a` and `b` overlap in.
-pub(super) fn intersect_scissors(a: MTLScissorRect, b: MTLScissorRect) -> MTLScissorRect {
-    let x0 = a.x.max(b.x);
-    let y0 = a.y.max(b.y);
-    let x1 = (a.x + a.width).min(b.x + b.width);
-    let y1 = (a.y + a.height).min(b.y + b.height);
-    MTLScissorRect {
-        x: x0,
-        y: y0,
-        width: x1.saturating_sub(x0),
-        height: y1.saturating_sub(y0),
+        self.shown.drew(scene);
     }
 }

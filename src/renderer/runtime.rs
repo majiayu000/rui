@@ -109,6 +109,13 @@ impl RendererPrimitiveSupport {
         }
     }
 
+    pub const fn wgpu() -> Self {
+        Self {
+            backend: "wgpu",
+            path_reason: None,
+        }
+    }
+
     pub fn backend(self) -> &'static str {
         self.backend
     }

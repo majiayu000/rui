@@ -1,6 +1,7 @@
 //! Textures the renderer keeps: uploaded images and the offscreen target.
 
 use super::*;
+use crate::renderer::plan::TextureUpload;
 
 impl MetalRenderer {
     /// The kept offscreen texture, at least `width` by `height`. It only grows,
@@ -25,48 +26,35 @@ impl MetalRenderer {
             }
         }
     }
+}
 
-    pub(super) fn ensure_texture(
-        &mut self,
-        id: u32,
-        size: Size,
-        pixels: &[u8],
-    ) -> Result<Texture, RendererError> {
-        let allocation = self.texture_resources.resolve(id, pixels.len())?;
-        for evicted_id in allocation.evicted {
-            self.textures.remove(&evicted_id);
-        }
+impl TextureUpload for Device {
+    type Texture = Texture;
 
-        if !self.textures.contains_key(&id) {
-            let width = size.width.max(1.0).round() as u64;
-            let height = size.height.max(1.0).round() as u64;
+    fn upload(&self, size: Size, pixels: &[u8]) -> Texture {
+        let width = size.width.max(1.0).round() as u64;
+        let height = size.height.max(1.0).round() as u64;
 
-            let desc = TextureDescriptor::new();
-            desc.set_texture_type(MTLTextureType::D2);
-            desc.set_pixel_format(MTLPixelFormat::RGBA8Unorm_sRGB);
-            desc.set_width(width);
-            desc.set_height(height);
-            desc.set_usage(MTLTextureUsage::ShaderRead);
+        let desc = TextureDescriptor::new();
+        desc.set_texture_type(MTLTextureType::D2);
+        desc.set_pixel_format(MTLPixelFormat::RGBA8Unorm_sRGB);
+        desc.set_width(width);
+        desc.set_height(height);
+        desc.set_usage(MTLTextureUsage::ShaderRead);
 
-            let texture = self.device.new_texture(&desc);
+        let texture = self.new_texture(&desc);
 
-            let bytes_per_row = width * 4;
-            let region = MTLRegion {
-                origin: MTLOrigin { x: 0, y: 0, z: 0 },
-                size: MTLSize {
-                    width,
-                    height,
-                    depth: 1,
-                },
-            };
+        let bytes_per_row = width * 4;
+        let region = MTLRegion {
+            origin: MTLOrigin { x: 0, y: 0, z: 0 },
+            size: MTLSize {
+                width,
+                height,
+                depth: 1,
+            },
+        };
 
-            texture.replace_region(region, 0, pixels.as_ptr() as *const _, bytes_per_row);
-            self.textures.insert(id, texture);
-        }
-
-        self.textures
-            .get(&id)
-            .cloned()
-            .ok_or_else(|| RendererResourceError::missing(RendererResourceKind::Texture, id).into())
+        texture.replace_region(region, 0, pixels.as_ptr() as *const _, bytes_per_row);
+        texture
     }
 }
