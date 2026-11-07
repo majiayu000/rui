@@ -52,7 +52,8 @@ float3 oklab_to_linear(float3 lab) {
 /// per fragment as a scissor rectangle would be; sprites inside theirs skip the test.
 ///
 /// Quads are rounded rectangles with borders and solid or oklab gradient fills;
-/// plain ones, solid with square corners and no border, take a shorter path.
+/// plain ones, solid with square corners and no border, take a shorter path, and
+/// plain ones whose edges lie on device pixels skip antialiasing, as GPUI's do.
 /// Shadows are a rounded rectangle blurred by a Gaussian with sigma =
 /// blur_radius / 2, as CSS box shadows are: separable for square corners and
 /// integrated numerically along y for rounded ones (Evan Wallace, "Fast Rounded
@@ -79,6 +80,9 @@ constant uint KIND_MASK = 7;
 constant uint CROSSES_CLIP = 8;
 // A quad with a solid fill, square corners and no border.
 constant uint PLAIN_QUAD = 16;
+// A plain quad whose edges lie on device pixels. The pixels it covers lie wholly
+// inside it, so they take its color without antialiasing.
+constant uint ALIGNED_QUAD = 32;
 
 struct SpriteRef {
     uint index;              // kind << 29 | index into that kind's buffer
@@ -163,7 +167,7 @@ float2 corner(thread VertexOut& out, float2 origin, float2 size, float2 unit_pos
 }
 
 void quad_vertex(thread VertexOut& out, QuadInstance instance, float2 unit_pos,
-                 float4 clip, float2 viewport_size) {
+                 float4 clip, float2 viewport_size, float2 scale) {
     float2 origin = instance.bounds.xy;
     float2 size = instance.bounds.zw;
     float2 pixel_pos = corner(out, origin, size, unit_pos, clip);
@@ -174,6 +178,10 @@ void quad_vertex(thread VertexOut& out, QuadInstance instance, float2 unit_pos,
     if (all(instance.corner_radii == 0.0) && all(instance.border_widths == 0.0) &&
         instance.gradient_params.x < 0.5) {
         out.kind |= PLAIN_QUAD;
+        float4 edges = instance.bounds * scale.xyxy;
+        if (all(abs(edges - rint(edges)) < 1e-3)) {
+            out.kind |= ALIGNED_QUAD;
+        }
     }
     out.border_color = linear_color(instance.border_color);
     out.border_widths = instance.border_widths;
@@ -251,7 +259,8 @@ vertex VertexOut sprite_vertex(
     float2 viewport_size = uniforms.viewport_size;
     float4 clip = out.clip * (viewport_size / uniforms.drawable_size).xyxy;
     if (kind == KIND_QUAD) {
-        quad_vertex(out, quads[index], unit_pos, clip, viewport_size);
+        quad_vertex(out, quads[index], unit_pos, clip, viewport_size,
+                    uniforms.drawable_size / viewport_size);
     } else if (kind == KIND_SHADOW) {
         shadow_vertex(out, shadows[index], unit_pos, clip, viewport_size);
     } else if (kind == KIND_PATH) {
@@ -484,7 +493,9 @@ fragment float4 sprite_fragment(VertexOut in [[stage_in]],
                                 constant PathInstance* paths [[buffer(1)]]) {
     float4 color;
     uint kind = in.kind & KIND_MASK;
-    if ((in.kind & PLAIN_QUAD) != 0) {
+    if ((in.kind & ALIGNED_QUAD) != 0) {
+        color = in.color;
+    } else if ((in.kind & PLAIN_QUAD) != 0) {
         color = plain_quad_fragment(in);
     } else if (kind == KIND_QUAD) {
         color = quad_fragment(in);
