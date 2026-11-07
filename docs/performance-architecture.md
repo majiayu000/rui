@@ -182,8 +182,10 @@ input/effects -> build -> layout -> paint -> hit index -> render -> present
     Xcode, and on Xcode 26 its Metal Toolchain component) each library is a
     `.metallib`. Without it, as with the Command Line Tools alone, the build
     compiles the source on the build machine's Metal device and embeds the
-    serialized `MTLBinaryArchive`: that file holds the AIR next to the GPU code,
-    so it loads as a library on any Mac, in 0.1–0.2 ms.
+    serialized `MTLBinaryArchive`: on Apple GPUs that file holds the AIR next to
+    the GPU code, so it loads as a library on any Mac, in 0.1–0.2 ms. A
+    paravirtual GPU (GitHub's macOS runners) writes GPU code only; such an
+    archive does not load, and the shader compiles at runtime instead.
   - A library that is not embedded, or does not load, comes from an archive in
     `~/Library/Caches/rui/shaders` (`RUI_SHADER_CACHE_DIR` overrides it, empty
     turns it off), keyed by the source, device name and OS build. A missing,

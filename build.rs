@@ -4,7 +4,8 @@
 //! With Xcode's `metal` tool each library is a `.metallib`. Without it (the
 //! Command Line Tools alone do not have it) the build compiles the source on
 //! this machine's Metal device and embeds the serialized `MTLBinaryArchive`,
-//! which holds the AIR and so loads as a library on any Mac. With neither, or
+//! which on Apple GPUs holds the AIR and so loads as a library on any Mac (a
+//! paravirtual GPU writes GPU code only, which does not load). With neither, or
 //! if the embedded library does not load, the renderer compiles the source at
 //! runtime and caches it (`src/renderer/metal/shader_cache.rs`).
 
