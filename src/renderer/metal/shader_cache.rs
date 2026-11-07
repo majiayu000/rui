@@ -62,7 +62,12 @@ pub(super) struct ShaderLibrary {
     archive: Option<BinaryArchive>,
     /// Where to write the archive, for a library compiled from source.
     store_at: Option<PathBuf>,
+    /// The functions the library must define.
+    functions: Vec<String>,
     name: String,
+    /// Why the cache was not used, for a library compiled from source.
+    #[cfg(test)]
+    cache_miss: Option<String>,
 }
 
 impl ShaderLibrary {
@@ -83,7 +88,10 @@ impl ShaderLibrary {
                 load_time: started.elapsed(),
                 archive: None,
                 store_at: None,
+                functions: Vec::new(),
                 name: name.to_string(),
+                #[cfg(test)]
+                cache_miss: None,
             });
         }
         Self::load_in(
@@ -109,6 +117,11 @@ impl ShaderLibrary {
             let key = cache_key(source, device.name(), os_build());
             dir.join(format!("{name}-{key:016x}.metallib"))
         });
+        let functions_owned = functions
+            .iter()
+            .map(|function| function.to_string())
+            .collect();
+        let mut miss = None;
         if let Some(file) = &file {
             match cached_library(device, file, functions) {
                 Ok((library, archive)) => {
@@ -118,18 +131,27 @@ impl ShaderLibrary {
                         load_time: started.elapsed(),
                         archive,
                         store_at: None,
+                        functions: functions_owned,
                         name: name.to_string(),
+                        #[cfg(test)]
+                        cache_miss: None,
                     });
                 }
                 Err(CacheMiss::Absent) => {
-                    log::info!("no cached {name} shader at {}; compiling", file.display())
+                    log::info!("no cached {name} shader at {}; compiling", file.display());
+                    miss = Some(String::from("absent"));
                 }
-                Err(CacheMiss::Unusable(reason)) => log::warn!(
-                    "cached {name} shader at {} is unusable ({reason}); compiling it again",
-                    file.display()
-                ),
+                Err(CacheMiss::Unusable(reason)) => {
+                    log::warn!(
+                        "cached {name} shader at {} is unusable ({reason}); compiling it again",
+                        file.display()
+                    );
+                    miss = Some(reason);
+                }
             }
         }
+        #[cfg(not(test))]
+        let _ = miss;
         let library = device.new_library_with_source(source, &CompileOptions::new())?;
         Ok(Self {
             library,
@@ -137,7 +159,10 @@ impl ShaderLibrary {
             load_time: started.elapsed(),
             archive: None,
             store_at: file,
+            functions: functions_owned,
             name: name.to_string(),
+            #[cfg(test)]
+            cache_miss: miss,
         })
     }
 
@@ -171,16 +196,21 @@ impl ShaderLibrary {
     /// Writes the archive of `pipelines` for the next launch, when this library
     /// was compiled from source. Failing only costs that launch the compile.
     pub(super) fn store(&self, device: &Device, pipelines: &[&RenderPipelineDescriptorRef]) {
-        let Some(file) = &self.store_at else {
-            return;
-        };
-        if let Err(err) = store_archive(device, file, pipelines) {
-            log::warn!(
-                "could not cache the {} shader at {}: {err}",
-                self.name,
-                file.display()
-            );
+        if let Err(err) = self.try_store(device, pipelines) {
+            log::warn!("could not cache the {} shader: {err}", self.name);
         }
+    }
+
+    fn try_store(
+        &self,
+        device: &Device,
+        pipelines: &[&RenderPipelineDescriptorRef],
+    ) -> Result<(), StoreError> {
+        let Some(file) = &self.store_at else {
+            return Ok(());
+        };
+        let functions: Vec<&str> = self.functions.iter().map(String::as_str).collect();
+        store_archive(device, file, pipelines, &functions)
     }
 }
 
@@ -229,6 +259,27 @@ enum CacheMiss {
     Unusable(String),
 }
 
+#[derive(Debug)]
+enum StoreError {
+    /// Writing the archive failed.
+    Failed(String),
+    /// The archive was written but does not load back as the library, as on
+    /// devices whose archives hold only GPU code; it was removed again.
+    NotALibrary(String),
+}
+
+impl std::fmt::Display for StoreError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StoreError::Failed(err) => f.write_str(err),
+            StoreError::NotALibrary(reason) => write!(
+                f,
+                "the archive written does not load as a library ({reason}); this device cannot cache shaders"
+            ),
+        }
+    }
+}
+
 fn cached_library(
     device: &Device,
     file: &Path,
@@ -256,6 +307,26 @@ fn cached_library(
 }
 
 fn store_archive(
+    device: &Device,
+    file: &Path,
+    pipelines: &[&RenderPipelineDescriptorRef],
+    functions: &[&str],
+) -> Result<(), StoreError> {
+    write_archive(device, file, pipelines).map_err(StoreError::Failed)?;
+    // A file the next launch would reject only costs it a load and a rewrite.
+    match cached_library(device, file, functions) {
+        Ok(_) => Ok(()),
+        Err(miss) => {
+            let _ = std::fs::remove_file(file);
+            Err(StoreError::NotALibrary(match miss {
+                CacheMiss::Absent => String::from("it is not there"),
+                CacheMiss::Unusable(reason) => reason,
+            }))
+        }
+    }
+}
+
+fn write_archive(
     device: &Device,
     file: &Path,
     pipelines: &[&RenderPipelineDescriptorRef],
@@ -379,20 +450,15 @@ fragment float4 probe_fragment() { return float4(1.0); }
         assert_eq!(plist_string(plist, "Missing"), None);
     }
 
-    fn device() -> Option<Device> {
-        Device::system_default()
-    }
-
-    fn scratch_dir(test: &str) -> PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("rui-shader-cache-{test}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        dir
+    struct Launch {
+        origin: Origin,
+        /// Why the cache was not used.
+        miss: Option<String>,
     }
 
     /// Loads the probe library from `dir` as a launch would, storing it after
-    /// a compile; returns where it came from.
-    fn launch(device: &Device, dir: &Path, source: &str) -> Origin {
+    /// a compile.
+    fn launch(device: &Device, dir: &Path, source: &str) -> Launch {
         let library = ShaderLibrary::load_in(
             device,
             Some(dir),
@@ -402,18 +468,72 @@ fragment float4 probe_fragment() { return float4(1.0); }
             Instant::now(),
         )
         .expect("the probe shader loads");
+        let desc = probe_pipeline(&library.library, "probe_fragment");
+        library
+            .pipeline(device, &desc)
+            .expect("the probe pipeline builds");
+        if let Err(err) = library.try_store(device, &[&desc]) {
+            panic!("storing the probe shader failed: {err}");
+        }
+        Launch {
+            origin: library.origin,
+            miss: library.cache_miss.clone(),
+        }
+    }
+
+    fn probe_pipeline(library: &LibraryRef, fragment: &str) -> RenderPipelineDescriptor {
         let desc = RenderPipelineDescriptor::new();
-        desc.set_vertex_function(Some(&library.function("probe_vertex").unwrap()));
-        desc.set_fragment_function(Some(&library.function("probe_fragment").unwrap()));
+        desc.set_vertex_function(Some(&library.get_function("probe_vertex", None).unwrap()));
+        desc.set_fragment_function(Some(&library.get_function(fragment, None).unwrap()));
         desc.color_attachments()
             .object_at(0)
             .unwrap()
             .set_pixel_format(MTLPixelFormat::BGRA8Unorm_sRGB);
-        library
-            .pipeline(device, &desc)
-            .expect("the probe pipeline builds");
-        library.store(device, &[&desc]);
-        library.origin
+        desc
+    }
+
+    fn assert_cached(launch: Launch) {
+        assert_eq!(
+            launch.origin,
+            Origin::Cached,
+            "the cache was not used: {:?}",
+            launch.miss
+        );
+    }
+
+    /// The system device, if its archives load back as libraries. Some
+    /// (GitHub's virtual macOS GPUs) write archives of GPU code only; there the
+    /// renderer stores nothing, and these tests have nothing to check.
+    fn device() -> Option<Device> {
+        let device = Device::system_default()?;
+        let dir = scratch_dir("probe-device");
+        let library = device
+            .new_library_with_source(SOURCE, &CompileOptions::new())
+            .unwrap();
+        let desc = probe_pipeline(&library, "probe_fragment");
+        let result = store_archive(&device, &dir.join("probe-0.metallib"), &[&desc], FUNCTIONS);
+        let _ = std::fs::remove_dir_all(&dir);
+        match result {
+            Ok(()) => Some(device),
+            Err(err @ StoreError::NotALibrary(_)) => {
+                eprintln!("skipped on {}: {err}", device.name());
+                None
+            }
+            Err(StoreError::Failed(err)) => panic!("writing an archive failed: {err}"),
+        }
+    }
+
+    /// An empty directory of this test's own: tests run in parallel, and a
+    /// library file removed while another test has it loaded crashes it.
+    fn scratch_dir(test: &str) -> PathBuf {
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "rui-shader-cache-{test}-{}-{n}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
     }
 
     fn archives(dir: &Path) -> Vec<PathBuf> {
@@ -428,9 +548,9 @@ fragment float4 probe_fragment() { return float4(1.0); }
     fn second_launch_loads_the_archive_the_first_wrote() {
         let Some(device) = device() else { return };
         let dir = scratch_dir("reuse");
-        assert_eq!(launch(&device, &dir, SOURCE), Origin::Compiled);
+        assert_eq!(launch(&device, &dir, SOURCE).origin, Origin::Compiled);
         assert_eq!(archives(&dir).len(), 1);
-        assert_eq!(launch(&device, &dir, SOURCE), Origin::Cached);
+        assert_cached(launch(&device, &dir, SOURCE));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -441,8 +561,8 @@ fragment float4 probe_fragment() { return float4(1.0); }
         launch(&device, &dir, SOURCE);
         let file = archives(&dir).pop().unwrap();
         std::fs::write(&file, b"not a metal library").unwrap();
-        assert_eq!(launch(&device, &dir, SOURCE), Origin::Compiled);
-        assert_eq!(launch(&device, &dir, SOURCE), Origin::Cached);
+        assert_eq!(launch(&device, &dir, SOURCE).origin, Origin::Compiled);
+        assert_cached(launch(&device, &dir, SOURCE));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -458,17 +578,22 @@ fragment float4 probe_fragment() { return float4(1.0); }
         let library = device
             .new_library_with_source(&renamed, &CompileOptions::new())
             .unwrap();
-        let desc = RenderPipelineDescriptor::new();
-        desc.set_vertex_function(Some(&library.get_function("probe_vertex", None).unwrap()));
-        desc.set_fragment_function(Some(&library.get_function("other_fragment", None).unwrap()));
-        desc.color_attachments()
-            .object_at(0)
-            .unwrap()
-            .set_pixel_format(MTLPixelFormat::BGRA8Unorm_sRGB);
-        store_archive(&device, &other.join("x-0.metallib"), &[&desc]).unwrap();
+        let desc = probe_pipeline(&library, "other_fragment");
+        store_archive(
+            &device,
+            &other.join("x-0.metallib"),
+            &[&desc],
+            &["probe_vertex", "other_fragment"],
+        )
+        .unwrap();
         std::fs::rename(other.join("x-0.metallib"), &file).unwrap();
-        assert_eq!(launch(&device, &dir, SOURCE), Origin::Compiled);
-        assert_eq!(launch(&device, &dir, SOURCE), Origin::Cached);
+        let mismatched = launch(&device, &dir, SOURCE);
+        assert_eq!(mismatched.origin, Origin::Compiled);
+        assert_eq!(
+            mismatched.miss.as_deref(),
+            Some("it has no probe_fragment function")
+        );
+        assert_cached(launch(&device, &dir, SOURCE));
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&other);
     }
@@ -480,11 +605,109 @@ fragment float4 probe_fragment() { return float4(1.0); }
         launch(&device, &dir, SOURCE);
         let before = archives(&dir);
         let changed = format!("{SOURCE}// changed\n");
-        assert_eq!(launch(&device, &dir, &changed), Origin::Compiled);
+        let launched = launch(&device, &dir, &changed);
+        assert_eq!(launched.origin, Origin::Compiled);
+        assert_eq!(launched.miss.as_deref(), Some("absent"));
         let after = archives(&dir);
         assert_eq!(after.len(), 1, "the stale archive is removed");
         assert_ne!(before, after);
-        assert_eq!(launch(&device, &dir, &changed), Origin::Cached);
+        assert_cached(launch(&device, &dir, &changed));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Every library the renderer creates, as (name, source, functions).
+    #[cfg(rui_embedded_metallib)]
+    fn renderer_libraries() -> [(&'static str, String, &'static [&'static str]); 3] {
+        use super::super::{retained::RETAINED_SHADER, shaders};
+        [
+            (
+                "sprite",
+                [shaders::COLOR_SHADER, shaders::SPRITE_SHADER].concat(),
+                &["sprite_vertex", "sprite_fragment"],
+            ),
+            (
+                "image",
+                [shaders::COLOR_SHADER, shaders::IMAGE_SHADER].concat(),
+                &["image_vertex", "image_fragment"],
+            ),
+            (
+                "copy",
+                RETAINED_SHADER.to_string(),
+                &["fullscreen_vertex", "copy_fragment", "clear_fragment"],
+            ),
+        ]
+    }
+
+    #[cfg(rui_embedded_metallib)]
+    #[test]
+    fn embedded_libraries_load() {
+        let Some(system) = Device::system_default() else {
+            return;
+        };
+        // An archive the build compiled on a device that cannot hold libraries
+        // in archives loads nowhere; the renderer then compiles at runtime.
+        if env!("RUI_EMBEDDED_SHADERS_BY") == "device" && device().is_none() {
+            return;
+        }
+        for (name, source, functions) in renderer_libraries() {
+            assert!(
+                embedded_library(&system, name, &source, functions).is_some(),
+                "the embedded {name} shader ({}) does not load",
+                env!("RUI_EMBEDDED_SHADERS_BY")
+            );
+        }
+    }
+
+    /// Temporary: reports what CI's device does with archives.
+    #[test]
+    fn zz_ci_probe() {
+        let Some(system) = Device::system_default() else {
+            panic!("no device");
+        };
+        let mut report = format!("device {}; ", system.name());
+        let dir = scratch_dir("ci-probe");
+        let library = system
+            .new_library_with_source(SOURCE, &CompileOptions::new())
+            .unwrap();
+        let desc = probe_pipeline(&library, "probe_fragment");
+        let file = dir.join("probe-0.metallib");
+        report.push_str(&format!(
+            "write {:?}; ",
+            write_archive(&system, &file, &[&desc])
+        ));
+        report.push_str(&format!(
+            "size {:?}; ",
+            std::fs::metadata(&file).map(|m| m.len())
+        ));
+        if let Ok(bytes) = std::fs::read(&file) {
+            report.push_str(&format!("head {:02x?}; ", &bytes[..bytes.len().min(48)]));
+        }
+        match system.new_library_with_file(&file) {
+            Ok(lib) => report.push_str(&format!("as library ok {:?}; ", lib.function_names())),
+            Err(err) => report.push_str(&format!("as library failed: {err}; ")),
+        }
+        #[cfg(rui_embedded_metallib)]
+        {
+            report.push_str(&format!(
+                "embedded by {}; ",
+                env!("RUI_EMBEDDED_SHADERS_BY")
+            ));
+            for (name, source, _) in renderer_libraries() {
+                let (hash, bytes) = embedded::library(name).unwrap();
+                report.push_str(&format!(
+                    "{name}: hash ok {} size {} head {:02x?} load {:?}; ",
+                    hash == shader_hash(&[source.as_bytes()]),
+                    bytes.len(),
+                    &bytes[..bytes.len().min(16)],
+                    system
+                        .new_library_with_data(bytes)
+                        .map(|lib| lib.function_names())
+                ));
+            }
+        }
+        #[cfg(not(rui_embedded_metallib))]
+        report.push_str("nothing embedded; ");
+        let _ = std::fs::remove_dir_all(&dir);
+        panic!("CI PROBE: {report}");
     }
 }

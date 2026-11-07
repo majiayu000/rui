@@ -31,12 +31,15 @@ fn main() {
     // `xcrun -f metal` can succeed while the tool cannot run, as when Xcode's
     // Metal toolchain component is not installed.
     let tool = if has_metal_tool() {
-        embed(&out, compile_with_tool)
+        embed(&out, compile_with_tool).map(|()| "metal tool")
     } else {
         Err(String::from("no metal tool"))
     };
-    match tool.or_else(|_| embed(&out, compile_on_device)) {
-        Ok(()) => println!("cargo::rustc-cfg=rui_embedded_metallib"),
+    match tool.or_else(|_| embed(&out, compile_on_device).map(|()| "device")) {
+        Ok(by) => {
+            println!("cargo::rustc-cfg=rui_embedded_metallib");
+            println!("cargo::rustc-env=RUI_EMBEDDED_SHADERS_BY={by}");
+        }
         Err(err) => {
             println!("cargo::warning=shaders not precompiled, they compile at runtime: {err}")
         }
