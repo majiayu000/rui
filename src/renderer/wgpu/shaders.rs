@@ -93,6 +93,9 @@ const KIND_MASK: u32 = 7u;
 const CROSSES_CLIP: u32 = 8u;
 // A quad with a solid fill, square corners and no border.
 const PLAIN_QUAD: u32 = 16u;
+// A plain quad whose edges lie on device pixels. The pixels it covers lie wholly
+// inside it, so they take its color without antialiasing.
+const ALIGNED_QUAD: u32 = 32u;
 
 const PI: f32 = 3.14159265358979323846;
 const SQRT1_2: f32 = 0.70710678118654752440;
@@ -179,7 +182,7 @@ fn corner(out: ptr<function, VertexOut>, origin: vec2<f32>, size: vec2<f32>,
 }
 
 fn quad_vertex(out: ptr<function, VertexOut>, instance: QuadInstance, unit_pos: vec2<f32>,
-               clip: vec4<f32>, viewport_size: vec2<f32>) {
+               clip: vec4<f32>, viewport_size: vec2<f32>, scale: vec2<f32>) {
     let origin = instance.bounds.xy;
     let size = instance.bounds.zw;
     let pixel_pos = corner(out, origin, size, unit_pos, clip);
@@ -190,6 +193,10 @@ fn quad_vertex(out: ptr<function, VertexOut>, instance: QuadInstance, unit_pos: 
     if (all(instance.corner_radii == vec4<f32>(0.0)) && all(instance.border_widths == vec4<f32>(0.0)) &&
         instance.gradient_params.x < 0.5) {
         (*out).kind |= PLAIN_QUAD;
+        let edges = instance.bounds * scale.xyxy;
+        if (all(abs(edges - round(edges)) < vec4<f32>(1e-3))) {
+            (*out).kind |= ALIGNED_QUAD;
+        }
     }
     (*out).border_color = linear_color(instance.border_color);
     (*out).border_widths = instance.border_widths;
@@ -254,7 +261,8 @@ fn sprite_vertex(@builtin(vertex_index) vertex_id: u32,
     let viewport_size = uniforms.viewport_size;
     let clip = out.clip * (viewport_size / uniforms.drawable_size).xyxy;
     if (kind == KIND_QUAD) {
-        quad_vertex(&out, quads[index], unit_pos, clip, viewport_size);
+        quad_vertex(&out, quads[index], unit_pos, clip, viewport_size,
+                    uniforms.drawable_size / viewport_size);
     } else if (kind == KIND_SHADOW) {
         shadow_vertex(&out, shadows[index], unit_pos, clip, viewport_size);
     } else if (kind == KIND_PATH) {
@@ -462,7 +470,9 @@ fn sprite_fragment(in: VertexOut) -> @location(0) vec4<f32> {
 
     var color: vec4<f32>;
     let kind = in.kind & KIND_MASK;
-    if ((in.kind & PLAIN_QUAD) != 0u) {
+    if ((in.kind & ALIGNED_QUAD) != 0u) {
+        color = in.color;
+    } else if ((in.kind & PLAIN_QUAD) != 0u) {
         color = plain_quad_fragment(in, dist, aa);
     } else if (kind == KIND_QUAD) {
         color = quad_fragment(in, dist, aa);

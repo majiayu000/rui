@@ -182,6 +182,38 @@ input/effects -> build -> layout -> paint -> hit index -> render -> present
 - **Color (done).** sRGB targets with linear blending, oklab gradients and erf
   Gaussian shadows, with text coverage remapped so weight does not change with
   color.
+- **Sprite shader cost (done).** Measured by drawing a frame's sprite pass 100
+  times in one command buffer: a single frame's GPU time is mostly clock
+  ramp-up, which hides shader changes.
+  - Aligned plain quads skip antialiasing. A solid, square-cornered, borderless
+    quad whose device-pixel edges are whole numbers covers only pixels that lie
+    wholly inside it. The vertex shader tests its edges and sets an
+    `ALIGNED_QUAD` flag, and the fragment returns the color. GPUI does the same
+    for unrounded, borderless quads. Rounded, bordered, gradient and fractional
+    quads keep the antialiased paths. A flag fits the existing kind bits, where
+    a second pipeline would need CPU-side classification and a pipeline switch
+    per batch. The pixels that change are aligned edges, which drew at about 84%
+    alpha before and left a light seam between adjacent list rows.
+  - Vertex outputs carry 13 values instead of 45. The tiler writes every output
+    of each of an instance's six vertices to memory, which dominated small
+    sprites such as glyphs. Fragments read quad, shadow and clip fields by
+    instance index, as GPUI does, and convert border and gradient colors per
+    fragment. Pixels are unchanged.
+  - Branch order matters in the one fragment function. Aligned quads come first
+    and glyphs second; glyphs first would cost quads 14%.
+  - Per pass at 2880x1800 (M-series, load 15–20), main → now:
+    `list_virtual_1k` 0.064 → 0.037 ms, `quad_grid` 0.093 → 0.052 ms,
+    `text_paragraphs` 0.036 → 0.023 ms.
+  - Single-frame GPU p50 from `benchmarks/gpui_compare/run.sh`, median of 5
+    runs per side (load 12–24), main → now, GPUI: `list_virtual_1k` 0.227 →
+    0.128 (0.097), `list_virtual_100k` 0.232 → 0.153 (0.097),
+    `text_paragraphs` 0.266 → 0.229 (0.199), `quad_grid` 0.223 → 0.146
+    (0.375). The per-pass work of a list frame is now about 0.04 ms, so the rest
+    of its single-frame time is fixed per-frame cost and GPU clock state.
+  - What text still pays: glyph sampling and the coverage remap are about 2% of
+    its pass. A fragment function that holds only the glyph path draws the pass
+    in about 0.012 ms, so the remainder is the size of the shared fragment
+    function. Splitting it needs a second pipeline.
 
 ### 7. Present (lane 5, #191)
 
