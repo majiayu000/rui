@@ -175,10 +175,41 @@ input/effects -> build -> layout -> paint -> hit index -> render -> present
     ms of GPU time against 0.50 ms for a full redraw at 2880x1800 (M2 Max). The
     copy costs about 0.1 ms, so a nearly empty window gains nothing.
   - GPUI clears and redraws the whole window every frame.
-- **Startup (#177).** Shader libraries compile on a background thread in parallel
-  with font setup. Pipelines are cached in an `MTLBinaryArchive` keyed by the
-  shader source hash; a mismatched or corrupt cache is rebuilt, never trusted.
-  Build-time `metallib` is an option where the Xcode toolchain exists.
+- **Startup (#177).** The renderer is created on a background thread while the
+  first frame is built and laid out (#226), and its shaders are not compiled
+  from source at runtime:
+  - `build.rs` embeds them precompiled. With Xcode's `metal` tool (install full
+    Xcode, and on Xcode 26 its Metal Toolchain component) each library is a
+    `.metallib`. Without it, as with the Command Line Tools alone, the build
+    compiles the source on the build machine's Metal device and embeds the
+    serialized `MTLBinaryArchive`: on Apple GPUs that file holds the AIR next to
+    the GPU code, so it loads as a library on any Mac, in 0.1–0.2 ms. A
+    paravirtual GPU (GitHub's macOS runners) writes GPU code only; such an
+    archive does not load, and the shader compiles at runtime instead.
+  - A library that is not embedded, or does not load, comes from an archive in
+    `~/Library/Caches/rui/shaders` (`RUI_SHADER_CACHE_DIR` overrides it, empty
+    turns it off), keyed by the source, device name and OS build. A missing,
+    corrupt or mismatched archive is compiled again, rewritten and logged; it is
+    a cache, never trusted for correctness.
+  - `RUI_PROFILE=1` prints `rui renderer_init` with device, shader
+    (origin:load+pipeline) and resource times.
+  - Cold start (shader source the system cache has never seen), 2000-row list,
+    `compare_frame startup`, 5 rounds, p50 (range), M2 Max under other
+    sessions' load:
+
+    | | first frame | renderer wait after layout |
+    |---|---|---|
+    | before (`d76ae8d`), source compile | 207 ms (200–269) | 166 ms |
+    | runtime archive, first launch | 236 ms (205–273) | 199 ms |
+    | runtime archive, second launch | 42 ms (37–63) | 4.5 ms |
+    | embedded, first launch | 69 ms (43–91) | 21 ms |
+    | warm, before / embedded | 47 / 46 ms | 10.5 / 9.2 ms |
+
+    With shaders embedded, renderer creation is almost all
+    `Device::system_default` (38–84 ms; shaders 2–5 ms, samplers and empty pages
+    0.1 ms). It overlaps the ~35 ms first layout, and the wait left is what it
+    runs past it. The first render, glyph rasterization and atlas pages
+    included, is about 2 ms.
 - **Color (done).** sRGB targets with linear blending, oklab gradients and erf
   Gaussian shadows, with text coverage remapped so weight does not change with
   color.
@@ -252,11 +283,12 @@ machine. The target for a one-row change is allocations proportional to that row
 | Wrap cache | keyed by exact width | keyed by width interval |
 | Font fallback | Core Text, per-platform code | script runs over rustybuzz, one implementation |
 | Foreground scheduling | FIFO | priority queue with frame budget |
-| Startup shaders | precompiled metallib | renderer created off the main thread, in parallel with the first layout (#226); build-time metallib still open (#177) |
+| Startup shaders | precompiled metallib (needs Xcode's `metal`) | renderer created off the main thread, in parallel with the first layout (#226); shaders embedded precompiled with or without Xcode, runtime archive cache as fallback |
 
-Every row is implemented on main as of `c2e3596`, except a build-time metallib (#177,
-needs the Xcode `metal` tool). `MTLBinaryArchive` was measured and dropped: the cold
-cost is the source compile, which runs before any archive lookup (#226).
+Every row is implemented on main as of `c2e3596`; embedded shaders followed (#177).
+#226 found an `MTLBinaryArchive` useless for pipeline lookup, because the cold cost
+is the source compile before it. A serialized archive, though, also loads as the
+library itself, which removes that compile.
 
 ## Verification
 
