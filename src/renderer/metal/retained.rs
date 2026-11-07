@@ -7,6 +7,7 @@
 //! encoder would make the driver allocate far more memory (#175).
 
 use super::renderer::TARGET_PIXEL_FORMAT;
+use super::shader_cache::ShaderLibrary;
 use crate::core::geometry::{Bounds, Size};
 use crate::renderer::{Reach, RendererError, Scene};
 use metal::*;
@@ -48,15 +49,22 @@ pub(super) struct RetainedPipelines {
 }
 
 impl RetainedPipelines {
-    pub(super) fn new(device: &Device) -> Result<Self, RendererError> {
-        let library = device
-            .new_library_with_source(RETAINED_SHADER, &CompileOptions::new())
-            .map_err(|err| {
-                RendererError::render_failed(format!("failed to compile the copy shader: {err}"))
-            })?;
+    /// The pipelines, and how their shader was loaded for the `RUI_PROFILE`
+    /// line.
+    pub(super) fn new(device: &Device) -> Result<(Self, String), RendererError> {
+        let library = ShaderLibrary::load(
+            device,
+            "copy",
+            RETAINED_SHADER,
+            &["fullscreen_vertex", "copy_fragment", "clear_fragment"],
+        )
+        .map_err(|err| {
+            RendererError::render_failed(format!("failed to compile the copy shader: {err}"))
+        })?;
+        let started = std::time::Instant::now();
         let pipeline = |fragment: &str| {
             let function = |name: &str| {
-                library.get_function(name, None).map_err(|err| {
+                library.function(name).map_err(|err| {
                     RendererError::render_failed(format!("missing {name} shader: {err}"))
                 })
             };
@@ -70,14 +78,16 @@ impl RetainedPipelines {
             })?;
             color.set_pixel_format(TARGET_PIXEL_FORMAT);
             color.set_blending_enabled(false);
-            device.new_render_pipeline_state(&desc).map_err(|err| {
+            let state = library.pipeline(device, &desc).map_err(|err| {
                 RendererError::render_failed(format!("failed to create {fragment} pipeline: {err}"))
-            })
+            })?;
+            Ok::<_, RendererError>((state, desc))
         };
-        Ok(Self {
-            copy: pipeline("copy_fragment")?,
-            clear: pipeline("clear_fragment")?,
-        })
+        let (copy, copy_desc) = pipeline("copy_fragment")?;
+        let (clear, clear_desc) = pipeline("clear_fragment")?;
+        let pipelines = started.elapsed();
+        library.store(device, &[&copy_desc, &clear_desc]);
+        Ok((Self { copy, clear }, library.report(pipelines)))
     }
 }
 

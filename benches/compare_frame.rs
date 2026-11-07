@@ -491,7 +491,9 @@ fn run(case: &str) -> Result<(), Box<dyn std::error::Error>> {
         // From before the renderer exists to the first long-list frame submitted.
         // As the native runner starts: the renderer is created on another thread
         // while the first frame is built, laid out and painted, and the first
-        // present waits for it. `renderer_wait_ms` is what that wait still took.
+        // present waits for it. `layout_ms` is building, laying out and painting
+        // that frame, `renderer_wait_ms` what the wait still took after it, and
+        // `render_ms` the first render, glyph rasterization and atlas included.
         "startup" => {
             let to_fixture = ms_since_process_start();
             let t0 = Instant::now();
@@ -515,8 +517,10 @@ fn run(case: &str) -> Result<(), Box<dyn std::error::Error>> {
                 renderer.render_offscreen(&scene, viewport, SCALE_FACTOR)
             })?;
             let first_frame = t0.elapsed().as_secs_f64() * 1e3;
+            let layout = (laid_out - t0).as_secs_f64() * 1e3;
+            let render = first_frame - layout - renderer_wait;
             println!(
-                "rui startup process_to_fixture_ms={to_fixture:.1} first_frame_ms={first_frame:.1} process_to_first_frame_ms={:.1} footprint_mb={:.1} renderer_wait_ms={renderer_wait:.1}",
+                "rui startup process_to_fixture_ms={to_fixture:.1} first_frame_ms={first_frame:.1} process_to_first_frame_ms={:.1} footprint_mb={:.1} layout_ms={layout:.1} renderer_wait_ms={renderer_wait:.1} render_ms={render:.1}",
                 ms_since_process_start(),
                 footprint_mb()
             );

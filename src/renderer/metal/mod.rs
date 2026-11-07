@@ -9,6 +9,8 @@ mod order;
 mod path;
 mod renderer;
 mod retained;
+mod shader_cache;
+mod shader_hash;
 mod shaders;
 #[cfg(test)]
 mod tests;
