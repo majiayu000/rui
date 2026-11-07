@@ -6,7 +6,7 @@ impl MetalRenderer {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn encode_frame(
         &mut self,
-        frame: &mut FrameData,
+        frame: &mut FrameData<Texture>,
         texture: &TextureRef,
         drawable_size: Size,
         viewport_size: Size,
@@ -19,28 +19,28 @@ impl MetalRenderer {
 
         let command_queue = self.command_queue.to_owned();
         let command_buffer = command_queue.new_command_buffer();
-        let epoch = self.text_cache.epoch();
+        let epoch = self.planner.text_cache.epoch();
         let (cleared, uploads) = (
-            self.text_cache.take_cleared_pages(),
-            self.text_cache.take_uploads(),
+            self.planner.text_cache.take_cleared_pages(),
+            self.planner.text_cache.take_uploads(),
         );
         let staging = self.glyph_pages.sync(
             &self.device,
             epoch,
-            self.text_cache.atlas(),
+            self.planner.text_cache.atlas(),
             cleared,
             uploads,
             command_buffer,
             &mut self.instances,
         );
         let (cleared, uploads) = (
-            self.text_cache.take_cleared_color_pages(),
-            self.text_cache.take_color_uploads(),
+            self.planner.text_cache.take_cleared_color_pages(),
+            self.planner.text_cache.take_color_uploads(),
         );
         let color_staging = self.color_pages.sync(
             &self.device,
             epoch,
-            self.text_cache.color_atlas(),
+            self.planner.text_cache.color_atlas(),
             cleared,
             uploads,
             command_buffer,
@@ -52,7 +52,7 @@ impl MetalRenderer {
         color_attachment.set_texture(Some(texture));
         color_attachment.set_store_action(MTLStoreAction::Store);
         // The clear color is linear; this is 0.1 in sRGB, as before.
-        let clear = srgb_to_linear(0.1);
+        let clear = clear_linear();
         // A retained frame keeps what the target shows outside the damage.
         let damage = frame.damage;
         if damage.is_some() {
@@ -77,7 +77,7 @@ impl MetalRenderer {
             viewport_size: [viewport_size.width, viewport_size.height],
             drawable_size: [drawable_size.width, drawable_size.height],
         };
-        let full = frame.scissors[0];
+        let full = MTLScissorRect::from(frame.scissors[0]);
         encoder.set_scissor_rect(full);
         self.frame_stats.redrawn_pixels = full.width * full.height;
         if damage.is_some() && full.width > 0 && full.height > 0 {
@@ -166,7 +166,7 @@ impl MetalRenderer {
                 Draw::Image(index) => {
                     let image = &frame.images[index as usize];
                     if scissor != image.clip {
-                        encoder.set_scissor_rect(frame.scissors[image.clip as usize]);
+                        encoder.set_scissor_rect(frame.scissors[image.clip as usize].into());
                         scissor = image.clip;
                     }
                     encoder.set_render_pipeline_state(&self.image_pipeline);
@@ -227,7 +227,7 @@ impl MetalRenderer {
             self.instances.retire(command_buffer, staging);
         }
         self.frames_in_flight
-            .push((self.text_cache.frame(), command_buffer.to_owned()));
+            .push((self.planner.text_cache.frame(), command_buffer.to_owned()));
         if wait_until_completed {
             command_buffer.wait_until_completed();
             if command_buffer.status() == MTLCommandBufferStatus::Error {
