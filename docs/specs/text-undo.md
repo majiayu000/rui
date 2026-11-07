@@ -42,9 +42,14 @@ Adopt local editing transactions, not BUI's cross-widget history or interaction-
 `TextEditBuffer` owns before/after text and directed selection snapshots. Insert,
 replacement, delete, cut, paste and composition commit converge on its edit
 boundary; nested helpers do not double-record. Each field retains at most 100
-committed entries across undo/redo. Snapshots own their strings; eviction drops
-both strings. The count limit is not a byte limit: a 1 MiB document edited 100
-times can retain roughly 200 MiB in snapshots. This is not a large editor claim.
+committed entries across undo/redo. Snapshot text uses immutable `Arc<str>`;
+matching undo/redo boundary text is shared, while each directed selection stays
+independent. The mutable document remains a separate `String`. Eviction releases
+text when its last snapshot owner disappears; cloning a buffer can retain shared
+history until both owners release it. `TextEditBuffer` remains `Send + Sync`.
+The count limit is not a byte limit: 100 small edits of a roughly 1 MiB document
+can still retain roughly 101 MiB of historical text. This is not a large editor
+claim or a process-memory bound.
 
 An uncontrolled rebuild (no `.value(...)`) transfers the existing editor at the
 same identity. A controlled rebuild retains history only when `.value(...)`
@@ -76,3 +81,24 @@ Local verification (2026-11-07):
 - `cargo test --lib history::tests`: retained entries and owned text bytes checked directly; 1 passed.
 - `cargo test --lib input::`: existing Input and macOS text-input adapter regressions; 146 passed. These are unit tests, not physical IME acceptance.
 - Logs: `/Users/lifcc/Documents/reports/rui/2026-11-07/feature-implementation/undo-acceptance.log`, `undo-history.log`, `undo-input-native-unit.log`.
+
+## Snapshot storage optimization (#293)
+
+Decision: share immutable adjacent snapshot text using the standard library;
+retain per-snapshot selections and the existing transaction/100-entry policy.
+No public API, configurable cache or delta-edit engine is introduced. The
+snapshot path compares text at the undo/redo boundary; it does not scan history
+or globally intern strings. Restoring a snapshot still copies into the mutable
+document, and snapshots still require full-document storage.
+
+For 100 one-character inserts after a 64 KiB initial document, a baseline test
+on main `9665596` counted 200 distinct live snapshot text allocations containing
+13,117,200 text bytes. The same test after sharing counted 101 allocations and
+6,624,186 bytes (49.5% fewer). This excludes Arc headers, allocator overhead,
+the live document and unrelated application memory; it is not a latency result.
+
+Tests assert separate directed selections despite shared text, cloned-buffer
+isolation, composition start/cancel/commit, redo-branch release and eviction
+using weak references. Existing Unicode, native UTF-16, controlled-rebuild and
+list/focus command regressions remain the behavior checks. Physical IME and
+process-level profiling remain outside this measurement.
