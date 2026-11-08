@@ -25,6 +25,34 @@ Correctness checks that guard the incremental paths run in `cargo test`: `tests/
 
 The head-to-head comparison with GPUI is local only: see `docs/gpui-comparison.md`.
 
+## CI execution and regression evidence
+
+The `CI` workflow runs on pull requests, pushes to `main`, and manual dispatch.
+New pushes to a PR cancel its superseded run; branch pushes do not duplicate PR
+checks. The existing `rust` job keeps the MSRV, tests, Clippy and performance
+gate together. Command output is retained for 14 days in a `ci-<sha>-<attempt>`
+artifact, including on failure. Pipelines use `pipefail`, so saving a log cannot
+turn a failing check green. Setup failures remain in the Actions step logs.
+
+The separate `Replay verification` workflow runs daily at 19:23 UTC and can be
+started manually. Reproduce it locally with:
+
+```sh
+RUI_VERIFY_REPLAY=1 cargo test --locked
+```
+
+For painted frames exercised by those tests, this compares replayed visible
+primitives against a full repaint and reports the first difference. The
+`replay-<sha>-<attempt>` artifact retains its output. This is not a pixel oracle
+or an AppKit/IME/VoiceOver acceptance test. A new workflow becomes scheduled
+and manually dispatchable after it lands on the default branch.
+
+For each confirmed bug, add a focused test that fails before the fix and passes
+after it. Reuse the existing headless harness and retained/fresh oracles rather
+than introducing another test framework. Nightly replay failures need triage;
+they are not a required PR check. Keep wall-clock and GPU timing informational
+until equivalent workloads have been calibrated on a fixed machine.
+
 ## Runtime baselines
 
 `runtime_baselines` is a stable, CI-friendly benchmark harness for the runtime paths that are most likely to regress user-facing responsiveness.

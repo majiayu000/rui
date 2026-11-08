@@ -1,0 +1,49 @@
+name: Replay verification
+
+on:
+  schedule:
+    - cron: '23 19 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash --noprofile --norc -eo pipefail {0}
+
+jobs:
+  replay:
+    runs-on: macos-latest
+    timeout-minutes: 45
+    env:
+      CARGO_TERM_COLOR: always
+      RUI_VERIFY_REPLAY: '1'
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Prepare check logs
+        run: mkdir -p ci-results
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Compare replayed frames with full repaints
+        run: cargo test --locked 2>&1 | tee ci-results/replay.log
+
+      - name: Upload replay log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: replay-${{ github.sha }}-${{ github.run_attempt }}
+          path: ci-results/
+          retention-days: 14
+          if-no-files-found: warn
