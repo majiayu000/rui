@@ -2,6 +2,7 @@
 //! and the conversion from [`Style`] to taffy.
 
 use super::*;
+use crate::core::SharedStr;
 
 /// Source of [`LayoutNodes`] epochs: a new one whenever the kept nodes are
 /// started over, so layout recorded against old nodes is never reused.
@@ -38,10 +39,10 @@ pub(crate) type WrappedLines = Rc<RefCell<Option<Arc<WrappedText>>>>;
 /// What a wrapped text leaf needs to be measured at any width.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct TextWrapRequest {
-    pub(crate) content: String,
+    pub(crate) content: SharedStr,
     pub(crate) font_size: f32,
     pub(crate) font_weight: u16,
-    pub(crate) font_family: Option<String>,
+    pub(crate) font_family: Option<Arc<str>>,
     pub(crate) line_height: f32,
     pub(crate) max_lines: Option<usize>,
 }

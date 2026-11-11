@@ -342,7 +342,7 @@ impl Element for Menu {
 
             cx.paint(Primitive::Text {
                 bounds: item_bounds,
-                content: self.items[index].label.clone(),
+                content: self.items[index].label.clone().into(),
                 color: self
                     .theme
                     .colors

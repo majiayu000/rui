@@ -435,7 +435,7 @@ impl Div {
     }
 
     pub fn font_family(mut self, family: impl Into<String>) -> Self {
-        self.text_style.font_family = Some(family.into());
+        self.text_style.font_family = Some(std::sync::Arc::from(family.into()));
         self
     }
 

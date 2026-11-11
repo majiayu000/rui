@@ -55,7 +55,7 @@ fn representative_scene() -> Scene {
     });
     scene.insert(Primitive::Text {
         bounds: Bounds::from_xywh(36.0, 34.0, 44.0, 16.0),
-        content: String::from("RUI"),
+        content: "RUI".into(),
         color: Rgba::WHITE,
         font_size: 12.0,
         font_weight: 700,

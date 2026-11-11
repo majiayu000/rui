@@ -1,6 +1,7 @@
 //! Text element for rendering text
 
 use crate::core::ElementId;
+use crate::core::SharedStr;
 use crate::core::accessibility::{
     AccessibilityContext, AccessibilityError, AccessibilityNode, AccessibilityRole,
 };
@@ -14,6 +15,7 @@ use crate::elements::element::{
 use crate::renderer::Primitive;
 use crate::renderer::text::{TextMeasureCache, TextMetrics, TextRequest};
 use std::any::Any;
+use std::sync::Arc;
 use taffy::prelude::*;
 
 /// Text alignment
@@ -59,7 +61,7 @@ pub struct TextStyle {
     pub color: Color,
     pub font_size: f32,
     pub font_weight: FontWeight,
-    pub font_family: Option<String>,
+    pub font_family: Option<Arc<str>>,
     pub line_height: f32,
 }
 
@@ -98,7 +100,7 @@ pub struct TextStyleRefinement {
     pub color: Option<Color>,
     pub font_size: Option<f32>,
     pub font_weight: Option<FontWeight>,
-    pub font_family: Option<String>,
+    pub font_family: Option<Arc<str>>,
     pub line_height: Option<f32>,
 }
 
@@ -128,12 +130,12 @@ pub struct Text {
     id: Option<ElementId>,
     /// Set by [`Text::accessible`]: the id of its accessibility node.
     accessible: Option<StableId>,
-    content: String,
+    content: SharedStr,
     style: Style,
     color: Color,
     font_size: f32,
     font_weight: FontWeight,
-    font_family: Option<String>,
+    font_family: Option<Arc<str>>,
     line_height: f32,
     own: OwnTextStyle,
     align: TextAlign,
@@ -144,7 +146,7 @@ pub struct Text {
 }
 
 impl Text {
-    pub fn new(content: impl Into<String>) -> Self {
+    pub fn new(content: impl Into<SharedStr>) -> Self {
         let defaults = TextStyle::default();
         Self {
             id: None,
@@ -223,7 +225,7 @@ impl Text {
     }
 
     pub fn font(mut self, family: impl Into<String>) -> Self {
-        self.font_family = Some(family.into());
+        self.font_family = Some(Arc::from(family.into()));
         self.own.font_family = true;
         self
     }
@@ -292,7 +294,7 @@ impl Text {
         }
     }
 
-    fn primitive(&self, bounds: Bounds, content: String) -> Primitive {
+    fn primitive(&self, bounds: Bounds, content: SharedStr) -> Primitive {
         Primitive::Text {
             bounds,
             content,
@@ -453,14 +455,14 @@ impl Element for Text {
             return Ok(None);
         }
         let node = AccessibilityNode::new(id, AccessibilityRole::Text)
-            .with_label(self.content.clone())
+            .with_label(self.content.to_string())
             .with_focused(cx.a11y_has_focus(id));
         Ok(Some(node))
     }
 }
 
 /// Create a new Text element
-pub fn text(content: impl Into<String>) -> Text {
+pub fn text(content: impl Into<SharedStr>) -> Text {
     Text::new(content)
 }
 

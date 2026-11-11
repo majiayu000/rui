@@ -85,7 +85,7 @@ fn list_scene() -> Result<Scene, Box<dyn std::error::Error>> {
 fn label(bounds: Bounds, content: String, font_size: f32, color: Rgba) -> Primitive {
     Primitive::Text {
         bounds,
-        content,
+        content: content.into(),
         color,
         font_size,
         font_weight: 400,
