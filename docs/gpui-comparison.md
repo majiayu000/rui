@@ -108,6 +108,45 @@ examples and GPUI's `primitives` bench paint this way.
   - Neither side opens an on-screen window or waits for a presented frame. Startup of
     a real app window is not measured here.
 
+## Shared text and identity-kept layout (RUI `8099b1f`)
+
+RUI side only, from `benches/compare_frame.rs`, against the GPUI numbers of the
+runs below (same GPUI build). The machine was under load average 100–185 from
+other builds, so only instructions and allocations are quoted; between rounds
+they moved by under 1%. Two changes since `27a9be7`:
+
+- `Primitive::Text` holds a `SharedStr`, a range of an `Arc<str>`, and an
+  `Arc<str>` family. Text, styled-text pieces and wrapped lines paint slices of
+  the text they own instead of a new `String` per piece.
+- A retained layout pass hands each element the nodes of the element with the
+  same identity in the previous pass, not the nodes at the same position. A
+  scrolled list's rows keep their nodes and taffy's cached layout; before, each
+  row slot took a new line's text and every row was laid out again.
+
+| Case | RUI instructions (M), before → now | GPUI | RUI allocations, before → now | GPUI |
+|---|---|---|---|---|
+| editor_scroll | 5.72 → 2.81 | 8.48–8.76 | 2 819 → 906 | 1 636 |
+| editor_edit | 2.64 → 2.12 | 8.49–8.68 | 1 667 → 510 | 1 636 |
+| text_paragraphs | 10.37 → 10.20 | 19.31 | 1 553 → 1 143 | 1 842 |
+| list_full | 24.04 → 24.85 | 159.5 | 16 015 → 14 015 | 50 046 |
+| list_full_one_row | 24.05 → 24.84 | 252.9 | 16 015 → 14 015 | 6 092 |
+| list_virtual_1k | 0.94 → 0.94 | 3.92 | 299 → 270 | 787 |
+| resize_full | 47.36 → 48.73 | 164.3 | 28 026 → 26 026 | 50 045 |
+| resize_virtual | 1.37 → 1.40 | 9.03 | 532 → 503 | 788 |
+| quad_grid | 5.30 → 5.78 | 79.97 | 16 → 16 | 14 |
+
+Most of the `quad_grid` and `resize_full` rise is inlining in the renderer, which
+neither change touched: built with one codegen unit on both sides they read
+5.76 → 5.86 M and 47.35 → 47.81 M, and `list_full` 23.93 → 24.67 M.
+
+- **Editor allocations are now below GPUI's**: 906 against 1 636 when scrolling,
+  510 against 1 636 when editing. Scrolling costs a third of GPUI's instructions.
+- **Identity lookups cost about 3% on the 2000-row frames** (list_full,
+  resize_full), which lay out every row each frame.
+- **Still behind on allocations:** `list_full_one_row` (14 015 against GPUI's
+  `.cached()` 6 092), because this fixture rebuilds from the root (see the
+  verdict below), and `quad_grid` by 2.
+
 ## Final results (RUI `c2e3596`)
 
 Apple M2 Max (12 cores, 96 GB), macOS 26.5.2. RUI `c2e3596`: every lane of #179
