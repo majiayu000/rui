@@ -5,10 +5,12 @@ use crate::core::color::{Color, Rgba};
 use crate::core::geometry::{Bounds, Edges, Point};
 use crate::core::style::{Corners, Dimension as StyleDimension, Style};
 use crate::elements::element::{
-    Element, EventContext, LayoutContext, PaintContext, PointerEvent, PointerEventKind, StableId,
-    style_to_taffy,
+    Capabilities, Element, EventContext, LayoutContext, PaintContext, PointerEvent,
+    PointerEventKind, StableId, style_to_taffy,
 };
 use crate::renderer::{Primitive, Scene};
+use std::any::Any;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use taffy::prelude::*;
 
 /// Inserts primitives into the scene while a [`Canvas`] paints.
@@ -60,12 +62,16 @@ type PointerFn = Box<dyn Fn(&PointerEvent)>;
 
 /// A leaf element that calls a closure with its bounds to paint primitives, clipped
 /// to those bounds. Size it like a [`Div`](crate::elements::Div).
+///
+/// By default the closure runs every frame. With [`Canvas::cache_key`] the canvas
+/// keeps what it painted and draws it again without calling the closure.
 pub struct Canvas {
     id: StableId,
     style: Style,
     paint: PaintFn,
     on_pointer: Option<PointerFn>,
     pressed: bool,
+    cache_key: Option<u64>,
 }
 
 /// A [`Canvas`] painted by `paint(bounds, painter)`.
@@ -76,6 +82,7 @@ pub fn canvas(paint: impl FnMut(Bounds, &mut Painter) + 'static) -> Canvas {
         paint: Box::new(paint),
         on_pointer: None,
         pressed: false,
+        cache_key: None,
     }
 }
 
@@ -112,6 +119,27 @@ impl Canvas {
         self
     }
 
+    /// Keep what the closure painted while `key` stays the same, as iced's
+    /// `canvas::Cache` keeps its geometry.
+    ///
+    /// The closure must paint only from `key` and the bounds it is given. A
+    /// canvas rebuilt with the same key, style and id keeps the previous
+    /// instance, closure included, and replays its primitives instead of
+    /// painting: the closure runs again only when the key changes, when layout
+    /// gives the canvas another size or a position off the whole-pixel grid it
+    /// was painted at, or when the previous frame did not paint it (it was out of
+    /// view, or the canvas is new). Change the key whenever what the closure
+    /// draws changes, for example to a revision counter of the data it draws.
+    ///
+    /// A canvas with [`Canvas::on_pointer`] registers a hit region every frame,
+    /// so it is painted every frame, key or not.
+    pub fn cache_key(mut self, key: impl Hash) -> Self {
+        let mut hasher = DefaultHasher::new();
+        key.hash(&mut hasher);
+        self.cache_key = Some(hasher.finish());
+        self
+    }
+
     /// Receive pointer events with positions relative to the canvas origin.
     ///
     /// Gets presses and releases inside the canvas, moves over it, and every move
@@ -129,6 +157,27 @@ impl Element for Canvas {
 
     fn stable_id_mut(&mut self) -> Option<&mut StableId> {
         Some(&mut self.id)
+    }
+
+    fn capabilities(&self) -> Capabilities {
+        Capabilities {
+            pure: self.cache_key.is_some(),
+            pointer_inert: self.on_pointer.is_none(),
+        }
+    }
+
+    fn same_props(&self, previous: &dyn Element) -> bool {
+        let Some(previous) = (previous as &dyn Any).downcast_ref::<Canvas>() else {
+            return false;
+        };
+        self.cache_key.is_some()
+            && self.cache_key == previous.cache_key
+            && self.on_pointer.is_none()
+            && previous.on_pointer.is_none()
+            // An id layout gave the previous one is the identity the new one gets.
+            && self.id.is_explicit() == previous.id.is_explicit()
+            && (!self.id.is_explicit() || self.id == previous.id)
+            && self.style == previous.style
     }
 
     fn style(&self) -> &Style {
