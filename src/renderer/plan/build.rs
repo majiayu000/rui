@@ -396,16 +396,20 @@ impl<T: Clone> FramePlanner<T> {
                 font_family,
                 line_height,
                 align,
+                direction,
             } => {
                 self.build_text(
                     frame,
                     bounds,
-                    content,
                     *color,
-                    *font_size,
-                    *font_weight,
-                    font_family.as_deref(),
-                    *line_height,
+                    TextRequest::new(
+                        content,
+                        *font_size,
+                        *font_weight,
+                        font_family.as_deref(),
+                        *line_height,
+                    )
+                    .with_direction(*direction),
                     *align,
                     walk.clip,
                     walk.scale_factor,
@@ -532,25 +536,16 @@ impl<T: Clone> FramePlanner<T> {
         &mut self,
         frame: &mut FrameData<T>,
         bounds: &Bounds,
-        content: &str,
         color: crate::core::color::Rgba,
-        font_size: f32,
-        font_weight: u16,
-        font_family: Option<&str>,
-        line_height: f32,
+        request: TextRequest<'_>,
         align: crate::elements::text::TextAlign,
         clip: u32,
         scale_factor: f32,
     ) -> Result<(), RendererError> {
         let text_error =
             |err| RendererError::render_failed(format!("text rendering failed: {:?}", err));
-        let shaped = match self.text_cache.shape(TextRequest::new(
-            content,
-            font_size,
-            font_weight,
-            font_family,
-            line_height,
-        )) {
+        let font_size = request.font_size;
+        let shaped = match self.text_cache.shape(request) {
             Ok(Some(shaped)) => shaped,
             Ok(None) => return Ok(()),
             Err(err) => return Err(text_error(err)),

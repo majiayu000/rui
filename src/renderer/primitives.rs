@@ -8,6 +8,7 @@ use crate::elements::fit_bounds;
 use crate::elements::text::TextAlign;
 use crate::renderer::Picture;
 use crate::renderer::picture::moved;
+use crate::renderer::text::BaseDirection;
 use crate::{ImageFit, ImageSource};
 use bytemuck::{Pod, Zeroable};
 use std::sync::Arc;
@@ -63,6 +64,8 @@ pub enum Primitive {
         font_family: Option<Arc<str>>,
         line_height: f32,
         align: TextAlign,
+        /// The base direction of the paragraph the text is a line of.
+        direction: BaseDirection,
     },
 
     /// Image rendering
@@ -564,6 +567,7 @@ mod tests {
             font_family: None,
             line_height: 1.2,
             align: TextAlign::Left,
+            direction: BaseDirection::Auto,
         }
     }
 

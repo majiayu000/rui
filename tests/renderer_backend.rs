@@ -4,6 +4,7 @@ use rui::core::color::Rgba;
 use rui::core::geometry::{Bounds, Edges, Size};
 use rui::core::style::Corners;
 use rui::elements::text::TextAlign;
+use rui::renderer::text::BaseDirection;
 use rui::renderer::{PathVertex, Primitive, PrimitiveKind, RendererError, Scene};
 use rui::testing::{FrameCaptureBackend, MetalFrameCaptureBackend};
 use rui::{ImageFit, ImageSource};
@@ -62,6 +63,7 @@ fn representative_scene() -> Scene {
         font_family: None,
         line_height: 1.1,
         align: TextAlign::Center,
+        direction: BaseDirection::Auto,
     });
     scene.insert(Primitive::PushClip {
         bounds: Bounds::from_xywh(82.0, 34.0, 12.0, 16.0),

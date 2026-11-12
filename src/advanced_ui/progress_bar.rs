@@ -12,6 +12,7 @@ use crate::elements::element::{
     Element, LayoutContext, PaintContext, style_dimension_or, style_to_taffy,
 };
 use crate::renderer::Primitive;
+use crate::renderer::text::BaseDirection;
 use taffy::prelude::*;
 
 pub struct ProgressBar {
@@ -223,6 +224,7 @@ impl Element for ProgressBar {
                 font_family: None,
                 line_height: 1.0,
                 align: crate::elements::text::TextAlign::Center,
+                direction: BaseDirection::Auto,
             });
         }
     }

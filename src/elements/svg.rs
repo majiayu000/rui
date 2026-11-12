@@ -18,6 +18,7 @@ use crate::elements::element::{
     Capabilities, Element, LayoutContext, PaintContext, style_to_taffy,
 };
 use crate::elements::text::TextAlign;
+use crate::renderer::text::BaseDirection;
 use crate::renderer::{Picture, Primitive};
 use geometry::{Transform, fill_polygon, stroke_outline};
 use parse::{ColorValue, Document};
@@ -344,6 +345,7 @@ fn paint_error(cx: &mut PaintContext, bounds: Bounds, message: &str) {
         font_family: None,
         line_height: 1.2,
         align: TextAlign::Left,
+        direction: BaseDirection::Auto,
     });
 }
 

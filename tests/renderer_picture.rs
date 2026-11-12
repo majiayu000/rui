@@ -4,6 +4,7 @@ use rui::core::color::Rgba;
 use rui::core::geometry::{Bounds, Edges, Point, Size};
 use rui::core::style::Corners;
 use rui::elements::text::TextAlign;
+use rui::renderer::text::BaseDirection;
 use rui::renderer::{PathVertex, Picture, Primitive, RendererError, Scene};
 use rui::testing::{FrameCaptureBackend, MetalFrameCaptureBackend};
 
@@ -82,6 +83,7 @@ fn content() -> Vec<Primitive> {
         font_family: None,
         line_height: 18.0,
         align: TextAlign::Left,
+        direction: BaseDirection::Auto,
     });
     primitives.push(Primitive::PopClip);
     primitives.push(quad(

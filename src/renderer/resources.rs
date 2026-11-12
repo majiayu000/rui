@@ -2,6 +2,7 @@
 
 use crate::core::geometry::Size;
 use crate::renderer::primitives::PrimitiveKind;
+use crate::renderer::text::BaseDirection;
 use crate::{DecodedImage, ImageSource};
 use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
@@ -725,6 +726,7 @@ pub struct GlyphResourceKey {
     weight: u16,
     family: Option<String>,
     line_height_bits: u32,
+    direction: BaseDirection,
 }
 
 impl GlyphResourceKey {
@@ -741,6 +743,12 @@ impl GlyphResourceKey {
             weight,
             family: family.map(str::to_string),
             line_height_bits: line_height.to_bits(),
+            direction: BaseDirection::Auto,
         }
+    }
+
+    /// The key of the same text laid out at the paragraph level `direction` gives.
+    pub fn with_direction(self, direction: BaseDirection) -> Self {
+        Self { direction, ..self }
     }
 }

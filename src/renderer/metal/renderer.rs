@@ -4,12 +4,13 @@ use super::batch::{BufferLayout, InstancePool, bind_vertex_value, write_slice};
 use super::capture::{create_capture_texture, read_texture_rgba, texture_extent};
 use super::glyph::GlyphPages;
 use super::retained::{RetainedPipelines, RetainedTarget};
+use super::shader_cache::ShaderLibrary;
 use crate::core::geometry::{Bounds, Size};
 use crate::renderer::plan::{Draw, FrameData, FramePlanner, ScissorRect, clear_linear};
 use crate::renderer::{
     Renderer, RendererDeviceDiagnostics, RendererDiagnostics, RendererError,
     RendererPrimitiveSupport, RendererResourceError, RendererResourceKind, RendererResourceLimits,
-    Scene,
+    RendererTelemetryRecorder, Scene,
 };
 use metal::*;
 
@@ -115,35 +116,29 @@ pub struct MetalRenderer {
     scheduled_wait: Option<std::time::Duration>,
 }
 
-/// A pipeline drawing into the target format with source-over blending.
-fn blended_pipeline(
+/// The shader library `name` from `source`, defining every function in `functions`.
+fn load_library(
     device: &Device,
+    name: &str,
     source: &str,
-    vertex: &str,
-    fragment: &str,
-) -> Result<RenderPipelineState, RendererError> {
-    let library = compile(device, source, vertex)?;
-    pipeline_from(device, &library, vertex, fragment)
+    functions: &[&str],
+) -> Result<ShaderLibrary, RendererError> {
+    ShaderLibrary::load(device, name, &with_color(source), functions).map_err(|err| {
+        RendererError::render_failed(format!("failed to compile {name} shader: {err}"))
+    })
 }
 
-fn compile(device: &Device, source: &str, vertex: &str) -> Result<Library, RendererError> {
-    device
-        .new_library_with_source(&with_color(source), &CompileOptions::new())
-        .map_err(|err| {
-            RendererError::render_failed(format!("failed to compile {vertex} shader: {err}"))
-        })
-}
-
-/// [`blended_pipeline`] from a compiled `library`.
+/// A pipeline drawing into the target format with source-over blending, from
+/// `library`, and its descriptor for the shader cache.
 fn pipeline_from(
     device: &Device,
-    library: &Library,
+    library: &ShaderLibrary,
     vertex: &str,
     fragment: &str,
-) -> Result<RenderPipelineState, RendererError> {
+) -> Result<(RenderPipelineState, RenderPipelineDescriptor), RendererError> {
     let function = |name: &str| {
         library
-            .get_function(name, None)
+            .function(name)
             .map_err(|err| RendererError::render_failed(format!("missing {name} shader: {err}")))
     };
     let desc = RenderPipelineDescriptor::new();
@@ -160,9 +155,44 @@ fn pipeline_from(
     color.set_destination_rgb_blend_factor(MTLBlendFactor::OneMinusSourceAlpha);
     color.set_source_alpha_blend_factor(MTLBlendFactor::One);
     color.set_destination_alpha_blend_factor(MTLBlendFactor::OneMinusSourceAlpha);
-    device.new_render_pipeline_state(&desc).map_err(|err| {
-        RendererError::render_failed(format!("failed to create {vertex} pipeline: {err}"))
-    })
+    let pipeline = library.pipeline(device, &desc).map_err(|err| {
+        RendererError::render_failed(format!("failed to create {fragment} pipeline: {err}"))
+    })?;
+    Ok((pipeline, desc))
+}
+
+/// The blended pipelines `(vertex, fragment)` of the shader library `name`,
+/// and how it was loaded for the `RUI_PROFILE` line.
+fn blended_pipelines<const N: usize>(
+    device: &Device,
+    name: &str,
+    source: &str,
+    pipelines: [(&str, &str); N],
+) -> Result<([RenderPipelineState; N], String), RendererError> {
+    let mut functions: Vec<&str> = Vec::with_capacity(N * 2);
+    for (vertex, fragment) in pipelines {
+        for function in [vertex, fragment] {
+            if !functions.contains(&function) {
+                functions.push(function);
+            }
+        }
+    }
+    let library = load_library(device, name, source, &functions)?;
+    let started = std::time::Instant::now();
+    let mut states = Vec::with_capacity(N);
+    let mut descs = Vec::with_capacity(N);
+    for (vertex, fragment) in pipelines {
+        let (state, desc) = pipeline_from(device, &library, vertex, fragment)?;
+        states.push(state);
+        descs.push(desc);
+    }
+    let elapsed = started.elapsed();
+    let descs: Vec<&RenderPipelineDescriptorRef> = descs.iter().map(|desc| &**desc).collect();
+    library.store(device, &descs);
+    let states = states
+        .try_into()
+        .unwrap_or_else(|_| unreachable!("one pipeline per entry"));
+    Ok((states, library.report(elapsed)))
 }
 
 /// The GPU to draw with. `MTLCreateSystemDefaultDevice` picks the GPU of the
@@ -199,26 +229,32 @@ impl MetalRenderer {
     }
 
     pub fn with_resource_limits(limits: RendererResourceLimits) -> Result<Self, RendererError> {
+        let started = std::time::Instant::now();
         let device = default_device()
             .ok_or_else(|| RendererError::backend_unavailable("Metal device is unavailable"))?;
         let command_queue = device.new_command_queue();
+        let device_time = started.elapsed();
 
-        // The shaders compile at the same time: on a first launch, before the
-        // system's shader cache holds them, each takes tens of milliseconds.
-        let (sprite_pipeline, image_pipeline, retained_pipelines) = std::thread::scope(|scope| {
+        // The shaders load at the same time: compiled from source on a first
+        // launch, each takes tens of milliseconds.
+        let (sprite, image, retained) = std::thread::scope(|scope| {
             let retained = scope.spawn(|| RetainedPipelines::new(&device));
             let sprite = scope.spawn(|| {
-                let library = compile(&device, super::shaders::SPRITE_SHADER, "sprite_vertex")?;
-                Ok::<_, RendererError>((
-                    pipeline_from(&device, &library, "sprite_vertex", "sprite_fragment")?,
-                    pipeline_from(&device, &library, "sprite_vertex", "simple_fragment")?,
-                ))
+                blended_pipelines(
+                    &device,
+                    "sprite",
+                    super::shaders::SPRITE_SHADER,
+                    [
+                        ("sprite_vertex", "sprite_fragment"),
+                        ("sprite_vertex", "simple_fragment"),
+                    ],
+                )
             });
-            let image = blended_pipeline(
+            let image = blended_pipelines(
                 &device,
+                "image",
                 super::shaders::IMAGE_SHADER,
-                "image_vertex",
-                "image_fragment",
+                [("image_vertex", "image_fragment")],
             );
             let sprite = sprite.join().unwrap_or_else(|_| {
                 Err(RendererError::render_failed(
@@ -232,8 +268,12 @@ impl MetalRenderer {
             });
             (sprite, image, retained)
         });
-        let ((sprite_pipeline, simple_pipeline), image_pipeline, retained_pipelines) =
-            (sprite_pipeline?, image_pipeline?, retained_pipelines?);
+        let (
+            ([sprite_pipeline, simple_pipeline], sprite),
+            ([image_pipeline], image),
+            (retained_pipelines, retained),
+        ) = (sprite?, image?, retained?);
+        let shaders_time = started.elapsed() - device_time;
 
         // Sampler for images/text
         let sampler_desc = SamplerDescriptor::new();
@@ -253,7 +293,7 @@ impl MetalRenderer {
         page_desc.set_pixel_format(MTLPixelFormat::RGBA8Unorm_sRGB);
         let empty_color_page = device.new_texture(&page_desc);
 
-        Ok(Self {
+        let renderer = Self {
             device,
             command_queue,
             sprite_pipeline,
@@ -275,7 +315,19 @@ impl MetalRenderer {
             profiling: false,
             completed_gpu_time: None,
             scheduled_wait: None,
-        })
+        };
+        if RendererTelemetryRecorder::enabled_from_env().is_some() {
+            let ms = |time: std::time::Duration| time.as_secs_f64() * 1e3;
+            let total = started.elapsed();
+            eprintln!(
+                "rui renderer_init device_ms={:.1} shaders_ms={:.1} {sprite} {image} {retained} resources_ms={:.1} total_ms={:.1}",
+                ms(device_time),
+                ms(shaders_time),
+                ms(total - device_time - shaders_time),
+                ms(total)
+            );
+        }
+        Ok(renderer)
     }
 
     /// Get the Metal device

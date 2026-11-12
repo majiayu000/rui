@@ -32,13 +32,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 use taffy::prelude::TaffyTree;
 
-const CASES: [&str; 15] = [
+const CASES: [&str; 16] = [
     "startup",
     "list_full",
     "list_full_rows",
     "list_virtual_1k",
     "list_virtual_100k",
     "text_paragraphs",
+    "text_complex",
     "quad_grid",
     "quad_grid_cached",
     "resize_full",
@@ -52,6 +53,8 @@ const CASES: [&str; 15] = [
 mod compare_grid;
 mod compare_paths;
 use compare_grid::{CELL, ChangedCell, GRID, changed_cell, quad_grid, static_grid};
+#[path = "../benchmarks/complex_text.rs"]
+mod complex_text;
 #[path = "../benchmarks/gpui_compare/gpu_time.rs"]
 mod gpu_time;
 
@@ -205,7 +208,7 @@ fn paragraph(index: usize) -> String {
         .join(" ")
 }
 
-fn paragraphs(revision: usize) -> impl Element {
+fn paragraphs(revision: usize, paragraph: fn(usize) -> String) -> impl Element {
     div()
         .w_full()
         .flex_col()
@@ -417,6 +420,35 @@ impl Harness {
         })
     }
 
+    /// With `RUI_COMPARE_PNG=<dir>`, the last frame's scene drawn again and saved as
+    /// `<dir>/rui_<case>.png`, to check what the fixture shows.
+    fn save_png_if_asked(
+        &mut self,
+        case: &str,
+        viewport: Size,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let Some(dir) = std::env::var_os("RUI_COMPARE_PNG") else {
+            return Ok(());
+        };
+        let mut pixels =
+            self.renderer
+                .capture_frame_pixels_at_scale(&self.scene, viewport, SCALE_FACTOR)?;
+        // Opaque, to view: the fixture paints no background of its own.
+        for pixel in pixels.as_chunks_mut::<4>().0 {
+            pixel[3] = 255;
+        }
+        let path = std::path::Path::new(&dir).join(format!("rui_{case}.png"));
+        image::save_buffer(
+            &path,
+            &pixels,
+            (viewport.width * SCALE_FACTOR) as u32,
+            (viewport.height * SCALE_FACTOR) as u32,
+            image::ColorType::Rgba8,
+        )?;
+        eprintln!("saved {}", path.display());
+        Ok(())
+    }
+
     fn draw(
         &mut self,
         root: &mut impl Element,
@@ -510,7 +542,9 @@ fn run(case: &str) -> Result<(), Box<dyn std::error::Error>> {
         // From before the renderer exists to the first long-list frame submitted.
         // As the native runner starts: the renderer is created on another thread
         // while the first frame is built, laid out and painted, and the first
-        // present waits for it. `renderer_wait_ms` is what that wait still took.
+        // present waits for it. `layout_ms` is building, laying out and painting
+        // that frame, `renderer_wait_ms` what the wait still took after it, and
+        // `render_ms` the first render, glyph rasterization and atlas included.
         "startup" => {
             let to_fixture = ms_since_process_start();
             let t0 = Instant::now();
@@ -534,8 +568,10 @@ fn run(case: &str) -> Result<(), Box<dyn std::error::Error>> {
                 renderer.render_offscreen(&scene, viewport, SCALE_FACTOR)
             })?;
             let first_frame = t0.elapsed().as_secs_f64() * 1e3;
+            let layout = (laid_out - t0).as_secs_f64() * 1e3;
+            let render = first_frame - layout - renderer_wait;
             println!(
-                "rui startup process_to_fixture_ms={to_fixture:.1} first_frame_ms={first_frame:.1} process_to_first_frame_ms={:.1} footprint_mb={:.1} renderer_wait_ms={renderer_wait:.1}",
+                "rui startup process_to_fixture_ms={to_fixture:.1} first_frame_ms={first_frame:.1} process_to_first_frame_ms={:.1} footprint_mb={:.1} layout_ms={layout:.1} renderer_wait_ms={renderer_wait:.1} render_ms={render:.1}",
                 ms_since_process_start(),
                 footprint_mb()
             );
@@ -624,11 +660,18 @@ fn run(case: &str) -> Result<(), Box<dyn std::error::Error>> {
                 harness.frame(virtual_rows(&handle, count, selected), viewport)
             })?;
         }
-        "text_paragraphs" => {
+        // `text_complex` is `text_paragraphs` in seven scripts and emoji.
+        "text_paragraphs" | "text_complex" => {
+            let content = if case == "text_paragraphs" {
+                paragraph
+            } else {
+                complex_text::complex_paragraph
+            };
             let mut harness = Harness::new()?;
             measure(case, &mut harness, |harness, turn| {
-                harness.frame(paragraphs(turn), viewport)
+                harness.frame(paragraphs(turn, content), viewport)
             })?;
+            harness.save_png_if_asked(case, viewport)?;
         }
         "quad_grid" => {
             let mut harness = Harness::new()?;

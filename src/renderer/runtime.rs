@@ -221,6 +221,7 @@ mod tests {
     use crate::core::style::Corners;
     use crate::elements::text::TextAlign;
     use crate::renderer::PathVertex;
+    use crate::renderer::text::BaseDirection;
     use crate::{ImageFit, ImageSource};
 
     fn sample_quad() -> Primitive {
@@ -282,6 +283,7 @@ mod tests {
                 font_family: None,
                 line_height: 1.2,
                 align: TextAlign::Left,
+                direction: BaseDirection::Auto,
             },
             Primitive::Image {
                 bounds: Bounds::from_xywh(5.0, 6.0, 10.0, 10.0),

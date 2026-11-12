@@ -17,7 +17,7 @@ const MAX_FACES_PER_FILE: u32 = 16;
 /// Font files by family, probed in order; missing files are skipped. macOS
 /// first, then the paths Debian, Fedora and Arch install common families to.
 #[cfg(not(windows))]
-const FONT_CANDIDATES: [(&str, &str); 29] = [
+const FONT_CANDIDATES: [(&str, &str); 33] = [
     ("Arial", "/System/Library/Fonts/Supplemental/Arial.ttf"),
     ("Arial", "/System/Library/Fonts/Supplemental/Arial Bold.ttf"),
     ("Arial", "/Library/Fonts/Arial.ttf"),
@@ -39,6 +39,10 @@ const FONT_CANDIDATES: [(&str, &str); 29] = [
         "/System/Library/Fonts/Hiragino Sans GB.ttc",
     ),
     ("STHeiti", "/System/Library/Fonts/STHeiti Medium.ttc"),
+    // The faces macOS itself falls back to for Devanagari and Thai: Arial
+    // Unicode has the letters but forms few conjuncts.
+    ("Kohinoor Devanagari", "/System/Library/Fonts/Kohinoor.ttc"),
+    ("Thonburi", "/System/Library/Fonts/ThonburiUI.ttc"),
     (
         "Apple Color Emoji",
         "/System/Library/Fonts/Apple Color Emoji.ttc",
@@ -59,6 +63,14 @@ const FONT_CANDIDATES: [(&str, &str); 29] = [
     (
         "Noto Sans Arabic",
         "/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf",
+    ),
+    (
+        "Noto Sans Devanagari",
+        "/usr/share/fonts/truetype/noto/NotoSansDevanagari-Regular.ttf",
+    ),
+    (
+        "Noto Sans Thai",
+        "/usr/share/fonts/truetype/noto/NotoSansThai-Regular.ttf",
     ),
     (
         "Noto Color Emoji",

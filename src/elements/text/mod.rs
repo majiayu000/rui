@@ -12,6 +12,7 @@ use crate::elements::element::{
     Capabilities, Element, LayoutContext, PaintContext, StableId, TextWrapRequest, WrappedLines,
     no_reach, style_to_taffy,
 };
+use crate::renderer::text::BaseDirection;
 use crate::renderer::text::{TextMeasureCache, TextMetrics, TextRequest};
 use crate::renderer::{Primitive, text_reach};
 use std::any::Any;
@@ -294,7 +295,7 @@ impl Text {
         }
     }
 
-    fn primitive(&self, bounds: Bounds, content: SharedStr) -> Primitive {
+    fn primitive(&self, bounds: Bounds, content: SharedStr, direction: BaseDirection) -> Primitive {
         Primitive::Text {
             bounds,
             content,
@@ -304,6 +305,7 @@ impl Text {
             font_family: self.font_family.clone(),
             line_height: self.line_height,
             align: self.align,
+            direction,
         }
     }
 
@@ -425,7 +427,7 @@ impl Element for Text {
         let bounds = cx.bounds();
         let Some(wrapped) = &self.wrapped else {
             let content = self.content.share();
-            cx.paint(self.primitive(bounds, content));
+            cx.paint(self.primitive(bounds, content, BaseDirection::Auto));
             return;
         };
 
@@ -441,7 +443,7 @@ impl Element for Text {
                 bounds.width(),
                 line_box,
             );
-            cx.paint(self.primitive(line_bounds, line.content.clone()));
+            cx.paint(self.primitive(line_bounds, line.content.clone(), line.direction));
         }
     }
 

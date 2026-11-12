@@ -6,6 +6,7 @@ use crate::core::style::{Corners, Style};
 use crate::elements::element::PaintContext;
 use crate::elements::text::TextAlign;
 use crate::renderer::Primitive;
+use crate::renderer::text::BaseDirection;
 
 pub(super) type DataValueHandler = Box<dyn Fn(&str)>;
 pub(super) type DataRowHandler = Box<dyn Fn()>;
@@ -108,6 +109,7 @@ pub(super) fn paint_data_row(cx: &mut PaintContext, bounds: Bounds, row: DataRow
             font_family: None,
             line_height: row.theme.typography.line_height,
             align: TextAlign::Center,
+            direction: BaseDirection::Auto,
         });
     }
 
@@ -134,6 +136,7 @@ pub(super) fn paint_data_row(cx: &mut PaintContext, bounds: Bounds, row: DataRow
         font_family: None,
         line_height: row.theme.typography.line_height,
         align: row.align,
+        direction: BaseDirection::Auto,
     });
 
     if let Some(detail) = row.detail {
@@ -153,6 +156,7 @@ pub(super) fn paint_data_row(cx: &mut PaintContext, bounds: Bounds, row: DataRow
             font_family: None,
             line_height: row.theme.typography.line_height,
             align: row.align,
+            direction: BaseDirection::Auto,
         });
     }
 

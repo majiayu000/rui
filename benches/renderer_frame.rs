@@ -22,6 +22,7 @@ use rui::core::style::Corners;
 use rui::elements::element::LayoutNodes;
 use rui::elements::text::TextAlign;
 use rui::renderer::metal::MetalRenderer;
+use rui::renderer::text::BaseDirection;
 use rui::renderer::text::TextMeasureCache;
 use rui::renderer::{PathVertex, Primitive, Scene};
 use rui::{Color, ElementId, Size, div, text};
@@ -92,6 +93,7 @@ fn label(bounds: Bounds, content: String, font_size: f32, color: Rgba) -> Primit
         font_family: None,
         line_height: 1.2,
         align: TextAlign::Left,
+        direction: BaseDirection::Auto,
     }
 }
 
