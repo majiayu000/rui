@@ -15,13 +15,13 @@
 //! Draw calls and instances come from `MetalRenderer::last_frame_stats`. GPU time comes
 //! from the same sampled frames through `benchmarks/gpui_compare/gpu_time.rs`, which
 //! GPUI's side uses too: each committed command buffer's `GPUEndTime - GPUStartTime`.
+use rui::core::entity::Entity;
 use rui::core::frame_pipeline::FramePipeline;
 use rui::elements::element::{Element, LayoutNodes};
 use rui::elements::{VirtualListHandle, canvas, shared_styled_text, span_range, virtual_list};
 use rui::renderer::metal::MetalRenderer;
 use rui::renderer::text::TextMeasureCache;
 use rui::renderer::{RendererResourceLimits, Scene};
-use rui::core::entity::Entity;
 use rui::{AppContext, Bounds, Color, ElementId, Size, div, text};
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::RefCell;
@@ -32,12 +32,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 use taffy::prelude::TaffyTree;
 
-const CASES: [&str; 11] = [
+const CASES: [&str; 12] = [
     "startup",
     "list_full",
     "list_virtual_1k",
     "list_virtual_100k",
     "text_paragraphs",
+    "text_complex",
     "quad_grid",
     "resize_full",
     "resize_virtual",
@@ -45,6 +46,8 @@ const CASES: [&str; 11] = [
     "editor_scroll",
     "editor_edit",
 ];
+#[path = "../benchmarks/complex_text.rs"]
+mod complex_text;
 #[path = "../benchmarks/gpui_compare/gpu_time.rs"]
 mod gpu_time;
 
@@ -200,7 +203,7 @@ fn paragraph(index: usize) -> String {
         .join(" ")
 }
 
-fn paragraphs(revision: usize) -> impl Element {
+fn paragraphs(revision: usize, paragraph: fn(usize) -> String) -> impl Element {
     div()
         .w_full()
         .flex_col()
@@ -440,6 +443,35 @@ impl Harness {
         })
     }
 
+    /// With `RUI_COMPARE_PNG=<dir>`, the last frame's scene drawn again and saved as
+    /// `<dir>/rui_<case>.png`, to check what the fixture shows.
+    fn save_png_if_asked(
+        &mut self,
+        case: &str,
+        viewport: Size,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let Some(dir) = std::env::var_os("RUI_COMPARE_PNG") else {
+            return Ok(());
+        };
+        let mut pixels =
+            self.renderer
+                .capture_frame_pixels_at_scale(&self.scene, viewport, SCALE_FACTOR)?;
+        // Opaque, to view: the fixture paints no background of its own.
+        for pixel in pixels.as_chunks_mut::<4>().0 {
+            pixel[3] = 255;
+        }
+        let path = std::path::Path::new(&dir).join(format!("rui_{case}.png"));
+        image::save_buffer(
+            &path,
+            &pixels,
+            (viewport.width * SCALE_FACTOR) as u32,
+            (viewport.height * SCALE_FACTOR) as u32,
+            image::ColorType::Rgba8,
+        )?;
+        eprintln!("saved {}", path.display());
+        Ok(())
+    }
+
     fn draw(
         &mut self,
         root: &mut impl Element,
@@ -579,9 +611,10 @@ fn run(case: &str) -> Result<(), Box<dyn std::error::Error>> {
                 .collect();
             let items = rows.clone();
             let mut build = move |cx: &mut AppContext| {
-                div().w_full().flex_col().children(cx.rows(&items, |row: &ListRow, _| {
-                    row_with(row.index, row.selected)
-                }))
+                div()
+                    .w_full()
+                    .flex_col()
+                    .children(cx.rows(&items, |row: &ListRow, _| row_with(row.index, row.selected)))
             };
             let mut root = div();
             measure(case, &mut harness, |harness, turn| {
@@ -607,11 +640,18 @@ fn run(case: &str) -> Result<(), Box<dyn std::error::Error>> {
                 harness.frame(virtual_rows(&handle, count, selected), viewport)
             })?;
         }
-        "text_paragraphs" => {
+        // `text_complex` is `text_paragraphs` in seven scripts and emoji.
+        "text_paragraphs" | "text_complex" => {
+            let content = if case == "text_paragraphs" {
+                paragraph
+            } else {
+                complex_text::complex_paragraph
+            };
             let mut harness = Harness::new()?;
             measure(case, &mut harness, |harness, turn| {
-                harness.frame(paragraphs(turn), viewport)
+                harness.frame(paragraphs(turn, content), viewport)
             })?;
+            harness.save_png_if_asked(case, viewport)?;
         }
         "quad_grid" => {
             let mut harness = Harness::new()?;
