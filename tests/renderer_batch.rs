@@ -43,7 +43,7 @@ fn quad(x: f32, y: f32, width: f32, height: f32, background: Rgba) -> Primitive 
 fn label(x: f32, y: f32, content: &str) -> Primitive {
     Primitive::Text {
         bounds: Bounds::from_xywh(x, y, 100.0, 16.0),
-        content: content.to_string(),
+        content: content.into(),
         color: Rgba::new(1.0, 1.0, 1.0, 1.0),
         font_size: 12.0,
         font_weight: 400,
@@ -173,7 +173,9 @@ fn clips_hold_inside_a_shared_draw() {
     ]);
     let pixels = capture(&mut renderer, &frame);
 
-    assert_eq!(renderer.last_frame_stats().draw_calls, 1);
+    // The background inside its clip draws with the simple pipeline; the two
+    // quads crossing theirs share the next draw.
+    assert_eq!(renderer.last_frame_stats().draw_calls, 2);
     for (x, y, inside) in [
         (10, 10, true),
         (29, 29, true),

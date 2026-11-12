@@ -672,7 +672,7 @@ pub fn column() -> Flex {
 
 /// [`crate::elements::Text`] exposed to assistive technology: see
 /// [`crate::elements::Text::accessible`].
-pub fn text(content: impl Into<String>) -> Text {
+pub fn text(content: impl Into<crate::core::SharedStr>) -> Text {
     crate::elements::text(content).accessible()
 }
 

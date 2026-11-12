@@ -623,7 +623,7 @@ fragment float4 probe_fragment() { return float4(1.0); }
             (
                 "sprite",
                 [shaders::COLOR_SHADER, shaders::SPRITE_SHADER].concat(),
-                &["sprite_vertex", "sprite_fragment"],
+                &["sprite_vertex", "sprite_fragment", "simple_fragment"],
             ),
             (
                 "image",

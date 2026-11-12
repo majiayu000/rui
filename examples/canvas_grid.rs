@@ -44,11 +44,11 @@ fn main() {
                     }
                     painter.paint(Primitive::Text {
                         bounds: Bounds::from_xywh(bounds.x(), y, bounds.width(), CELL_HEIGHT),
-                        content: content.clone(),
+                        content: content.clone().into(),
                         color: Color::WHITE.to_rgba(),
                         font_size: 13.0,
                         font_weight: 400,
-                        font_family: Some("SF Mono".to_string()),
+                        font_family: Some("SF Mono".into()),
                         line_height: 1.0,
                         align: TextAlign::Left,
                     });

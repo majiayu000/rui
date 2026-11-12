@@ -565,7 +565,7 @@ impl Element for Table {
 
                 cx.paint(Primitive::Text {
                     bounds: Bounds::from_xywh(text_x, text_y, text_width, text_height),
-                    content: cell.content.clone(),
+                    content: cell.content.clone().into(),
                     color: cell.color.to_rgba(),
                     font_size: cell.font_size,
                     font_weight: cell.font_weight.to_value(),

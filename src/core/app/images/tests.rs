@@ -51,7 +51,7 @@ fn texts(scene: &crate::renderer::Scene) -> Vec<String> {
         .primitives()
         .iter()
         .filter_map(|primitive| match primitive {
-            Primitive::Text { content, .. } => Some(content.clone()),
+            Primitive::Text { content, .. } => Some(content.to_string()),
             _ => None,
         })
         .collect()

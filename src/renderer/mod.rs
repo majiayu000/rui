@@ -9,10 +9,12 @@ mod scene;
 mod system_fonts;
 mod telemetry;
 pub mod text;
+mod text_ascii;
 mod text_bidi;
 mod text_classify;
 mod text_cluster_position;
 mod text_fallback;
+mod text_glyph_box;
 mod text_plan;
 mod text_shaping;
 
@@ -22,6 +24,7 @@ pub mod metal;
 pub mod wgpu;
 
 pub use primitives::{PathVertex, Primitive, PrimitiveKind, Reach};
+pub(crate) use primitives::{quad_reach, text_reach};
 pub use resources::{
     GlyphResourceKey, ImageResourceEntry, ImageResourceKey, RendererDeviceDiagnostics,
     RendererDiagnostics, RendererImageCache, RendererResourceAllocation, RendererResourceCache,

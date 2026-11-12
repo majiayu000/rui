@@ -1,5 +1,6 @@
 //! Rendering primitives - the basic shapes the GPU can draw
 
+use crate::core::SharedStr;
 use crate::core::color::Rgba;
 use crate::core::geometry::{Bounds, Edges, Size};
 use crate::core::style::Corners;
@@ -7,6 +8,7 @@ use crate::elements::fit_bounds;
 use crate::elements::text::TextAlign;
 use crate::{ImageFit, ImageSource};
 use bytemuck::{Pod, Zeroable};
+use std::sync::Arc;
 
 /// GPU-renderable primitives
 #[derive(Debug, Clone)]
@@ -52,11 +54,11 @@ pub enum Primitive {
     /// Text rendering
     Text {
         bounds: Bounds,
-        content: String,
+        content: SharedStr,
         color: Rgba,
         font_size: f32,
         font_weight: u16,
-        font_family: Option<String>,
+        font_family: Option<Arc<str>>,
         line_height: f32,
         align: TextAlign,
     },
@@ -216,12 +218,10 @@ impl Primitive {
 
     /// Everything the primitive can draw on.
     pub fn reach(&self) -> Reach {
-        // Antialiasing reaches about one pixel past an edge.
-        const EDGE: f32 = 1.0;
         Reach::Within(match self {
             Self::Quad { bounds, .. }
             | Self::LinearGradient { bounds, .. }
-            | Self::RadialGradient { bounds, .. } => outset(*bounds, EDGE, EDGE),
+            | Self::RadialGradient { bounds, .. } => quad_reach(*bounds),
             Self::Shadow {
                 bounds,
                 blur_radius,
@@ -232,7 +232,7 @@ impl Primitive {
             }
             Self::Text {
                 bounds, font_size, ..
-            } => outset(*bounds, f32::INFINITY, font_size.max(0.0) * 2.0 + EDGE),
+            } => text_reach(*bounds, *font_size),
             Self::Path {
                 vertices,
                 stroke_width,
@@ -294,6 +294,20 @@ pub enum Reach {
     Unbounded,
 }
 
+/// What a [`Primitive::Quad`] or gradient at `bounds` can draw on.
+pub(crate) fn quad_reach(bounds: Bounds) -> Bounds {
+    outset(bounds, EDGE, EDGE)
+}
+
+/// What a [`Primitive::Text`] at `bounds` can draw on. Text is centred on its
+/// ink, which can be wider than its bounds, so it is unbounded horizontally.
+pub(crate) fn text_reach(bounds: Bounds, font_size: f32) -> Bounds {
+    outset(bounds, f32::INFINITY, font_size.max(0.0) * 2.0 + EDGE)
+}
+
+/// Antialiasing reaches about one pixel past an edge.
+const EDGE: f32 = 1.0;
+
 fn outset(bounds: Bounds, dx: f32, dy: f32) -> Bounds {
     let (x, width) = if dx.is_infinite() {
         (f32::MIN / 4.0, f32::MAX / 2.0)
@@ -334,11 +348,21 @@ pub struct GpuQuad {
     pub gradient_start: [f32; 4],
     // Gradient end color (for gradients)
     pub gradient_end: [f32; 4],
-    // Gradient params: x = fill_type (0 solid, 1 linear, 2 radial), y = angle (radians)
+    // Gradient params: x = fill_type (0 solid, 1 linear, 2 radial), y = angle (radians),
+    // z = 1 for a plain quad whose edges lie on device pixels
     pub gradient_params: [f32; 4],
 }
 
 impl GpuQuad {
+    /// A solid fill with square corners and no border.
+    pub(crate) fn is_plain(&self) -> bool {
+        // Zero or negative zero in every radius and width: no bit but the signs.
+        const SIGNS: u128 = 0x8000_0000_8000_0000_8000_0000_8000_0000;
+        let bits = bytemuck::cast::<_, u128>(self.corner_radii)
+            | bytemuck::cast::<_, u128>(self.border_widths);
+        (bits & !SIGNS == 0) & (self.gradient_params[0] < 0.5)
+    }
+
     pub fn solid(
         bounds: Bounds,
         background: Rgba,
@@ -484,7 +508,7 @@ mod tests {
     fn text(bounds: Bounds) -> Primitive {
         Primitive::Text {
             bounds,
-            content: "label".to_string(),
+            content: "label".to_string().into(),
             color: Rgba::new(1.0, 1.0, 1.0, 1.0),
             font_size: 14.0,
             font_weight: 400,

@@ -1,11 +1,12 @@
 //! [`AnyElement`]: the type-erased element the frame keeps, with its stable
 //! identity, reconcile, kept layout and paint replay, and action dispatch.
 
+use super::element_box::ElementBox;
 use super::*;
 
 /// Type-erased element wrapper
 pub struct AnyElement {
-    pub(super) inner: Box<dyn Element>,
+    pub(super) inner: ElementBox,
     stable_id: Option<ElementId>,
     /// Layout of a memoizable subtree, which the next retained pass can keep.
     layout_record: Option<LayoutRecord>,
@@ -48,6 +49,10 @@ impl PaintSlot {
 /// small: every element carries one, and containers hold children inline.
 struct LayoutRecord {
     epoch: u64,
+    /// Identity the subtree was laid out under.
+    id: ElementId,
+    /// The subtree's last node, its root's.
+    last: NodeId,
     /// The subtree's nodes, in creation order, in [`LayoutNodes`]; its own node
     /// comes last.
     start: u32,
@@ -136,16 +141,16 @@ pub(crate) fn refresh_views(
 impl AnyElement {
     // Composite builders keep one owned child tree while accessing typed props.
     pub(crate) fn downcast_ref<E: Element>(&self) -> Option<&E> {
-        (self.inner.as_ref() as &dyn Any).downcast_ref()
+        (&*self.inner as &dyn Any).downcast_ref()
     }
 
     pub(crate) fn downcast_mut<E: Element>(&mut self) -> Option<&mut E> {
-        (self.inner.as_mut() as &mut dyn Any).downcast_mut()
+        (&mut *self.inner as &mut dyn Any).downcast_mut()
     }
 
     pub fn new<E: Element>(element: E) -> Self {
         let is_view = TypeId::of::<E>() == TypeId::of::<crate::elements::ViewElement>();
-        let mut inner: Box<dyn Element> = Box::new(element);
+        let mut inner = ElementBox::new(element);
         // Read from the box: reading the element before boxing copies it.
         let keyed = is_view || inner.id().is_some_and(|id| !id.is_ephemeral());
         debug_assert_eq!(
@@ -209,7 +214,7 @@ impl AnyElement {
         }
         let parent = std::mem::replace(&mut cx.identity_parent, id);
         let next_child_index = std::mem::replace(&mut cx.next_child_index, 0);
-        let start = cx.retained.as_ref().map(|pass| pass.cursor);
+        let start = cx.retained.as_ref().map(|pass| pass.cursor());
         let node = self.inner.layout(cx);
         cx.identity_parent = parent;
         cx.next_child_index = next_child_index;
@@ -220,8 +225,10 @@ impl AnyElement {
                 (capabilities.pure && children.iter().all(|child| child.layout_record.is_some()))
                     .then(|| LayoutRecord {
                         epoch: pass.kept.epoch,
+                        id,
+                        last: node,
                         start: start as u32,
-                        end: pass.cursor as u32,
+                        end: pass.cursor() as u32,
                         text_style: Rc::clone(&cx.text_style),
                         pointer_inert: capabilities.pointer_inert
                             && children.iter().all(|child| {
@@ -241,29 +248,32 @@ impl AnyElement {
     /// retained pass, handed back without visiting the subtree. Its nodes must
     /// be the ones this pass reaches next, so the pass keeps them.
     fn keep_layout(&mut self, cx: &mut LayoutContext) -> Option<NodeId> {
-        let record = self.layout_record.as_ref()?;
+        let record = self.layout_record.as_mut()?;
         let pass = cx.retained.as_mut()?;
         let (start, end) = (record.start as usize, record.end as usize);
-        if pass.kept.epoch != record.epoch
-            || pass.cursor != start
-            || end > pass.kept.nodes.len()
-            || start == end
-            || !(Rc::ptr_eq(&cx.text_style, &record.text_style)
-                || *cx.text_style == *record.text_style)
-        {
+        let kept_start = pass.cursor();
+        let node = (pass.kept.epoch == record.epoch
+            && Some(record.id) == self.stable_id
+            && (Rc::ptr_eq(&cx.text_style, &record.text_style)
+                || *cx.text_style == *record.text_style))
+            .then(|| pass.keep_range(start, end, record.last))
+            .flatten();
+        let Some(node) = node else {
             self.layout_record = None;
             return None;
-        }
-        pass.cursor = end;
-        let nodes = &pass.kept.nodes[start..end];
+        };
+        // The subtree's nodes now sit where this pass put them. Its descendants'
+        // records keep the old places, which only holds while it does not move.
+        record.start = kept_start as u32;
+        record.end = pass.cursor() as u32;
         if !cx.previous_measured_text.is_empty() {
-            for node in nodes {
+            for (_, node) in &pass.kept.nodes[kept_start..] {
                 if let Some(text) = cx.previous_measured_text.remove(node) {
                     cx.measured_text.insert(*node, text);
                 }
             }
         }
-        nodes.last().copied()
+        Some(node)
     }
 
     fn kind(&self) -> TypeId {
@@ -358,6 +368,25 @@ impl AnyElement {
                 self.paint_record.set(Some((cx.scene.frame(), index)));
                 return;
             }
+        }
+        if let Some(reach) = cx.unseen_reach(&*self.inner) {
+            // Left out as a replay leaves out what is not seen, so the next
+            // frame can pass it by the same way.
+            if self.layout_record.is_some() {
+                let start = cx.scene.len() as u32;
+                let index = cx.scene.record(PaintRecord {
+                    painted: false,
+                    replayed: true,
+                    start,
+                    end: start,
+                    origin,
+                    unrounded_origin: unrounded.origin,
+                    unrounded_size: unrounded.size,
+                    reach,
+                });
+                self.paint_record.set(Some((cx.scene.frame(), index)));
+            }
+            return;
         }
         let start = cx.scene.len();
         let regions = cx.scene.region_count();

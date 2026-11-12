@@ -11,6 +11,7 @@ mod instances;
 mod order;
 mod path;
 mod retained;
+mod simple;
 
 pub(crate) use frame::{
     Draw, KIND_COLOR_GLYPH, KIND_GLYPH, KIND_PATH, KIND_PATH_SPRITE, KIND_QUAD, KIND_SHADOW,
@@ -117,6 +118,9 @@ pub(crate) struct FrameData<T> {
     /// the whole frame, or the damage of a retained one.
     pub scissors: Vec<ScissorRect>,
     pub clip_edges: Vec<[f32; 4]>,
+    /// Per clip, the flipped device pixel bounds a sprite lies within when none
+    /// of its pixels needs the clip test: see `simple::clip_bounds`.
+    pub(super) clip_bounds: Vec<Option<[f32; 4]>>,
     /// The device pixels a retained frame draws again; every clip is cut to it.
     pub damage: Option<ScissorRect>,
 }
@@ -134,6 +138,7 @@ impl<T> Default for FrameData<T> {
             path: PathGeometry::default(),
             scissors: Vec::new(),
             clip_edges: Vec::new(),
+            clip_bounds: Vec::new(),
             damage: None,
         }
     }

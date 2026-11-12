@@ -88,6 +88,8 @@ pub struct MetalRenderer {
     device: Device,
     command_queue: CommandQueue,
     sprite_pipeline: RenderPipelineState,
+    /// Glyphs and aligned plain quads inside their clips: see `simple_fragment`.
+    simple_pipeline: RenderPipelineState,
     image_pipeline: RenderPipelineState,
     retained_pipelines: RetainedPipelines,
     sampler: SamplerState,
@@ -114,20 +116,26 @@ pub struct MetalRenderer {
     scheduled_wait: Option<std::time::Duration>,
 }
 
-/// A pipeline drawing into the target format with source-over blending, and
-/// how its shader was loaded for the `RUI_PROFILE` line.
-fn blended_pipeline(
+/// The shader library `name` from `source`, defining every function in `functions`.
+fn load_library(
     device: &Device,
     name: &str,
     source: &str,
+    functions: &[&str],
+) -> Result<ShaderLibrary, RendererError> {
+    ShaderLibrary::load(device, name, &with_color(source), functions).map_err(|err| {
+        RendererError::render_failed(format!("failed to compile {name} shader: {err}"))
+    })
+}
+
+/// A pipeline drawing into the target format with source-over blending, from
+/// `library`, and its descriptor for the shader cache.
+fn pipeline_from(
+    device: &Device,
+    library: &ShaderLibrary,
     vertex: &str,
     fragment: &str,
-) -> Result<(RenderPipelineState, String), RendererError> {
-    let library = ShaderLibrary::load(device, name, &with_color(source), &[vertex, fragment])
-        .map_err(|err| {
-            RendererError::render_failed(format!("failed to compile {vertex} shader: {err}"))
-        })?;
-    let started = std::time::Instant::now();
+) -> Result<(RenderPipelineState, RenderPipelineDescriptor), RendererError> {
     let function = |name: &str| {
         library
             .function(name)
@@ -148,11 +156,55 @@ fn blended_pipeline(
     color.set_source_alpha_blend_factor(MTLBlendFactor::One);
     color.set_destination_alpha_blend_factor(MTLBlendFactor::OneMinusSourceAlpha);
     let pipeline = library.pipeline(device, &desc).map_err(|err| {
-        RendererError::render_failed(format!("failed to create {vertex} pipeline: {err}"))
+        RendererError::render_failed(format!("failed to create {fragment} pipeline: {err}"))
     })?;
-    let pipelines = started.elapsed();
-    library.store(device, &[&desc]);
-    Ok((pipeline, library.report(pipelines)))
+    Ok((pipeline, desc))
+}
+
+/// The blended pipelines `(vertex, fragment)` of the shader library `name`,
+/// and how it was loaded for the `RUI_PROFILE` line.
+fn blended_pipelines<const N: usize>(
+    device: &Device,
+    name: &str,
+    source: &str,
+    pipelines: [(&str, &str); N],
+) -> Result<([RenderPipelineState; N], String), RendererError> {
+    let mut functions: Vec<&str> = Vec::with_capacity(N * 2);
+    for (vertex, fragment) in pipelines {
+        for function in [vertex, fragment] {
+            if !functions.contains(&function) {
+                functions.push(function);
+            }
+        }
+    }
+    let library = load_library(device, name, source, &functions)?;
+    let started = std::time::Instant::now();
+    let mut states = Vec::with_capacity(N);
+    let mut descs = Vec::with_capacity(N);
+    for (vertex, fragment) in pipelines {
+        let (state, desc) = pipeline_from(device, &library, vertex, fragment)?;
+        states.push(state);
+        descs.push(desc);
+    }
+    let elapsed = started.elapsed();
+    let descs: Vec<&RenderPipelineDescriptorRef> = descs.iter().map(|desc| &**desc).collect();
+    library.store(device, &descs);
+    let states = states
+        .try_into()
+        .unwrap_or_else(|_| unreachable!("one pipeline per entry"));
+    Ok((states, library.report(elapsed)))
+}
+
+/// The GPU to draw with. `MTLCreateSystemDefaultDevice` picks the GPU of the
+/// main display, which took 35-60 ms in a fresh process, against 13-30 ms to
+/// list the devices. With one GPU, as on Apple silicon, there is no choice to make.
+fn default_device() -> Option<Device> {
+    let mut devices = Device::all();
+    if devices.len() == 1 {
+        devices.pop()
+    } else {
+        Device::system_default()
+    }
 }
 
 impl MetalRenderer {
@@ -178,7 +230,7 @@ impl MetalRenderer {
 
     pub fn with_resource_limits(limits: RendererResourceLimits) -> Result<Self, RendererError> {
         let started = std::time::Instant::now();
-        let device = Device::system_default()
+        let device = default_device()
             .ok_or_else(|| RendererError::backend_unavailable("Metal device is unavailable"))?;
         let command_queue = device.new_command_queue();
         let device_time = started.elapsed();
@@ -188,20 +240,21 @@ impl MetalRenderer {
         let (sprite, image, retained) = std::thread::scope(|scope| {
             let retained = scope.spawn(|| RetainedPipelines::new(&device));
             let sprite = scope.spawn(|| {
-                blended_pipeline(
+                blended_pipelines(
                     &device,
                     "sprite",
                     super::shaders::SPRITE_SHADER,
-                    "sprite_vertex",
-                    "sprite_fragment",
+                    [
+                        ("sprite_vertex", "sprite_fragment"),
+                        ("sprite_vertex", "simple_fragment"),
+                    ],
                 )
             });
-            let image = blended_pipeline(
+            let image = blended_pipelines(
                 &device,
                 "image",
                 super::shaders::IMAGE_SHADER,
-                "image_vertex",
-                "image_fragment",
+                [("image_vertex", "image_fragment")],
             );
             let sprite = sprite.join().unwrap_or_else(|_| {
                 Err(RendererError::render_failed(
@@ -215,8 +268,11 @@ impl MetalRenderer {
             });
             (sprite, image, retained)
         });
-        let ((sprite_pipeline, sprite), (image_pipeline, image), (retained_pipelines, retained)) =
-            (sprite?, image?, retained?);
+        let (
+            ([sprite_pipeline, simple_pipeline], sprite),
+            ([image_pipeline], image),
+            (retained_pipelines, retained),
+        ) = (sprite?, image?, retained?);
         let shaders_time = started.elapsed() - device_time;
 
         // Sampler for images/text
@@ -241,6 +297,7 @@ impl MetalRenderer {
             device,
             command_queue,
             sprite_pipeline,
+            simple_pipeline,
             image_pipeline,
             retained_pipelines,
             sampler,

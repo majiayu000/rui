@@ -64,6 +64,9 @@ float3 oklab_to_linear(float3 lab) {
 /// function), or, once rasterized into the atlas, sprites whose coverage is
 /// used as is. Color glyphs, such as emoji, sample an sRGB RGBA atlas page and
 /// keep their own colors.
+///
+/// The simple pipeline shares the vertex function and draws glyphs and aligned
+/// plain quads that lie inside their clips with `simple_fragment`.
 pub const SPRITE_SHADER: &str = r#"
 #include <metal_stdlib>
 using namespace metal;
@@ -129,7 +132,7 @@ struct Uniforms {
 
 // Fields are shared between kinds where their meaning matches. The fragment
 // reads everything else from the instance at `index`: every vertex output is
-// written to memory for each of an instance's six vertices, which dominates
+// written to memory for each of an instance's four vertices, which dominates
 // small sprites such as glyphs.
 struct VertexOut {
     float4 position [[position]];
@@ -163,7 +166,7 @@ float2 corner(thread VertexOut& out, float2 origin, float2 size, float2 unit_pos
 }
 
 void quad_vertex(thread VertexOut& out, QuadInstance instance, float2 unit_pos,
-                 float4 clip, float2 viewport_size, float2 scale) {
+                 float4 clip, float2 viewport_size) {
     float2 origin = instance.bounds.xy;
     float2 size = instance.bounds.zw;
     float2 pixel_pos = corner(out, origin, size, unit_pos, clip);
@@ -171,11 +174,13 @@ void quad_vertex(thread VertexOut& out, QuadInstance instance, float2 unit_pos,
     out.position = to_clip_space(pixel_pos, viewport_size);
     out.uv = unit_pos;
     out.color = linear_color(instance.background);
+    // Tells quads from glyphs in `simple_fragment`.
+    out.scalar = -1.0;
     if (all(instance.corner_radii == 0.0) && all(instance.border_widths == 0.0) &&
         instance.gradient_params.x < 0.5) {
         out.kind |= PLAIN_QUAD;
-        float4 edges = instance.bounds * scale.xyxy;
-        if (all(abs(edges - rint(edges)) < 1e-3)) {
+        // The planner found its edges on device pixels.
+        if (instance.gradient_params.z > 0.5) {
             out.kind |= ALIGNED_QUAD;
         }
     }
@@ -225,16 +230,14 @@ vertex VertexOut sprite_vertex(
     constant float4* clips [[buffer(5)]],
     constant PathInstance* paths [[buffer(6)]]
 ) {
-    // Unit quad vertices (two triangles)
-    float2 positions[6] = {
-        float2(0, 0), float2(1, 0), float2(0, 1),
-        float2(1, 0), float2(1, 1), float2(0, 1)
-    };
+    // Unit quad corners as a triangle strip: four vertices rather than six,
+    // which dominate the cost of drawing small sprites such as glyphs. The two
+    // triangles are the ones a list of six would draw.
+    float2 unit_pos = float2(vertex_id & 1, vertex_id >> 1);
 
     SpriteRef sprite = refs[instance_id];
     uint kind = sprite.index >> 29;
     uint index = sprite.index & 0x1fffffff;
-    float2 unit_pos = positions[vertex_id];
 
     VertexOut out = {};
     out.kind = kind;
@@ -243,8 +246,7 @@ vertex VertexOut sprite_vertex(
     float2 viewport_size = uniforms.viewport_size;
     float4 clip = clips[sprite.clip] * (viewport_size / uniforms.drawable_size).xyxy;
     if (kind == KIND_QUAD) {
-        quad_vertex(out, quads[index], unit_pos, clip, viewport_size,
-                    uniforms.drawable_size / viewport_size);
+        quad_vertex(out, quads[index], unit_pos, clip, viewport_size);
     } else if (kind == KIND_SHADOW) {
         shadow_vertex(out, shadows[index], unit_pos, clip, viewport_size);
     } else if (kind == KIND_PATH) {
@@ -519,6 +521,19 @@ fragment float4 sprite_fragment(VertexOut in [[stage_in]],
         }
     }
     return color;
+}
+
+// The simple pipeline's fragment function, for glyphs and aligned plain quads
+// the planner found inside their clips. It reads no flat output: on Apple GPUs
+// each one a fragment function reads costs every sprite it draws, which here
+// is a fifth of a text frame.
+fragment float4 simple_fragment(VertexOut in [[stage_in]],
+                                texture2d<float> atlas [[texture(0)]],
+                                sampler samp [[sampler(0)]]) {
+    if (in.scalar < -0.5) {
+        return in.color;
+    }
+    return glyph_fragment(in, atlas, samp);
 }
 "#;
 

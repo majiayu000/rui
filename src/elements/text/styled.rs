@@ -1,10 +1,10 @@
 //! Text with runs of different styles in one paragraph.
 
 use super::{FontWeight, TextAlign, TextStyle, TextStyleRefinement};
-use crate::core::ElementId;
 use crate::core::color::Color;
 use crate::core::geometry::Bounds;
 use crate::core::style::Style;
+use crate::core::{ElementId, SharedStr};
 use crate::elements::element::{
     Capabilities, Element, LayoutContext, PaintContext, RichLines, RichWrapRequest, style_to_taffy,
 };
@@ -12,8 +12,10 @@ use crate::renderer::Primitive;
 use crate::renderer::text::{RichPieceText, RichSpan};
 use std::any::Any;
 use std::ops::Range;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use taffy::prelude::*;
+
+static ELLIPSIS: LazyLock<Arc<str>> = LazyLock::new(|| Arc::from("\u{2026}"));
 
 /// A run of a [`StyledText`]: its text and the style properties it sets over
 /// what the paragraph inherits.
@@ -93,7 +95,7 @@ impl TextSpan {
     }
 
     pub fn font(mut self, family: impl Into<String>) -> Self {
-        self.refinement.font_family = Some(family.into());
+        self.refinement.font_family = Some(Arc::from(family.into()));
         self
     }
 
@@ -298,7 +300,6 @@ impl Element for StyledText {
         self.inherited = cx.text_style().clone();
         let inherited = &self.inherited;
         // Copied once for every span that does not set its own.
-        let inherited_family: Option<Arc<str>> = inherited.font_family.as_deref().map(Arc::from);
         let request = RichWrapRequest {
             content: Arc::clone(&self.content),
             spans: self
@@ -313,10 +314,10 @@ impl Element for StyledText {
                             .font_weight
                             .unwrap_or(inherited.font_weight)
                             .to_value(),
-                        font_family: match &refinement.font_family {
-                            Some(family) => Some(Arc::from(family.as_str())),
-                            None => inherited_family.clone(),
-                        },
+                        font_family: refinement
+                            .font_family
+                            .clone()
+                            .or_else(|| inherited.font_family.clone()),
                         line_height: refinement.line_height.unwrap_or(inherited.line_height),
                     }
                 })
@@ -352,8 +353,8 @@ impl Element for StyledText {
                 let refinement = &self.spans[piece.span].refinement;
                 let inherited = &self.inherited;
                 let content = match &piece.text {
-                    RichPieceText::Content(bytes) => self.content[bytes.clone()].to_string(),
-                    RichPieceText::Ellipsis => "\u{2026}".to_string(),
+                    RichPieceText::Content(bytes) => SharedStr::slice(&self.content, bytes.clone()),
+                    RichPieceText::Ellipsis => SharedStr::from(ELLIPSIS.clone()),
                 };
                 cx.paint(Primitive::Text {
                     bounds: Bounds::from_xywh(

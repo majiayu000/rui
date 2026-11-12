@@ -219,10 +219,12 @@ impl WgpuRenderer {
             let mut sprites_bound = false;
             for &draw in &frame.plan.draws {
                 match draw {
+                    // One pipeline draws every sprite here, simple or not.
                     Draw::Sprites {
                         pages,
                         start,
                         count: instances,
+                        ..
                     } => {
                         if !sprites_bound {
                             pass.set_pipeline(&self.sprite_pipeline);

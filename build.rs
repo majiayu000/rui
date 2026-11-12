@@ -66,7 +66,10 @@ fn embed(out: &Path, compile: Compile) -> Result<(), String> {
         (
             "sprite",
             format!("{color}{}", raw_string(&shaders, "SPRITE_SHADER")?),
-            &[("sprite_vertex", "sprite_fragment", true)],
+            &[
+                ("sprite_vertex", "sprite_fragment", true),
+                ("sprite_vertex", "simple_fragment", true),
+            ],
         ),
         (
             "image",

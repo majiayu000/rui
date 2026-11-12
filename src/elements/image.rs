@@ -394,7 +394,7 @@ impl Element for Image {
                 let text_y = bounds.y() + bounds.height() / 2.0 - 7.0;
                 cx.paint(Primitive::Text {
                     bounds: Bounds::from_xywh(text_x, text_y, bounds.width() - 16.0, 14.0),
-                    content: message.to_string(),
+                    content: message.to_string().into(),
                     color: Color::hex(0xb91c1c).to_rgba(),
                     font_size: 12.0,
                     font_weight: 400,

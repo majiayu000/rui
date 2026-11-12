@@ -535,7 +535,7 @@ impl Element for TextArea {
                     text_width,
                     14.0,
                 ),
-                content: line.to_string(),
+                content: line.to_string().into(),
                 color: text_color.to_rgba(),
                 font_size: 14.0,
                 font_weight: 400,

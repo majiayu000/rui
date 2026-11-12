@@ -325,7 +325,7 @@ impl Element for SegmentedControl {
             }
             cx.paint(Primitive::Text {
                 bounds: segment_bounds,
-                content: option.label.clone(),
+                content: option.label.clone().into(),
                 color: label_color.to_rgba(),
                 font_size: self.theme.text_size(self.size),
                 font_weight: if selected {

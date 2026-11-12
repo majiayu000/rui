@@ -60,6 +60,19 @@ fn cluster_script(buffer: &mut UnicodeBuffer, cluster: &ClusterDraft) -> RunScri
     if cluster.script == TextScript::Emoji {
         return RunScript::Emoji;
     }
+    // ASCII letters are Latin and every other ASCII character is shared.
+    if let &[byte] = cluster.text.as_bytes()
+        && byte.is_ascii()
+    {
+        return if byte.is_ascii_alphabetic() {
+            RunScript::Script {
+                script: script::LATIN,
+                rtl: false,
+            }
+        } else {
+            RunScript::Common
+        };
+    }
     buffer.clear();
     buffer.push_str(cluster.text);
     buffer.guess_segment_properties();
