@@ -10,6 +10,9 @@ mod frame;
 mod instances;
 mod order;
 mod path;
+mod path_cache;
+mod path_tiles;
+mod picture;
 mod retained;
 mod simple;
 mod sprites;
@@ -30,9 +33,13 @@ use crate::renderer::{
     RendererResourceKind, RendererResourceLimits, RendererResourceStats,
 };
 use frame::FramePlan;
-use path::{PathGeometry, PathTiles};
+use path::PathGeometry;
+use path_cache::PathCache;
+use path_tiles::PathTiles;
+use picture::PictureCache;
 use sprites::PathSprites;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// The clear color, linear: 0.1 in sRGB.
 pub(crate) fn clear_linear() -> f64 {
@@ -108,6 +115,11 @@ pub(crate) struct ImageDraw<T> {
 pub(crate) struct FrameData<T> {
     pub plan: FramePlan,
     pub quads: Vec<GpuQuad>,
+    /// Quads of kept pictures, shared rather than copied, which go after
+    /// `quads` in the instance buffer. Until the frame is planned, items index
+    /// them from the first with [`KEPT_QUAD`] set.
+    pub kept_quads: Vec<Arc<[GpuQuad]>>,
+    kept_quad_count: u32,
     pub shadows: Vec<GpuShadow>,
     pub glyphs: Vec<GpuGlyph>,
     pub images: Vec<ImageDraw<T>>,
@@ -133,6 +145,8 @@ impl<T> Default for FrameData<T> {
         Self {
             plan: FramePlan::default(),
             quads: Vec::new(),
+            kept_quads: Vec::new(),
+            kept_quad_count: 0,
             shadows: Vec::new(),
             glyphs: Vec::new(),
             images: Vec::new(),
@@ -147,6 +161,30 @@ impl<T> Default for FrameData<T> {
     }
 }
 
+/// Set in the start of an item of kept quads until the frame is planned.
+pub(super) const KEPT_QUAD: u32 = 1 << 28;
+
+impl<T> FrameData<T> {
+    /// Every quad of the frame in buffer order: its own, then the kept ones.
+    pub(crate) fn quad_parts(&self) -> impl Iterator<Item = &[GpuQuad]> {
+        std::iter::once(self.quads.as_slice()).chain(self.kept_quads.iter().map(|quads| &quads[..]))
+    }
+
+    /// How many quads [`Self::quad_parts`] holds.
+    pub(crate) fn quad_count(&self) -> usize {
+        self.quads.len() + self.kept_quad_count as usize
+    }
+
+    /// Shares `quads` into the frame; returns the index of the first, with
+    /// [`KEPT_QUAD`] set.
+    pub(super) fn keep_quads(&mut self, quads: &Arc<[GpuQuad]>) -> u32 {
+        let start = self.kept_quad_count | KEPT_QUAD;
+        self.kept_quad_count += quads.len() as u32;
+        self.kept_quads.push(Arc::clone(quads));
+        start
+    }
+}
+
 /// The CPU side of a renderer: glyph, image and path caches, and the image
 /// textures a backend uploaded for them.
 pub(crate) struct FramePlanner<T> {
@@ -154,6 +192,8 @@ pub(crate) struct FramePlanner<T> {
     pub image_cache: RendererImageCache,
     path_sprites: PathSprites,
     path_tiles: PathTiles,
+    path_cache: PathCache,
+    picture_cache: PictureCache,
     pub textures: ImageTextures<T>,
 }
 
@@ -170,6 +210,8 @@ impl<T: Clone> FramePlanner<T> {
             ),
             path_sprites: PathSprites::default(),
             path_tiles: PathTiles::default(),
+            path_cache: PathCache::default(),
+            picture_cache: PictureCache::default(),
             textures: ImageTextures::new(limits),
         }
     }
@@ -196,6 +238,8 @@ impl<T: Clone> FramePlanner<T> {
         );
         self.path_sprites.begin_frame(self.text_cache.epoch());
         self.path_tiles.begin_frame();
+        self.path_cache.begin_frame();
+        self.picture_cache.begin_frame();
         Ok(())
     }
 

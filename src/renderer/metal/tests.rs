@@ -131,6 +131,7 @@ pub(crate) fn random_scene(seed: u64) -> Scene {
                     .collect();
                 Primitive::Path {
                     vertices,
+                    offset: Default::default(),
                     color: rng.color(),
                     stroke_width: (rng.below(2) == 0).then(|| rng.range(1.0, 5.0)),
                 }
@@ -348,6 +349,7 @@ fn paths_match_a_reference_raster_drawn_as_tiles_and_from_the_atlas() {
             });
             scene.insert(Primitive::Path {
                 vertices: points.iter().map(|&(x, y)| PathVertex::new(x, y)).collect(),
+                offset: Default::default(),
                 color: Rgba::new(1.0, 1.0, 1.0, 1.0),
                 stroke_width,
             });

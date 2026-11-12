@@ -32,6 +32,7 @@ fn primitive_names(scene: &Scene) -> Vec<&'static str> {
             Primitive::Text { .. } => "text",
             Primitive::Image { .. } => "image",
             Primitive::Path { .. } => "path",
+            Primitive::Picture { .. } => "picture",
         })
         .collect()
 }

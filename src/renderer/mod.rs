@@ -1,6 +1,7 @@
 //! Rendering subsystem
 
 #[cfg(any(all(target_os = "macos", feature = "metal"), feature = "wgpu"))]
+mod picture;
 mod plan;
 mod primitives;
 mod resources;
@@ -25,6 +26,7 @@ pub mod metal;
 #[cfg(feature = "wgpu")]
 pub mod wgpu;
 
+pub use picture::Picture;
 pub use primitives::{PathVertex, Primitive, PrimitiveKind, Reach};
 pub(crate) use primitives::{quad_reach, text_reach};
 pub use resources::{

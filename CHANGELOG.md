@@ -6,6 +6,19 @@ All notable project changes should be recorded here.
 
 ### Rendering
 
+- **Breaking:** `Primitive::Path` takes `vertices: Arc<[PathVertex]>` and an
+  `offset: Point` added to each vertex. Keep the `Arc` and paint clones of it
+  while the shape stays the same: the renderer keeps a path's edges and its atlas
+  sprite or tiles by that storage, and moving it only changes the offset.
+- `Primitive::Picture` draws a `Picture`, primitives recorded once, at an
+  offset. The renderer keeps what it planned for a picture and copies it into
+  later frames while the picture is drawn at the same offset, scale and clip.
+- `canvas(..).cache_key(key)` records the closure into a `Picture` and paints it
+  again without the closure while the key and the canvas bounds stay the same;
+  the canvas is then pure, so its paint is replayed. `svg` icons are pictures.
+- Path tiles cut by the visible area's left side no longer lose the inside of
+  the path left of the first edge in the area.
+
 - A `wgpu` cargo feature adds `renderer::wgpu::WgpuRenderer`, which draws the
   same planned frames as Metal with WGSL ports of its shaders over Vulkan, DX12
   or Metal, offscreen or into a caller's `Bgra8UnormSrgb` texture (ADR 0002).

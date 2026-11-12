@@ -82,7 +82,9 @@ fn representative_scene() -> Scene {
             PathVertex::new(12.0, 58.0),
             PathVertex::new(28.0, 58.0),
             PathVertex::new(20.0, 48.0),
-        ],
+        ]
+        .into(),
+        offset: Default::default(),
         color: Rgba::new(1.0, 0.80, 0.10, 1.0),
         stroke_width: None,
     });
@@ -91,7 +93,9 @@ fn representative_scene() -> Scene {
             PathVertex::new(42.0, 58.0),
             PathVertex::new(58.0, 48.0),
             PathVertex::new(72.0, 58.0),
-        ],
+        ]
+        .into(),
+        offset: Default::default(),
         color: Rgba::new(0.10, 0.95, 1.0, 1.0),
         stroke_width: Some(3.0),
     });

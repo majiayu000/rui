@@ -81,6 +81,14 @@ fn example_smoke_assets_shows_every_fit_the_decoded_photo_and_icons() {
                     ..
                 } => decoded += 1,
                 Primitive::Path { .. } => paths += 1,
+                // An svg icon is a picture of its paths.
+                Primitive::Picture { picture, .. } => {
+                    paths += picture
+                        .primitives()
+                        .iter()
+                        .filter(|primitive| matches!(primitive, Primitive::Path { .. }))
+                        .count();
+                }
                 Primitive::Text { content, .. } => texts.push(content.clone()),
                 _ => {}
             }

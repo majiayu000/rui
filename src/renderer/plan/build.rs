@@ -2,14 +2,14 @@
 
 use super::frame::{ItemKind, Pages};
 use super::order::Rect;
-use super::path::PathGeometry;
+use super::path_cache::PathPrimitive;
 use super::retained::{damage_scissor, intersect_scissors};
-use super::sprites::SpriteLookup;
 use super::*;
 use crate::core::geometry::Bounds;
 use crate::elements::fit_bounds;
 use crate::renderer::Scene;
 use crate::renderer::primitives::Primitive;
+use crate::renderer::quad_reach;
 use crate::renderer::text::TextRequest;
 use crate::{ImageFit, ImageSource};
 
@@ -17,6 +17,8 @@ impl<T> FrameData<T> {
     pub(super) fn clear(&mut self) {
         self.plan.clear();
         self.quads.clear();
+        self.kept_quads.clear();
+        self.kept_quad_count = 0;
         self.shadows.clear();
         self.glyphs.clear();
         self.images.clear();
@@ -163,6 +165,18 @@ fn scissor_rect(clip: Option<Bounds>, scale_factor: f32, drawable_size: Size) ->
     }
 }
 
+/// Where a walk through a scene's primitives is: what is seen, and the clips.
+pub(super) struct Walk {
+    pub viewport: Bounds,
+    /// In a retained frame, the damage, which is all that is drawn.
+    pub redrawn: Option<Bounds>,
+    pub scale_factor: f32,
+    pub drawable_size: Size,
+    pub clip_stack: Vec<Bounds>,
+    /// The frame's clip in effect.
+    pub clip: u32,
+}
+
 impl<T: Clone> FramePlanner<T> {
     /// Turns the scene into instance data and a plan of draws. With `damage`,
     /// only what can touch it, cut to it.
@@ -188,186 +202,25 @@ impl<T: Clone> FramePlanner<T> {
                 scissor.height as f32 / scale_factor,
             )
         });
-        let viewport = Bounds::from_xywh(0.0, 0.0, viewport_size.width, viewport_size.height);
-        let mut clip_stack: Vec<Bounds> = Vec::new();
-        let mut clip = frame.push_clip(
+        let mut walk = Walk {
+            viewport: Bounds::from_xywh(0.0, 0.0, viewport_size.width, viewport_size.height),
+            redrawn,
+            scale_factor,
+            drawable_size,
+            clip_stack: Vec::new(),
+            clip: 0,
+        };
+        walk.clip = frame.push_clip(
             scissor_rect(None, scale_factor, drawable_size),
             scale_factor,
         );
-
         for primitive in scene.primitives() {
-            // Nothing a primitive outside the current clip draws can be seen,
-            // nor, in a retained frame, anything outside the damage.
-            let visible = clip_stack.last().copied().unwrap_or(viewport);
-            let visible = match redrawn {
-                Some(redrawn) => visible.intersection(&redrawn),
-                None => Some(visible),
-            };
-            let clips = matches!(primitive, Primitive::PushClip { .. } | Primitive::PopClip);
-            if !clips && !visible.is_some_and(|visible| primitive.may_touch(&visible)) {
-                continue;
-            }
-            match primitive {
-                Primitive::Shadow {
-                    bounds,
-                    corner_radii,
-                    blur_radius,
-                    color,
-                } => {
-                    let shadow =
-                        GpuShadow::from_primitive(*bounds, *corner_radii, *blur_radius, *color);
-                    // As far as the shader's blur margin reaches, and half a
-                    // pixel more for rounding.
-                    let margin = 3.0 * (blur_radius.max(0.0) * 0.5) + 1.5;
-                    let kind = ItemKind::Sprites {
-                        kind: KIND_SHADOW,
-                        start: frame.shadows.len() as u32,
-                        count: 1,
-                        pages: Pages::default(),
-                        simple: false,
-                    };
-                    frame.shadows.push(shadow);
-                    let rect = outset(bounds_rect(shadow.bounds), margin);
-                    frame.push_item(kind, clip, rect, scale_factor);
-                }
-                Primitive::Quad {
-                    bounds,
-                    background,
-                    border_color,
-                    border_widths,
-                    corner_radii,
-                } => {
-                    let quad = GpuQuad::solid(
-                        *bounds,
-                        *background,
-                        *border_color,
-                        *border_widths,
-                        *corner_radii,
-                    );
-                    frame.push_quad(quad, clip, scale_factor);
-                }
-                Primitive::LinearGradient {
-                    bounds,
-                    start,
-                    end,
-                    angle,
-                    border_color,
-                    border_widths,
-                    corner_radii,
-                } => {
-                    let quad = GpuQuad::linear_gradient(
-                        *bounds,
-                        *start,
-                        *end,
-                        angle.to_radians(),
-                        *border_color,
-                        *border_widths,
-                        *corner_radii,
-                    );
-                    frame.push_quad(quad, clip, scale_factor);
-                }
-                Primitive::RadialGradient {
-                    bounds,
-                    inner,
-                    outer,
-                    border_color,
-                    border_widths,
-                    corner_radii,
-                } => {
-                    let quad = GpuQuad::radial_gradient(
-                        *bounds,
-                        *inner,
-                        *outer,
-                        *border_color,
-                        *border_widths,
-                        *corner_radii,
-                    );
-                    frame.push_quad(quad, clip, scale_factor);
-                }
-                Primitive::Image {
-                    bounds,
-                    source,
-                    fit,
-                    corner_radii,
-                    opacity,
-                } => {
-                    self.build_image(
-                        frame,
-                        bounds,
-                        source,
-                        *fit,
-                        *corner_radii,
-                        *opacity,
-                        clip,
-                        clip_stack.last().copied(),
-                        scale_factor,
-                        drawable_size,
-                        upload,
-                    )?;
-                }
-                Primitive::Text {
-                    bounds,
-                    content,
-                    color,
-                    font_size,
-                    font_weight,
-                    font_family,
-                    line_height,
-                    align,
-                    direction,
-                } => {
-                    self.build_text(
-                        frame,
-                        bounds,
-                        *color,
-                        TextRequest::new(
-                            content,
-                            *font_size,
-                            *font_weight,
-                            font_family.as_deref(),
-                            *line_height,
-                        )
-                        .with_direction(*direction),
-                        *align,
-                        clip,
-                        scale_factor,
-                    )?;
-                }
-                Primitive::Path {
-                    vertices,
-                    color,
-                    stroke_width,
-                } => {
-                    let mut path = std::mem::take(&mut frame.path);
-                    let built = path
-                        .set(vertices, *stroke_width, scale_factor)
-                        .and_then(|()| self.build_path(frame, &path, *color, clip, scale_factor));
-                    frame.path = path;
-                    built?;
-                }
-                Primitive::PushClip { bounds, .. } => {
-                    let new_clip = if let Some(prev) = clip_stack.last() {
-                        prev.intersection(bounds)
-                            .unwrap_or(Bounds::from_xywh(0.0, 0.0, 0.0, 0.0))
-                    } else {
-                        *bounds
-                    };
-                    clip_stack.push(new_clip);
-                    clip = frame.push_clip(
-                        scissor_rect(clip_stack.last().copied(), scale_factor, drawable_size),
-                        scale_factor,
-                    );
-                }
-                Primitive::PopClip => {
-                    clip_stack.pop();
-                    clip = frame.push_clip(
-                        scissor_rect(clip_stack.last().copied(), scale_factor, drawable_size),
-                        scale_factor,
-                    );
-                }
-            }
+            self.build_primitive(frame, primitive, &mut walk, upload)?;
         }
 
+        if !frame.kept_quads.is_empty() {
+            frame.plan.place_kept_quads(frame.quads.len() as u32);
+        }
         // Text runs are pushed without their extent, which only ordering needs.
         let FrameData {
             plan,
@@ -392,104 +245,221 @@ impl<T: Clone> FramePlanner<T> {
         Ok(())
     }
 
-    /// Draws `path` from the atlas when it is a small shape drawn before, and as
-    /// analytic tiles otherwise.
-    pub(super) fn build_path(
+    /// [`Self::build_primitive`] out of line, for the primitives of a picture.
+    #[inline(never)]
+    pub(super) fn build_inner_primitive(
         &mut self,
         frame: &mut FrameData<T>,
-        path: &PathGeometry,
-        color: crate::core::color::Rgba,
-        clip: u32,
-        scale_factor: f32,
+        primitive: &Primitive,
+        walk: &mut Walk,
+        upload: &impl TextureUpload<Texture = T>,
     ) -> Result<(), RendererError> {
-        // A font loaded earlier in this frame may have emptied the atlas.
-        self.path_sprites.sync_epoch(self.text_cache.epoch());
-        let (cell, key) = match self.path_sprites.lookup(path) {
-            SpriteLookup::Analytic => (None, 0),
-            SpriteLookup::Placed(slot, generation, cell, key) => {
-                if self.text_cache.use_sprite(slot, generation) {
-                    (Some((Some(slot), cell)), key)
-                } else {
-                    // Its atlas page was emptied: place it again.
-                    (Some((None, cell)), key)
-                }
-            }
-            SpriteLookup::Rasterize(cell, key) => (Some((None, cell)), key),
-        };
-        let placed = match cell {
-            None => None,
-            Some((Some(slot), cell)) => Some((slot, cell)),
-            Some((None, cell)) => {
-                let pixels = path.rasterize(cell.origin, cell.width, cell.height);
-                match self
-                    .text_cache
-                    .place_sprite(cell.width, cell.height, pixels)
-                {
-                    Ok((slot, generation)) => {
-                        self.path_sprites.place(key, slot, generation);
-                        Some((slot, cell))
-                    }
-                    // Without atlas room the path is still drawn, as tiles.
-                    Err(RendererResourceError::ResourcePressure { .. }) => None,
-                    Err(err) => return Err(err.into()),
-                }
-            }
-        };
+        self.build_primitive(frame, primitive, walk, upload)
+    }
 
-        if let Some((slot, cell)) = placed {
-            let (page_width, page_height) = self
-                .text_cache
-                .atlas()
-                .page_extent(slot.page)
-                .ok_or_else(|| {
-                    RendererResourceError::missing(RendererResourceKind::Glyph, slot.page as u32)
-                })?;
-            let rect = slot.rect;
-            let sprite = GpuGlyph {
-                bounds: [
-                    cell.origin[0] / scale_factor,
-                    cell.origin[1] / scale_factor,
-                    cell.width as f32 / scale_factor,
-                    cell.height as f32 / scale_factor,
-                ],
-                uv: [
-                    rect.x as f32 / page_width as f32,
-                    rect.y as f32 / page_height as f32,
-                    rect.width as f32 / page_width as f32,
-                    rect.height as f32 / page_height as f32,
-                ],
-                color: color.to_array(),
-            };
-            let kind = ItemKind::Sprites {
-                kind: KIND_PATH_SPRITE,
-                start: frame.glyphs.len() as u32,
-                count: 1,
-                pages: Pages::coverage(slot.page as u32),
-                simple: false,
-            };
-            frame.glyphs.push(sprite);
-            frame.push_item(kind, clip, bounds_rect(sprite.bounds), scale_factor);
+    /// Plans one primitive of the walk through a scene.
+    // Inlined into the loop over the scene, which every quad goes through.
+    #[inline(always)]
+    fn build_primitive(
+        &mut self,
+        frame: &mut FrameData<T>,
+        primitive: &Primitive,
+        walk: &mut Walk,
+        upload: &impl TextureUpload<Texture = T>,
+    ) -> Result<(), RendererError> {
+        // Nothing a primitive outside the current clip draws can be seen,
+        // nor, in a retained frame, anything outside the damage.
+        let visible = walk.clip_stack.last().copied().unwrap_or(walk.viewport);
+        let visible = match walk.redrawn {
+            Some(redrawn) => visible.intersection(&redrawn),
+            None => Some(visible),
+        };
+        // A path is found among the kept ones before its reach is measured, and
+        // a quad, the most common primitive, is tested where it is built.
+        let culled = !matches!(
+            primitive,
+            Primitive::PushClip { .. }
+                | Primitive::PopClip
+                | Primitive::Path { .. }
+                | Primitive::Quad { .. }
+        );
+        if culled && !visible.is_some_and(|visible| primitive.may_touch(&visible)) {
             return Ok(());
         }
-
-        let start = frame.path_tiles.len() as u32;
-        let visible = frame.clip_edges[clip as usize];
-        if let Some(rect) = self.path_tiles.push(
-            path,
-            color,
-            scale_factor,
-            visible,
-            &mut frame.path_tiles,
-            &mut frame.path_edges,
-        ) {
-            let kind = ItemKind::Sprites {
-                kind: KIND_PATH,
+        match primitive {
+            Primitive::Shadow {
+                bounds,
+                corner_radii,
+                blur_radius,
+                color,
+            } => {
+                let shadow =
+                    GpuShadow::from_primitive(*bounds, *corner_radii, *blur_radius, *color);
+                // As far as the shader's blur margin reaches, and half a
+                // pixel more for rounding.
+                let margin = 3.0 * (blur_radius.max(0.0) * 0.5) + 1.5;
+                let kind = ItemKind::Sprites {
+                    kind: KIND_SHADOW,
+                    start: frame.shadows.len() as u32,
+                    count: 1,
+                    pages: Pages::default(),
+                    simple: false,
+                };
+                frame.shadows.push(shadow);
+                let rect = outset(bounds_rect(shadow.bounds), margin);
+                frame.push_item(kind, walk.clip, rect, walk.scale_factor);
+            }
+            Primitive::Quad {
+                bounds,
+                background,
+                border_color,
+                border_widths,
+                corner_radii,
+            } => {
+                if !visible.is_some_and(|visible| quad_reach(*bounds).intersects(&visible)) {
+                    return Ok(());
+                }
+                let quad = GpuQuad::solid(
+                    *bounds,
+                    *background,
+                    *border_color,
+                    *border_widths,
+                    *corner_radii,
+                );
+                frame.push_quad(quad, walk.clip, walk.scale_factor);
+            }
+            Primitive::LinearGradient {
+                bounds,
                 start,
-                count: frame.path_tiles.len() as u32 - start,
-                pages: Pages::default(),
-                simple: false,
-            };
-            frame.push_item(kind, clip, rect, scale_factor);
+                end,
+                angle,
+                border_color,
+                border_widths,
+                corner_radii,
+            } => {
+                let quad = GpuQuad::linear_gradient(
+                    *bounds,
+                    *start,
+                    *end,
+                    angle.to_radians(),
+                    *border_color,
+                    *border_widths,
+                    *corner_radii,
+                );
+                frame.push_quad(quad, walk.clip, walk.scale_factor);
+            }
+            Primitive::RadialGradient {
+                bounds,
+                inner,
+                outer,
+                border_color,
+                border_widths,
+                corner_radii,
+            } => {
+                let quad = GpuQuad::radial_gradient(
+                    *bounds,
+                    *inner,
+                    *outer,
+                    *border_color,
+                    *border_widths,
+                    *corner_radii,
+                );
+                frame.push_quad(quad, walk.clip, walk.scale_factor);
+            }
+            Primitive::Image {
+                bounds,
+                source,
+                fit,
+                corner_radii,
+                opacity,
+            } => {
+                self.build_image(
+                    frame,
+                    bounds,
+                    source,
+                    *fit,
+                    *corner_radii,
+                    *opacity,
+                    walk.clip,
+                    walk.clip_stack.last().copied(),
+                    walk.scale_factor,
+                    walk.drawable_size,
+                    upload,
+                )?;
+            }
+            Primitive::Text {
+                bounds,
+                content,
+                color,
+                font_size,
+                font_weight,
+                font_family,
+                line_height,
+                align,
+                direction,
+            } => {
+                self.build_text(
+                    frame,
+                    bounds,
+                    *color,
+                    TextRequest::new(
+                        content,
+                        *font_size,
+                        *font_weight,
+                        font_family.as_deref(),
+                        *line_height,
+                    )
+                    .with_direction(*direction),
+                    *align,
+                    walk.clip,
+                    walk.scale_factor,
+                )?;
+            }
+            Primitive::Path {
+                vertices,
+                offset,
+                color,
+                stroke_width,
+            } => {
+                let path = PathPrimitive {
+                    vertices,
+                    offset: *offset,
+                    color: *color,
+                    stroke_width: *stroke_width,
+                };
+                self.build_path_primitive(frame, path, visible, walk.clip, walk.scale_factor)?;
+            }
+            Primitive::Picture { picture, offset } => {
+                self.build_picture(frame, picture, *offset, walk, upload)?;
+            }
+            Primitive::PushClip { bounds, .. } => {
+                let new_clip = if let Some(prev) = walk.clip_stack.last() {
+                    prev.intersection(bounds)
+                        .unwrap_or(Bounds::from_xywh(0.0, 0.0, 0.0, 0.0))
+                } else {
+                    *bounds
+                };
+                walk.clip_stack.push(new_clip);
+                walk.clip = frame.push_clip(
+                    scissor_rect(
+                        walk.clip_stack.last().copied(),
+                        walk.scale_factor,
+                        walk.drawable_size,
+                    ),
+                    walk.scale_factor,
+                );
+            }
+            Primitive::PopClip => {
+                walk.clip_stack.pop();
+                walk.clip = frame.push_clip(
+                    scissor_rect(
+                        walk.clip_stack.last().copied(),
+                        walk.scale_factor,
+                        walk.drawable_size,
+                    ),
+                    walk.scale_factor,
+                );
+            }
         }
         Ok(())
     }
@@ -560,6 +530,8 @@ impl<T: Clone> FramePlanner<T> {
     }
 
     #[allow(clippy::too_many_arguments)]
+    // Inlined into each walk, as before pictures planned their primitives too.
+    #[inline(always)]
     pub(super) fn build_text(
         &mut self,
         frame: &mut FrameData<T>,
