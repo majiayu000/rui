@@ -1,0 +1,20 @@
+[package]
+name = "iced_compare"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Kept out of RUI's build: iced and its renderer are only this harness's.
+[workspace]
+
+[dependencies]
+iced_core = "=0.14.0"
+iced_graphics = "=0.14.0"
+iced_runtime = "=0.14.0"
+iced_wgpu = { version = "=0.14.0", features = ["geometry"] }
+iced_widget = { version = "=0.14.2", features = ["canvas", "lazy", "wgpu"] }
+iced_renderer = { version = "=0.14.0", features = ["wgpu", "geometry"] }
+pollster = "0.4"
+
+[profile.release]
+debug = "line-tables-only"
