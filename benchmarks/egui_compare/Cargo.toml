@@ -10,7 +10,11 @@ publish = false
 [dependencies]
 egui = "=0.37.0"
 egui-wgpu = "=0.37.0"
+# Color emoji (`sbix`) for `text_complex`; without it egui draws no color glyphs.
+epaint = { version = "=0.37.0", features = ["color_fonts"] }
 pollster = "0.4"
+# Saves a frame for `EGUI_COMPARE_PNG`.
+png = "0.18"
 
 [profile.release]
 debug = "line-tables-only"

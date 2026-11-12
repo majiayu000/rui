@@ -17,15 +17,19 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
+mod capture;
+#[path = "../../complex_text.rs"]
+mod complex_text;
 #[path = "../../gpui_compare/gpu_time.rs"]
 mod gpu_time;
 
-const CASES: [&str; 6] = [
+const CASES: [&str; 7] = [
     "startup",
     "list_full",
     "list_virtual_1k",
     "list_virtual_100k",
     "text_paragraphs",
+    "text_complex",
     "quad_grid",
 ];
 const WARMUP: usize = 10;
@@ -37,8 +41,20 @@ const LIST_ROWS: usize = 2_000;
 const ROW_HEIGHT: f32 = 28.0;
 const VISIBLE_ROWS: usize = 32;
 const FONT_SIZE: f32 = 14.0;
+/// A face: name, file and index in the file.
+type Face = (&'static str, &'static str, u32);
 /// RUI's default face, so both sides shape and rasterize the same glyphs.
-const FONT_PATH: &str = "/System/Library/Fonts/Supplemental/Arial.ttf";
+const ARIAL: Face = ("arial", "/System/Library/Fonts/Supplemental/Arial.ttf", 0);
+/// `text_complex`'s fallback chain: the faces RUI's fallback picks for each script
+/// (Arial also has Arabic), in an order where each character's first face with it is
+/// RUI's. egui takes the first face with the character.
+const COMPLEX_FONTS: [Face; 5] = [
+    ARIAL,
+    ("hiragino", "/System/Library/Fonts/Hiragino Sans GB.ttc", 0),
+    ("kohinoor", "/System/Library/Fonts/Kohinoor.ttc", 0),
+    ("thonburi", "/System/Library/Fonts/ThonburiUI.ttc", 0),
+    ("emoji", "/System/Library/Fonts/Apple Color Emoji.ttc", 0),
+];
 const PARAGRAPHS: usize = 200;
 const EDITED_PARAGRAPH: usize = 3;
 const WORDS: [&str; 16] = [
@@ -133,11 +149,7 @@ fn row(ui: &mut egui::Ui, index: usize, selected: bool) {
         egui::Sense::hover(),
     );
     let painter = ui.painter();
-    painter.rect_filled(
-        rect,
-        0.0,
-        hex(if selected { 0x2d3748 } else { 0x1a202c }),
-    );
+    painter.rect_filled(rect, 0.0, hex(if selected { 0x2d3748 } else { 0x1a202c }));
     let font = FontId::proportional(FONT_SIZE);
     painter.text(
         rect.left_center(),
@@ -188,7 +200,7 @@ fn paragraph(index: usize) -> String {
         .join(" ")
 }
 
-fn paragraphs(ui: &mut egui::Ui, revision: usize) {
+fn paragraphs(ui: &mut egui::Ui, revision: usize, paragraph: fn(usize) -> String) {
     egui::ScrollArea::vertical().show(ui, |ui| {
         egui::Frame::NONE.inner_margin(16.0).show(ui, |ui| {
             ui.spacing_mut().item_spacing = Vec2::new(0.0, 8.0);
@@ -230,12 +242,17 @@ struct Harness {
     device: wgpu::Device,
     queue: wgpu::Queue,
     renderer: egui_wgpu::Renderer,
+    texture: wgpu::Texture,
     target: wgpu::TextureView,
     start: Instant,
 }
 
 impl Harness {
     fn new() -> Result<Self, Box<dyn std::error::Error>> {
+        Self::with_fonts(&[ARIAL])
+    }
+
+    fn with_fonts(fonts: &[Face]) -> Result<Self, Box<dyn std::error::Error>> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::METAL,
             ..wgpu::InstanceDescriptor::new_without_display_handle()
@@ -258,15 +275,16 @@ impl Harness {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: FORMAT,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
         let target = texture.create_view(&Default::default());
         Ok(Self {
-            ctx: context(),
+            ctx: context(fonts),
             device,
             queue,
             renderer,
+            texture,
             target,
             start: Instant::now(),
         })
@@ -279,9 +297,7 @@ impl Harness {
             ..Default::default()
         };
         let output = self.ctx.run_ui(input, ui);
-        let primitives = self
-            .ctx
-            .tessellate(output.shapes, output.pixels_per_point);
+        let primitives = self.ctx.tessellate(output.shapes, output.pixels_per_point);
         for (id, deltas) in &output.textures_delta.set {
             for delta in deltas {
                 self.renderer
@@ -333,16 +349,20 @@ impl Harness {
     }
 }
 
-fn context() -> egui::Context {
+/// A context whose fonts are `faces`, tried in order.
+fn context(faces: &[Face]) -> egui::Context {
     let ctx = egui::Context::default();
     ctx.set_pixels_per_point(SCALE_FACTOR);
     let mut fonts = FontDefinitions::empty();
-    let arial = std::fs::read(FONT_PATH).expect("Arial is a macOS system font");
-    fonts
-        .font_data
-        .insert("arial".into(), Arc::new(FontData::from_owned(arial)));
+    for &(name, path, index) in faces {
+        let bytes = std::fs::read(path).unwrap_or_else(|_| panic!("{path} is a macOS system font"));
+        let mut data = FontData::from_owned(bytes);
+        data.index = index;
+        fonts.font_data.insert(name.into(), Arc::new(data));
+    }
+    let chain: Vec<String> = faces.iter().map(|face| face.0.into()).collect();
     for family in [FontFamily::Proportional, FontFamily::Monospace] {
-        fonts.families.insert(family, vec!["arial".into()]);
+        fonts.families.insert(family, chain.clone());
     }
     ctx.set_fonts(fonts);
     ctx.all_styles_mut(|style| {
@@ -430,11 +450,27 @@ fn run(case: &str) -> Result<(), Box<dyn std::error::Error>> {
                 harness.frame(|ui| virtual_rows(ui, count, selected));
             });
         }
-        "text_paragraphs" => {
-            let mut harness = Harness::new()?;
+        // `text_complex` is `text_paragraphs` in seven scripts and emoji.
+        "text_paragraphs" | "text_complex" => {
+            let (content, fonts): (fn(usize) -> String, &[Face]) = if case == "text_paragraphs" {
+                (paragraph, &[ARIAL])
+            } else {
+                (complex_text::complex_paragraph, &COMPLEX_FONTS)
+            };
+            let mut harness = Harness::with_fonts(fonts)?;
             measure(case, &mut harness, |harness, turn| {
-                harness.frame(|ui| paragraphs(ui, turn));
+                harness.frame(|ui| paragraphs(ui, turn, content));
             });
+            capture::save_png_if_asked(
+                case,
+                &harness.device,
+                &harness.queue,
+                &harness.texture,
+                (
+                    (VIEWPORT.0 * SCALE_FACTOR) as u32,
+                    (VIEWPORT.1 * SCALE_FACTOR) as u32,
+                ),
+            )?;
         }
         "quad_grid" => {
             let mut harness = Harness::new()?;

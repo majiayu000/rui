@@ -32,13 +32,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 use taffy::prelude::TaffyTree;
 
-const CASES: [&str; 13] = [
+const CASES: [&str; 14] = [
     "startup",
     "list_full",
     "list_full_rows",
     "list_virtual_1k",
     "list_virtual_100k",
     "text_paragraphs",
+    "text_complex",
     "quad_grid",
     "quad_grid_cached",
     "resize_full",
@@ -47,6 +48,8 @@ const CASES: [&str; 13] = [
     "editor_scroll",
     "editor_edit",
 ];
+#[path = "../benchmarks/complex_text.rs"]
+mod complex_text;
 #[path = "../benchmarks/gpui_compare/gpu_time.rs"]
 mod gpu_time;
 
@@ -202,7 +205,7 @@ fn paragraph(index: usize) -> String {
         .join(" ")
 }
 
-fn paragraphs(revision: usize) -> impl Element {
+fn paragraphs(revision: usize, paragraph: fn(usize) -> String) -> impl Element {
     div()
         .w_full()
         .flex_col()
@@ -473,6 +476,35 @@ impl Harness {
         })
     }
 
+    /// With `RUI_COMPARE_PNG=<dir>`, the last frame's scene drawn again and saved as
+    /// `<dir>/rui_<case>.png`, to check what the fixture shows.
+    fn save_png_if_asked(
+        &mut self,
+        case: &str,
+        viewport: Size,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let Some(dir) = std::env::var_os("RUI_COMPARE_PNG") else {
+            return Ok(());
+        };
+        let mut pixels =
+            self.renderer
+                .capture_frame_pixels_at_scale(&self.scene, viewport, SCALE_FACTOR)?;
+        // Opaque, to view: the fixture paints no background of its own.
+        for pixel in pixels.as_chunks_mut::<4>().0 {
+            pixel[3] = 255;
+        }
+        let path = std::path::Path::new(&dir).join(format!("rui_{case}.png"));
+        image::save_buffer(
+            &path,
+            &pixels,
+            (viewport.width * SCALE_FACTOR) as u32,
+            (viewport.height * SCALE_FACTOR) as u32,
+            image::ColorType::Rgba8,
+        )?;
+        eprintln!("saved {}", path.display());
+        Ok(())
+    }
+
     fn draw(
         &mut self,
         root: &mut impl Element,
@@ -679,11 +711,18 @@ fn run(case: &str) -> Result<(), Box<dyn std::error::Error>> {
                 harness.frame(virtual_rows(&handle, count, selected), viewport)
             })?;
         }
-        "text_paragraphs" => {
+        // `text_complex` is `text_paragraphs` in seven scripts and emoji.
+        "text_paragraphs" | "text_complex" => {
+            let content = if case == "text_paragraphs" {
+                paragraph
+            } else {
+                complex_text::complex_paragraph
+            };
             let mut harness = Harness::new()?;
             measure(case, &mut harness, |harness, turn| {
-                harness.frame(paragraphs(turn), viewport)
+                harness.frame(paragraphs(turn, content), viewport)
             })?;
+            harness.save_png_if_asked(case, viewport)?;
         }
         "quad_grid" => {
             let mut harness = Harness::new()?;

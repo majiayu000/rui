@@ -30,8 +30,8 @@ pub use atlas::{
     ATLAS_PAGE_SIZE, AtlasGlyph, AtlasRect, AtlasSlot, GlyphAtlas, GlyphSprite, GlyphUpload,
     PlacedGlyph, SUBPIXEL_VARIANTS, ShapedText, TextGlyphCache,
 };
-pub use rich::{RichLine, RichPiece, RichPieceText, RichSpan, RichWrapped};
 pub(crate) use hash::FastMap;
+pub use rich::{RichLine, RichPiece, RichPieceText, RichSpan, RichWrapped};
 pub use wrap::{TextLine, WrappedText};
 
 pub const TEXT_BOUNDS_TOLERANCE: f32 = 1.0;
@@ -596,7 +596,13 @@ impl TextRasterCache {
             return Ok(None);
         }
 
-        let pixels = rasterize_with_plan(self.measurer.fonts.as_slice(), request, metrics, &plan);
+        let pixels = rasterize_with_plan(
+            self.measurer.fonts.as_slice(),
+            primary_index,
+            request,
+            metrics,
+            &plan,
+        );
         let allocation = self.resources.resolve(key.clone(), pixels.len())?;
         self.drop_evicted(allocation.evicted);
 
