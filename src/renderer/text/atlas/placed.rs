@@ -71,7 +71,18 @@ impl TextGlyphCache {
             }
             self.glyph_hits += text.glyphs.len();
         } else {
-            let placed = self.place_text(text, origin_x, device_font_size, scale_factor)?;
+            // A text drawn at more than one x is placed again each time; its
+            // buffers are reused.
+            let mut placed = self.placed.remove(&key).unwrap_or_else(|| PlacedText {
+                text: Arc::clone(text),
+                origin_x: 0,
+                device_font_size: 0,
+                scale_factor: 0,
+                generation: 0,
+                sprites: Vec::with_capacity(text.glyphs.len()),
+                pages: Vec::new(),
+            });
+            self.place_text(&mut placed, origin_x, device_font_size, scale_factor)?;
             self.placed.insert(key, placed);
         }
         Ok(&self.placed[&key].sprites)
@@ -79,14 +90,20 @@ impl TextGlyphCache {
 
     fn place_text(
         &mut self,
-        text: &Arc<ShapedText>,
+        placed: &mut PlacedText,
         origin_x: f32,
         device_font_size: f32,
         scale_factor: f32,
-    ) -> Result<PlacedText, TextError> {
+    ) -> Result<(), TextError> {
         let variants = f32::from(SUBPIXEL_VARIANTS);
-        let mut sprites = Vec::with_capacity(text.glyphs.len());
-        let mut pages = Vec::new();
+        let PlacedText {
+            text,
+            sprites,
+            pages,
+            ..
+        } = placed;
+        sprites.clear();
+        pages.clear();
         for glyph in &text.glyphs {
             let pen_x = ((origin_x + glyph.x) * scale_factor * variants).round() / variants;
             let whole_x = pen_x.floor();
@@ -123,14 +140,10 @@ impl TextGlyphCache {
                 page: slot.page as u32,
             });
         }
-        Ok(PlacedText {
-            text: Arc::clone(text),
-            origin_x: origin_x.to_bits(),
-            device_font_size: device_font_size.to_bits(),
-            scale_factor: scale_factor.to_bits(),
-            generation: self.glyph_generation,
-            sprites,
-            pages,
-        })
+        placed.origin_x = origin_x.to_bits();
+        placed.device_font_size = device_font_size.to_bits();
+        placed.scale_factor = scale_factor.to_bits();
+        placed.generation = self.glyph_generation;
+        Ok(())
     }
 }
