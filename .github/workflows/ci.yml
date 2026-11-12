@@ -72,7 +72,8 @@ jobs:
       - name: Open hello_world on lavapipe under Xvfb
         run: |
           sudo apt-get update
-          sudo apt-get install -y xvfb mesa-vulkan-drivers
+          # winit loads the X11 and xkbcommon libraries at runtime.
+          sudo apt-get install -y xvfb mesa-vulkan-drivers libxkbcommon-x11-0 libxcursor1 libxrandr2 libxi6
           cargo build --locked --no-default-features --features winit --example hello_world
           # The example runs until its window closes: surviving the timeout
           # means the window, surface, device and first frames came up.
