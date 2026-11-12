@@ -9,7 +9,7 @@ use crate::renderer::text::TextRequest;
 use crate::renderer::text_shaping::{
     ClusterDraft, GlyphDraft, InkBounds, ShapedRun, TextShapingFont,
 };
-use rusttype::{GlyphId, Scale, point};
+use rusttype::{Scale, point};
 use unicode_bidi::{BidiClass, BidiInfo, Level, bidi_class};
 
 /// The resolved level of each byte of `text`, each paragraph laid out as one
@@ -77,13 +77,10 @@ pub(crate) fn ink_of(
     let scale = Scale::uniform(request.font_size);
     let mut ink = InkBounds::empty();
     for glyph in glyphs {
-        let font = fonts[glyph.font_index].font();
-        let ascent = font.v_metrics(scale).ascent;
-        let positioned = font
-            .glyph(GlyphId(glyph.glyph_id))
-            .scaled(scale)
-            .positioned(point(glyph.x_offset, ascent + glyph.y_offset));
-        if let Some(bounds) = positioned.pixel_bounding_box() {
+        let font = &fonts[glyph.font_index];
+        let ascent = font.font().v_metrics(scale).ascent;
+        let position = point(glyph.x_offset, ascent + glyph.y_offset);
+        if let Some(bounds) = font.pixel_bounds(glyph.glyph_id, request.font_size, position) {
             ink.include(bounds);
         }
     }

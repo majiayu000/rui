@@ -6,6 +6,7 @@ use crate::renderer::text_classify::{
 };
 use crate::renderer::text_cluster_position::apply_exact_cluster_positions;
 use crate::renderer::text_fallback::{RunScript, assign_fonts, script_runs};
+use crate::renderer::text_glyph_box::GlyphBoxes;
 pub use crate::renderer::text_plan::{
     ShapedGlyph, TextCluster, TextDirection, TextRun, TextScript, TextShapeDiagnostic,
     TextShapePlan,
@@ -72,6 +73,7 @@ pub(crate) struct TextShapingFont {
     face: Face<'static>,
     /// Plans built so far, one per direction, script and language shaped.
     plans: Arc<Mutex<Vec<CachedPlan>>>,
+    boxes: Arc<GlyphBoxes>,
     /// Owns the bytes `font` and `face` read; never read directly.
     #[allow(dead_code)]
     data: Arc<FontBytes>,
@@ -105,12 +107,25 @@ impl TextShapingFont {
             font,
             face,
             plans: Arc::new(Mutex::new(Vec::new())),
+            boxes: Arc::default(),
             data,
         })
     }
 
     pub(crate) fn font(&self) -> &Font<'_> {
         &self.font
+    }
+
+    /// The pixel box of glyph `id` at `font_size` drawn at `position`, as
+    /// rusttype's `pixel_bounding_box` gives it, without decoding the outline.
+    pub(crate) fn pixel_bounds(
+        &self,
+        id: u16,
+        font_size: f32,
+        position: rusttype::Point<f32>,
+    ) -> Option<rusttype::Rect<i32>> {
+        self.boxes
+            .pixel_bounds(&self.font, &self.face, id, font_size, position)
     }
 
     /// The glyph's bitmap from the strike closest above `pixels_per_em`, for
@@ -649,12 +664,8 @@ fn shape_run_glyphs(
         let y_offset = -(position.y_offset as f32 * position_scale);
         let advance_width = position.x_advance as f32 * position_scale;
         let glyph_id = info.glyph_id as u16;
-        let glyph = font
-            .font()
-            .glyph(GlyphId(glyph_id))
-            .scaled(rust_scale)
-            .positioned(point(x_offset, v_metrics.ascent + y_offset));
-        if let Some(bounds) = glyph.pixel_bounding_box() {
+        let position = point(x_offset, v_metrics.ascent + y_offset);
+        if let Some(bounds) = font.pixel_bounds(glyph_id, request.font_size, position) {
             ink_bounds.include(bounds);
         }
 
