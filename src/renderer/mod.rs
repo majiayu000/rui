@@ -13,6 +13,7 @@ mod text_bidi;
 mod text_classify;
 mod text_cluster_position;
 mod text_fallback;
+mod text_glyph_box;
 mod text_plan;
 mod text_shaping;
 
