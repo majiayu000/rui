@@ -21,8 +21,8 @@ RUI helps you build native macOS interfaces in Rust with declarative components,
 
 RUI is an early-stage, pre-1.0 framework. APIs, component behavior, and renderer internals may change before the first stable release.
 
-- macOS is the only supported runtime platform today, using the Metal renderer.
-- Windows, Linux, and Web support are roadmap items, not working backends.
+- macOS is the supported runtime platform today, using the Metal renderer.
+- Linux and Windows have an experimental runner (feature `winit`: a winit window drawn by the wgpu backend). It opens a single window with pointer, keyboard, scroll, resize and DPI input; IME composition, accessibility, the system clipboard, menus, file drops and extra windows are macOS-only so far. Web is a roadmap item.
 - Accessibility semantics and advanced component interactions are still active development areas.
 - Visual behavior should be verified on a local macOS desktop session; CI covers compile and automated tests, but not full end-to-end visual QA.
 - The recommended install path is the Git dependency shown below until crates.io package ownership or naming is resolved.
@@ -92,7 +92,7 @@ Continue with the [examples guide](docs/EXAMPLES.md) for component demos and the
 ### First-run questions
 
 - **`no example target named hello_world`?** Run the example command inside the cloned RUI repository. In your own project, use `cargo run` for `src/main.rs`.
-- **Can this run on Linux, Windows, or in a headless job?** The supported renderer uses macOS Metal and a native window. Use a local macOS desktop session for visual evaluation; other backends are still roadmap work.
+- **Can this run on Linux, Windows, or in a headless job?** Experimentally: `cargo run --example hello_world --no-default-features --features winit` uses the winit runner and the wgpu backend (Vulkan or DX12). The same command on macOS runs it on Metal through winit, for testing the runner. CI opens `hello_world` this way on Linux under Xvfb and lavapipe. On X11, winit loads `libxkbcommon-x11` and the Xcursor, Xrandr and Xi libraries at runtime.
 - **Does a successful compile prove the UI works?** It checks types and dependencies. Inspect the actual window and interactions separately; [status and limitations](#status-and-limitations) explains the current scope.
 
 ## Examples
@@ -298,8 +298,8 @@ Color::hsla(180.0, 0.5, 0.5, 0.8)
 | Platform | Status | Renderer |
 |----------|--------|----------|
 | macOS | Supported | Metal |
-| Windows | Planned | Vulkan/DX12 |
-| Linux | Planned | Vulkan |
+| Windows | Experimental (feature `winit`) | wgpu: DX12/Vulkan |
+| Linux | Experimental (feature `winit`) | wgpu: Vulkan |
 | Web | Planned | WebGPU |
 
 ## Release Status

@@ -536,7 +536,7 @@ fn paint_cell(
             (bounds.width() - DATA_PADDING_X * 2.0).max(0.0),
             bounds.height(),
         ),
-        content: cell.content.clone(),
+        content: cell.content.clone().into(),
         color: disabled_aware_color(cell.color.unwrap_or(theme.colors.text), disabled).to_rgba(),
         font_size: theme.text_size(size),
         font_weight: if header {

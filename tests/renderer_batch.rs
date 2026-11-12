@@ -43,7 +43,7 @@ fn quad(x: f32, y: f32, width: f32, height: f32, background: Rgba) -> Primitive 
 fn label(x: f32, y: f32, content: &str) -> Primitive {
     Primitive::Text {
         bounds: Bounds::from_xywh(x, y, 100.0, 16.0),
-        content: content.to_string(),
+        content: content.into(),
         color: Rgba::new(1.0, 1.0, 1.0, 1.0),
         font_size: 12.0,
         font_weight: 400,

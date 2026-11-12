@@ -6,8 +6,9 @@
 //!
 //! Every fixture matches `benchmarks/gpui_compare/fixtures.rs`: same content and sizes,
 //! a 1440x900 window at scale 2. Each frame changes one thing, then rebuilds, lays out
-//! against the kept layout tree, paints and submits to Metal without waiting, as GPUI's
-//! headless renderer does. Instructions are the whole process's retired instructions,
+//! against the kept layout tree, paints what the window shows, as the native runner
+//! does, and submits to Metal without waiting, as GPUI's headless renderer does.
+//! Instructions are the whole process's retired instructions,
 //! as GPUI's `BENCH_MEASUREMENT=instructions` counts; allocations are counted by this
 //! binary's allocator, as `gpui::bench_main!` installs one.
 //!
@@ -20,7 +21,8 @@ use rui::elements::{VirtualListHandle, canvas, shared_styled_text, span_range, v
 use rui::renderer::metal::MetalRenderer;
 use rui::renderer::text::TextMeasureCache;
 use rui::renderer::{RendererResourceLimits, Scene};
-use rui::{Bounds, Color, ElementId, Size, div, text};
+use rui::core::entity::Entity;
+use rui::{AppContext, Bounds, Color, ElementId, Size, div, text};
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::RefCell;
 use std::ops::Range;
@@ -151,7 +153,11 @@ fn ms_since_process_start() -> f64 {
 }
 
 fn row(index: usize, selected: usize) -> rui::Div {
-    let background = if index == selected {
+    row_with(index, index == selected)
+}
+
+fn row_with(index: usize, selected: bool) -> rui::Div {
+    let background = if selected {
         Color::hex(0x2d3748)
     } else {
         Color::hex(0x1a202c)
@@ -164,6 +170,12 @@ fn row(index: usize, selected: usize) -> rui::Div {
         .bg(background)
         .child(text(format!("task {index}: fix the failing check")))
         .child(text(format!("{} min", index % 60)))
+}
+
+/// A row of `list_full_one_row`, kept in an entity.
+struct ListRow {
+    index: usize,
+    selected: bool,
 }
 
 fn list(selected: usize) -> impl Element {
@@ -403,6 +415,31 @@ impl Harness {
         objc2::rc::autoreleasepool(|_| self.draw(&mut root, viewport))
     }
 
+    /// A frame of `context`'s views: rebuilds only what was notified.
+    fn app_frame<E: Element>(
+        &mut self,
+        context: &mut AppContext,
+        root: &mut E,
+        build: &mut impl FnMut(&mut AppContext) -> E,
+        viewport: Size,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        objc2::rc::autoreleasepool(|_| {
+            FramePipeline::build_frame_retained(
+                context,
+                root,
+                build,
+                &mut self.taffy,
+                &mut self.nodes,
+                &mut self.scene,
+                &mut self.measurer,
+                viewport,
+            )?;
+            self.renderer
+                .render_offscreen(&self.scene, viewport, SCALE_FACTOR)?;
+            Ok(())
+        })
+    }
+
     fn draw(
         &mut self,
         root: &mut impl Element,
@@ -415,7 +452,7 @@ impl Harness {
             &mut self.measurer,
             viewport,
         )?;
-        FramePipeline::paint_root(root, &self.taffy, &mut self.scene, bounds);
+        FramePipeline::paint_root_in_viewport(root, &self.taffy, &mut self.scene, bounds, viewport);
         self.renderer
             .render_offscreen(&self.scene, viewport, SCALE_FACTOR)?;
         Ok(())
@@ -521,12 +558,39 @@ fn run(case: &str) -> Result<(), Box<dyn std::error::Error>> {
                 footprint_mb()
             );
         }
-        "list_full" | "list_full_one_row" => {
-            // RUI has no per-view cache like GPUI's `.cached()`: one changed row still
-            // rebuilds the list, so both cases are this one.
+        "list_full" => {
             let mut harness = Harness::new()?;
             measure(case, &mut harness, |harness, turn| {
                 harness.frame(list(turn % LIST_ROWS), viewport)
+            })?;
+        }
+        // Each row is a view of its own entity, as GPUI's `.cached()` rows are, and
+        // only the row that toggles is notified; the list around it is not rebuilt.
+        "list_full_one_row" => {
+            let mut harness = Harness::new()?;
+            let mut context = AppContext::new();
+            let rows: Vec<Entity<ListRow>> = (0..LIST_ROWS)
+                .map(|index| {
+                    context.create(ListRow {
+                        index,
+                        selected: index == 0,
+                    })
+                })
+                .collect();
+            let items = rows.clone();
+            let mut build = move |cx: &mut AppContext| {
+                div().w_full().flex_col().children(cx.rows(&items, |row: &ListRow, _| {
+                    row_with(row.index, row.selected)
+                }))
+            };
+            let mut root = div();
+            measure(case, &mut harness, |harness, turn| {
+                let toggled = rows[turn % rows.len()];
+                if let Some(mut row) = context.get_mut(toggled) {
+                    row.selected = !row.selected;
+                }
+                context.notify(toggled.id());
+                harness.app_frame(&mut context, &mut root, &mut build, viewport)
             })?;
         }
         "list_virtual_1k" | "list_virtual_100k" => {

@@ -14,7 +14,6 @@ use crate::elements::element::{
     PointerEventKind, StableId, dispatch_action_to_children, style_to_taffy,
 };
 use crate::elements::text::{FontWeight, TextStyleRefinement};
-use crate::renderer::Primitive;
 use crate::renderer::text::TextMeasureCache;
 use smallvec::SmallVec;
 use std::any::Any;
@@ -31,6 +30,7 @@ pub struct Div {
     on_context_menu: Option<Box<dyn Fn(Point)>>,
     /// Drag source and drop target handlers, when it has any.
     drag: Option<Box<drag::DragHandlers>>,
+    actions: actions::ActionHandlers,
     hovered: bool,
     layout_node: Option<NodeId>,
     child_nodes: SmallVec<[NodeId; 4]>,
@@ -47,6 +47,7 @@ impl Div {
             on_hover: None,
             on_context_menu: None,
             drag: None,
+            actions: Vec::new(),
             hovered: false,
             layout_node: None,
             child_nodes: SmallVec::new(),
@@ -435,7 +436,7 @@ impl Div {
     }
 
     pub fn font_family(mut self, family: impl Into<String>) -> Self {
-        self.text_style.font_family = Some(family.into());
+        self.text_style.font_family = Some(std::sync::Arc::from(family.into()));
         self
     }
 
@@ -500,14 +501,8 @@ impl Element for Div {
             return false;
         };
         // Handlers cannot be compared, so a div with any keeps the new instance.
-        self.on_click.is_none()
-            && self.on_hover.is_none()
-            && self.on_context_menu.is_none()
-            && self.drag.is_none()
-            && previous.on_click.is_none()
-            && previous.on_hover.is_none()
-            && previous.on_context_menu.is_none()
-            && previous.drag.is_none()
+        !self.has_handlers()
+            && !previous.has_handlers()
             && self.id == previous.id
             && self.style == previous.style
             && self.text_style == previous.text_style
@@ -516,7 +511,7 @@ impl Element for Div {
     fn layout(&mut self, cx: &mut LayoutContext) -> NodeId {
         // Layout children first
         let children = &mut self.children;
-        let child_nodes: Vec<NodeId> = cx.with_text_style(&self.text_style, |cx| {
+        let child_nodes: SmallVec<_> = cx.with_text_style(&self.text_style, |cx| {
             children.iter_mut().map(|child| child.layout(cx)).collect()
         });
 
@@ -527,75 +522,21 @@ impl Element for Div {
             .expect("Failed to create layout node");
 
         self.layout_node = Some(node);
-        self.child_nodes = SmallVec::from_vec(child_nodes);
+        self.child_nodes = child_nodes;
         node
     }
 
     fn paint(&mut self, cx: &mut PaintContext) {
-        let bounds = cx.bounds();
+        self.paint_div(cx);
+    }
 
-        // Paint shadow first (behind the element)
-        if let Some(ref shadow) = self.style.shadow {
-            let shadow_bounds = Bounds::from_xywh(
-                bounds.x() + shadow.offset_x - shadow.spread_radius,
-                bounds.y() + shadow.offset_y - shadow.spread_radius,
-                bounds.width() + shadow.spread_radius * 2.0,
-                bounds.height() + shadow.spread_radius * 2.0,
-            );
-            cx.paint(Primitive::Shadow {
-                bounds: shadow_bounds,
-                corner_radii: self.style.border.radius,
-                blur_radius: shadow.blur_radius,
-                color: shadow.color.to_rgba(),
-            });
-        }
-
-        // Paint background
-        match &self.style.background {
-            Background::None => {}
-            Background::Solid(color) => {
-                cx.paint(Primitive::Quad {
-                    bounds,
-                    background: color.to_rgba(),
-                    border_color: self.style.border.color.to_rgba(),
-                    border_widths: self.style.border.width,
-                    corner_radii: self.style.border.radius,
-                });
-            }
-            Background::LinearGradient { start, end, angle } => {
-                cx.paint(Primitive::LinearGradient {
-                    bounds,
-                    start: start.to_rgba(),
-                    end: end.to_rgba(),
-                    angle: *angle,
-                    border_color: self.style.border.color.to_rgba(),
-                    border_widths: self.style.border.width,
-                    corner_radii: self.style.border.radius,
-                });
-            }
-            Background::RadialGradient { inner, outer } => {
-                cx.paint(Primitive::RadialGradient {
-                    bounds,
-                    inner: inner.to_rgba(),
-                    outer: outer.to_rgba(),
-                    border_color: self.style.border.color.to_rgba(),
-                    border_widths: self.style.border.width,
-                    corner_radii: self.style.border.radius,
-                });
-            }
-        }
-
-        // Paint children
-        // Note: In a full implementation, we'd get child bounds from the layout tree
-        for (child, node) in self
-            .children
-            .iter_mut()
-            .zip(self.child_nodes.iter().copied())
-        {
-            let child_bounds = cx.child_bounds(node).unwrap_or(bounds);
-            let mut child_cx = cx.with_bounds(child_bounds);
-            child.paint(&mut child_cx);
-        }
+    fn unseen_reach(
+        &self,
+        taffy: &TaffyTree<ElementId>,
+        bounds: Bounds,
+        visible: &Bounds,
+    ) -> Option<Bounds> {
+        self.unseen_div_reach(taffy, bounds, visible)
     }
 
     fn refresh_text_geometry(&mut self, text_measurer: &mut TextMeasureCache) {
@@ -644,7 +585,11 @@ impl Element for Div {
         }
 
         if event.button == Some(MouseButton::Right) {
-            if !handled && is_press && inside && let Some(handler) = &self.on_context_menu {
+            if !handled
+                && is_press
+                && inside
+                && let Some(handler) = &self.on_context_menu
+            {
                 handler(event.position);
                 handled = true;
             }
@@ -730,7 +675,11 @@ impl Element for Div {
         cx: &mut EventContext,
         action: &crate::core::action::ActionId,
     ) -> crate::core::action::ActionOutcome {
-        dispatch_action_to_children(&mut self.children, cx, action)
+        let outcome = dispatch_action_to_children(&mut self.children, cx, action);
+        if outcome.is_handled() {
+            return outcome;
+        }
+        self.run_action(action)
     }
 
     fn handle_text_input_event(&mut self, cx: &mut EventContext, event: &TextInputEvent) -> bool {
@@ -792,6 +741,8 @@ pub fn div() -> Div {
     Div::new()
 }
 
+mod actions;
 mod drag;
+mod paint;
 #[cfg(test)]
 mod tests;

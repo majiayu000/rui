@@ -1,0 +1,16 @@
+[package]
+name = "egui_compare"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Kept out of RUI's build: egui and its renderer are only this harness's.
+[workspace]
+
+[dependencies]
+egui = "=0.37.0"
+egui-wgpu = "=0.37.0"
+pollster = "0.4"
+
+[profile.release]
+debug = "line-tables-only"

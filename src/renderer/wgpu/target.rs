@@ -102,7 +102,7 @@ impl WgpuRenderer {
         )
     }
 
-    fn render_retained_to(
+    pub(super) fn render_retained_to(
         &mut self,
         scene: &Scene,
         target: &mut RetainedTarget,

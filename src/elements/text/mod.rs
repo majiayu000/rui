@@ -1,6 +1,7 @@
 //! Text element for rendering text
 
 use crate::core::ElementId;
+use crate::core::SharedStr;
 use crate::core::accessibility::{
     AccessibilityContext, AccessibilityError, AccessibilityNode, AccessibilityRole,
 };
@@ -9,11 +10,12 @@ use crate::core::geometry::Bounds;
 use crate::core::style::Style;
 use crate::elements::element::{
     Capabilities, Element, LayoutContext, PaintContext, StableId, TextWrapRequest, WrappedLines,
-    style_to_taffy,
+    no_reach, style_to_taffy,
 };
-use crate::renderer::Primitive;
 use crate::renderer::text::{TextMeasureCache, TextMetrics, TextRequest};
+use crate::renderer::{Primitive, text_reach};
 use std::any::Any;
+use std::sync::Arc;
 use taffy::prelude::*;
 
 /// Text alignment
@@ -59,7 +61,7 @@ pub struct TextStyle {
     pub color: Color,
     pub font_size: f32,
     pub font_weight: FontWeight,
-    pub font_family: Option<String>,
+    pub font_family: Option<Arc<str>>,
     pub line_height: f32,
 }
 
@@ -98,7 +100,7 @@ pub struct TextStyleRefinement {
     pub color: Option<Color>,
     pub font_size: Option<f32>,
     pub font_weight: Option<FontWeight>,
-    pub font_family: Option<String>,
+    pub font_family: Option<Arc<str>>,
     pub line_height: Option<f32>,
 }
 
@@ -128,12 +130,12 @@ pub struct Text {
     id: Option<ElementId>,
     /// Set by [`Text::accessible`]: the id of its accessibility node.
     accessible: Option<StableId>,
-    content: String,
+    content: SharedStr,
     style: Style,
     color: Color,
     font_size: f32,
     font_weight: FontWeight,
-    font_family: Option<String>,
+    font_family: Option<Arc<str>>,
     line_height: f32,
     own: OwnTextStyle,
     align: TextAlign,
@@ -144,7 +146,7 @@ pub struct Text {
 }
 
 impl Text {
-    pub fn new(content: impl Into<String>) -> Self {
+    pub fn new(content: impl Into<SharedStr>) -> Self {
         let defaults = TextStyle::default();
         Self {
             id: None,
@@ -223,7 +225,7 @@ impl Text {
     }
 
     pub fn font(mut self, family: impl Into<String>) -> Self {
-        self.font_family = Some(family.into());
+        self.font_family = Some(Arc::from(family.into()));
         self.own.font_family = true;
         self
     }
@@ -292,7 +294,7 @@ impl Text {
         }
     }
 
-    fn primitive(&self, bounds: Bounds, content: String) -> Primitive {
+    fn primitive(&self, bounds: Bounds, content: SharedStr) -> Primitive {
         Primitive::Text {
             bounds,
             content,
@@ -378,7 +380,7 @@ impl Element for Text {
         self.inherit(cx.text_style());
         if let Some(lines) = &self.wrapped {
             let request = TextWrapRequest {
-                content: self.content.clone(),
+                content: self.content.share(),
                 font_size: self.font_size,
                 font_weight: self.font_weight.to_value(),
                 font_family: self.font_family.clone(),
@@ -422,7 +424,8 @@ impl Element for Text {
 
         let bounds = cx.bounds();
         let Some(wrapped) = &self.wrapped else {
-            cx.paint(self.primitive(bounds, self.content.clone()));
+            let content = self.content.share();
+            cx.paint(self.primitive(bounds, content));
             return;
         };
 
@@ -442,6 +445,30 @@ impl Element for Text {
         }
     }
 
+    fn unseen_reach(
+        &self,
+        _taffy: &TaffyTree<ElementId>,
+        bounds: Bounds,
+        visible: &Bounds,
+    ) -> Option<Bounds> {
+        if self.accessible.is_some() {
+            return None;
+        }
+        if self.content.is_empty() || self.font_size <= 0.0 || self.line_height <= 0.0 {
+            return Some(no_reach());
+        }
+        // The lines paint one below the other from the top of `bounds`.
+        let height = match &self.wrapped {
+            None => bounds.height(),
+            Some(wrapped) => {
+                wrapped.borrow().as_ref()?.lines.len() as f32 * self.font_size * self.line_height
+            }
+        };
+        let painted = Bounds::from_xywh(bounds.x(), bounds.y(), bounds.width(), height);
+        let reach = text_reach(painted, self.font_size);
+        (!reach.intersects(visible)).then_some(reach)
+    }
+
     fn accessibility(
         &self,
         cx: &AccessibilityContext,
@@ -453,14 +480,14 @@ impl Element for Text {
             return Ok(None);
         }
         let node = AccessibilityNode::new(id, AccessibilityRole::Text)
-            .with_label(self.content.clone())
+            .with_label(self.content.to_string())
             .with_focused(cx.a11y_has_focus(id));
         Ok(Some(node))
     }
 }
 
 /// Create a new Text element
-pub fn text(content: impl Into<String>) -> Text {
+pub fn text(content: impl Into<SharedStr>) -> Text {
     Text::new(content)
 }
 

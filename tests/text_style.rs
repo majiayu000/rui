@@ -47,7 +47,7 @@ fn paint(root: &mut Div, taffy: &TaffyTree<ElementId>, bounds: Bounds) -> Vec<Li
                 ..
             } => Some(Line {
                 bounds: *bounds,
-                content: content.clone(),
+                content: content.to_string(),
                 color: Color::Rgba(*color),
                 font_size: *font_size,
                 font_weight: *font_weight,
