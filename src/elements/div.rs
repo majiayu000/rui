@@ -435,7 +435,7 @@ impl Div {
     }
 
     pub fn font_family(mut self, family: impl Into<String>) -> Self {
-        self.text_style.font_family = Some(family.into());
+        self.text_style.font_family = Some(std::sync::Arc::from(family.into()));
         self
     }
 
@@ -516,7 +516,7 @@ impl Element for Div {
     fn layout(&mut self, cx: &mut LayoutContext) -> NodeId {
         // Layout children first
         let children = &mut self.children;
-        let child_nodes: Vec<NodeId> = cx.with_text_style(&self.text_style, |cx| {
+        let child_nodes: SmallVec<_> = cx.with_text_style(&self.text_style, |cx| {
             children.iter_mut().map(|child| child.layout(cx)).collect()
         });
 
@@ -527,7 +527,7 @@ impl Element for Div {
             .expect("Failed to create layout node");
 
         self.layout_node = Some(node);
-        self.child_nodes = SmallVec::from_vec(child_nodes);
+        self.child_nodes = child_nodes;
         node
     }
 

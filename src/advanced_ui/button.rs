@@ -207,7 +207,7 @@ impl Element for Button {
 
         cx.paint(Primitive::Text {
             bounds,
-            content: self.label.clone(),
+            content: self.label.clone().into(),
             color: colors.foreground.to_rgba(),
             font_size: self.theme.text_size(self.size),
             font_weight: self.theme.typography.control_weight,

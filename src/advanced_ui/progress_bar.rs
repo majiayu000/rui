@@ -216,7 +216,7 @@ impl Element for ProgressBar {
             }
             cx.paint(Primitive::Text {
                 bounds,
-                content: format!("{}%", (self.value * 100.0).round() as u32),
+                content: format!("{}%", (self.value * 100.0).round() as u32).into(),
                 color: self.theme.colors.text.to_rgba(),
                 font_size: (bounds.height() * 0.62).max(10.0),
                 font_weight: self.theme.typography.control_weight,

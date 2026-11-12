@@ -1,5 +1,6 @@
 //! Rendering primitives - the basic shapes the GPU can draw
 
+use crate::core::SharedStr;
 use crate::core::color::Rgba;
 use crate::core::geometry::{Bounds, Edges, Size};
 use crate::core::style::Corners;
@@ -7,6 +8,7 @@ use crate::elements::fit_bounds;
 use crate::elements::text::TextAlign;
 use crate::{ImageFit, ImageSource};
 use bytemuck::{Pod, Zeroable};
+use std::sync::Arc;
 
 /// GPU-renderable primitives
 #[derive(Debug, Clone)]
@@ -52,11 +54,11 @@ pub enum Primitive {
     /// Text rendering
     Text {
         bounds: Bounds,
-        content: String,
+        content: SharedStr,
         color: Rgba,
         font_size: f32,
         font_weight: u16,
-        font_family: Option<String>,
+        font_family: Option<Arc<str>>,
         line_height: f32,
         align: TextAlign,
     },
@@ -484,7 +486,7 @@ mod tests {
     fn text(bounds: Bounds) -> Primitive {
         Primitive::Text {
             bounds,
-            content: "label".to_string(),
+            content: "label".to_string().into(),
             color: Rgba::new(1.0, 1.0, 1.0, 1.0),
             font_size: 14.0,
             font_weight: 400,

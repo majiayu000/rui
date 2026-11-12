@@ -6,6 +6,7 @@ use super::{
     RETAINED_METRICS_TARGET, TextError, TextMeasureCache, TextMeasureKey, TextRequest,
     request_hasher,
 };
+use crate::core::SharedStr;
 use crate::core::geometry::Size;
 use crate::renderer::text_shaping::{ClusterDraft, TextScript};
 use std::hash::{Hash, Hasher};
@@ -19,7 +20,7 @@ pub(super) const KEPT_RESULTS: usize = 4;
 /// One line of a wrapped paragraph, ready to be drawn on its own.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TextLine {
-    pub content: String,
+    pub content: SharedStr,
     pub width: f32,
 }
 
@@ -302,11 +303,17 @@ impl TextMeasureCache {
 
         let truncated = spans.len() > line_limit;
         spans.truncate(line_limit);
+        // One copy of the text that every line slices.
+        let text: Arc<str> = Arc::from(request.content);
         let mut lines: Vec<TextLine> = spans
             .iter()
-            .map(|span| TextLine {
-                content: paragraphs[span.paragraph][span.start..span.end].to_string(),
-                width: span.width.ceil(),
+            .map(|span| {
+                let start = paragraphs[span.paragraph].as_ptr() as usize
+                    - request.content.as_ptr() as usize;
+                TextLine {
+                    content: SharedStr::slice(&text, start + span.start..start + span.end),
+                    width: span.width.ceil(),
+                }
             })
             .collect();
         let mut ellipsis = None;
@@ -385,6 +392,7 @@ impl TextMeasureCache {
             )
             .size
             .width;
+        let content = content.into();
         (TextLine { content, width }, (room_range, ellipsis_width))
     }
 }
@@ -578,7 +586,7 @@ mod tests {
                 .expect("wrap")
                 .lines
                 .into_iter()
-                .map(|line| line.content)
+                .map(|line| line.content.to_string())
                 .collect::<Vec<_>>()
         };
         let widest_word = ["alpha", "beta", "gamma"]
