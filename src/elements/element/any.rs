@@ -359,6 +359,25 @@ impl AnyElement {
                 return;
             }
         }
+        if let Some(reach) = cx.unseen_reach(&*self.inner) {
+            // Left out as a replay leaves out what is not seen, so the next
+            // frame can pass it by the same way.
+            if self.layout_record.is_some() {
+                let start = cx.scene.len() as u32;
+                let index = cx.scene.record(PaintRecord {
+                    painted: false,
+                    replayed: true,
+                    start,
+                    end: start,
+                    origin,
+                    unrounded_origin: unrounded.origin,
+                    unrounded_size: unrounded.size,
+                    reach,
+                });
+                self.paint_record.set(Some((cx.scene.frame(), index)));
+            }
+            return;
+        }
         let start = cx.scene.len();
         let regions = cx.scene.region_count();
         let layers = cx.scene.layers().len();

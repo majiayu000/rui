@@ -6,8 +6,9 @@
 //!
 //! Every fixture matches `benchmarks/gpui_compare/fixtures.rs`: same content and sizes,
 //! a 1440x900 window at scale 2. Each frame changes one thing, then rebuilds, lays out
-//! against the kept layout tree, paints and submits to Metal without waiting, as GPUI's
-//! headless renderer does. Instructions are the whole process's retired instructions,
+//! against the kept layout tree, paints what the window shows, as the native runner
+//! does, and submits to Metal without waiting, as GPUI's headless renderer does.
+//! Instructions are the whole process's retired instructions,
 //! as GPUI's `BENCH_MEASUREMENT=instructions` counts; allocations are counted by this
 //! binary's allocator, as `gpui::bench_main!` installs one.
 //!
@@ -415,7 +416,7 @@ impl Harness {
             &mut self.measurer,
             viewport,
         )?;
-        FramePipeline::paint_root(root, &self.taffy, &mut self.scene, bounds);
+        FramePipeline::paint_root_in_viewport(root, &self.taffy, &mut self.scene, bounds, viewport);
         self.renderer
             .render_offscreen(&self.scene, viewport, SCALE_FACTOR)?;
         Ok(())

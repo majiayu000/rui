@@ -216,12 +216,10 @@ impl Primitive {
 
     /// Everything the primitive can draw on.
     pub fn reach(&self) -> Reach {
-        // Antialiasing reaches about one pixel past an edge.
-        const EDGE: f32 = 1.0;
         Reach::Within(match self {
             Self::Quad { bounds, .. }
             | Self::LinearGradient { bounds, .. }
-            | Self::RadialGradient { bounds, .. } => outset(*bounds, EDGE, EDGE),
+            | Self::RadialGradient { bounds, .. } => quad_reach(*bounds),
             Self::Shadow {
                 bounds,
                 blur_radius,
@@ -232,7 +230,7 @@ impl Primitive {
             }
             Self::Text {
                 bounds, font_size, ..
-            } => outset(*bounds, f32::INFINITY, font_size.max(0.0) * 2.0 + EDGE),
+            } => text_reach(*bounds, *font_size),
             Self::Path {
                 vertices,
                 stroke_width,
@@ -293,6 +291,20 @@ pub enum Reach {
     /// primitives show.
     Unbounded,
 }
+
+/// What a [`Primitive::Quad`] or gradient at `bounds` can draw on.
+pub(crate) fn quad_reach(bounds: Bounds) -> Bounds {
+    outset(bounds, EDGE, EDGE)
+}
+
+/// What a [`Primitive::Text`] at `bounds` can draw on. Text is centred on its
+/// ink, which can be wider than its bounds, so it is unbounded horizontally.
+pub(crate) fn text_reach(bounds: Bounds, font_size: f32) -> Bounds {
+    outset(bounds, f32::INFINITY, font_size.max(0.0) * 2.0 + EDGE)
+}
+
+/// Antialiasing reaches about one pixel past an edge.
+const EDGE: f32 = 1.0;
 
 fn outset(bounds: Bounds, dx: f32, dy: f32) -> Bounds {
     let (x, width) = if dx.is_infinite() {

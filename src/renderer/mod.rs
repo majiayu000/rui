@@ -22,6 +22,7 @@ pub mod metal;
 pub mod wgpu;
 
 pub use primitives::{PathVertex, Primitive, PrimitiveKind, Reach};
+pub(crate) use primitives::{quad_reach, text_reach};
 pub use resources::{
     GlyphResourceKey, ImageResourceEntry, ImageResourceKey, RendererDeviceDiagnostics,
     RendererDiagnostics, RendererImageCache, RendererResourceAllocation, RendererResourceCache,

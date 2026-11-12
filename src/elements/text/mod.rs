@@ -9,10 +9,10 @@ use crate::core::geometry::Bounds;
 use crate::core::style::Style;
 use crate::elements::element::{
     Capabilities, Element, LayoutContext, PaintContext, StableId, TextWrapRequest, WrappedLines,
-    style_to_taffy,
+    no_reach, style_to_taffy,
 };
-use crate::renderer::Primitive;
 use crate::renderer::text::{TextMeasureCache, TextMetrics, TextRequest};
+use crate::renderer::{Primitive, text_reach};
 use std::any::Any;
 use taffy::prelude::*;
 
@@ -440,6 +440,30 @@ impl Element for Text {
             );
             cx.paint(self.primitive(line_bounds, line.content.clone()));
         }
+    }
+
+    fn unseen_reach(
+        &self,
+        _taffy: &TaffyTree<ElementId>,
+        bounds: Bounds,
+        visible: &Bounds,
+    ) -> Option<Bounds> {
+        if self.accessible.is_some() {
+            return None;
+        }
+        if self.content.is_empty() || self.font_size <= 0.0 || self.line_height <= 0.0 {
+            return Some(no_reach());
+        }
+        // The lines paint one below the other from the top of `bounds`.
+        let height = match &self.wrapped {
+            None => bounds.height(),
+            Some(wrapped) => {
+                wrapped.borrow().as_ref()?.lines.len() as f32 * self.font_size * self.line_height
+            }
+        };
+        let painted = Bounds::from_xywh(bounds.x(), bounds.y(), bounds.width(), height);
+        let reach = text_reach(painted, self.font_size);
+        (!reach.intersects(visible)).then_some(reach)
     }
 
     fn accessibility(
