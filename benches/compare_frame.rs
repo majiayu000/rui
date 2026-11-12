@@ -390,7 +390,8 @@ fn quad_grid(changed: usize) -> impl Element {
     .h(GRID.1 as f32 * CELL.1)
 }
 
-/// The grid of `quad_grid` with no cell changed, for a view that never renders again.
+/// The grid of `quad_grid` with no cell changed, for a view that never renders again,
+/// kept by its canvas as iced's `canvas::Cache` keeps it.
 fn static_grid() -> impl Element {
     canvas(move |bounds, painter| {
         for row in 0..GRID.1 {
@@ -405,6 +406,7 @@ fn static_grid() -> impl Element {
             }
         }
     })
+    .cache_key(())
     .w(GRID.0 as f32 * CELL.0)
     .h(GRID.1 as f32 * CELL.1)
 }
@@ -757,8 +759,9 @@ fn run(case: &str) -> Result<(), Box<dyn std::error::Error>> {
         "paths" => {
             let mut harness = Harness::new()?;
             let shapes = compare_paths::scene();
-            let root = |turn| compare_paths::backdrop(compare_paths::paths(&shapes, turn));
-            compare_paths::save_png(case, &mut harness, root(0), viewport)?;
+            let kept = compare_paths::kept(&shapes);
+            let root = |turn| compare_paths::backdrop(compare_paths::paths(&shapes, &kept, turn));
+            compare_paths::save_png(case, &mut harness, || root(0), viewport)?;
             measure(case, &mut harness, |harness, turn| {
                 harness.frame(root(turn), viewport)
             })?;
@@ -768,7 +771,7 @@ fn run(case: &str) -> Result<(), Box<dyn std::error::Error>> {
             let mut harness = Harness::new()?;
             let markup = compare_paths::icon_markup();
             let root = |turn| compare_paths::backdrop(compare_paths::icons(&markup, turn));
-            compare_paths::save_png(case, &mut harness, root(0), viewport)?;
+            compare_paths::save_png(case, &mut harness, || root(0), viewport)?;
             measure(case, &mut harness, |harness, turn| {
                 harness.frame(root(turn), viewport)
             })?;

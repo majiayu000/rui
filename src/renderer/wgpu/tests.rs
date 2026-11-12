@@ -172,14 +172,16 @@ fn fixture_scene() -> Scene {
     scene.insert(Primitive::Path {
         vertices: [(10.0, 116.0), (60.0, 84.0), (110.0, 116.0), (60.0, 100.0)]
             .map(|(x, y)| PathVertex::new(x, y))
-            .to_vec(),
+            .into(),
+        offset: Default::default(),
         color: Rgba::new(0.1, 0.6, 0.3, 0.9),
         stroke_width: None,
     });
     scene.insert(Primitive::Path {
         vertices: [(120.0, 112.0), (130.0, 94.0), (140.0, 112.0), (150.0, 96.0)]
             .map(|(x, y)| PathVertex::new(x, y))
-            .to_vec(),
+            .into(),
+        offset: Default::default(),
         color: Rgba::new(0.8, 0.2, 0.2, 1.0),
         stroke_width: Some(2.0),
     });

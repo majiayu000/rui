@@ -12,7 +12,7 @@ pub use parse::SvgError;
 
 use crate::core::ElementId;
 use crate::core::color::{Color, Rgba};
-use crate::core::geometry::{Bounds, Edges, Size};
+use crate::core::geometry::{Bounds, Edges, Point, Size};
 use crate::core::style::Style;
 use crate::elements::element::{
     Capabilities, Element, LayoutContext, PaintContext, style_to_taffy,
@@ -167,7 +167,8 @@ fn shape(document: &Document, size: Size, tint: Option<Rgba>) -> Vec<Primitive> 
             let vertices = fill_polygon(&contours);
             if vertices.len() >= 3 {
                 primitives.push(Primitive::Path {
-                    vertices,
+                    vertices: vertices.into(),
+                    offset: Point::ZERO,
                     color,
                     stroke_width: None,
                 });
@@ -184,7 +185,8 @@ fn shape(document: &Document, size: Size, tint: Option<Rgba>) -> Vec<Primitive> 
             let vertices = fill_polygon(&contours);
             if vertices.len() >= 3 {
                 primitives.push(Primitive::Path {
-                    vertices,
+                    vertices: vertices.into(),
+                    offset: Point::ZERO,
                     color,
                     stroke_width: None,
                 });

@@ -2,9 +2,8 @@
 
 use super::frame::{ItemKind, Pages};
 use super::order::Rect;
-use super::path::PathGeometry;
+use super::path_cache::PathPrimitive;
 use super::retained::{damage_scissor, intersect_scissors};
-use super::sprites::SpriteLookup;
 use super::*;
 use crate::core::geometry::Bounds;
 use crate::elements::fit_bounds;
@@ -203,8 +202,12 @@ impl<T: Clone> FramePlanner<T> {
                 Some(redrawn) => visible.intersection(&redrawn),
                 None => Some(visible),
             };
-            let clips = matches!(primitive, Primitive::PushClip { .. } | Primitive::PopClip);
-            if !clips && !visible.is_some_and(|visible| primitive.may_touch(&visible)) {
+            // A path is found among the kept ones before its reach is measured.
+            let culled = !matches!(
+                primitive,
+                Primitive::PushClip { .. } | Primitive::PopClip | Primitive::Path { .. }
+            );
+            if culled && !visible.is_some_and(|visible| primitive.may_touch(&visible)) {
                 continue;
             }
             match primitive {
@@ -331,15 +334,17 @@ impl<T: Clone> FramePlanner<T> {
                 }
                 Primitive::Path {
                     vertices,
+                    offset,
                     color,
                     stroke_width,
                 } => {
-                    let mut path = std::mem::take(&mut frame.path);
-                    let built = path
-                        .set(vertices, *stroke_width, scale_factor)
-                        .and_then(|()| self.build_path(frame, &path, *color, clip, scale_factor));
-                    frame.path = path;
-                    built?;
+                    let path = PathPrimitive {
+                        vertices,
+                        offset: *offset,
+                        color: *color,
+                        stroke_width: *stroke_width,
+                    };
+                    self.build_path_primitive(frame, path, visible, clip, scale_factor)?;
                 }
                 Primitive::PushClip { bounds, .. } => {
                     let new_clip = if let Some(prev) = clip_stack.last() {
@@ -385,108 +390,6 @@ impl<T: Clone> FramePlanner<T> {
                 visible_rect(clip_edges, rect, clip, scale_factor)
             },
         );
-        Ok(())
-    }
-
-    /// Draws `path` from the atlas when it is a small shape drawn before, and as
-    /// analytic tiles otherwise.
-    pub(super) fn build_path(
-        &mut self,
-        frame: &mut FrameData<T>,
-        path: &PathGeometry,
-        color: crate::core::color::Rgba,
-        clip: u32,
-        scale_factor: f32,
-    ) -> Result<(), RendererError> {
-        // A font loaded earlier in this frame may have emptied the atlas.
-        self.path_sprites.sync_epoch(self.text_cache.epoch());
-        let (cell, key) = match self.path_sprites.lookup(path) {
-            SpriteLookup::Analytic => (None, 0),
-            SpriteLookup::Placed(slot, generation, cell, key) => {
-                if self.text_cache.use_sprite(slot, generation) {
-                    (Some((Some(slot), cell)), key)
-                } else {
-                    // Its atlas page was emptied: place it again.
-                    (Some((None, cell)), key)
-                }
-            }
-            SpriteLookup::Rasterize(cell, key) => (Some((None, cell)), key),
-        };
-        let placed = match cell {
-            None => None,
-            Some((Some(slot), cell)) => Some((slot, cell)),
-            Some((None, cell)) => {
-                let pixels = path.rasterize(cell.origin, cell.width, cell.height);
-                match self
-                    .text_cache
-                    .place_sprite(cell.width, cell.height, pixels)
-                {
-                    Ok((slot, generation)) => {
-                        self.path_sprites.place(key, slot, generation);
-                        Some((slot, cell))
-                    }
-                    // Without atlas room the path is still drawn, as tiles.
-                    Err(RendererResourceError::ResourcePressure { .. }) => None,
-                    Err(err) => return Err(err.into()),
-                }
-            }
-        };
-
-        if let Some((slot, cell)) = placed {
-            let (page_width, page_height) = self
-                .text_cache
-                .atlas()
-                .page_extent(slot.page)
-                .ok_or_else(|| {
-                    RendererResourceError::missing(RendererResourceKind::Glyph, slot.page as u32)
-                })?;
-            let rect = slot.rect;
-            let sprite = GpuGlyph {
-                bounds: [
-                    cell.origin[0] / scale_factor,
-                    cell.origin[1] / scale_factor,
-                    cell.width as f32 / scale_factor,
-                    cell.height as f32 / scale_factor,
-                ],
-                uv: [
-                    rect.x as f32 / page_width as f32,
-                    rect.y as f32 / page_height as f32,
-                    rect.width as f32 / page_width as f32,
-                    rect.height as f32 / page_height as f32,
-                ],
-                color: color.to_array(),
-            };
-            let kind = ItemKind::Sprites {
-                kind: KIND_PATH_SPRITE,
-                start: frame.glyphs.len() as u32,
-                count: 1,
-                pages: Pages::coverage(slot.page as u32),
-                simple: false,
-            };
-            frame.glyphs.push(sprite);
-            frame.push_item(kind, clip, bounds_rect(sprite.bounds), scale_factor);
-            return Ok(());
-        }
-
-        let start = frame.path_tiles.len() as u32;
-        let visible = frame.clip_edges[clip as usize];
-        if let Some(rect) = self.path_tiles.push(
-            path,
-            color,
-            scale_factor,
-            visible,
-            &mut frame.path_tiles,
-            &mut frame.path_edges,
-        ) {
-            let kind = ItemKind::Sprites {
-                kind: KIND_PATH,
-                start,
-                count: frame.path_tiles.len() as u32 - start,
-                pages: Pages::default(),
-                simple: false,
-            };
-            frame.push_item(kind, clip, rect, scale_factor);
-        }
         Ok(())
     }
 

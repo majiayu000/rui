@@ -239,7 +239,9 @@ mod tests {
                 PathVertex::new(0.0, 0.0),
                 PathVertex::new(10.0, 0.0),
                 PathVertex::new(10.0, 10.0),
-            ],
+            ]
+            .into(),
+            offset: Default::default(),
             color: Rgba::new(0.1, 0.2, 0.3, 1.0),
             stroke_width: Some(1.0),
         }

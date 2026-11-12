@@ -204,6 +204,7 @@ fn icons_and_paths_draw_with_text_in_one_call() {
             .iter()
             .map(|&(x, y)| PathVertex::new(x, y))
             .collect(),
+        offset: Default::default(),
         color: Rgba::new(0.2, 0.3, 0.5, 1.0),
         stroke_width: None,
     }];
@@ -214,7 +215,9 @@ fn icons_and_paths_draw_with_text_in_one_call() {
                 PathVertex::new(2.0, y + 5.0),
                 PathVertex::new(4.0, y + 8.0),
                 PathVertex::new(8.0, y + 2.0),
-            ],
+            ]
+            .into(),
+            offset: Default::default(),
             color: Rgba::new(0.3, 0.8, 0.4, 1.0),
             stroke_width: Some(1.5),
         });

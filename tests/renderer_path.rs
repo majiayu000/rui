@@ -21,6 +21,7 @@ fn draw(vertices: &[(f32, f32)], stroke_width: Option<f32>) -> Option<Vec<u8>> {
             .iter()
             .map(|(x, y)| PathVertex::new(*x, *y))
             .collect(),
+        offset: Default::default(),
         color: Rgba::new(0.0, 1.0, 0.0, 1.0),
         stroke_width,
     });

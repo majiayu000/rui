@@ -10,6 +10,8 @@ mod frame;
 mod instances;
 mod order;
 mod path;
+mod path_cache;
+mod path_tiles;
 mod retained;
 mod simple;
 mod sprites;
@@ -30,7 +32,9 @@ use crate::renderer::{
     RendererResourceKind, RendererResourceLimits, RendererResourceStats,
 };
 use frame::FramePlan;
-use path::{PathGeometry, PathTiles};
+use path::PathGeometry;
+use path_cache::PathCache;
+use path_tiles::PathTiles;
 use sprites::PathSprites;
 use std::collections::HashMap;
 
@@ -154,6 +158,7 @@ pub(crate) struct FramePlanner<T> {
     pub image_cache: RendererImageCache,
     path_sprites: PathSprites,
     path_tiles: PathTiles,
+    path_cache: PathCache,
     pub textures: ImageTextures<T>,
 }
 
@@ -170,6 +175,7 @@ impl<T: Clone> FramePlanner<T> {
             ),
             path_sprites: PathSprites::default(),
             path_tiles: PathTiles::default(),
+            path_cache: PathCache::default(),
             textures: ImageTextures::new(limits),
         }
     }
@@ -196,6 +202,7 @@ impl<T: Clone> FramePlanner<T> {
         );
         self.path_sprites.begin_frame(self.text_cache.epoch());
         self.path_tiles.begin_frame();
+        self.path_cache.begin_frame();
         Ok(())
     }
 

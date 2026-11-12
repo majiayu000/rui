@@ -258,16 +258,19 @@ fn primitive_line(index: usize, primitive: &Primitive) -> Result<String, Primiti
         },
         Primitive::Path {
             vertices,
+            offset,
             color,
             stroke_width,
         } => {
+            // Where the vertices are drawn, so moving a path by its offset or by
+            // its vertices reads the same.
             let points = vertices
                 .iter()
                 .map(|vertex| {
                     format!(
                         "({}, {})",
-                        f32_text(vertex.position[0]),
-                        f32_text(vertex.position[1])
+                        f32_text(vertex.position[0] + offset.x),
+                        f32_text(vertex.position[1] + offset.y)
                     )
                 })
                 .collect::<Vec<_>>()

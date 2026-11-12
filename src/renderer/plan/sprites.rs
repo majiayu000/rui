@@ -93,6 +93,12 @@ impl PathSprites {
         }
     }
 
+    /// Whether `geometry` is small enough for the atlas.
+    pub(super) fn fits(&self, geometry: &PathGeometry) -> bool {
+        let [x0, y0, x1, y1] = geometry.bounds;
+        x1.ceil() - x0.floor() <= MAX_SPRITE_SIZE && y1.ceil() - y0.floor() <= MAX_SPRITE_SIZE
+    }
+
     pub(super) fn lookup(&mut self, geometry: &PathGeometry) -> SpriteLookup {
         let [x0, y0, x1, y1] = geometry.bounds;
         let origin = [x0.floor(), y0.floor()];
