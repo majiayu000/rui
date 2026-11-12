@@ -17,7 +17,6 @@ use crate::renderer::text::{RichSpan, RichWrapped, TextMeasureCache, TextRequest
 use crate::renderer::{PaintRecord, Primitive, Scene};
 use std::any::{Any, TypeId};
 use std::cell::{Cell, RefCell, RefMut};
-use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};

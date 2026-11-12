@@ -9,6 +9,7 @@ mod scene;
 mod system_fonts;
 mod telemetry;
 pub mod text;
+mod text_ascii;
 mod text_bidi;
 mod text_classify;
 mod text_cluster_position;
