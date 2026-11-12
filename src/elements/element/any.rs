@@ -414,10 +414,32 @@ impl AnyElement {
                 origin,
                 unrounded_origin: unrounded.origin,
                 unrounded_size: unrounded.size,
-                reach: cx.scene.reach_of(start..cx.scene.len()),
+                reach: self.painted_reach(cx.scene, start),
             });
             self.paint_record.set(Some((frame, index)));
         }
+    }
+
+    /// What the primitives this element painted from `start` reach: each
+    /// child's recorded reach, and the primitives between children, so a
+    /// primitive is measured once however deep it is painted. Children must
+    /// all have painted records of this frame.
+    fn painted_reach(&self, scene: &Scene, start: usize) -> Bounds {
+        let (mut reach, mut at) = (Bounds::default(), start);
+        for child in self.children() {
+            let record = child
+                .paint_record
+                .get()
+                .and_then(|(frame, index)| scene.paint_record(frame, index));
+            let Some(record) = record.filter(|record| record.start as usize >= at) else {
+                return scene.reach_of(start..scene.len());
+            };
+            reach = reach
+                .union(&scene.reach_of(at..record.start as usize))
+                .union(&record.reach);
+            at = record.end as usize;
+        }
+        reach.union(&scene.reach_of(at..scene.len()))
     }
 
     /// Frame and index of the [`PaintRecord`] this element last left.
