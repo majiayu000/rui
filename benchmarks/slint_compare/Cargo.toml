@@ -1,0 +1,18 @@
+[package]
+name = "slint_compare"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Kept out of RUI's build: Slint and its renderers are only this harness's.
+[workspace]
+
+[dependencies]
+slint = { version = "=1.18.1", default-features = false, features = ["std", "compat-1-2", "renderer-software", "renderer-femtovg-wgpu", "unstable-wgpu-30"] }
+pollster = "=0.4.0"
+
+[build-dependencies]
+slint-build = "=1.18.1"
+
+[profile.release]
+debug = "line-tables-only"
