@@ -5,6 +5,8 @@ mod capture;
 mod glyph;
 mod renderer;
 mod retained;
+mod shader_cache;
+mod shader_hash;
 mod shaders;
 #[cfg(test)]
 pub(crate) mod tests;
