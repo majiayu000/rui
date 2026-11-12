@@ -214,6 +214,18 @@ input/effects -> build -> layout -> paint -> hit index -> render -> present
     its pass. A fragment function that holds only the glyph path draws the pass
     in about 0.012 ms, so the remainder is the size of the shared fragment
     function. Splitting it needs a second pipeline.
+  - The second pipeline: glyphs and pixel-aligned plain quads inside their
+    clips draw with `simple_fragment`, which reads no flat vertex output. On
+    this GPU each flat output the fragment function reads costs every sprite,
+    even in a branch that does not run: reading `kind` alone added about 16%
+    to a text frame. The planner marks such sprites; an open draw of other
+    sprites takes them too, so draws never split more often than before. The
+    offscreen pass also covers only the drawn extent of its kept texture.
+    Single-frame GPU p50, `compare_frame`, median of 6 interleaved runs (load
+    27–53), before → after: `text_paragraphs` 0.227 → 0.164, `list_full`
+    0.219 → 0.158, `list_virtual_1k` 0.103 → 0.077. Clip distances instead of
+    the per-fragment clip test, dropping the shadow and path branches, and a
+    Private offscreen texture did not help.
 
 ### 7. Present (lane 5, #191)
 

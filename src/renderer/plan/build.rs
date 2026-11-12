@@ -47,13 +47,19 @@ impl<T> FrameData<T> {
         }
     }
 
-    pub(super) fn push_quad(&mut self, quad: GpuQuad, clip: u32, scale_factor: f32) {
+    pub(super) fn push_quad(&mut self, mut quad: GpuQuad, clip: u32, scale_factor: f32) {
         let rect = bounds_rect(quad.bounds);
+        let device = rect.map(|edge| edge * scale_factor);
+        let aligned = quad.is_plain() && device.iter().all(|&edge| on_device_pixel(edge));
+        if aligned {
+            quad.gradient_params[2] = 1.0;
+        }
         let kind = ItemKind::Sprites {
             kind: KIND_QUAD,
             start: self.quads.len() as u32,
             count: 1,
             pages: Pages::default(),
+            simple: aligned && inside_clip(&self.clip_edges, clip, device),
         };
         self.quads.push(quad);
         self.push_item(kind, clip, rect, scale_factor);
@@ -75,6 +81,22 @@ pub(super) fn visible_rect(
         rect[3].min(edges[3] / scale_factor),
     ];
     (visible[0] < visible[2] && visible[1] < visible[3]).then_some(visible)
+}
+
+/// Whether a device pixel coordinate lies on a pixel edge.
+fn on_device_pixel(value: f32) -> bool {
+    (value - value.round()).abs() < 1e-3
+}
+
+/// Whether no pixel `device`, in device pixels, covers needs the test against
+/// clip `clip`: it lies inside the clip where the scissor rectangle of every
+/// sprite draw, clip 0, keeps it.
+pub(super) fn inside_clip(clip_edges: &[[f32; 4]], clip: u32, device: Rect) -> bool {
+    let (edges, scissor) = (clip_edges[clip as usize], clip_edges[0]);
+    device[0].max(scissor[0]) >= edges[0]
+        && device[1].max(scissor[1]) >= edges[1]
+        && device[2].min(scissor[2]) <= edges[2]
+        && device[3].min(scissor[3]) <= edges[3]
 }
 
 /// `[x, y, width, height]` as the rectangle it covers.
@@ -201,6 +223,7 @@ impl<T: Clone> FramePlanner<T> {
                         start: frame.shadows.len() as u32,
                         count: 1,
                         pages: Pages::default(),
+                        simple: false,
                     };
                     frame.shadows.push(shadow);
                     let rect = outset(bounds_rect(shadow.bounds), margin);
@@ -439,6 +462,7 @@ impl<T: Clone> FramePlanner<T> {
                 start: frame.glyphs.len() as u32,
                 count: 1,
                 pages: Pages::coverage(slot.page as u32),
+                simple: false,
             };
             frame.glyphs.push(sprite);
             frame.push_item(kind, clip, bounds_rect(sprite.bounds), scale_factor);
@@ -460,6 +484,7 @@ impl<T: Clone> FramePlanner<T> {
                 start,
                 count: frame.path_tiles.len() as u32 - start,
                 pages: Pages::default(),
+                simple: false,
             };
             frame.push_item(kind, clip, rect, scale_factor);
         }
@@ -587,8 +612,10 @@ impl<T: Clone> FramePlanner<T> {
         // Glyphs of one kind on one atlas page form one item; a color glyph, or
         // a glyph on another page, starts the next, ordered after it where they
         // overlap.
+        // A run is simple when its glyphs are coverage glyphs inside the clip.
         let mut run: Option<(bool, u32, u32)> = None;
-        let flush = |frame: &mut FrameData<T>, run: Option<(bool, u32, u32)>| {
+        let mut inside = true;
+        let flush = |frame: &mut FrameData<T>, run: Option<(bool, u32, u32)>, inside: bool| {
             if let Some((color, page, start)) = run {
                 let (kind, pages) = if color {
                     (KIND_COLOR_GLYPH, Pages::color(page))
@@ -600,6 +627,7 @@ impl<T: Clone> FramePlanner<T> {
                     start,
                     count: frame.glyphs.len() as u32 - start,
                     pages,
+                    simple: !color && inside,
                 };
                 frame.plan.push(kind, clip, None);
             }
@@ -629,10 +657,20 @@ impl<T: Clone> FramePlanner<T> {
                 RendererResourceError::missing(RendererResourceKind::Glyph, slot.page as u32)
             })?;
             let rect = slot.rect;
+            let (left, top) = (
+                whole_x + atlas_glyph.left as f32,
+                pen_y + atlas_glyph.top as f32,
+            );
+            let device = [
+                left,
+                top,
+                left + rect.width as f32,
+                top + rect.height as f32,
+            ];
             let sprite = GpuGlyph {
                 bounds: [
-                    (whole_x + atlas_glyph.left as f32) / scale_factor,
-                    (pen_y + atlas_glyph.top as f32) / scale_factor,
+                    left / scale_factor,
+                    top / scale_factor,
                     rect.width as f32 / scale_factor,
                     rect.height as f32 / scale_factor,
                 ],
@@ -646,12 +684,14 @@ impl<T: Clone> FramePlanner<T> {
             };
             let key = (atlas_glyph.color, page);
             if run.is_none_or(|(color, open, _)| (color, open) != key) {
-                flush(frame, run);
+                flush(frame, run, inside);
                 run = Some((key.0, key.1, frame.glyphs.len() as u32));
+                inside = true;
             }
+            inside &= inside_clip(&frame.clip_edges, clip, device);
             frame.glyphs.push(sprite);
         }
-        flush(frame, run);
+        flush(frame, run, inside);
         Ok(())
     }
 }

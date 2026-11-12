@@ -48,6 +48,10 @@ impl MetalRenderer {
         );
 
         let render_pass_desc = RenderPassDescriptor::new();
+        // Only the drawn extent: a kept offscreen texture may be larger, and
+        // every tile of the pass is cleared and stored.
+        render_pass_desc.set_render_target_width(drawable_size.width as u64);
+        render_pass_desc.set_render_target_height(drawable_size.height as u64);
         let color_attachment = render_pass_desc.color_attachments().object_at(0).unwrap();
         color_attachment.set_texture(Some(texture));
         color_attachment.set_store_action(MTLStoreAction::Store);
@@ -93,8 +97,9 @@ impl MetalRenderer {
             self.count_draw(1);
         }
         let mut scissor = 0;
-        // Sprite references live at buffer 0, which image and path draws rebind.
-        let mut sprites_bound = false;
+        // Sprite references live at buffer 0, which image draws rebind. The
+        // pipeline bound for sprites: `Some(simple)`, or `None` after an image.
+        let mut sprites_bound: Option<bool> = None;
 
         // All instance data of the frame goes in one buffer from the pool.
         let mut layout = BufferLayout::default();
@@ -130,13 +135,20 @@ impl MetalRenderer {
                     pages,
                     start,
                     count,
+                    simple,
                 } => {
-                    if !sprites_bound {
-                        encoder.set_render_pipeline_state(&self.sprite_pipeline);
+                    if sprites_bound.is_none() {
                         encoder.set_vertex_buffer(0, Some(&instances), refs_at as u64);
                         bind_vertex_value(encoder, 1, &uniforms);
                         encoder.set_fragment_sampler_state(0, Some(&self.sampler));
-                        sprites_bound = true;
+                    }
+                    if sprites_bound != Some(simple) {
+                        encoder.set_render_pipeline_state(if simple {
+                            &self.simple_pipeline
+                        } else {
+                            &self.sprite_pipeline
+                        });
+                        sprites_bound = Some(simple);
                     }
                     if scissor != 0 {
                         encoder.set_scissor_rect(full);
@@ -178,7 +190,7 @@ impl MetalRenderer {
                     encoder.set_fragment_sampler_state(0, Some(&self.sampler));
                     encoder.draw_primitives_instanced(MTLPrimitiveType::Triangle, 0, 6, 1);
                     self.count_draw(1);
-                    sprites_bound = false;
+                    sprites_bound = None;
                 }
             }
         }
