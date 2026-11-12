@@ -173,7 +173,9 @@ fn clips_hold_inside_a_shared_draw() {
     ]);
     let pixels = capture(&mut renderer, &frame);
 
-    assert_eq!(renderer.last_frame_stats().draw_calls, 1);
+    // The background inside its clip draws with the simple pipeline; the two
+    // quads crossing theirs share the next draw.
+    assert_eq!(renderer.last_frame_stats().draw_calls, 2);
     for (x, y, inside) in [
         (10, 10, true),
         (29, 29, true),

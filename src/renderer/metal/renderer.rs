@@ -87,6 +87,8 @@ pub struct MetalRenderer {
     device: Device,
     command_queue: CommandQueue,
     sprite_pipeline: RenderPipelineState,
+    /// Glyphs and aligned plain quads inside their clips: see `simple_fragment`.
+    simple_pipeline: RenderPipelineState,
     image_pipeline: RenderPipelineState,
     retained_pipelines: RetainedPipelines,
     sampler: SamplerState,
@@ -120,11 +122,25 @@ fn blended_pipeline(
     vertex: &str,
     fragment: &str,
 ) -> Result<RenderPipelineState, RendererError> {
-    let library = device
+    let library = compile(device, source, vertex)?;
+    pipeline_from(device, &library, vertex, fragment)
+}
+
+fn compile(device: &Device, source: &str, vertex: &str) -> Result<Library, RendererError> {
+    device
         .new_library_with_source(&with_color(source), &CompileOptions::new())
         .map_err(|err| {
             RendererError::render_failed(format!("failed to compile {vertex} shader: {err}"))
-        })?;
+        })
+}
+
+/// [`blended_pipeline`] from a compiled `library`.
+fn pipeline_from(
+    device: &Device,
+    library: &Library,
+    vertex: &str,
+    fragment: &str,
+) -> Result<RenderPipelineState, RendererError> {
     let function = |name: &str| {
         library
             .get_function(name, None)
@@ -192,12 +208,11 @@ impl MetalRenderer {
         let (sprite_pipeline, image_pipeline, retained_pipelines) = std::thread::scope(|scope| {
             let retained = scope.spawn(|| RetainedPipelines::new(&device));
             let sprite = scope.spawn(|| {
-                blended_pipeline(
-                    &device,
-                    super::shaders::SPRITE_SHADER,
-                    "sprite_vertex",
-                    "sprite_fragment",
-                )
+                let library = compile(&device, super::shaders::SPRITE_SHADER, "sprite_vertex")?;
+                Ok::<_, RendererError>((
+                    pipeline_from(&device, &library, "sprite_vertex", "sprite_fragment")?,
+                    pipeline_from(&device, &library, "sprite_vertex", "simple_fragment")?,
+                ))
             });
             let image = blended_pipeline(
                 &device,
@@ -217,7 +232,7 @@ impl MetalRenderer {
             });
             (sprite, image, retained)
         });
-        let (sprite_pipeline, image_pipeline, retained_pipelines) =
+        let ((sprite_pipeline, simple_pipeline), image_pipeline, retained_pipelines) =
             (sprite_pipeline?, image_pipeline?, retained_pipelines?);
 
         // Sampler for images/text
@@ -242,6 +257,7 @@ impl MetalRenderer {
             device,
             command_queue,
             sprite_pipeline,
+            simple_pipeline,
             image_pipeline,
             retained_pipelines,
             sampler,

@@ -215,7 +215,7 @@ fn colored_box(pixels: &[u8], width: usize) -> Option<(usize, usize, usize, usiz
 }
 
 #[test]
-fn emoji_draw_in_color_beside_text_in_one_draw() {
+fn emoji_draw_in_color_beside_text_in_two_draws() {
     let mut renderer = match MetalRenderer::new() {
         Ok(renderer) => renderer,
         Err(RendererError::BackendUnavailable(_)) => return,
@@ -245,10 +245,11 @@ fn emoji_draw_in_color_beside_text_in_one_draw() {
         );
         return;
     };
+    // The quad and "Hi " draw with the simple pipeline, the emoji after them.
     assert_eq!(
         renderer.last_frame_stats().draw_calls,
-        1,
-        "text and emoji share a draw"
+        2,
+        "the emoji follows the simple draw"
     );
     // Right of "Hi ", within the 40-pixel line at 10 + 0..40, about 28 px tall.
     let (x0, y0, x1, y1) = (x0 / 2, y0 / 2, x1 / 2, y1 / 2);

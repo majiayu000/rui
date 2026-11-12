@@ -348,11 +348,21 @@ pub struct GpuQuad {
     pub gradient_start: [f32; 4],
     // Gradient end color (for gradients)
     pub gradient_end: [f32; 4],
-    // Gradient params: x = fill_type (0 solid, 1 linear, 2 radial), y = angle (radians)
+    // Gradient params: x = fill_type (0 solid, 1 linear, 2 radial), y = angle (radians),
+    // z = 1 for a plain quad whose edges lie on device pixels
     pub gradient_params: [f32; 4],
 }
 
 impl GpuQuad {
+    /// A solid fill with square corners and no border.
+    pub(crate) fn is_plain(&self) -> bool {
+        // Zero or negative zero in every radius and width: no bit but the signs.
+        const SIGNS: u128 = 0x8000_0000_8000_0000_8000_0000_8000_0000;
+        let bits = bytemuck::cast::<_, u128>(self.corner_radii)
+            | bytemuck::cast::<_, u128>(self.border_widths);
+        (bits & !SIGNS == 0) & (self.gradient_params[0] < 0.5)
+    }
+
     pub fn solid(
         bounds: Bounds,
         background: Rgba,
