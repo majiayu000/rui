@@ -101,7 +101,7 @@ pub(super) fn paint_data_row(cx: &mut PaintContext, bounds: Bounds, row: DataRow
                 14.0,
                 bounds.height(),
             ),
-            content: marker.to_string(),
+            content: marker.to_string().into(),
             color: text_fg.to_rgba(),
             font_size: text_size,
             font_weight: row.theme.typography.control_weight,
@@ -123,7 +123,7 @@ pub(super) fn paint_data_row(cx: &mut PaintContext, bounds: Bounds, row: DataRow
             (bounds.max_x() - content_x - DATA_PADDING_X).max(0.0),
             label_height,
         ),
-        content: row.label.to_string(),
+        content: row.label.to_string().into(),
         color: text_fg.to_rgba(),
         font_size: text_size,
         font_weight: if row.selected {
@@ -144,7 +144,7 @@ pub(super) fn paint_data_row(cx: &mut PaintContext, bounds: Bounds, row: DataRow
                 (bounds.max_x() - content_x - DATA_PADDING_X).max(0.0),
                 bounds.height() - label_height,
             ),
-            content: detail.to_string(),
+            content: detail.to_string().into(),
             color: disabled_aware_color(row.theme.colors.text, row.disabled)
                 .with_alpha(DATA_DETAIL_ALPHA)
                 .to_rgba(),

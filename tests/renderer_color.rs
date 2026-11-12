@@ -245,7 +245,7 @@ fn ink(text: Rgba, background: Rgba) -> Option<f32> {
         full(background),
         Primitive::Text {
             bounds: Bounds::from_xywh(5.0, 5.0, 90.0, 50.0),
-            content: String::from("Hamburgefonts"),
+            content: "Hamburgefonts".into(),
             color: text,
             font_size: 13.0,
             font_weight: 400,

@@ -48,6 +48,10 @@ impl PaintSlot {
 /// small: every element carries one, and containers hold children inline.
 struct LayoutRecord {
     epoch: u64,
+    /// Identity the subtree was laid out under.
+    id: ElementId,
+    /// The subtree's last node, its root's.
+    last: NodeId,
     /// The subtree's nodes, in creation order, in [`LayoutNodes`]; its own node
     /// comes last.
     start: u32,
@@ -209,7 +213,7 @@ impl AnyElement {
         }
         let parent = std::mem::replace(&mut cx.identity_parent, id);
         let next_child_index = std::mem::replace(&mut cx.next_child_index, 0);
-        let start = cx.retained.as_ref().map(|pass| pass.cursor);
+        let start = cx.retained.as_ref().map(|pass| pass.cursor());
         let node = self.inner.layout(cx);
         cx.identity_parent = parent;
         cx.next_child_index = next_child_index;
@@ -220,8 +224,10 @@ impl AnyElement {
                 (capabilities.pure && children.iter().all(|child| child.layout_record.is_some()))
                     .then(|| LayoutRecord {
                         epoch: pass.kept.epoch,
+                        id,
+                        last: node,
                         start: start as u32,
-                        end: pass.cursor as u32,
+                        end: pass.cursor() as u32,
                         text_style: Rc::clone(&cx.text_style),
                         pointer_inert: capabilities.pointer_inert
                             && children.iter().all(|child| {
@@ -241,29 +247,32 @@ impl AnyElement {
     /// retained pass, handed back without visiting the subtree. Its nodes must
     /// be the ones this pass reaches next, so the pass keeps them.
     fn keep_layout(&mut self, cx: &mut LayoutContext) -> Option<NodeId> {
-        let record = self.layout_record.as_ref()?;
+        let record = self.layout_record.as_mut()?;
         let pass = cx.retained.as_mut()?;
         let (start, end) = (record.start as usize, record.end as usize);
-        if pass.kept.epoch != record.epoch
-            || pass.cursor != start
-            || end > pass.kept.nodes.len()
-            || start == end
-            || !(Rc::ptr_eq(&cx.text_style, &record.text_style)
-                || *cx.text_style == *record.text_style)
-        {
+        let kept_start = pass.cursor();
+        let node = (pass.kept.epoch == record.epoch
+            && Some(record.id) == self.stable_id
+            && (Rc::ptr_eq(&cx.text_style, &record.text_style)
+                || *cx.text_style == *record.text_style))
+            .then(|| pass.keep_range(start, end, record.last))
+            .flatten();
+        let Some(node) = node else {
             self.layout_record = None;
             return None;
-        }
-        pass.cursor = end;
-        let nodes = &pass.kept.nodes[start..end];
+        };
+        // The subtree's nodes now sit where this pass put them. Its descendants'
+        // records keep the old places, which only holds while it does not move.
+        record.start = kept_start as u32;
+        record.end = pass.cursor() as u32;
         if !cx.previous_measured_text.is_empty() {
-            for node in nodes {
+            for (_, node) in &pass.kept.nodes[kept_start..] {
                 if let Some(text) = cx.previous_measured_text.remove(node) {
                     cx.measured_text.insert(*node, text);
                 }
             }
         }
-        nodes.last().copied()
+        Some(node)
     }
 
     fn kind(&self) -> TypeId {

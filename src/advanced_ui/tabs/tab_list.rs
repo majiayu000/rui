@@ -448,7 +448,7 @@ impl TabList {
         };
         cx.paint(Primitive::Text {
             bounds,
-            content: tab.label.clone(),
+            content: tab.label.clone().into(),
             color: if tab.disabled {
                 text.with_alpha(0.5)
             } else {

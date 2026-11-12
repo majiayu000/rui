@@ -273,7 +273,7 @@ mod tests {
             },
             Primitive::Text {
                 bounds: Bounds::from_xywh(4.0, 5.0, 80.0, 20.0),
-                content: String::from("renderer"),
+                content: String::from("renderer").into(),
                 color: Rgba::new(0.0, 0.0, 0.0, 1.0),
                 font_size: 14.0,
                 font_weight: 400,
