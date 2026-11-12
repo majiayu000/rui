@@ -27,8 +27,8 @@ pub use crate::renderer::text_shaping::{
     TextCluster, TextDirection, TextRun, TextScript, TextShapeDiagnostic, TextShapePlan,
 };
 pub use atlas::{
-    ATLAS_PAGE_SIZE, AtlasGlyph, AtlasRect, AtlasSlot, GlyphAtlas, GlyphUpload, PlacedGlyph,
-    SUBPIXEL_VARIANTS, ShapedText, TextGlyphCache,
+    ATLAS_PAGE_SIZE, AtlasGlyph, AtlasRect, AtlasSlot, GlyphAtlas, GlyphSprite, GlyphUpload,
+    PlacedGlyph, SUBPIXEL_VARIANTS, ShapedText, TextGlyphCache,
 };
 pub use rich::{RichLine, RichPiece, RichPieceText, RichSpan, RichWrapped};
 pub use wrap::{TextLine, WrappedText};

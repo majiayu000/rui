@@ -312,3 +312,45 @@ fn glyph_limit_is_a_pressure_error() {
         .expect_err("second glyph is over the limit");
     assert!(matches!(err, TextError::Resource(err) if err.is_pressure()));
 }
+
+#[test]
+fn placed_sprites_are_reused_until_their_page_is_evicted() {
+    let mut cache = TextGlyphCache::with_measurer(
+        TextMeasureCache::new(),
+        GlyphAtlas::new(64, 64 * 64),
+        usize::MAX,
+    );
+    let shaped = cache.shape(request("ab")).expect("shape").expect("ink");
+    cache.begin_frame();
+    let first = cache
+        .sprites(&shaped, 3.0, 28.0, 2.0)
+        .expect("sprites")
+        .to_vec();
+    assert_eq!(first.len(), 2);
+    let misses = cache.resource_stats().cache_misses;
+
+    cache.begin_frame();
+    let again = cache.sprites(&shaped, 3.0, 28.0, 2.0).expect("sprites");
+    assert_eq!(again, first);
+    assert_eq!(
+        cache.resource_stats().cache_misses,
+        misses,
+        "no glyph rasterized"
+    );
+    let moved = cache.sprites(&shaped, 4.0, 28.0, 2.0).expect("sprites");
+    assert_eq!(moved[0].x, first[0].x + 1.0, "placed again at the new x");
+
+    // Fill the page, then let a later frame empty it.
+    while cache.place(false, 15, 15).is_ok() {}
+    cache.take_uploads();
+    cache.take_cleared_pages();
+    cache.begin_frame();
+    cache.set_completed_frame(cache.frame() - 1);
+    sprite(&mut cache).expect("an idle page");
+    assert_eq!(cache.take_cleared_pages(), [0]);
+
+    cache.take_uploads();
+    let after = cache.sprites(&shaped, 3.0, 28.0, 2.0).expect("sprites");
+    assert_eq!(after.len(), 2);
+    assert_eq!(cache.take_uploads().len(), 2, "rasterized again");
+}
