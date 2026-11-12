@@ -2,6 +2,7 @@
 //! and the conversion from [`Style`] to taffy.
 
 use super::*;
+use crate::renderer::text::FastMap;
 
 /// Source of [`LayoutNodes`] epochs: a new one whenever the kept nodes are
 /// started over, so layout recorded against old nodes is never reused.
@@ -22,10 +23,10 @@ pub struct LayoutContext<'a> {
     /// records can keep the one they were laid out with cheaply.
     pub(super) text_style: Rc<TextStyle>,
     /// Wrapped text in this pass, measured by taffy in [`Self::compute_layout`].
-    pub(super) measured_text: HashMap<NodeId, MeasuredText>,
+    pub(super) measured_text: FastMap<NodeId, MeasuredText>,
     /// Wrapped text of the previous retained pass, to dirty nodes whose text
     /// changed while their taffy style did not.
-    pub(super) previous_measured_text: HashMap<NodeId, MeasuredText>,
+    pub(super) previous_measured_text: FastMap<NodeId, MeasuredText>,
     /// Identity of the element whose children are being laid out.
     pub(super) identity_parent: ElementId,
     /// Position the next child laid out under `identity_parent` takes.
@@ -152,7 +153,7 @@ pub struct LayoutNodes {
     /// Node count of the tree after the last retained pass. Anything else means the
     /// tree was changed outside a retained pass and the kept ids are stale.
     tree_node_count: usize,
-    measured_text: HashMap<NodeId, MeasuredText>,
+    measured_text: FastMap<NodeId, MeasuredText>,
 }
 
 impl Default for LayoutNodes {
@@ -161,7 +162,7 @@ impl Default for LayoutNodes {
             nodes: Vec::new(),
             epoch: next_layout_epoch(),
             tree_node_count: 0,
-            measured_text: HashMap::new(),
+            measured_text: FastMap::default(),
         }
     }
 }
@@ -230,8 +231,8 @@ impl<'a> LayoutContext<'a> {
             text_measurer,
             retained,
             text_style: Rc::default(),
-            measured_text: HashMap::new(),
-            previous_measured_text: HashMap::new(),
+            measured_text: FastMap::default(),
+            previous_measured_text: FastMap::default(),
             identity_parent: ElementId::ROOT,
             next_child_index: 0,
         }
@@ -258,6 +259,8 @@ impl<'a> LayoutContext<'a> {
             LayoutTextMeasurer::Borrowed(text_measurer),
             Some(RetainedPass { kept, cursor: 0 }),
         );
+        // Most passes measure the same texts as the last.
+        cx.measured_text.reserve(previous_measured_text.len());
         cx.previous_measured_text = previous_measured_text;
         cx
     }

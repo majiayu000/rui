@@ -31,6 +31,7 @@ pub use atlas::{
     PlacedGlyph, SUBPIXEL_VARIANTS, ShapedText, TextGlyphCache,
 };
 pub use rich::{RichLine, RichPiece, RichPieceText, RichSpan, RichWrapped};
+pub(crate) use hash::FastMap;
 pub use wrap::{TextLine, WrappedText};
 
 pub const TEXT_BOUNDS_TOLERANCE: f32 = 1.0;
