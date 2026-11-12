@@ -132,7 +132,7 @@ struct Uniforms {
 
 // Fields are shared between kinds where their meaning matches. The fragment
 // reads everything else from the instance at `index`: every vertex output is
-// written to memory for each of an instance's six vertices, which dominates
+// written to memory for each of an instance's four vertices, which dominates
 // small sprites such as glyphs.
 struct VertexOut {
     float4 position [[position]];
@@ -230,16 +230,14 @@ vertex VertexOut sprite_vertex(
     constant float4* clips [[buffer(5)]],
     constant PathInstance* paths [[buffer(6)]]
 ) {
-    // Unit quad vertices (two triangles)
-    float2 positions[6] = {
-        float2(0, 0), float2(1, 0), float2(0, 1),
-        float2(1, 0), float2(1, 1), float2(0, 1)
-    };
+    // Unit quad corners as a triangle strip: four vertices rather than six,
+    // which dominate the cost of drawing small sprites such as glyphs. The two
+    // triangles are the ones a list of six would draw.
+    float2 unit_pos = float2(vertex_id & 1, vertex_id >> 1);
 
     SpriteRef sprite = refs[instance_id];
     uint kind = sprite.index >> 29;
     uint index = sprite.index & 0x1fffffff;
-    float2 unit_pos = positions[vertex_id];
 
     VertexOut out = {};
     out.kind = kind;

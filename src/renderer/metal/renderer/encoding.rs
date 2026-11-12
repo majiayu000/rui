@@ -169,9 +169,9 @@ impl MetalRenderer {
                     encoder.set_fragment_texture(0, Some(page_texture));
                     encoder.set_fragment_texture(1, Some(color_texture));
                     encoder.draw_primitives_instanced_base_instance(
-                        MTLPrimitiveType::Triangle,
+                        MTLPrimitiveType::TriangleStrip,
                         0,
-                        6,
+                        4,
                         u64::from(count),
                         u64::from(start),
                     );
