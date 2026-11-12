@@ -74,11 +74,15 @@ fn is_emoji(ch: char) -> bool {
 }
 
 fn is_ltr(ch: char) -> bool {
+    if ch.is_ascii() {
+        return ch.is_ascii_alphabetic();
+    }
     ch.is_alphabetic() && bidi_class(ch) == BidiClass::L
 }
 
 fn is_rtl(ch: char) -> bool {
-    ch.is_alphabetic() && matches!(bidi_class(ch), BidiClass::R | BidiClass::AL)
+    // Nothing below U+0590 is right to left.
+    ch >= '\u{590}' && ch.is_alphabetic() && matches!(bidi_class(ch), BidiClass::R | BidiClass::AL)
 }
 
 pub(crate) fn is_default_ignorable(ch: char) -> bool {

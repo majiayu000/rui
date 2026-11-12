@@ -1,5 +1,6 @@
 use crate::core::geometry::{Bounds, Size};
 use crate::renderer::text::{TextMetrics, TextRequest};
+use crate::renderer::text_ascii::AsciiCoverage;
 use crate::renderer::text_bidi::{ink_of, line_levels, place_visually};
 use crate::renderer::text_classify::{
     classify_direction, classify_script, is_default_ignorable, resolve_text_direction,
@@ -74,6 +75,7 @@ pub(crate) struct TextShapingFont {
     /// Plans built so far, one per direction, script and language shaped.
     plans: Arc<Mutex<Vec<CachedPlan>>>,
     boxes: Arc<GlyphBoxes>,
+    ascii: AsciiCoverage,
     /// Owns the bytes `font` and `face` read; never read directly.
     #[allow(dead_code)]
     data: Arc<FontBytes>,
@@ -108,6 +110,7 @@ impl TextShapingFont {
             face,
             plans: Arc::new(Mutex::new(Vec::new())),
             boxes: Arc::default(),
+            ascii: AsciiCoverage::default(),
             data,
         })
     }
@@ -167,6 +170,11 @@ impl TextShapingFont {
 
     pub(crate) fn supports_cluster(&self, cluster: &str) -> bool {
         let face = self.face();
+        if let &[byte] = cluster.as_bytes()
+            && byte.is_ascii()
+        {
+            return char::from(byte).is_control() || self.ascii.covers(face, byte);
+        }
         cluster
             .chars()
             .all(|ch| ch.is_control() || is_default_ignorable(ch) || face.glyph_index(ch).is_some())
