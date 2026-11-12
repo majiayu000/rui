@@ -33,13 +33,15 @@ mod gpu_time;
 
 type Element<'a> = CoreElement<'a, (), Theme, Renderer>;
 
-const CASES: [&str; 6] = [
+const CASES: [&str; 8] = [
     "startup",
     "list_full",
+    "list_full_rows",
     "list_virtual_1k",
     "list_virtual_100k",
     "text_paragraphs",
     "quad_grid",
+    "quad_grid_cached",
 ];
 const WARMUP: usize = 10;
 const GPU_SETTLE: std::time::Duration = std::time::Duration::from_millis(100);
@@ -177,8 +179,15 @@ fn cached<D: Hash + 'static>(
     lazy(dependency, view).into()
 }
 
-fn list(selected: usize) -> Element<'static> {
-    let rows = (0..LIST_ROWS).map(|index| lazy_row(index, index == selected));
+/// The 2000-row list; with `lazy`, only the rows whose selection changed rebuild.
+fn list(selected: usize, lazy: bool) -> Element<'static> {
+    let rows = (0..LIST_ROWS).map(move |index| {
+        if lazy {
+            lazy_row(index, index == selected)
+        } else {
+            row_view(index, index == selected)
+        }
+    });
     // `lazy` hints `Shrink`, so the column is told to fill or its rows get no width.
     scrollable(column(rows).width(Length::Fill))
         .id(SCROLLABLE)
@@ -192,7 +201,7 @@ fn list(selected: usize) -> Element<'static> {
 fn virtual_rows(count: usize, offset: f32, selected: usize) -> Element<'static> {
     let first = ((offset / ROW_HEIGHT) as usize).min(count);
     let last = (first + (VIEWPORT.1 / ROW_HEIGHT).ceil() as usize + 1).min(count);
-    let rows = (first..last).map(|index| lazy_row(index, index == selected));
+    let rows = (first..last).map(|index| row_view(index, index == selected));
     scrollable(
         column![space().height(first as f32 * ROW_HEIGHT)]
             .extend(rows)
@@ -225,7 +234,7 @@ fn paragraphs(revision: usize) -> Element<'static> {
             content.push_str(&format!(" revision {revision}"));
             paragraph_view(content)
         } else {
-            cached(index, |&index| paragraph_view(paragraph(index)))
+            paragraph_view(paragraph(index))
         }
     });
     scrollable(column(texts).padding(16).spacing(8).width(Length::Fill))
@@ -238,10 +247,11 @@ fn cell_color(row: usize, column: usize) -> u32 {
     (((column * 255 / GRID.0) as u32) << 16) | (((row * 255 / GRID.1) as u32) << 8) | 0x60
 }
 
-/// The grid: every cell in a geometry cache that is never cleared, and the one cell
-/// that changes drawn on top of it each frame.
+/// The grid. Without a cache every cell is tessellated each frame, the changed one
+/// white. With one, every cell sits in a geometry cache that is never cleared and
+/// the changed cell is drawn on top of it each frame.
 struct Grid<'a> {
-    cells: &'a GeometryCache,
+    cells: Option<&'a GeometryCache>,
     changed: usize,
 }
 
@@ -259,7 +269,21 @@ impl canvas::Program<(), Theme, Renderer> for Grid<'_> {
         let size = Size::new(CELL.0, CELL.1);
         let origin =
             |row: usize, column: usize| Point::new(column as f32 * CELL.0, row as f32 * CELL.1);
-        let cells = self.cells.draw(renderer, bounds.size(), |frame| {
+        let Some(cache) = self.cells else {
+            let mut frame = canvas::Frame::new(renderer, bounds.size());
+            for row in 0..GRID.1 {
+                for column in 0..GRID.0 {
+                    let color = if row * GRID.0 + column == self.changed {
+                        0xffffff
+                    } else {
+                        cell_color(row, column)
+                    };
+                    frame.fill_rectangle(origin(row, column), size, hex(color));
+                }
+            }
+            return vec![frame.into_geometry()];
+        };
+        let cells = cache.draw(renderer, bounds.size(), |frame| {
             for row in 0..GRID.1 {
                 for column in 0..GRID.0 {
                     frame.fill_rectangle(origin(row, column), size, hex(cell_color(row, column)));
@@ -276,7 +300,7 @@ impl canvas::Program<(), Theme, Renderer> for Grid<'_> {
     }
 }
 
-fn quad_grid(cells: &GeometryCache, changed: usize) -> Element<'_> {
+fn quad_grid(cells: Option<&GeometryCache>, changed: usize) -> Element<'_> {
     iced_widget::canvas(Grid { cells, changed })
         .width(GRID.0 as f32 * CELL.0)
         .height(GRID.1 as f32 * CELL.1)
@@ -455,7 +479,7 @@ fn run(case: &str) -> Result<(), Box<dyn std::error::Error>> {
             let to_fixture = ms_since_process_start();
             let t0 = Instant::now();
             let mut harness = Harness::new()?;
-            harness.frame(list(0));
+            harness.frame(list(0, false));
             let first_frame = t0.elapsed().as_secs_f64() * 1e3;
             println!(
                 "iced startup process_to_fixture_ms={to_fixture:.1} first_frame_ms={first_frame:.1} process_to_first_frame_ms={:.1} footprint_mb={:.1}",
@@ -463,10 +487,11 @@ fn run(case: &str) -> Result<(), Box<dyn std::error::Error>> {
                 footprint_mb()
             );
         }
-        "list_full" => {
+        "list_full" | "list_full_rows" => {
+            let lazy = case == "list_full_rows";
             let mut harness = Harness::new()?;
             measure(case, &mut harness, |harness, turn| {
-                harness.frame(list(turn % LIST_ROWS));
+                harness.frame(list(turn % LIST_ROWS, lazy));
             });
         }
         "list_virtual_1k" | "list_virtual_100k" => {
@@ -489,11 +514,12 @@ fn run(case: &str) -> Result<(), Box<dyn std::error::Error>> {
                 harness.frame(paragraphs(turn));
             });
         }
-        "quad_grid" => {
+        "quad_grid" | "quad_grid_cached" => {
             let mut harness = Harness::new()?;
-            let cells = GeometryCache::new();
+            let cache = GeometryCache::new();
+            let cells = (case == "quad_grid_cached").then_some(&cache);
             measure(case, &mut harness, |harness, turn| {
-                harness.frame(quad_grid(&cells, turn % (GRID.0 * GRID.1)));
+                harness.frame(quad_grid(cells, turn % (GRID.0 * GRID.1)));
             });
         }
         _ => return Err(format!("unknown case {case}; cases: {}", CASES.join(" ")).into()),

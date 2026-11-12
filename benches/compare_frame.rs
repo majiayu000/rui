@@ -15,13 +15,13 @@
 //! Draw calls and instances come from `MetalRenderer::last_frame_stats`. GPU time comes
 //! from the same sampled frames through `benchmarks/gpui_compare/gpu_time.rs`, which
 //! GPUI's side uses too: each committed command buffer's `GPUEndTime - GPUStartTime`.
+use rui::core::entity::Entity;
 use rui::core::frame_pipeline::FramePipeline;
 use rui::elements::element::{Element, LayoutNodes};
 use rui::elements::{VirtualListHandle, canvas, shared_styled_text, span_range, virtual_list};
 use rui::renderer::metal::MetalRenderer;
 use rui::renderer::text::TextMeasureCache;
 use rui::renderer::{RendererResourceLimits, Scene};
-use rui::core::entity::Entity;
 use rui::{AppContext, Bounds, Color, ElementId, Size, div, text};
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::RefCell;
@@ -32,13 +32,15 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 use taffy::prelude::TaffyTree;
 
-const CASES: [&str; 11] = [
+const CASES: [&str; 13] = [
     "startup",
     "list_full",
+    "list_full_rows",
     "list_virtual_1k",
     "list_virtual_100k",
     "text_paragraphs",
     "quad_grid",
+    "quad_grid_cached",
     "resize_full",
     "resize_virtual",
     "list_full_one_row",
@@ -385,6 +387,37 @@ fn quad_grid(changed: usize) -> impl Element {
     .h(GRID.1 as f32 * CELL.1)
 }
 
+/// The grid of `quad_grid` with no cell changed, for a view that never renders again.
+fn static_grid() -> impl Element {
+    canvas(move |bounds, painter| {
+        for row in 0..GRID.1 {
+            for column in 0..GRID.0 {
+                let cell = Bounds::from_xywh(
+                    bounds.x() + column as f32 * CELL.0,
+                    bounds.y() + row as f32 * CELL.1,
+                    CELL.0,
+                    CELL.1,
+                );
+                painter.fill(cell, Color::hex(cell_color(row, column)));
+            }
+        }
+    })
+    .w(GRID.0 as f32 * CELL.0)
+    .h(GRID.1 as f32 * CELL.1)
+}
+
+/// Cell `changed` of the grid, white, placed absolutely over the grid.
+fn changed_cell(changed: usize) -> impl Element {
+    div()
+        .absolute()
+        .pl((changed % GRID.0) as f32 * CELL.0)
+        .pt((changed / GRID.0) as f32 * CELL.1)
+        .child(div().w(CELL.0).h(CELL.1).bg(Color::hex(0xffffff)))
+}
+
+/// Which cell of `quad_grid_cached` is white, kept in an entity.
+struct ChangedCell(usize);
+
 /// What one runtime keeps across frames: layout tree, measure cache, scene, renderer.
 struct Harness {
     taffy: TaffyTree<ElementId>,
@@ -579,9 +612,10 @@ fn run(case: &str) -> Result<(), Box<dyn std::error::Error>> {
                 .collect();
             let items = rows.clone();
             let mut build = move |cx: &mut AppContext| {
-                div().w_full().flex_col().children(cx.rows(&items, |row: &ListRow, _| {
-                    row_with(row.index, row.selected)
-                }))
+                div()
+                    .w_full()
+                    .flex_col()
+                    .children(cx.rows(&items, |row: &ListRow, _| row_with(row.index, row.selected)))
             };
             let mut root = div();
             measure(case, &mut harness, |harness, turn| {
@@ -590,6 +624,40 @@ fn run(case: &str) -> Result<(), Box<dyn std::error::Error>> {
                     row.selected = !row.selected;
                 }
                 context.notify(toggled.id());
+                harness.app_frame(&mut context, &mut root, &mut build, viewport)
+            })?;
+        }
+        // `list_full` with each row a view of its own entity: the selection moves
+        // as in `list_full`, and only the two rows it leaves and enters are
+        // notified and rendered again.
+        "list_full_rows" => {
+            let mut harness = Harness::new()?;
+            let mut context = AppContext::new();
+            let rows: Vec<Entity<ListRow>> = (0..LIST_ROWS)
+                .map(|index| {
+                    context.create(ListRow {
+                        index,
+                        selected: index == 0,
+                    })
+                })
+                .collect();
+            let items = rows.clone();
+            let mut build = move |cx: &mut AppContext| {
+                div()
+                    .w_full()
+                    .flex_col()
+                    .children(cx.rows(&items, |row: &ListRow, _| row_with(row.index, row.selected)))
+            };
+            let mut root = div();
+            measure(case, &mut harness, |harness, turn| {
+                let selected = turn % LIST_ROWS;
+                let previous = (turn + LIST_ROWS - 1) % LIST_ROWS;
+                for (index, on) in [(previous, false), (selected, true)] {
+                    if let Some(mut row) = context.get_mut(rows[index]) {
+                        row.selected = on;
+                    }
+                    context.notify(rows[index].id());
+                }
                 harness.app_frame(&mut context, &mut root, &mut build, viewport)
             })?;
         }
@@ -617,6 +685,29 @@ fn run(case: &str) -> Result<(), Box<dyn std::error::Error>> {
             let mut harness = Harness::new()?;
             measure(case, &mut harness, |harness, turn| {
                 harness.frame(quad_grid(turn % (GRID.0 * GRID.1)), viewport)
+            })?;
+        }
+        // `quad_grid` as a static grid in a view that is never notified, so its
+        // paint is replayed, under the changed cell in a view of its own.
+        "quad_grid_cached" => {
+            let mut harness = Harness::new()?;
+            let mut context = AppContext::new();
+            let grid = [context.create(())];
+            let cell = [context.create(ChangedCell(0))];
+            let mut build = move |cx: &mut AppContext| {
+                div()
+                    .w(GRID.0 as f32 * CELL.0)
+                    .h(GRID.1 as f32 * CELL.1)
+                    .children(cx.rows(&grid, |_: &(), _| static_grid()))
+                    .children(cx.rows(&cell, |cell: &ChangedCell, _| changed_cell(cell.0)))
+            };
+            let mut root = div();
+            measure(case, &mut harness, |harness, turn| {
+                if let Some(mut changed) = context.get_mut(cell[0]) {
+                    changed.0 = turn % (GRID.0 * GRID.1);
+                }
+                context.notify(cell[0].id());
+                harness.app_frame(&mut context, &mut root, &mut build, viewport)
             })?;
         }
         "resize_full" => {
