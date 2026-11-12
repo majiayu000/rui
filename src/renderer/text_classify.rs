@@ -93,16 +93,18 @@ fn is_emoji(ch: char) -> bool {
     )
 }
 
+// The bidi class is read before `is_alphabetic`: its table is searched in a few
+// steps, where `is_alphabetic` scans a long run for most letters past Latin.
 fn is_ltr(ch: char) -> bool {
     if ch.is_ascii() {
         return ch.is_ascii_alphabetic();
     }
-    ch.is_alphabetic() && bidi_class(ch) == BidiClass::L
+    bidi_class(ch) == BidiClass::L && ch.is_alphabetic()
 }
 
 fn is_rtl(ch: char) -> bool {
     // Nothing below U+0590 is right to left.
-    ch >= '\u{590}' && ch.is_alphabetic() && matches!(bidi_class(ch), BidiClass::R | BidiClass::AL)
+    ch >= '\u{590}' && matches!(bidi_class(ch), BidiClass::R | BidiClass::AL) && ch.is_alphabetic()
 }
 
 pub(crate) fn is_default_ignorable(ch: char) -> bool {
