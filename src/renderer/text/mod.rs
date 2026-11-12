@@ -18,7 +18,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 mod atlas;
-mod hash;
+pub(crate) mod hash;
 mod lru;
 mod rich;
 mod wrap;
@@ -27,10 +27,11 @@ pub use crate::renderer::text_shaping::{
     TextCluster, TextDirection, TextRun, TextScript, TextShapeDiagnostic, TextShapePlan,
 };
 pub use atlas::{
-    ATLAS_PAGE_SIZE, AtlasGlyph, AtlasRect, AtlasSlot, GlyphAtlas, GlyphUpload, PlacedGlyph,
-    SUBPIXEL_VARIANTS, ShapedText, TextGlyphCache,
+    ATLAS_PAGE_SIZE, AtlasGlyph, AtlasRect, AtlasSlot, GlyphAtlas, GlyphSprite, GlyphUpload,
+    PlacedGlyph, SUBPIXEL_VARIANTS, ShapedText, TextGlyphCache,
 };
 pub use rich::{RichLine, RichPiece, RichPieceText, RichSpan, RichWrapped};
+pub(crate) use hash::FastMap;
 pub use wrap::{TextLine, WrappedText};
 
 pub const TEXT_BOUNDS_TOLERANCE: f32 = 1.0;

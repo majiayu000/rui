@@ -2,7 +2,6 @@
 
 #[cfg(any(all(target_os = "macos", feature = "metal"), feature = "wgpu"))]
 mod plan;
-mod face_cache;
 mod primitives;
 mod resources;
 mod runtime;
@@ -10,10 +9,12 @@ mod scene;
 mod system_fonts;
 mod telemetry;
 pub mod text;
+mod text_ascii;
 mod text_bidi;
 mod text_classify;
 mod text_cluster_position;
 mod text_fallback;
+mod text_glyph_box;
 mod text_plan;
 mod text_shaping;
 

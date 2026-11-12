@@ -9,7 +9,7 @@ use crate::core::geometry::Bounds;
 use crate::elements::fit_bounds;
 use crate::renderer::Scene;
 use crate::renderer::primitives::Primitive;
-use crate::renderer::text::{SUBPIXEL_VARIANTS, TextRequest};
+use crate::renderer::text::TextRequest;
 use crate::{ImageFit, ImageSource};
 
 impl<T> FrameData<T> {
@@ -581,7 +581,6 @@ impl<T: Clone> FramePlanner<T> {
         let origin_x = x - ink.x();
         let origin_y = line_top;
         let device_font_size = font_size * scale_factor;
-        let variants = f32::from(SUBPIXEL_VARIANTS);
         let color = color.to_array();
 
         // Glyphs of one kind on one atlas page form one item; a color glyph, or
@@ -605,51 +604,28 @@ impl<T: Clone> FramePlanner<T> {
             }
         };
 
-        for glyph in &shaped.glyphs {
-            let pen_x = ((origin_x + glyph.x) * scale_factor * variants).round() / variants;
-            let pen_y = ((origin_y + glyph.baseline_y) * scale_factor).round();
-            let whole_x = pen_x.floor();
-            let subpixel = ((pen_x - whole_x) * variants).round() as u8;
-            let Some(atlas_glyph) = self
-                .text_cache
-                .glyph(glyph, device_font_size, subpixel)
-                .map_err(text_error)?
-            else {
-                continue;
-            };
-
-            let slot = atlas_glyph.slot;
-            let page = slot.page as u32;
-            let atlas = if atlas_glyph.color {
-                self.text_cache.color_atlas()
-            } else {
-                self.text_cache.atlas()
-            };
-            let (page_width, page_height) = atlas.page_extent(slot.page).ok_or_else(|| {
-                RendererResourceError::missing(RendererResourceKind::Glyph, slot.page as u32)
-            })?;
-            let rect = slot.rect;
-            let sprite = GpuGlyph {
+        let sprites = self
+            .text_cache
+            .sprites(&shaped, origin_x, device_font_size, scale_factor)
+            .map_err(text_error)?;
+        for sprite in sprites {
+            let pen_y = ((origin_y + sprite.baseline_y) * scale_factor).round();
+            let gpu = GpuGlyph {
                 bounds: [
-                    (whole_x + atlas_glyph.left as f32) / scale_factor,
-                    (pen_y + atlas_glyph.top as f32) / scale_factor,
-                    rect.width as f32 / scale_factor,
-                    rect.height as f32 / scale_factor,
+                    sprite.x,
+                    (pen_y + sprite.top as f32) / scale_factor,
+                    sprite.width,
+                    sprite.height,
                 ],
-                uv: [
-                    rect.x as f32 / page_width as f32,
-                    rect.y as f32 / page_height as f32,
-                    rect.width as f32 / page_width as f32,
-                    rect.height as f32 / page_height as f32,
-                ],
+                uv: sprite.uv,
                 color,
             };
-            let key = (atlas_glyph.color, page);
+            let key = (sprite.color, sprite.page);
             if run.is_none_or(|(color, open, _)| (color, open) != key) {
                 flush(frame, run);
                 run = Some((key.0, key.1, frame.glyphs.len() as u32));
             }
-            frame.glyphs.push(sprite);
+            frame.glyphs.push(gpu);
         }
         flush(frame, run);
         Ok(())

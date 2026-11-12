@@ -629,7 +629,7 @@ mod tests {
             let plain_lines: Vec<String> = plain
                 .lines
                 .iter()
-                .map(|line| line.content.clone())
+                .map(|line| line.content.to_string())
                 .collect();
             assert_eq!(texts(content, &rich), plain_lines, "width {width}");
             assert_eq!(rich.size.width, plain.size.width, "width {width}");

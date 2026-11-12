@@ -90,7 +90,7 @@ pub(crate) fn random_scene(seed: u64) -> Scene {
             10..=13 => Primitive::Text {
                 bounds: rng.bounds(90.0),
                 content: ["row 12", "Wg@", "fix the check", "5 min", "ÅÉ ñ"][rng.below(5) as usize]
-                    .to_string(),
+                    .into(),
                 color: rng.color(),
                 font_size: rng.range(8.0, 24.0),
                 font_weight: 400,

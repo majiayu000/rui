@@ -6,9 +6,8 @@
 //! left. Text with nothing that can start a right-to-left run skips all of it.
 
 use crate::renderer::text::TextRequest;
-use crate::renderer::text_shaping::{
-    ClusterDraft, GlyphDraft, InkBounds, ShapedRun, TextShapingFont,
-};
+use crate::renderer::text_glyph_box::InkBounds;
+use crate::renderer::text_shaping::{ClusterDraft, GlyphDraft, ShapedRun, TextShapingFont};
 use rusttype::{Scale, point};
 use unicode_bidi::{BidiClass, BidiInfo, Level, bidi_class};
 
@@ -80,7 +79,7 @@ pub(crate) fn ink_of(
         let font = &fonts[glyph.font_index];
         let ascent = font.font().v_metrics(scale).ascent;
         let position = point(glyph.x_offset, ascent + glyph.y_offset);
-        if let Some(bounds) = font.pixel_bounds(glyph.glyph_id, scale, position) {
+        if let Some(bounds) = font.pixel_bounds(glyph.glyph_id, request.font_size, position) {
             ink.include(bounds);
         }
     }

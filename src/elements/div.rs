@@ -31,6 +31,7 @@ pub struct Div {
     on_context_menu: Option<Box<dyn Fn(Point)>>,
     /// Drag source and drop target handlers, when it has any.
     drag: Option<Box<drag::DragHandlers>>,
+    actions: actions::ActionHandlers,
     hovered: bool,
     layout_node: Option<NodeId>,
     child_nodes: SmallVec<[NodeId; 4]>,
@@ -47,6 +48,7 @@ impl Div {
             on_hover: None,
             on_context_menu: None,
             drag: None,
+            actions: Vec::new(),
             hovered: false,
             layout_node: None,
             child_nodes: SmallVec::new(),
@@ -435,7 +437,7 @@ impl Div {
     }
 
     pub fn font_family(mut self, family: impl Into<String>) -> Self {
-        self.text_style.font_family = Some(family.into());
+        self.text_style.font_family = Some(std::sync::Arc::from(family.into()));
         self
     }
 
@@ -500,14 +502,8 @@ impl Element for Div {
             return false;
         };
         // Handlers cannot be compared, so a div with any keeps the new instance.
-        self.on_click.is_none()
-            && self.on_hover.is_none()
-            && self.on_context_menu.is_none()
-            && self.drag.is_none()
-            && previous.on_click.is_none()
-            && previous.on_hover.is_none()
-            && previous.on_context_menu.is_none()
-            && previous.drag.is_none()
+        !self.has_handlers()
+            && !previous.has_handlers()
             && self.id == previous.id
             && self.style == previous.style
             && self.text_style == previous.text_style
@@ -516,7 +512,7 @@ impl Element for Div {
     fn layout(&mut self, cx: &mut LayoutContext) -> NodeId {
         // Layout children first
         let children = &mut self.children;
-        let child_nodes: Vec<NodeId> = cx.with_text_style(&self.text_style, |cx| {
+        let child_nodes: SmallVec<_> = cx.with_text_style(&self.text_style, |cx| {
             children.iter_mut().map(|child| child.layout(cx)).collect()
         });
 
@@ -527,7 +523,7 @@ impl Element for Div {
             .expect("Failed to create layout node");
 
         self.layout_node = Some(node);
-        self.child_nodes = SmallVec::from_vec(child_nodes);
+        self.child_nodes = child_nodes;
         node
     }
 
@@ -730,7 +726,11 @@ impl Element for Div {
         cx: &mut EventContext,
         action: &crate::core::action::ActionId,
     ) -> crate::core::action::ActionOutcome {
-        dispatch_action_to_children(&mut self.children, cx, action)
+        let outcome = dispatch_action_to_children(&mut self.children, cx, action);
+        if outcome.is_handled() {
+            return outcome;
+        }
+        self.run_action(action)
     }
 
     fn handle_text_input_event(&mut self, cx: &mut EventContext, event: &TextInputEvent) -> bool {
@@ -792,6 +792,7 @@ pub fn div() -> Div {
     Div::new()
 }
 
+mod actions;
 mod drag;
 #[cfg(test)]
 mod tests;

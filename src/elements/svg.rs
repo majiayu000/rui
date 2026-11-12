@@ -304,7 +304,7 @@ fn paint_error(cx: &mut PaintContext, bounds: Bounds, message: &str) {
     });
     cx.paint(Primitive::Text {
         bounds,
-        content: message.to_string(),
+        content: message.to_string().into(),
         color: Color::hex(0xb91c1c).to_rgba(),
         font_size: 11.0,
         font_weight: 400,

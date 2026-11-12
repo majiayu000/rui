@@ -236,7 +236,7 @@ impl Element for Spinner {
 
         cx.paint(Primitive::Text {
             bounds,
-            content,
+            content: content.into(),
             color: self.color.to_rgba(),
             font_size: self.font_size,
             font_weight: 400,

@@ -118,7 +118,7 @@ impl Element for Tooltip {
             });
             cx.paint(Primitive::Text {
                 bounds: tooltip_bounds,
-                content: self.content.clone(),
+                content: self.content.clone().into(),
                 color: self.theme.colors.tooltip_text.to_rgba(),
                 font_size,
                 font_weight: self.theme.typography.label_weight,
@@ -145,7 +145,10 @@ impl Element for Tooltip {
             Ok(metrics) => Some(metrics.size.width),
             Err(err) => {
                 // Not shown at a guessed size: a box too small for its text.
-                log::error!("tooltip {:?} text could not be measured: {err:?}", self.content);
+                log::error!(
+                    "tooltip {:?} text could not be measured: {err:?}",
+                    self.content
+                );
                 None
             }
         };
