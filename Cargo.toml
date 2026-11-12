@@ -63,6 +63,8 @@ image = "0.25"
 rusttype = "0.9"
 unicode-segmentation = "1.12"
 unicode-bidi = "0.3.18"
+# Dictionary line breaks for Thai, Lao, Khmer and Myanmar, which put no spaces between words.
+icu_segmenter = { version = "2.4", default-features = false, features = ["compiled_data"] }
 rustybuzz = "0.20.1"
 
 # build.rs compiles the shaders on the build machine's Metal device.

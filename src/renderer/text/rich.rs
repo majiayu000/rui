@@ -12,7 +12,7 @@ use super::wrap::{
     break_paragraph,
 };
 use super::{
-    MAX_RETAINED_METRIC_BYTES, MAX_RETAINED_METRICS, RETAINED_METRIC_BYTES_TARGET,
+    BaseDirection, MAX_RETAINED_METRIC_BYTES, MAX_RETAINED_METRICS, RETAINED_METRIC_BYTES_TARGET,
     RETAINED_METRICS_TARGET, TextError, TextMeasureCache, TextRequest,
 };
 use crate::core::geometry::Size;
@@ -285,7 +285,7 @@ impl TextMeasureCache {
                     cluster_spans.push(index);
                 }
             }
-            let levels = line_levels(&content[offset..end]).map(|levels| {
+            let levels = line_levels(&content[offset..end], BaseDirection::Auto).map(|levels| {
                 clusters
                     .iter()
                     .map(|cluster| levels[cluster.byte_start].number())
@@ -293,7 +293,7 @@ impl TextMeasureCache {
             });
             paragraphs.push(RichParagraph {
                 offset,
-                layout: BreakParagraph::new(clusters),
+                layout: BreakParagraph::new(clusters, &content[offset..end]),
                 spans: cluster_spans,
                 levels,
             });

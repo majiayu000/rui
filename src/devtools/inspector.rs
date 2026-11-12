@@ -8,6 +8,7 @@ use crate::core::geometry::{Bounds, Edges, Point, Size};
 use crate::core::style::{Background, Corners, Display, FlexDirection, Overflow, Style};
 use crate::elements::element::{AnyElement, Element, PaintContext, PointerEvent, PointerEventKind};
 use crate::elements::text::TextAlign;
+use crate::renderer::text::BaseDirection;
 use crate::renderer::{Primitive, Scene};
 use std::cell::RefCell;
 use std::fmt::Write as _;
@@ -341,6 +342,7 @@ impl Inspector {
                 font_family: Some(std::sync::Arc::from(FONT_FAMILY)),
                 line_height: LINE_HEIGHT,
                 align: TextAlign::Left,
+                direction: BaseDirection::Auto,
             });
         }
     }

@@ -127,19 +127,30 @@ Arial with system fallback).
 | Arabic joined | yes | yes | yes |
 | Arabic right to left, digits left to right, brackets mirrored | yes, matches CoreText | yes | **no**: there is no bidi. A font run is shaped right to left as a whole, so `2024` is drawn `4202` and the space before a run moves to its end |
 | RTL run inside LTR, first line of a paragraph | correct | correct | wrong (as above) |
-| RTL run inside LTR, a wrapped line that starts with Arabic | **wrong**: the line is reordered as a right-to-left paragraph | **wrong**, not fixed | wrong |
+| RTL run inside LTR, a wrapped line that starts with Arabic | **wrong**: the line is reordered as a right-to-left paragraph | yes: the line is laid out at its paragraph's level | wrong |
 | Devanagari conjuncts | **partly**: falls back to Arial Unicode, which leaves न्द as न् + द | yes (Kohinoor) | yes |
 | Thai | drawn in Arial Unicode | Thonburi, as CoreText | Thonburi |
-| Thai line breaks | only at spaces; a Thai run with no spaces is one unbreakable word (no dictionary breaking, no UAX #14) | same | same (spaces, CJK, then any character) |
+| Thai line breaks | only at spaces; a Thai run with no spaces is one unbreakable word (no dictionary breaking, no UAX #14) | between dictionary words (ICU4X) | same as RUI `main` (spaces, CJK, then any character) |
 | Fallback faces at the right size | **no**: sizes are descent-to-ascent heights, so Chinese is 12% larger than Latin and Devanagari 20% smaller | yes: fallback faces get the requested face's em | yes |
 | Color emoji, ZWJ family as one glyph, flag, skin tone | yes | yes | yes, with `color_fonts` |
 | Tofu | none | none | none |
 
-The wrapped-line bidi bug: each wrapped line is shaped as text on its own, and
-`line_levels` finds that text's base direction from its first strong character. A
-line of an LTR paragraph that starts with an Arabic word is laid out right to left.
-Fixing it means passing the paragraph's base level to each line's shaping request. That
-touches `TextRequest` and the shape caches, so it is not in this change.
+Wrapped lines and bidi: each wrapped line is shaped as text on its own. It used to
+take its base direction from its own first strong character, so a line of an LTR
+paragraph that started with an Arabic word was laid out right to left. Now the wrap
+resolves each paragraph's base direction (rules P2 and P3) and every `TextLine` carries
+it. `TextRequest`, `Primitive::Text` and `GlyphResourceKey` carry a `BaseDirection`,
+and the measure, wrap and shape caches key on it. A line's levels are resolved at its
+paragraph's level from the line's own text. That differs from the full paragraph only
+where a weak or neutral character next to a line break would take its level from the
+previous line, or where an embedding or isolate spans a break.
+
+Thai, Lao, Khmer and Myanmar lines break between words found in ICU4X's dictionaries
+(`icu_segmenter`, `LineSegmenter::new_dictionary`). Only runs of those scripts reach the
+segmenter. Other text pays one `is_ascii` or character scan per wrap miss. The
+dictionaries add 1.06 MiB to a stripped release binary (`hello_world`: 5.30 to 6.36
+MiB). The LSTM models are smaller (+0.36 MiB) but cost 18 M instructions a frame on
+`text_complex`, more than the whole frame without them.
 
 ### Results
 
@@ -152,13 +163,14 @@ instruction and allocation counts varied by under 1% between rounds.
 | egui 0.37 | 15.29–15.42 | 3 078 | 0.133–0.139 | 1.18–1.25 | 308–315 |
 | RUI `main` + fixture | 15.74 | 3 013 | 0.152–0.153 | 1.13–1.22 | 72–75 |
 | RUI after the font fixes, before the classify fix | 17.45–17.47 | 3 157 | 0.117–0.158 | 1.42–1.79 | 76 |
-| RUI this branch | 15.57–15.58 | 3 157 | 0.157 | 1.20–1.23 | 73–76 |
+| RUI with the classify fix | 15.57–15.60 | 3 157 | 0.157 | 1.20–1.25 | 73–76 |
+| RUI this branch: bidi and Thai fixes, default-instance faces | 14.54–14.58 | 3 183 | 0.092 | 1.08 | 77 |
 
-`text_paragraphs` did not move: RUI 4.96–4.97 M instructions and 908 allocations,
-against 4.99–5.00 M before the change. egui was 5.36–5.39 M.
+`text_paragraphs` did not move: RUI 4.98–4.99 M instructions and 908 allocations,
+against 4.97–4.99 M before the bidi and Thai fixes. egui was 5.36–5.39 M.
 
-On complex text, RUI and egui cost about the same. RUI uses about 1% more instructions
-and 2.5% more allocations, and does bidi, which egui does not.
+On complex text, RUI now uses about 5% fewer instructions than egui, with bidi and
+dictionary line breaking, which egui does not have, and about 3% more allocations.
 
 The profile (`sample`, 30 000 frames) shows where RUI's frame goes. 63% is the changed
 paragraph being shaped again for layout, and 16% is the same paragraph's lines being
@@ -169,7 +181,10 @@ shaped for drawing. Two hotspots were found:
   instructions.
 - ThonburiUI is a variable font without `HVAR`. For every glyph advance, ttf-parser
   decodes the outline and applies `gvar`, even at the default coordinates. That cost
-  is about 7% of the frame. This is in ttf-parser, not RUI. The static faces in
+  about 7% of the frame. RUI never sets variation coordinates, so such a face (variable,
+  no `HVAR`, no `CFF2`) is now parsed without its variation tables, and advances come
+  from `hmtx`. A test checks that every ThonburiUI glyph keeps its advance and box. This
+  saves 1.2 M instructions a frame. The static faces in
   `Supplemental/Thonburi.ttc` are AAT (`morx`) only and cost far more under rustybuzz:
   26 M instructions. Sukhumvit Set is cheaper, at 14.2 M, but its Thai is loopless
   and does not look like the system's.

@@ -4,6 +4,7 @@ use rui::core::color::Rgba;
 use rui::core::geometry::{Bounds, Size};
 use rui::elements::text::TextAlign;
 use rui::renderer::metal::MetalRenderer;
+use rui::renderer::text::BaseDirection;
 use rui::renderer::{Primitive, RendererError, Scene};
 
 const VIEWPORT: Size = Size {
@@ -21,6 +22,7 @@ fn text(content: &str, x: f32, color: Rgba) -> Primitive {
         font_family: None,
         line_height: 1.2,
         align: TextAlign::Left,
+        direction: BaseDirection::Auto,
     }
 }
 
@@ -154,6 +156,7 @@ fn glyph_page_scene(first: usize) -> Scene {
             font_family: None,
             line_height: 1.2,
             align: TextAlign::Left,
+            direction: BaseDirection::Auto,
         });
     }
     scene

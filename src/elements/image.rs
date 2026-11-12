@@ -8,6 +8,7 @@ use crate::elements::element::{
     Capabilities, Element, LayoutContext, PaintContext, style_to_taffy,
 };
 use crate::renderer::Primitive;
+use crate::renderer::text::BaseDirection;
 use std::any::Any;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -401,6 +402,7 @@ impl Element for Image {
                     font_family: None,
                     line_height: 1.2,
                     align: crate::elements::text::TextAlign::Center,
+                    direction: BaseDirection::Auto,
                 });
             }
         }

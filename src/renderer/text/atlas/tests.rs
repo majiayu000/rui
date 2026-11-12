@@ -1,4 +1,5 @@
 use super::*;
+use crate::renderer::text::BaseDirection;
 
 #[test]
 fn atlas_packs_glyphs_into_one_page_without_overlap() {
@@ -114,6 +115,7 @@ fn strings_drawn_last_frame_survive_shape_eviction() {
             font_weight: 400,
             font_family: None,
             line_height: 1.2,
+            direction: BaseDirection::Auto,
             text: None,
             last_used: cache.frame,
         };

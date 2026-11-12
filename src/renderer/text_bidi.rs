@@ -10,23 +10,64 @@ use crate::renderer::text_face_size::face_size;
 use crate::renderer::text_glyph_box::InkBounds;
 use crate::renderer::text_shaping::{ClusterDraft, GlyphDraft, ShapedRun, TextShapingFont};
 use rusttype::{Scale, point};
-use unicode_bidi::{BidiClass, BidiInfo, Level, bidi_class};
+use unicode_bidi::{BidiClass, BidiInfo, Direction, Level, bidi_class, get_base_direction};
 
-/// The resolved level of each byte of `text`, each paragraph laid out as one
-/// line (rule L1 applied), or `None` when every level would be left to right.
-pub(crate) fn line_levels(text: &str) -> Option<Vec<Level>> {
+/// The base direction of the paragraph a piece of text belongs to (UAX #9
+/// rules P2 and P3).
+///
+/// A line wrapped out of a paragraph is laid out at its paragraph's level, not
+/// at a level found from the line's own first strong character.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum BaseDirection {
+    /// From the text's own first strong character; left to right without one.
+    #[default]
+    Auto,
+    LeftToRight,
+    RightToLeft,
+}
+
+impl BaseDirection {
+    /// `Auto` resolved for `text` as a paragraph of its own.
+    pub fn resolve(self, text: &str) -> Self {
+        match self {
+            Self::Auto if has_rtl(text) && get_base_direction(text) == Direction::Rtl => {
+                Self::RightToLeft
+            }
+            Self::Auto => Self::LeftToRight,
+            resolved => resolved,
+        }
+    }
+
+    fn level(self) -> Option<Level> {
+        match self {
+            Self::Auto => None,
+            Self::LeftToRight => Some(Level::ltr()),
+            Self::RightToLeft => Some(Level::rtl()),
+        }
+    }
+}
+
+/// Whether `text` has anything that can start a right-to-left run.
+fn has_rtl(text: &str) -> bool {
     // Nothing below U+0590 is right to left or starts a right-to-left run.
-    let rtl = text.chars().any(|ch| {
-        ch >= '\u{590}'
-            && matches!(
-                bidi_class(ch),
-                BidiClass::R | BidiClass::AL | BidiClass::RLE | BidiClass::RLO | BidiClass::RLI
-            )
-    });
-    if !rtl {
+    !text.is_ascii()
+        && text.chars().any(|ch| {
+            ch >= '\u{590}'
+                && matches!(
+                    bidi_class(ch),
+                    BidiClass::R | BidiClass::AL | BidiClass::RLE | BidiClass::RLO | BidiClass::RLI
+                )
+        })
+}
+
+/// The resolved level of each byte of `text` laid out as one line (rule L1
+/// applied) at the paragraph level `base` gives, or `None` when every level
+/// would be left to right.
+pub(crate) fn line_levels(text: &str, base: BaseDirection) -> Option<Vec<Level>> {
+    if base != BaseDirection::RightToLeft && !has_rtl(text) {
         return None;
     }
-    let bidi = BidiInfo::new(text, None);
+    let bidi = BidiInfo::new(text, base.level());
     let mut levels = bidi.levels.clone();
     for paragraph in &bidi.paragraphs {
         let range = paragraph.range.clone();

@@ -9,6 +9,7 @@ use crate::elements::element::{
     AnyElement, Element, EventContext, LayoutContext, PaintContext, PointerEvent, PointerEventKind,
 };
 use crate::renderer::Primitive;
+use crate::renderer::text::BaseDirection;
 use crate::renderer::text::{TextMeasureCache, TextRequest};
 use taffy::prelude::NodeId;
 
@@ -125,6 +126,7 @@ impl Element for Tooltip {
                 font_family: None,
                 line_height: self.theme.typography.line_height,
                 align: crate::elements::text::TextAlign::Center,
+                direction: BaseDirection::Auto,
             });
         }
     }
