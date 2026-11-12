@@ -526,6 +526,8 @@ impl<T: Clone> FramePlanner<T> {
     }
 
     #[allow(clippy::too_many_arguments)]
+    // Inlined into each walk, as before pictures planned their primitives too.
+    #[inline(always)]
     pub(super) fn build_text(
         &mut self,
         frame: &mut FrameData<T>,
