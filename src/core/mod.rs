@@ -37,7 +37,7 @@ pub use frame_pipeline::{FramePipeline, FramePipelineError};
 pub use geometry::{Bounds, Edges, Point, Rect, Size};
 pub use presenter::{PointerDispatch, Presenter, PresenterFrame};
 pub use style::{Background, BorderStyle, Corners, Dimension, DimensionConstraints, Style};
-pub use view::{View, ViewContext, ViewNotifier};
+pub use view::{View, ViewContext, ViewNotifier, ViewReleased, WeakView};
 pub use window::{Window, WindowId, WindowOptions};
 
 use std::any::TypeId;
