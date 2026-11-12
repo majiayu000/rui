@@ -1,8 +1,10 @@
 use crate::core::geometry::{Bounds, Size};
+use crate::renderer::face_cache::FaceCache;
 use crate::renderer::text::{TextMetrics, TextRequest};
 use crate::renderer::text_bidi::{ink_of, line_levels, place_visually};
 use crate::renderer::text_classify::{
-    classify_direction, classify_script, is_default_ignorable, resolve_text_direction,
+    ascii_graphemes, classify_direction, classify_script, is_default_ignorable,
+    resolve_text_direction,
 };
 use crate::renderer::text_cluster_position::apply_exact_cluster_positions;
 use crate::renderer::text_fallback::{RunScript, assign_fonts, script_runs};
@@ -10,7 +12,7 @@ pub use crate::renderer::text_plan::{
     ShapedGlyph, TextCluster, TextDirection, TextRun, TextScript, TextShapeDiagnostic,
     TextShapePlan,
 };
-use rusttype::{Font, GlyphId, Scale, point};
+use rusttype::{Font, GlyphId, Point, Rect, Scale, point};
 use rustybuzz::{
     BufferClusterLevel, Direction as HbDirection, Face, Language, Script, ShapePlan, UnicodeBuffer,
 };
@@ -72,6 +74,7 @@ pub(crate) struct TextShapingFont {
     face: Face<'static>,
     /// Plans built so far, one per direction, script and language shaped.
     plans: Arc<Mutex<Vec<CachedPlan>>>,
+    cache: Arc<FaceCache>,
     /// Owns the bytes `font` and `face` read; never read directly.
     #[allow(dead_code)]
     data: Arc<FontBytes>,
@@ -105,6 +108,7 @@ impl TextShapingFont {
             font,
             face,
             plans: Arc::new(Mutex::new(Vec::new())),
+            cache: Arc::default(),
             data,
         })
     }
@@ -122,6 +126,16 @@ impl TextShapingFont {
     ) -> Option<rustybuzz::ttf_parser::RasterGlyphImage<'_>> {
         self.face
             .glyph_raster_image(rustybuzz::ttf_parser::GlyphId(glyph_id), pixels_per_em)
+    }
+
+    /// Glyph `id`'s pixel box at `scale` placed at `position`.
+    pub(crate) fn pixel_bounds(
+        &self,
+        id: u16,
+        scale: Scale,
+        position: Point<f32>,
+    ) -> Option<Rect<i32>> {
+        self.cache.pixel_bounds(&self.font, id, scale, position)
     }
 
     fn face(&self) -> &Face<'_> {
@@ -152,9 +166,15 @@ impl TextShapingFont {
 
     pub(crate) fn supports_cluster(&self, cluster: &str) -> bool {
         let face = self.face();
-        cluster
-            .chars()
-            .all(|ch| ch.is_control() || is_default_ignorable(ch) || face.glyph_index(ch).is_some())
+        cluster.chars().all(|ch| {
+            ch.is_control()
+                || is_default_ignorable(ch)
+                || if ch.is_ascii() {
+                    self.cache.has_ascii(face, ch as u8)
+                } else {
+                    face.glyph_index(ch).is_some()
+                }
+        })
     }
 }
 
@@ -474,31 +494,36 @@ pub(crate) fn build_cluster_drafts<'a>(
     primary_index: usize,
     request: TextRequest<'a>,
 ) -> Vec<ClusterDraft<'a>> {
-    request
-        .content
-        .grapheme_indices(true)
-        .filter_map(|(byte_start, cluster_text)| {
-            if cluster_text.chars().all(char::is_control) {
-                return None;
-            }
+    let draft = |(byte_start, cluster_text): (usize, &'a str)| {
+        if cluster_text.chars().all(char::is_control) {
+            return None;
+        }
 
-            let byte_end = byte_start + cluster_text.len();
-            let script = classify_script(cluster_text);
-            let direction = classify_direction(cluster_text);
+        let byte_end = byte_start + cluster_text.len();
+        let script = classify_script(cluster_text);
+        let direction = classify_direction(cluster_text);
 
-            Some(ClusterDraft {
-                byte_start,
-                byte_end,
-                text: cluster_text,
-                script,
-                direction,
-                bidi_level: 0,
-                font_index: primary_index,
-                x_offset: 0.0,
-                advance_width: 0.0,
-            })
+        Some(ClusterDraft {
+            byte_start,
+            byte_end,
+            text: cluster_text,
+            script,
+            direction,
+            bidi_level: 0,
+            font_index: primary_index,
+            x_offset: 0.0,
+            advance_width: 0.0,
         })
-        .collect()
+    };
+    if request.content.is_ascii() {
+        ascii_graphemes(request.content).filter_map(draft).collect()
+    } else {
+        request
+            .content
+            .grapheme_indices(true)
+            .filter_map(draft)
+            .collect()
+    }
 }
 
 fn diagnostics_for_clusters(
@@ -649,12 +674,8 @@ fn shape_run_glyphs(
         let y_offset = -(position.y_offset as f32 * position_scale);
         let advance_width = position.x_advance as f32 * position_scale;
         let glyph_id = info.glyph_id as u16;
-        let glyph = font
-            .font()
-            .glyph(GlyphId(glyph_id))
-            .scaled(rust_scale)
-            .positioned(point(x_offset, v_metrics.ascent + y_offset));
-        if let Some(bounds) = glyph.pixel_bounding_box() {
+        let position = point(x_offset, v_metrics.ascent + y_offset);
+        if let Some(bounds) = font.pixel_bounds(glyph_id, rust_scale, position) {
             ink_bounds.include(bounds);
         }
 

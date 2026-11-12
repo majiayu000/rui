@@ -60,6 +60,17 @@ fn cluster_script(buffer: &mut UnicodeBuffer, cluster: &ClusterDraft) -> RunScri
     if cluster.script == TextScript::Emoji {
         return RunScript::Emoji;
     }
+    // One ASCII character: a Latin letter or a character every script shares.
+    if let [byte] = cluster.text.as_bytes() {
+        return if byte.is_ascii_alphabetic() {
+            RunScript::Script {
+                script: script::LATIN,
+                rtl: false,
+            }
+        } else {
+            RunScript::Common
+        };
+    }
     buffer.clear();
     buffer.push_str(cluster.text);
     buffer.guess_segment_properties();
@@ -239,6 +250,28 @@ mod tests {
                 )
             })
             .collect()
+    }
+
+    #[test]
+    fn one_ascii_character_has_the_script_the_tables_give() {
+        let mut buffer = UnicodeBuffer::new();
+        for byte in 0..128u8 {
+            let text = char::from(byte).to_string();
+            let request = TextRequest::new(&text, 14.0, 400, None, 1.2);
+            for cluster in build_cluster_drafts(0, request) {
+                buffer.clear();
+                buffer.push_str(cluster.text);
+                buffer.guess_segment_properties();
+                let expected = match buffer.script() {
+                    script::COMMON | script::INHERITED | script::UNKNOWN => RunScript::Common,
+                    script => RunScript::Script {
+                        script,
+                        rtl: buffer.direction() == Direction::RightToLeft,
+                    },
+                };
+                assert_eq!(cluster_script(&mut buffer, &cluster), expected, "{byte}");
+            }
+        }
     }
 
     fn pairs(expected: &[(&str, &str)]) -> Vec<(String, String)> {

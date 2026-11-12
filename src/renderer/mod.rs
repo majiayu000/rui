@@ -2,6 +2,7 @@
 
 #[cfg(any(all(target_os = "macos", feature = "metal"), feature = "wgpu"))]
 mod plan;
+mod face_cache;
 mod primitives;
 mod resources;
 mod runtime;

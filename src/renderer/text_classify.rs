@@ -74,11 +74,33 @@ fn is_emoji(ch: char) -> bool {
 }
 
 fn is_ltr(ch: char) -> bool {
+    if ch.is_ascii() {
+        return ch.is_ascii_alphabetic();
+    }
     ch.is_alphabetic() && bidi_class(ch) == BidiClass::L
 }
 
 fn is_rtl(ch: char) -> bool {
-    ch.is_alphabetic() && matches!(bidi_class(ch), BidiClass::R | BidiClass::AL)
+    !ch.is_ascii() && ch.is_alphabetic() && matches!(bidi_class(ch), BidiClass::R | BidiClass::AL)
+}
+
+/// The grapheme clusters of ASCII `text` and their byte offsets, as
+/// `grapheme_indices(true)` finds them: ASCII breaks between every two
+/// characters but CR LF, so no segmentation table is read.
+pub(crate) fn ascii_graphemes(text: &str) -> impl Iterator<Item = (usize, &str)> {
+    let bytes = text.as_bytes();
+    let mut start = 0;
+    std::iter::from_fn(move || {
+        let first = *bytes.get(start)?;
+        let len = if first == b'\r' && bytes.get(start + 1) == Some(&b'\n') {
+            2
+        } else {
+            1
+        };
+        let cluster = (start, &text[start..start + len]);
+        start += len;
+        Some(cluster)
+    })
 }
 
 pub(crate) fn is_default_ignorable(ch: char) -> bool {
@@ -98,4 +120,27 @@ pub(crate) fn is_default_ignorable(ch: char) -> bool {
             | 0xfff0..=0xfff8
             | 0xe0100..=0xe01ef
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ascii_graphemes;
+    use unicode_segmentation::UnicodeSegmentation;
+
+    #[test]
+    fn ascii_graphemes_match_the_segmentation_tables() {
+        for text in [
+            "",
+            "a",
+            "task 12: fix",
+            "a\r\nb",
+            "\n\r\r\n\r",
+            "\t\x07x\r",
+            "\r\n\r\n",
+        ] {
+            let fast: Vec<_> = ascii_graphemes(text).collect();
+            let tables: Vec<_> = text.grapheme_indices(true).collect();
+            assert_eq!(fast, tables, "{text:?}");
+        }
+    }
 }
