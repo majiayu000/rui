@@ -140,8 +140,8 @@ impl MeasuredText {
     }
 }
 
-/// Nodes one element created in a pass, in creation order.
-type OwnedNodes = SmallVec<[NodeId; 1]>;
+/// Where in the previous pass's nodes one element's nodes are, in creation order.
+type OwnedNodes = SmallVec<[u32; 1]>;
 
 /// Layout nodes kept from one frame to the next.
 ///
@@ -156,16 +156,12 @@ type OwnedNodes = SmallVec<[NodeId; 1]>;
 pub struct LayoutNodes {
     /// Nodes of the last pass in creation order, each with the element that made it.
     pub(super) nodes: Vec<(ElementId, NodeId)>,
-    /// The same nodes by the element that made them.
-    owners: FastMap<ElementId, OwnedNodes>,
     /// Emptied storage of the pass before, reused so a pass does not allocate it.
     spare_nodes: Vec<(ElementId, NodeId)>,
     spare_owners: FastMap<ElementId, OwnedNodes>,
-    /// A new one for every retained pass.
+    spare_claimed: Vec<bool>,
+    /// Changes whenever `nodes` are started over.
     pub(super) epoch: u64,
-    /// The epoch of the pass before; zero once `nodes` are started over. Only
-    /// layout recorded in that pass names nodes this pass can still reuse.
-    pub(super) previous_epoch: u64,
     /// Node count of the tree after the last retained pass. Anything else means the
     /// tree was changed outside a retained pass and the kept ids are stale.
     tree_node_count: usize,
@@ -176,11 +172,10 @@ impl Default for LayoutNodes {
     fn default() -> Self {
         Self {
             nodes: Vec::new(),
-            owners: FastMap::default(),
             spare_nodes: Vec::new(),
             spare_owners: FastMap::default(),
+            spare_claimed: Vec::new(),
             epoch: next_layout_epoch(),
-            previous_epoch: 0,
             tree_node_count: 0,
             measured_text: HashMap::new(),
         }
@@ -207,21 +202,30 @@ pub(super) struct RetainedPass<'a> {
     pub(super) kept: &'a mut LayoutNodes,
     /// Nodes of the previous pass in creation order.
     pub(super) previous: Vec<(ElementId, NodeId)>,
-    /// Nodes of the previous pass not reused yet, by the element that made them.
-    previous_owners: FastMap<ElementId, OwnedNodes>,
+    /// Which of `previous` this pass reused.
+    claimed: Vec<bool>,
+    /// Where the next element's nodes most likely are in `previous`: right after
+    /// the last ones reused, as long as the tree keeps its order.
+    next: usize,
+    /// `previous` by the element that made each node, built the first time an
+    /// element's nodes are not at `next`.
+    owners: FastMap<ElementId, OwnedNodes>,
+    owners_built: bool,
 }
 
 impl<'a> RetainedPass<'a> {
     fn new(kept: &'a mut LayoutNodes) -> Self {
-        kept.previous_epoch = kept.epoch;
-        kept.epoch = next_layout_epoch();
         let previous = std::mem::replace(&mut kept.nodes, std::mem::take(&mut kept.spare_nodes));
-        let previous_owners =
-            std::mem::replace(&mut kept.owners, std::mem::take(&mut kept.spare_owners));
+        let mut claimed = std::mem::take(&mut kept.spare_claimed);
+        claimed.resize(previous.len(), false);
+        let owners = std::mem::take(&mut kept.spare_owners);
         Self {
             kept,
             previous,
-            previous_owners,
+            claimed,
+            next: 0,
+            owners,
+            owners_built: false,
         }
     }
 
@@ -230,36 +234,53 @@ impl<'a> RetainedPass<'a> {
         self.kept.nodes.len()
     }
 
+    /// The first node `owner` made in the previous pass that this pass has not
+    /// reused yet.
     fn take_previous(&mut self, owner: ElementId) -> Option<NodeId> {
-        let nodes = self.previous_owners.get_mut(&owner)?;
-        (!nodes.is_empty()).then(|| nodes.remove(0))
+        let index = match self.previous.get(self.next) {
+            Some((made_by, _)) if *made_by == owner && !self.claimed[self.next] => self.next,
+            _ => self.find(owner)?,
+        };
+        self.claimed[index] = true;
+        self.next = index + 1;
+        Some(self.previous[index].1)
+    }
+
+    fn find(&mut self, owner: ElementId) -> Option<usize> {
+        if !self.owners_built {
+            self.owners_built = true;
+            for (index, (made_by, _)) in self.previous.iter().enumerate() {
+                self.owners.entry(*made_by).or_default().push(index as u32);
+            }
+        }
+        let claimed = &self.claimed;
+        self.owners
+            .get(&owner)?
+            .iter()
+            .map(|index| *index as usize)
+            .find(|index| !claimed[*index])
     }
 
     fn push(&mut self, owner: ElementId, node: NodeId) {
         self.kept.nodes.push((owner, node));
-        self.kept.owners.entry(owner).or_default().push(node);
     }
 
-    /// Reuse the previous pass's nodes `start..end`, in order, unless one of them
-    /// was reused already. Returns the last one.
-    pub(super) fn keep_range(&mut self, start: usize, end: usize) -> Option<NodeId> {
-        let nodes = self.previous.get(start..end)?;
-        let unclaimed = nodes.iter().all(|(owner, node)| {
-            self.previous_owners
-                .get(owner)
-                .is_some_and(|owned| owned.contains(node))
-        });
-        if nodes.is_empty() || !unclaimed {
+    /// Reuse the previous pass's nodes `start..end`, in order, when they are a
+    /// subtree that ends with `last`: a subtree's nodes are made together, its
+    /// root's last, so they are when `last` still sits at the end. Not when one
+    /// was reused already. Returns `last`.
+    pub(super) fn keep_range(&mut self, start: usize, end: usize, last: NodeId) -> Option<NodeId> {
+        let claimed = self.claimed.get(start..end)?;
+        if start == end
+            || self.previous[end - 1].1 != last
+            || claimed.iter().any(|claimed| *claimed)
+        {
             return None;
         }
-        for index in start..end {
-            let (owner, node) = self.previous[index];
-            let owned = self.previous_owners.get_mut(&owner)?;
-            let position = owned.iter().position(|kept| *kept == node)?;
-            owned.remove(position);
-            self.push(owner, node);
-        }
-        self.previous.get(end - 1).map(|(_, node)| *node)
+        self.claimed[start..end].fill(true);
+        self.kept.nodes.extend_from_slice(&self.previous[start..end]);
+        self.next = end;
+        Some(self.previous[end - 1].1)
     }
 
     /// Remove nodes the previous pass had and this one did not reuse.
@@ -267,17 +288,21 @@ impl<'a> RetainedPass<'a> {
         let Self {
             kept,
             mut previous,
-            mut previous_owners,
+            mut claimed,
+            mut owners,
+            ..
         } = self;
-        for nodes in previous_owners.values() {
-            for node in nodes {
+        for ((_, node), claimed) in previous.iter().zip(&claimed) {
+            if !claimed {
                 let _ = taffy.remove(*node);
             }
         }
         previous.clear();
-        previous_owners.clear();
+        claimed.clear();
+        owners.clear();
         kept.spare_nodes = previous;
-        kept.spare_owners = previous_owners;
+        kept.spare_claimed = claimed;
+        kept.spare_owners = owners;
         kept.tree_node_count = taffy.total_node_count();
         kept
     }
@@ -334,9 +359,8 @@ impl<'a> LayoutContext<'a> {
         if kept.tree_node_count != taffy.total_node_count() {
             taffy.clear();
             kept.nodes.clear();
-            kept.owners.clear();
             kept.measured_text.clear();
-            kept.epoch = 0;
+            kept.epoch = next_layout_epoch();
         }
         let previous_measured_text = std::mem::take(&mut kept.measured_text);
         let mut cx = Self::with_measurer(

@@ -380,7 +380,7 @@ impl Element for Text {
         self.inherit(cx.text_style());
         if let Some(lines) = &self.wrapped {
             let request = TextWrapRequest {
-                content: self.content.clone(),
+                content: self.content.share(),
                 font_size: self.font_size,
                 font_weight: self.font_weight.to_value(),
                 font_family: self.font_family.clone(),
@@ -424,7 +424,8 @@ impl Element for Text {
 
         let bounds = cx.bounds();
         let Some(wrapped) = &self.wrapped else {
-            cx.paint(self.primitive(bounds, self.content.clone()));
+            let content = self.content.share();
+            cx.paint(self.primitive(bounds, content));
             return;
         };
 

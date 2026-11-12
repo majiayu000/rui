@@ -50,6 +50,8 @@ struct LayoutRecord {
     epoch: u64,
     /// Identity the subtree was laid out under.
     id: ElementId,
+    /// The subtree's last node, its root's.
+    last: NodeId,
     /// The subtree's nodes, in creation order, in [`LayoutNodes`]; its own node
     /// comes last.
     start: u32,
@@ -223,6 +225,7 @@ impl AnyElement {
                     .then(|| LayoutRecord {
                         epoch: pass.kept.epoch,
                         id,
+                        last: node,
                         start: start as u32,
                         end: pass.cursor() as u32,
                         text_style: Rc::clone(&cx.text_style),
@@ -248,24 +251,20 @@ impl AnyElement {
         let pass = cx.retained.as_mut()?;
         let (start, end) = (record.start as usize, record.end as usize);
         let kept_start = pass.cursor();
-        let node = (pass.kept.previous_epoch == record.epoch
+        let node = (pass.kept.epoch == record.epoch
             && Some(record.id) == self.stable_id
             && (Rc::ptr_eq(&cx.text_style, &record.text_style)
                 || *cx.text_style == *record.text_style))
-            .then(|| pass.keep_range(start, end))
+            .then(|| pass.keep_range(start, end, record.last))
             .flatten();
         let Some(node) = node else {
             self.layout_record = None;
             return None;
         };
-        // The subtree's nodes now sit where this pass put them.
-        let delta = kept_start as i64 - start as i64;
-        let epoch = pass.kept.epoch;
-        record.epoch = epoch;
+        // The subtree's nodes now sit where this pass put them. Its descendants'
+        // records keep the old places, which only holds while it does not move.
         record.start = kept_start as u32;
         record.end = pass.cursor() as u32;
-        let pass = cx.retained.as_mut()?;
-        Self::move_records(self.inner.children_mut(), delta, epoch);
         if !cx.previous_measured_text.is_empty() {
             for (_, node) in &pass.kept.nodes[kept_start..] {
                 if let Some(text) = cx.previous_measured_text.remove(node) {
@@ -274,20 +273,6 @@ impl AnyElement {
             }
         }
         Some(node)
-    }
-
-    /// Move the layout records of a kept subtree's descendants with its nodes.
-    /// Descendants their parent does not list keep stale records, which the
-    /// next pass then lays out again.
-    fn move_records(children: &mut [AnyElement], delta: i64, epoch: u64) {
-        for child in children {
-            if let Some(record) = child.layout_record.as_mut() {
-                record.epoch = epoch;
-                record.start = (i64::from(record.start) + delta) as u32;
-                record.end = (i64::from(record.end) + delta) as u32;
-            }
-            Self::move_records(child.inner.children_mut(), delta, epoch);
-        }
     }
 
     fn kind(&self) -> TypeId {
