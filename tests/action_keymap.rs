@@ -545,21 +545,15 @@ fn action_keymap_runtime_routes_modified_deletes_as_word_deletes() {
     assert_eq!(latest.borrow().as_str(), " ");
 
     assert!(session.dispatch_key_event(&KeyEvent::new(KeyCode::A, Modifiers::meta())));
-    assert!(
-        session.dispatch_key_event(
-            &KeyEvent::new(KeyCode::Unknown(0), Modifiers::none()).with_char('a')
-        )
-    );
-    assert!(
-        session.dispatch_key_event(
-            &KeyEvent::new(KeyCode::Unknown(0), Modifiers::none()).with_char('b')
-        )
-    );
-    assert!(
-        session.dispatch_key_event(
-            &KeyEvent::new(KeyCode::Unknown(0), Modifiers::none()).with_char('c')
-        )
-    );
+    assert!(session.dispatch_key_event(
+        &KeyEvent::new(KeyCode::Unknown(0), Modifiers::none()).with_char('a')
+    ));
+    assert!(session.dispatch_key_event(
+        &KeyEvent::new(KeyCode::Unknown(0), Modifiers::none()).with_char('b')
+    ));
+    assert!(session.dispatch_key_event(
+        &KeyEvent::new(KeyCode::Unknown(0), Modifiers::none()).with_char('c')
+    ));
     assert_eq!(latest.borrow().as_str(), "abc");
 
     assert!(session.dispatch_key_event(&KeyEvent::new(KeyCode::Backspace, Modifiers::shift())));

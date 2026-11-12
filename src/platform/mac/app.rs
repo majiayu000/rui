@@ -17,14 +17,14 @@ use crate::devtools::RenderSample;
 use crate::elements::element::Element;
 use crate::platform::frame_driver::*;
 use crate::platform::mac::clipboard::MacPasteboard;
+use crate::platform::mac::menus::MacMenus;
+use crate::platform::mac::prompts::run_path_prompts;
 use crate::platform::mac::events::{
     MAC_REDRAW_EVENT_DATA, MacWindowEvent, post_application_event_from_any_thread,
 };
 use crate::platform::mac::frame::{NativeFrameEvents, dispatch_native_events};
 use crate::platform::mac::frame_ticker::FrameTicker;
-use crate::platform::mac::menus::MacMenus;
 use crate::platform::mac::present_latency;
-use crate::platform::mac::prompts::run_path_prompts;
 use crate::platform::mac::window::{
     MacAppEvent, MacWindow, create_window, has_pending_event, poll_windows,
 };
@@ -45,9 +45,9 @@ mod dogfood_automation;
 mod event_loop;
 mod window_driver;
 
-pub(crate) use crate::platform::frame_driver::{OrderedInputEvent, schedule_platform_redraw};
 use dogfood_automation::*;
 use event_loop::*;
+pub(crate) use crate::platform::frame_driver::{OrderedInputEvent, schedule_platform_redraw};
 pub(crate) use window_driver::{NativeWindowDriver, native_window};
 
 /// Run the application with default window options
@@ -192,9 +192,7 @@ where
         menus.sync(
             &app,
             &mut context,
-            windows
-                .iter()
-                .map(|window| (window.id(), window.mac_window())),
+            windows.iter().map(|window| (window.id(), window.mac_window())),
         );
         run_path_prompts(&mut context);
         run_between_frames(

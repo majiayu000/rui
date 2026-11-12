@@ -70,7 +70,7 @@ fn docs_api_enum_variants_match_source() {
     let surfaces = [
         EnumSurface {
             name: "InputType",
-            source: include_str!("../src/elements/input.rs"),
+            source: include_str!("../src/elements/input/state.rs"),
         },
         EnumSurface {
             name: "ImageFit",

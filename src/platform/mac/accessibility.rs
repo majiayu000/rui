@@ -332,10 +332,7 @@ impl fmt::Debug for MacAccessibilityBridge {
             .field("native_attached", &self.native_attached())
             .field(
                 "last_published_tree",
-                &self
-                    .last_published_tree
-                    .as_ref()
-                    .map(|tree| tree.roots().len()),
+                &self.last_published_tree.as_ref().map(|tree| tree.roots().len()),
             )
             .finish()
     }
@@ -676,8 +673,9 @@ pub(crate) fn focused_native_descendant(view: &NSView) -> Option<Retained<AnyObj
             if focused {
                 return Some(node);
             }
-            let children: Option<Retained<NSArray<AnyObject>>> =
-                unsafe { msg_send![&*node, accessibilityChildren] };
+            let children: Option<Retained<NSArray<AnyObject>>> = unsafe {
+                msg_send![&*node, accessibilityChildren]
+            };
             if let Some(found) = children.as_deref().and_then(find) {
                 return Some(found);
             }

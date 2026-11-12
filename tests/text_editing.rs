@@ -163,7 +163,9 @@ fn text_editing_composition_honors_concrete_utf16_replacement_ranges() {
 fn text_editing_commit_composition_replacing_utf16_preserves_composition_on_mid_grapheme_failure() {
     let mut buffer = TextEditBuffer::with_text("hello");
     must(buffer.set_selection(TextSelection::new(0, 5)));
-    must(buffer.apply_text_input_event(TextInputEvent::BeginComposition("e\u{301}".to_string())));
+    must(buffer.apply_text_input_event(TextInputEvent::BeginComposition(
+        "e\u{301}".to_string(),
+    )));
 
     assert_eq!(buffer.text(), "e\u{301}");
     assert_eq!(
@@ -294,14 +296,12 @@ fn text_editing_modified_delete_keys_remove_whole_words() {
     let mut buffer = TextEditBuffer::with_text("alpha beta gamma");
     must(buffer.set_cursor(buffer.text().len()));
 
-    let outcome =
-        must(buffer.apply_key_event(&KeyEvent::new(KeyCode::Backspace, Modifiers::alt())));
+    let outcome = must(buffer.apply_key_event(&KeyEvent::new(KeyCode::Backspace, Modifiers::alt())));
     assert!(outcome.changed);
     assert_eq!(buffer.text(), "alpha beta ");
     assert_eq!(buffer.cursor(), "alpha beta ".len());
 
-    let outcome =
-        must(buffer.apply_key_event(&KeyEvent::new(KeyCode::Backspace, Modifiers::ctrl())));
+    let outcome = must(buffer.apply_key_event(&KeyEvent::new(KeyCode::Backspace, Modifiers::ctrl())));
     assert!(outcome.changed);
     assert_eq!(buffer.text(), "alpha ");
     assert_eq!(buffer.cursor(), "alpha ".len());
