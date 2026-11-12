@@ -149,6 +149,18 @@ fn blended_pipeline(
     })
 }
 
+/// The GPU to draw with. `MTLCreateSystemDefaultDevice` picks the GPU of the
+/// main display, which took 35-60 ms in a fresh process, against 13-30 ms to
+/// list the devices. With one GPU, as on Apple silicon, there is no choice to make.
+fn default_device() -> Option<Device> {
+    let mut devices = Device::all();
+    if devices.len() == 1 {
+        devices.pop()
+    } else {
+        Device::system_default()
+    }
+}
+
 impl MetalRenderer {
     pub fn new() -> Result<Self, RendererError> {
         Self::with_resource_limits(RendererResourceLimits::default())
@@ -171,7 +183,7 @@ impl MetalRenderer {
     }
 
     pub fn with_resource_limits(limits: RendererResourceLimits) -> Result<Self, RendererError> {
-        let device = Device::system_default()
+        let device = default_device()
             .ok_or_else(|| RendererError::backend_unavailable("Metal device is unavailable"))?;
         let command_queue = device.new_command_queue();
 
