@@ -4,13 +4,13 @@ use crate::core::ElementId;
 use crate::core::app::AppContext;
 use crate::core::entity::{Entity, EntityId};
 use crate::core::geometry::Point;
-use crate::core::executor::Task;
+use crate::core::executor::{AsyncApp, Task};
 use crate::core::menu::Menu;
 use crate::core::prompt::{PathPromptOptions, PromptDismissed};
 use crate::core::text_editing::{ClipboardError, ClipboardItem};
 use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 
 /// Views notified from event handlers, which have no context to notify with;
 /// the next frame notifies them.
@@ -93,6 +93,54 @@ impl<T> ViewUpdates<T> {
     }
 }
 
+/// A view as work that outlives a render holds it, such as a task from
+/// [`ViewContext::spawn`]. It does not keep the view alive.
+pub struct WeakView<T> {
+    entity: Entity<T>,
+    updates: Weak<RefCell<Vec<ViewUpdate<T>>>>,
+}
+
+/// The view was released before an update reached it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ViewReleased;
+
+impl std::fmt::Display for ViewReleased {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("the view was released")
+    }
+}
+
+impl std::error::Error for ViewReleased {}
+
+impl<T: 'static> WeakView<T> {
+    /// Queue `update` for the view and schedule it to render. It runs before
+    /// that render, as a [`ViewContext::listener`] handler does, so it need not
+    /// notify. Call it from a task's [`AsyncApp`].
+    pub fn update(
+        &self,
+        cx: &AsyncApp,
+        update: impl FnOnce(&mut T, &mut ViewContext<'_, T>) + 'static,
+    ) -> Result<(), ViewReleased> {
+        let updates = self.updates.upgrade().ok_or(ViewReleased)?;
+        updates.borrow_mut().push(Box::new(update));
+        cx.update(|app| app.notify(self.entity.id()));
+        Ok(())
+    }
+
+    pub fn entity(&self) -> Entity<T> {
+        self.entity
+    }
+}
+
+impl<T> Clone for WeakView<T> {
+    fn clone(&self) -> Self {
+        Self {
+            entity: self.entity,
+            updates: Weak::clone(&self.updates),
+        }
+    }
+}
+
 impl<T> Clone for ViewUpdates<T> {
     fn clone(&self) -> Self {
         Self(Rc::clone(&self.0))
@@ -170,6 +218,35 @@ impl<'a, T: 'static> ViewContext<'a, T> {
     /// Get the view's entity handle
     pub fn entity(&self) -> Entity<T> {
         self.view
+    }
+
+    /// A handle on this view for work that outlives this render.
+    pub fn weak_view(&self) -> WeakView<T> {
+        WeakView {
+            entity: self.view,
+            updates: Rc::downgrade(&self.updates.0),
+        }
+    }
+
+    /// Run `task` on the UI thread with a handle on this view, as
+    /// [`AppContext::spawn`] does. The task updates the view through the handle
+    /// and the view renders again; it need not notify.
+    ///
+    /// ```ignore
+    /// cx.spawn(|this, cx| async move {
+    ///     let body = cx.background_spawn(fetch(url)).await;
+    ///     this.update(&cx, |this, _| this.body = body).ok();
+    /// })
+    /// .detach();
+    /// ```
+    pub fn spawn<F, Fut>(&mut self, task: F) -> Task<Fut::Output>
+    where
+        F: FnOnce(WeakView<T>, AsyncApp) -> Fut,
+        Fut: Future + 'static,
+        Fut::Output: 'static,
+    {
+        let this = self.weak_view();
+        self.app.spawn(move |cx| task(this, cx))
     }
 
     /// A `Send` handle that other threads use to update the application.
@@ -283,6 +360,12 @@ pub(crate) trait ChildView {
     fn render_any(&mut self, app: &mut AppContext) -> crate::elements::AnyElement;
 }
 
+impl<T> AsMut<AppContext> for ViewContext<'_, T> {
+    fn as_mut(&mut self) -> &mut AppContext {
+        self.app
+    }
+}
+
 impl<V: View> ChildView for crate::core::app::RuntimeView<V> {
     fn render_any(&mut self, app: &mut AppContext) -> crate::elements::AnyElement {
         crate::elements::AnyElement::new(self.render(app))
@@ -295,4 +378,30 @@ pub trait View: Sized + 'static {
     type Element: crate::elements::Element;
 
     fn render(&mut self, cx: &mut ViewContext<Self>) -> Self::Element;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn updating_a_released_view_fails() {
+        let mut app = AppContext::new();
+        let view = Entity::<u32>::new(app.create(()).id());
+        let updates = ViewUpdates::<u32>::new();
+        let weak = WeakView {
+            entity: view,
+            updates: Rc::downgrade(&updates.0),
+        };
+        let outcomes = Rc::new(RefCell::new(Vec::new()));
+        let seen = Rc::clone(&outcomes);
+        app.spawn(move |cx| async move {
+            seen.borrow_mut().push(weak.update(&cx, |count, _| *count += 1));
+            drop(updates);
+            seen.borrow_mut().push(weak.update(&cx, |count, _| *count += 1));
+        })
+        .detach();
+        app.run_until_parked();
+        assert_eq!(*outcomes.borrow(), [Ok(()), Err(ViewReleased)]);
+    }
 }

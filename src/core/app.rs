@@ -20,6 +20,7 @@ mod menus;
 mod prompts;
 mod release;
 mod rows;
+mod update;
 
 pub use rows::Row;
 
