@@ -528,6 +528,7 @@ fn retained_metrics_stay_bounded_for_ever_changing_text() {
                 line_height_bits: 1.2f32.to_bits(),
                 font_weight: 400,
                 font_family: "test".to_string(),
+                direction: BaseDirection::Auto,
             },
             TextMetrics::empty(),
         );
@@ -552,6 +553,7 @@ fn retained_metrics_stay_within_the_byte_budget() {
                 line_height_bits: 1.2f32.to_bits(),
                 font_weight: 400,
                 font_family: "test".to_string(),
+                direction: BaseDirection::Auto,
             },
             TextMetrics::empty(),
         );
@@ -566,6 +568,7 @@ fn retained_metrics_stay_within_the_byte_budget() {
             line_height_bits: 1.2f32.to_bits(),
             font_weight: 400,
             font_family: "test".to_string(),
+            direction: BaseDirection::Auto,
         },
         TextMetrics::empty(),
     );

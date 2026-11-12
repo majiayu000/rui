@@ -2,7 +2,7 @@
 
 use super::lru::FrameLru;
 use super::{
-    MAX_RETAINED_METRIC_BYTES, MAX_RETAINED_METRICS, RETAINED_METRIC_BYTES_TARGET,
+    BaseDirection, MAX_RETAINED_METRIC_BYTES, MAX_RETAINED_METRICS, RETAINED_METRIC_BYTES_TARGET,
     RETAINED_METRICS_TARGET, TextError, TextMeasureCache, TextMeasureKey, TextRequest,
     request_hasher,
 };
@@ -22,6 +22,9 @@ pub(super) const KEPT_RESULTS: usize = 4;
 pub struct TextLine {
     pub content: SharedStr,
     pub width: f32,
+    /// The base direction of the paragraph the line is from, which the line is
+    /// laid out at; never [`BaseDirection::Auto`].
+    pub direction: BaseDirection,
 }
 
 /// A paragraph broken into lines no wider than the width it was given, except
@@ -277,6 +280,10 @@ impl TextMeasureCache {
     ) -> WrapResult<WrappedText> {
         let line_limit = max_lines.unwrap_or(usize::MAX);
         let paragraphs: Vec<&str> = request.content.split('\n').collect();
+        let directions: Vec<BaseDirection> = paragraphs
+            .iter()
+            .map(|paragraph| request.direction.resolve(paragraph))
+            .collect();
         let mut fits = WidthRange::ANY;
         let mut spans = Vec::new();
         for (index, paragraph) in paragraphs.iter().enumerate() {
@@ -287,6 +294,7 @@ impl TextMeasureCache {
                 let parts = self.shape_counted(
                     TextRequest {
                         content: paragraph,
+                        direction: directions[index],
                         ..request
                     },
                     primary_index,
@@ -313,6 +321,7 @@ impl TextMeasureCache {
                 TextLine {
                     content: SharedStr::slice(&text, start + span.start..start + span.end),
                     width: span.width.ceil(),
+                    direction: directions[span.paragraph],
                 }
             })
             .collect();
@@ -323,7 +332,7 @@ impl TextMeasureCache {
                 .expect("a paragraph with lines was shaped")
                 .clusters;
             let (cut, room) = self.ellipsize(
-                request,
+                request.with_direction(directions[span.paragraph]),
                 primary_index,
                 paragraphs[span.paragraph],
                 clusters,
@@ -393,7 +402,13 @@ impl TextMeasureCache {
             .size
             .width;
         let content = content.into();
-        (TextLine { content, width }, (room_range, ellipsis_width))
+        let direction = request.direction;
+        let line = TextLine {
+            content,
+            width,
+            direction,
+        };
+        (line, (room_range, ellipsis_width))
     }
 }
 

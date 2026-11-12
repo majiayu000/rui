@@ -671,8 +671,7 @@ mod tests {
                 .is_none()
         );
         let resume = TextInputCommand::BeginComposition("resume".to_string());
-        let Some(resume_target) =
-            ime_state.target_for_event(&resume, presenter.focused_element())
+        let Some(resume_target) = ime_state.target_for_event(&resume, presenter.focused_element())
         else {
             panic!("resume begin should claim the focused input");
         };

@@ -3,8 +3,8 @@
 use crate::core::ElementId;
 use crate::core::app::AppContext;
 use crate::core::entity::{Entity, EntityId};
-use crate::core::geometry::Point;
 use crate::core::executor::{AsyncApp, Task};
+use crate::core::geometry::Point;
 use crate::core::menu::Menu;
 use crate::core::prompt::{PathPromptOptions, PromptDismissed};
 use crate::core::text_editing::{ClipboardError, ClipboardItem};
@@ -396,9 +396,11 @@ mod tests {
         let outcomes = Rc::new(RefCell::new(Vec::new()));
         let seen = Rc::clone(&outcomes);
         app.spawn(move |cx| async move {
-            seen.borrow_mut().push(weak.update(&cx, |count, _| *count += 1));
+            seen.borrow_mut()
+                .push(weak.update(&cx, |count, _| *count += 1));
             drop(updates);
-            seen.borrow_mut().push(weak.update(&cx, |count, _| *count += 1));
+            seen.borrow_mut()
+                .push(weak.update(&cx, |count, _| *count += 1));
         })
         .detach();
         app.run_until_parked();

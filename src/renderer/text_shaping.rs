@@ -324,7 +324,7 @@ pub(crate) fn shape_parts<'a>(
     request: TextRequest<'a>,
 ) -> ShapedParts<'a> {
     let mut clusters = build_cluster_drafts(primary_index, request);
-    let levels = line_levels(request.content);
+    let levels = line_levels(request.content, request.direction);
     if let Some(levels) = &levels {
         for cluster in &mut clusters {
             cluster.bidi_level = levels[cluster.byte_start].number();

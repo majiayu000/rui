@@ -2,8 +2,8 @@
 //! application moving state out of its view or notifying by hand.
 
 use rui::advanced_ui::Button;
-use rui::core::entity::Entity;
 use rui::core::action::ActionId;
+use rui::core::entity::Entity;
 use rui::core::event::{KeyCode, KeyEvent, Modifiers};
 use rui::core::{ElementId, Point, Size, View, ViewContext};
 use rui::testing::{HeadlessViewSession, mount_view};

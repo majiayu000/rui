@@ -14,15 +14,15 @@ use crate::core::geometry::Size;
 use crate::core::presenter::Presenter;
 use crate::core::text_editing::TextInputEvent;
 use crate::elements::element::Element;
+use crate::platform::frame_driver::dispatch_key;
+#[cfg(test)]
+use crate::platform::frame_driver::should_forward_key_event_to_tree;
 use crate::platform::mac::accessibility::MacAccessibilityActionRequest;
 use crate::platform::mac::accessibility::MacAccessibilityRequest;
 use crate::platform::mac::app::{OrderedInputEvent, schedule_platform_redraw};
 use crate::platform::mac::ime_state::{
     NativeImeState, cancel_composition_if_owner_lost, dispatch_text_input_event,
 };
-use crate::platform::frame_driver::dispatch_key;
-#[cfg(test)]
-use crate::platform::frame_driver::should_forward_key_event_to_tree;
 use crate::platform::mac::window::MacWindow;
 
 /// Backend-neutral events collected from one poll of the platform window.
@@ -242,9 +242,7 @@ where
     match presenter.accessibility_tree() {
         Ok(tree) => tree.find(id).cloned(),
         Err(err) => {
-            log::error!(
-                "failed to rebuild macOS accessibility tree for request validation: {err}"
-            );
+            log::error!("failed to rebuild macOS accessibility tree for request validation: {err}");
             None
         }
     }
@@ -349,9 +347,11 @@ mod tests {
         ) -> Result<Option<AccessibilityNode>, crate::core::accessibility::AccessibilityError>
         {
             if self.fail_tree {
-                return Err(crate::core::accessibility::AccessibilityError::MissingLabel {
-                    role: AccessibilityRole::TextInput,
-                });
+                return Err(
+                    crate::core::accessibility::AccessibilityError::MissingLabel {
+                        role: AccessibilityRole::TextInput,
+                    },
+                );
             }
             Ok(Some(
                 AccessibilityNode::label_required(self.id, AccessibilityRole::TextInput, "Probe")?

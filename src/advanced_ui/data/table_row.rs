@@ -20,6 +20,7 @@ use crate::elements::element::{
 };
 use crate::elements::text::{FontWeight, TextAlign};
 use crate::renderer::Primitive;
+use crate::renderer::text::BaseDirection;
 use std::any::TypeId;
 use taffy::prelude::*;
 
@@ -547,6 +548,7 @@ fn paint_cell(
         font_family: None,
         line_height: theme.typography.line_height,
         align: cell.align,
+        direction: BaseDirection::Auto,
     });
 }
 

@@ -278,7 +278,9 @@ impl<'a> RetainedPass<'a> {
             return None;
         }
         self.claimed[start..end].fill(true);
-        self.kept.nodes.extend_from_slice(&self.previous[start..end]);
+        self.kept
+            .nodes
+            .extend_from_slice(&self.previous[start..end]);
         self.next = end;
         Some(self.previous[end - 1].1)
     }
