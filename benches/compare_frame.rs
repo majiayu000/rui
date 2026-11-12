@@ -18,11 +18,11 @@
 use rui::core::entity::Entity;
 use rui::core::frame_pipeline::FramePipeline;
 use rui::elements::element::{Element, LayoutNodes};
-use rui::elements::{VirtualListHandle, canvas, shared_styled_text, span_range, virtual_list};
+use rui::elements::{VirtualListHandle, shared_styled_text, span_range, virtual_list};
 use rui::renderer::metal::MetalRenderer;
 use rui::renderer::text::TextMeasureCache;
 use rui::renderer::{RendererResourceLimits, Scene};
-use rui::{AppContext, Bounds, Color, ElementId, Size, div, text};
+use rui::{AppContext, Color, ElementId, Size, div, text};
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::RefCell;
 use std::ops::Range;
@@ -49,7 +49,9 @@ const CASES: [&str; 15] = [
     "paths",
     "paths_icons",
 ];
+mod compare_grid;
 mod compare_paths;
+use compare_grid::{CELL, ChangedCell, GRID, changed_cell, quad_grid, static_grid};
 #[path = "../benchmarks/gpui_compare/gpu_time.rs"]
 mod gpu_time;
 
@@ -100,8 +102,6 @@ const IDENTS: [&str; 12] = [
     "frame", "layout", "glyph", "scene", "cursor", "buffer", "row", "offset", "width", "atlas",
     "span", "view",
 ];
-const GRID: (usize, usize) = (200, 60);
-const CELL: (f32, f32) = (7.0, 15.0);
 
 struct CountingAllocator;
 
@@ -362,67 +362,6 @@ fn document() -> SharedDocument {
     Rc::new(RefCell::new(Document { tokens, lines }))
 }
 
-fn cell_color(row: usize, column: usize) -> u32 {
-    (((column * 255 / GRID.0) as u32) << 16) | (((row * 255 / GRID.1) as u32) << 8) | 0x60
-}
-
-/// A 200x60 grid of 7x15 cells painted by one canvas; cell `changed` is white.
-fn quad_grid(changed: usize) -> impl Element {
-    canvas(move |bounds, painter| {
-        for row in 0..GRID.1 {
-            for column in 0..GRID.0 {
-                let cell = Bounds::from_xywh(
-                    bounds.x() + column as f32 * CELL.0,
-                    bounds.y() + row as f32 * CELL.1,
-                    CELL.0,
-                    CELL.1,
-                );
-                let color = if row * GRID.0 + column == changed {
-                    0xffffff
-                } else {
-                    cell_color(row, column)
-                };
-                painter.fill(cell, Color::hex(color));
-            }
-        }
-    })
-    .w(GRID.0 as f32 * CELL.0)
-    .h(GRID.1 as f32 * CELL.1)
-}
-
-/// The grid of `quad_grid` with no cell changed, for a view that never renders again,
-/// kept by its canvas as iced's `canvas::Cache` keeps it.
-fn static_grid() -> impl Element {
-    canvas(move |bounds, painter| {
-        for row in 0..GRID.1 {
-            for column in 0..GRID.0 {
-                let cell = Bounds::from_xywh(
-                    bounds.x() + column as f32 * CELL.0,
-                    bounds.y() + row as f32 * CELL.1,
-                    CELL.0,
-                    CELL.1,
-                );
-                painter.fill(cell, Color::hex(cell_color(row, column)));
-            }
-        }
-    })
-    .cache_key(())
-    .w(GRID.0 as f32 * CELL.0)
-    .h(GRID.1 as f32 * CELL.1)
-}
-
-/// Cell `changed` of the grid, white, placed absolutely over the grid.
-fn changed_cell(changed: usize) -> impl Element {
-    div()
-        .absolute()
-        .pl((changed % GRID.0) as f32 * CELL.0)
-        .pt((changed / GRID.0) as f32 * CELL.1)
-        .child(div().w(CELL.0).h(CELL.1).bg(Color::hex(0xffffff)))
-}
-
-/// Which cell of `quad_grid_cached` is white, kept in an entity.
-struct ChangedCell(usize);
-
 /// What one runtime keeps across frames: layout tree, measure cache, scene, renderer.
 struct Harness {
     taffy: TaffyTree<ElementId>,
@@ -509,6 +448,11 @@ fn measure(
     harness: &mut Harness,
     mut frame: impl FnMut(&mut Harness, usize) -> Result<(), Box<dyn std::error::Error>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    // `COMPARE_SAMPLES` measures more frames, to profile the steady state.
+    let samples = std::env::var("COMPARE_SAMPLES")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(SAMPLES);
     gpu_time::install();
     for turn in 0..WARMUP {
         frame(harness, turn)?;
@@ -518,7 +462,7 @@ fn measure(
     gpu_time::take();
     let (mut ms, mut instructions, mut allocations) = (Vec::new(), Vec::new(), Vec::new());
     let (mut draw_calls, mut instances) = (Vec::new(), Vec::new());
-    for turn in WARMUP..WARMUP + SAMPLES {
+    for turn in WARMUP..WARMUP + samples {
         let (i0, a0) = (rusage()[31], ALLOCATIONS.load(Ordering::Relaxed));
         let t0 = Instant::now();
         frame(harness, turn)?;
@@ -532,9 +476,9 @@ fn measure(
     let footprint = footprint_mb();
     std::thread::sleep(GPU_SETTLE);
     let mut gpu_ms = gpu_time::take();
-    if gpu_ms.len() != SAMPLES {
+    if gpu_ms.len() != samples {
         return Err(format!(
-            "{case}: {} command buffers completed for {SAMPLES} frames; GPU time per frame needs one each",
+            "{case}: {} command buffers completed for {samples} frames; GPU time per frame needs one each",
             gpu_ms.len()
         )
         .into());
