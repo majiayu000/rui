@@ -70,14 +70,16 @@ version, measured the same way.
 
 | Case | | RUI before | RUI | egui | Vello |
 |---|---|---|---|---|---|
-| `paths` | instructions (M) | 30.4 | 8.71–8.73 | 54.6 | 16.5–17.7 |
-| | allocations | 2 522 | 21 | 24 791 | 7 555 |
-| | GPU ms p50 | 1.66–2.09 | 0.937–0.942 | 1.28 | 1.00–1.02 |
-| | CPU ms p50 | 3.2–3.3 | 1.17–1.31 | 5.2 | 1.07–1.20 |
+| `paths` | instructions (M) | 30.4 | 8.71–8.73 | 54.6 | 7.81–8.52 |
+| | allocations | 2 522 | 21 | 24 791 | 571–572 |
+| | GPU ms p50 | 1.66–2.09 | 0.933–0.942 | 1.28 | 0.99–1.01 |
+| | CPU ms p50 | 3.2–3.3 | 1.17–1.31 | 5.2 | not re-run |
 | `paths_icons` | instructions (M) | 31.3 | 5.04–5.05 | 65.7 | 5.70–5.99 |
 | | allocations | 6 081 | 98 | 41 476 | 567 |
 | | GPU ms p50 | 0.37–0.64 | 0.20–0.22 | 0.62 | 0.30–0.32 |
 | | CPU ms p50 | 2.3 | 0.36–0.39 | 5.8 | 0.49–0.52 |
+
+Vello's `paths` encodes the shapes below and above the moving one once, into two scenes of their own, and a frame appends them around the moving shape, as RUI's side keeps their vertices; encoding all 2 700 shapes every frame cost it 16.5–17.7 M. Its `paths_icons` was already built this way. Vello's `paths` row is from three runs at load average 17–29.
 
 RUI draws `paths` in 197 draw calls and 55 084 instances, `paths_icons` in 102 and
 6 001.
@@ -93,8 +95,10 @@ instances (5 interleaved runs each, medians 0.940, 0.830, 0.753 ms).
 
 ### Where each is ahead
 
-- **RUI is ahead of Vello on CPU for both cases** (1.9x fewer instructions on
-  `paths`, 1.1–1.2x on the icons) and level or ahead on GPU. An unchanged path
+- **Vello is slightly ahead on `paths` instructions** (7.81–8.52 M against
+  8.71 M) when both sides keep their still geometry; RUI allocates 27x less and
+  is level on GPU (0.93 against 0.99–1.01 ms).
+- **RUI is ahead of Vello on the icons**, by 1.1–1.5x in instructions and on GPU. An unchanged path
   costs RUI a lookup by its vertex storage and a copy of the tiles or atlas
   sprite it was drawn with; an icon is one `Picture` whose planned instances are
   copied whole.

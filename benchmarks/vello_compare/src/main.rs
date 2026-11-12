@@ -310,21 +310,26 @@ fn measure(
 fn run(case: &str) -> Result<(), Box<dyn std::error::Error>> {
     let scale = Affine::scale(SCALE_FACTOR);
     match case {
-        // The shapes are kept; each frame encodes them again, the moving one turned.
+        // The still shapes are encoded once into a scene of their own, as RUI's side
+        // keeps their geometry; a frame appends it and encodes the moving one.
         "paths" => {
             let mut harness = Harness::new()?;
             let shapes = paths_scene::paths();
+            // Below and above the moving shape, so the drawing order is kept.
+            let (mut below, mut above) = (Scene::new(), Scene::new());
+            for (index, shape) in shapes.iter().enumerate() {
+                if index < paths_scene::MOVING {
+                    draw(&mut below, Affine::IDENTITY, shape);
+                } else if index > paths_scene::MOVING {
+                    draw(&mut above, Affine::IDENTITY, shape);
+                }
+            }
             let frame = |harness: &mut Harness, turn: usize| {
                 let moving = paths_scene::moving(&shapes, turn);
                 harness.frame(|scene| {
-                    for (index, shape) in shapes.iter().enumerate() {
-                        let shape = if index == paths_scene::MOVING {
-                            &moving
-                        } else {
-                            shape
-                        };
-                        draw(scene, scale, shape);
-                    }
+                    scene.append(&below, Some(scale));
+                    draw(scene, scale, &moving);
+                    scene.append(&above, Some(scale));
                 })
             };
             frame(&mut harness, 0)?;
