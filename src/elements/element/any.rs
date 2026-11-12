@@ -1,11 +1,12 @@
 //! [`AnyElement`]: the type-erased element the frame keeps, with its stable
 //! identity, reconcile, kept layout and paint replay, and action dispatch.
 
+use super::element_box::ElementBox;
 use super::*;
 
 /// Type-erased element wrapper
 pub struct AnyElement {
-    pub(super) inner: Box<dyn Element>,
+    pub(super) inner: ElementBox,
     stable_id: Option<ElementId>,
     /// Layout of a memoizable subtree, which the next retained pass can keep.
     layout_record: Option<LayoutRecord>,
@@ -140,16 +141,16 @@ pub(crate) fn refresh_views(
 impl AnyElement {
     // Composite builders keep one owned child tree while accessing typed props.
     pub(crate) fn downcast_ref<E: Element>(&self) -> Option<&E> {
-        (self.inner.as_ref() as &dyn Any).downcast_ref()
+        (&*self.inner as &dyn Any).downcast_ref()
     }
 
     pub(crate) fn downcast_mut<E: Element>(&mut self) -> Option<&mut E> {
-        (self.inner.as_mut() as &mut dyn Any).downcast_mut()
+        (&mut *self.inner as &mut dyn Any).downcast_mut()
     }
 
     pub fn new<E: Element>(element: E) -> Self {
         let is_view = TypeId::of::<E>() == TypeId::of::<crate::elements::ViewElement>();
-        let mut inner: Box<dyn Element> = Box::new(element);
+        let mut inner = ElementBox::new(element);
         // Read from the box: reading the element before boxing copies it.
         let keyed = is_view || inner.id().is_some_and(|id| !id.is_ephemeral());
         debug_assert_eq!(
@@ -367,6 +368,25 @@ impl AnyElement {
                 self.paint_record.set(Some((cx.scene.frame(), index)));
                 return;
             }
+        }
+        if let Some(reach) = cx.unseen_reach(&*self.inner) {
+            // Left out as a replay leaves out what is not seen, so the next
+            // frame can pass it by the same way.
+            if self.layout_record.is_some() {
+                let start = cx.scene.len() as u32;
+                let index = cx.scene.record(PaintRecord {
+                    painted: false,
+                    replayed: true,
+                    start,
+                    end: start,
+                    origin,
+                    unrounded_origin: unrounded.origin,
+                    unrounded_size: unrounded.size,
+                    reach,
+                });
+                self.paint_record.set(Some((cx.scene.frame(), index)));
+            }
+            return;
         }
         let start = cx.scene.len();
         let regions = cx.scene.region_count();

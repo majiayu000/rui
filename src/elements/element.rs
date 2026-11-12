@@ -23,6 +23,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use taffy::prelude::*;
 
 mod any;
+mod cull;
+mod element_box;
 mod event;
 mod layout;
 mod paint;
@@ -30,6 +32,7 @@ mod reconcile;
 pub(crate) use reconcile::reconcile_children;
 
 pub use any::*;
+pub use cull::*;
 pub use event::*;
 pub use layout::*;
 pub use paint::*;
@@ -145,6 +148,21 @@ pub trait Element: Any {
 
     /// Paint the element to the scene
     fn paint(&mut self, cx: &mut PaintContext);
+
+    /// Where painting at `bounds`, laid out in `taffy`, would draw, when none
+    /// of that can be seen in `visible`; `None` when some of it may be, or it
+    /// is not known. A frame leaves out subtrees with a reach without painting
+    /// them. Conservative by default: only an element that paints just
+    /// primitives whose [`Primitive::reach`] it adds up, with its subtree, and
+    /// registers no hit or accessibility region, gives one.
+    fn unseen_reach(
+        &self,
+        _taffy: &TaffyTree<ElementId>,
+        _bounds: Bounds,
+        _visible: &Bounds,
+    ) -> Option<Bounds> {
+        None
+    }
 
     /// Refresh text geometry after event dispatch and before painting.
     fn refresh_text_geometry(&mut self, _text_measurer: &mut TextMeasureCache) {}

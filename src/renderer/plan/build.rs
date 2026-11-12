@@ -41,6 +41,9 @@ impl<T> FrameData<T> {
         (self.scissors.len() - 1) as u32
     }
 
+    // Called for every primitive drawn: left to the inliner, whether it is
+    // inlined into `push_quad` changed with unrelated code elsewhere in the crate.
+    #[inline]
     pub(super) fn push_item(&mut self, kind: ItemKind, clip: u32, rect: Rect, scale_factor: f32) {
         if let Some(rect) = visible_rect(&self.clip_edges, rect, clip, scale_factor) {
             self.plan.push(kind, clip, Some(rect));

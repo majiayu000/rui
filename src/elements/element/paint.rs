@@ -115,13 +115,7 @@ impl<'a> PaintContext<'a> {
     }
 
     pub fn child_bounds(&self, node: NodeId) -> Option<Bounds> {
-        let layout = self.taffy.layout(node).ok()?;
-        let bounds = Bounds::from_xywh(
-            self.bounds.x() + layout.location.x,
-            self.bounds.y() + layout.location.y,
-            layout.size.width,
-            layout.size.height,
-        );
+        let bounds = child_bounds_in(self.taffy, self.bounds, node)?;
         if let Some(parent) = self.unrounded {
             let unrounded = self.taffy.unrounded_layout(node);
             self.last_child.set(Some((
