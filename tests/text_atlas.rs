@@ -14,7 +14,7 @@ const VIEWPORT: Size = Size {
 fn text(content: &str, x: f32, color: Rgba) -> Primitive {
     Primitive::Text {
         bounds: Bounds::from_xywh(x, 10.0, 50.0, 40.0),
-        content: content.to_string(),
+        content: content.into(),
         color,
         font_size: 28.0,
         font_weight: 400,
@@ -147,7 +147,7 @@ fn glyph_page_scene(first: usize) -> Scene {
     for (index, size) in (first..first + 6).enumerate() {
         scene.insert(Primitive::Text {
             bounds: Bounds::from_xywh(0.0, index as f32 * 10.0, 400.0, 10.0),
-            content: "WgQ@#&".to_string(),
+            content: "WgQ@#&".into(),
             color: Rgba::new(1.0, 1.0, 1.0, 1.0),
             font_size: 60.0 + size as f32,
             font_weight: 400,

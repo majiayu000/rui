@@ -2,7 +2,9 @@
 //! and the conversion from [`Style`] to taffy.
 
 use super::*;
+use crate::core::SharedStr;
 use crate::renderer::text::FastMap;
+use smallvec::SmallVec;
 
 /// Source of [`LayoutNodes`] epochs: a new one whenever the kept nodes are
 /// started over, so layout recorded against old nodes is never reused.
@@ -39,10 +41,10 @@ pub(crate) type WrappedLines = Rc<RefCell<Option<Arc<WrappedText>>>>;
 /// What a wrapped text leaf needs to be measured at any width.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct TextWrapRequest {
-    pub(crate) content: String,
+    pub(crate) content: SharedStr,
     pub(crate) font_size: f32,
     pub(crate) font_weight: u16,
-    pub(crate) font_family: Option<String>,
+    pub(crate) font_family: Option<Arc<str>>,
     pub(crate) line_height: f32,
     pub(crate) max_lines: Option<usize>,
 }
@@ -138,16 +140,26 @@ impl MeasuredText {
     }
 }
 
+/// Where in the previous pass's nodes one element's nodes are, in creation order.
+type OwnedNodes = SmallVec<[u32; 1]>;
+
 /// Layout nodes kept from one frame to the next.
 ///
-/// A retained layout pass hands out the node created at the same position in the
-/// previous pass, in creation order, and only restyles or rewires it when its style
-/// or children changed. Taffy then dirties just those nodes and their ancestors, so
-/// unchanged subtrees keep their cached layout. A change of tree shape costs more
-/// restyling but stays correct: every node's style and children are still written.
+/// A retained layout pass hands each element the nodes the element with the same
+/// identity created in the previous pass, in creation order, and only restyles or
+/// rewires them when their style or children changed. Taffy then dirties just those
+/// nodes and their ancestors, so unchanged subtrees keep their cached layout, also
+/// when they moved: a scrolled list's rows keep their nodes. A change of tree shape
+/// costs more restyling but stays correct: every node's style and children are
+/// still written.
 #[derive(Debug)]
 pub struct LayoutNodes {
-    pub(super) nodes: Vec<NodeId>,
+    /// Nodes of the last pass in creation order, each with the element that made it.
+    pub(super) nodes: Vec<(ElementId, NodeId)>,
+    /// Emptied storage of the pass before, reused so a pass does not allocate it.
+    spare_nodes: Vec<(ElementId, NodeId)>,
+    spare_owners: FastMap<ElementId, OwnedNodes>,
+    spare_claimed: Vec<bool>,
     /// Changes whenever `nodes` are started over.
     pub(super) epoch: u64,
     /// Node count of the tree after the last retained pass. Anything else means the
@@ -160,6 +172,9 @@ impl Default for LayoutNodes {
     fn default() -> Self {
         Self {
             nodes: Vec::new(),
+            spare_nodes: Vec::new(),
+            spare_owners: FastMap::default(),
+            spare_claimed: Vec::new(),
             epoch: next_layout_epoch(),
             tree_node_count: 0,
             measured_text: FastMap::default(),
@@ -183,18 +198,113 @@ impl LayoutNodes {
 }
 
 pub(super) struct RetainedPass<'a> {
+    /// Collects this pass's nodes.
     pub(super) kept: &'a mut LayoutNodes,
-    pub(super) cursor: usize,
+    /// Nodes of the previous pass in creation order.
+    pub(super) previous: Vec<(ElementId, NodeId)>,
+    /// Which of `previous` this pass reused.
+    claimed: Vec<bool>,
+    /// Where the next element's nodes most likely are in `previous`: right after
+    /// the last ones reused, as long as the tree keeps its order.
+    next: usize,
+    /// `previous` by the element that made each node, built the first time an
+    /// element's nodes are not at `next`.
+    owners: FastMap<ElementId, OwnedNodes>,
+    owners_built: bool,
 }
 
 impl<'a> RetainedPass<'a> {
-    /// Remove nodes the previous pass had and this one did not reach.
-    fn finish(self, taffy: &mut TaffyTree<ElementId>) -> &'a mut LayoutNodes {
-        for node in self.kept.nodes.drain(self.cursor..) {
-            let _ = taffy.remove(node);
+    fn new(kept: &'a mut LayoutNodes) -> Self {
+        let previous = std::mem::replace(&mut kept.nodes, std::mem::take(&mut kept.spare_nodes));
+        let mut claimed = std::mem::take(&mut kept.spare_claimed);
+        claimed.resize(previous.len(), false);
+        let owners = std::mem::take(&mut kept.spare_owners);
+        Self {
+            kept,
+            previous,
+            claimed,
+            next: 0,
+            owners,
+            owners_built: false,
         }
-        self.kept.tree_node_count = taffy.total_node_count();
-        self.kept
+    }
+
+    /// Where the next node of this pass goes in [`LayoutNodes::nodes`].
+    pub(super) fn cursor(&self) -> usize {
+        self.kept.nodes.len()
+    }
+
+    /// The first node `owner` made in the previous pass that this pass has not
+    /// reused yet.
+    fn take_previous(&mut self, owner: ElementId) -> Option<NodeId> {
+        let index = match self.previous.get(self.next) {
+            Some((made_by, _)) if *made_by == owner && !self.claimed[self.next] => self.next,
+            _ => self.find(owner)?,
+        };
+        self.claimed[index] = true;
+        self.next = index + 1;
+        Some(self.previous[index].1)
+    }
+
+    fn find(&mut self, owner: ElementId) -> Option<usize> {
+        if !self.owners_built {
+            self.owners_built = true;
+            for (index, (made_by, _)) in self.previous.iter().enumerate() {
+                self.owners.entry(*made_by).or_default().push(index as u32);
+            }
+        }
+        let claimed = &self.claimed;
+        self.owners
+            .get(&owner)?
+            .iter()
+            .map(|index| *index as usize)
+            .find(|index| !claimed[*index])
+    }
+
+    fn push(&mut self, owner: ElementId, node: NodeId) {
+        self.kept.nodes.push((owner, node));
+    }
+
+    /// Reuse the previous pass's nodes `start..end`, in order, when they are a
+    /// subtree that ends with `last`: a subtree's nodes are made together, its
+    /// root's last, so they are when `last` still sits at the end. Not when one
+    /// was reused already. Returns `last`.
+    pub(super) fn keep_range(&mut self, start: usize, end: usize, last: NodeId) -> Option<NodeId> {
+        let claimed = self.claimed.get(start..end)?;
+        if start == end
+            || self.previous[end - 1].1 != last
+            || claimed.iter().any(|claimed| *claimed)
+        {
+            return None;
+        }
+        self.claimed[start..end].fill(true);
+        self.kept.nodes.extend_from_slice(&self.previous[start..end]);
+        self.next = end;
+        Some(self.previous[end - 1].1)
+    }
+
+    /// Remove nodes the previous pass had and this one did not reuse.
+    fn finish(self, taffy: &mut TaffyTree<ElementId>) -> &'a mut LayoutNodes {
+        let Self {
+            kept,
+            mut previous,
+            mut claimed,
+            mut owners,
+            ..
+        } = self;
+        for ((_, node), claimed) in previous.iter().zip(&claimed) {
+            if !claimed {
+                let _ = taffy.remove(*node);
+            }
+        }
+        previous.clear();
+        claimed.clear();
+        owners.clear();
+        kept.spare_nodes = previous;
+        kept.spare_claimed = claimed;
+        kept.spare_owners = owners;
+        kept.tree_node_count = taffy.total_node_count();
+        kept
     }
 }
 
@@ -257,7 +367,7 @@ impl<'a> LayoutContext<'a> {
             taffy,
             available_space,
             LayoutTextMeasurer::Borrowed(text_measurer),
-            Some(RetainedPass { kept, cursor: 0 }),
+            Some(RetainedPass::new(kept)),
         );
         // Most passes measure the same texts as the last.
         cx.measured_text.reserve(previous_measured_text.len());
@@ -430,18 +540,19 @@ impl<'a> LayoutContext<'a> {
         let Some(pass) = self.retained.as_mut() else {
             return self.taffy.new_with_children(style, children);
         };
-        let Some(&node) = pass.kept.nodes.get(pass.cursor) else {
+        // Nodes belong to the element being laid out.
+        let owner = self.identity_parent;
+        let Some(node) = pass.take_previous(owner) else {
             // `set_children`, unlike `new_with_children`, detaches each child from
             // the parent it had last pass, which that parent may still list.
             let node = self.taffy.new_leaf(style)?;
             if !children.is_empty() {
                 self.taffy.set_children(node, children)?;
             }
-            pass.kept.nodes.push(node);
-            pass.cursor += 1;
+            pass.push(owner, node);
             return Ok(node);
         };
-        pass.cursor += 1;
+        pass.push(owner, node);
         if *self.taffy.style(node)? != style {
             self.taffy.set_style(node, style)?;
         }

@@ -635,7 +635,7 @@ impl Element for Input {
 
             cx.paint(Primitive::Text {
                 bounds: Bounds::from_xywh(text_x, text_y, text_width, font_size),
-                content: display.to_string(),
+                content: display.to_string().into(),
                 color: text_color.to_rgba(),
                 font_size,
                 font_weight: 400,

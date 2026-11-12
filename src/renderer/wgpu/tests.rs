@@ -146,7 +146,7 @@ fn fixture_scene() -> Scene {
     });
     scene.insert(Primitive::Text {
         bounds: Bounds::from_xywh(10.0, 56.0, 140.0, 24.0),
-        content: "Wgpu & Metal \u{1F600} clipped".to_string(),
+        content: "Wgpu & Metal \u{1F600} clipped".into(),
         color: Rgba::new(0.1, 0.1, 0.12, 1.0),
         font_size: 14.0,
         font_weight: 400,
@@ -185,7 +185,7 @@ fn fixture_scene() -> Scene {
     });
     scene.insert(Primitive::Text {
         bounds: Bounds::from_xywh(0.0, 84.0, WIDTH, 16.0),
-        content: "light on dark".to_string(),
+        content: "light on dark".into(),
         color: Rgba::WHITE,
         font_size: 11.0,
         font_weight: 700,
