@@ -12,6 +12,7 @@ mod order;
 mod path;
 mod path_cache;
 mod path_tiles;
+mod picture;
 mod retained;
 mod simple;
 mod sprites;
@@ -35,6 +36,7 @@ use frame::FramePlan;
 use path::PathGeometry;
 use path_cache::PathCache;
 use path_tiles::PathTiles;
+use picture::PictureCache;
 use sprites::PathSprites;
 use std::collections::HashMap;
 
@@ -159,6 +161,7 @@ pub(crate) struct FramePlanner<T> {
     path_sprites: PathSprites,
     path_tiles: PathTiles,
     path_cache: PathCache,
+    picture_cache: PictureCache,
     pub textures: ImageTextures<T>,
 }
 
@@ -176,6 +179,7 @@ impl<T: Clone> FramePlanner<T> {
             path_sprites: PathSprites::default(),
             path_tiles: PathTiles::default(),
             path_cache: PathCache::default(),
+            picture_cache: PictureCache::default(),
             textures: ImageTextures::new(limits),
         }
     }
@@ -203,6 +207,7 @@ impl<T: Clone> FramePlanner<T> {
         self.path_sprites.begin_frame(self.text_cache.epoch());
         self.path_tiles.begin_frame();
         self.path_cache.begin_frame();
+        self.picture_cache.begin_frame();
         Ok(())
     }
 

@@ -317,15 +317,29 @@ fn what_is_not_supported_names_the_element() {
 
 const ICON: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/><circle cx="12" cy="12" r="10" fill="#000" stroke="none"/></svg>"##;
 
+/// Every path drawn, in pictures too, with its color and where it is drawn.
 fn paths(primitives: &[Primitive]) -> Vec<(Rgba, Bounds)> {
-    primitives
-        .iter()
-        .filter_map(|primitive| match primitive {
+    let mut drawn = Vec::new();
+    collect_paths(primitives, crate::core::geometry::Point::ZERO, &mut drawn);
+    drawn
+}
+
+fn collect_paths(
+    primitives: &[Primitive],
+    at: crate::core::geometry::Point,
+    drawn: &mut Vec<(Rgba, Bounds)>,
+) {
+    for primitive in primitives {
+        match primitive {
             Primitive::Path {
-                vertices, color, ..
+                vertices,
+                offset,
+                color,
+                ..
             } => {
-                let xs = vertices.iter().map(|vertex| vertex.position[0]);
-                let ys = vertices.iter().map(|vertex| vertex.position[1]);
+                let (dx, dy) = (at.x + offset.x, at.y + offset.y);
+                let xs = vertices.iter().map(|vertex| vertex.position[0] + dx);
+                let ys = vertices.iter().map(|vertex| vertex.position[1] + dy);
                 let (x0, x1) = (
                     xs.clone().fold(f32::MAX, f32::min),
                     xs.fold(f32::MIN, f32::max),
@@ -334,11 +348,16 @@ fn paths(primitives: &[Primitive]) -> Vec<(Rgba, Bounds)> {
                     ys.clone().fold(f32::MAX, f32::min),
                     ys.fold(f32::MIN, f32::max),
                 );
-                Some((*color, Bounds::from_xywh(x0, y0, x1 - x0, y1 - y0)))
+                drawn.push((*color, Bounds::from_xywh(x0, y0, x1 - x0, y1 - y0)));
             }
-            _ => None,
-        })
-        .collect()
+            Primitive::Picture { picture, offset } => collect_paths(
+                picture.primitives(),
+                crate::core::geometry::Point::new(at.x + offset.x, at.y + offset.y),
+                drawn,
+            ),
+            _ => {}
+        }
+    }
 }
 
 #[test]
@@ -378,11 +397,8 @@ fn an_icon_is_parsed_once_and_shaped_once_per_size_and_tint() {
     let parsed = b.parsed.as_ref().expect("parsed");
     let size = Size::new(16.0, 16.0);
     let first = shaped(parsed, size, None);
-    assert!(Rc::ptr_eq(&first, &shaped(parsed, size, None)));
-    assert!(!Rc::ptr_eq(
-        &first,
-        &shaped(parsed, Size::new(17.0, 16.0), None)
-    ));
+    assert!(first.ptr_eq(&shaped(parsed, size, None)));
+    assert!(!first.ptr_eq(&shaped(parsed, Size::new(17.0, 16.0), None)));
 }
 
 #[test]

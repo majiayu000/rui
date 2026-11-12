@@ -295,6 +295,10 @@ mod tests {
                 opacity: 1.0,
             },
             sample_path(),
+            Primitive::Picture {
+                picture: crate::renderer::Picture::new(vec![sample_quad(), sample_path()]),
+                offset: crate::core::geometry::Point::new(4.0, 2.0),
+            },
             Primitive::PushClip {
                 bounds: Bounds::from_xywh(0.0, 0.0, 100.0, 100.0),
                 corner_radii: Corners::ZERO,

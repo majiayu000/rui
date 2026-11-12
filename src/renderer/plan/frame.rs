@@ -87,10 +87,10 @@ pub(crate) enum ItemKind {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct Item {
-    kind: ItemKind,
-    clip: u32,
-    rect: Option<Rect>,
+pub(super) struct Item {
+    pub kind: ItemKind,
+    pub clip: u32,
+    pub rect: Option<Rect>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -142,6 +142,11 @@ impl FramePlan {
             ItemKind::Sprites { .. } | ItemKind::Image(_) => self.mixed = true,
         }
         self.items.push(Item { kind, clip, rect });
+    }
+
+    /// The items pushed so far, in order.
+    pub(super) fn items(&self) -> &[Item] {
+        &self.items
     }
 
     /// Fills `refs` and `draws`. `width` and `height` bound every item's rect;

@@ -8,7 +8,7 @@ use crate::elements::element::{
     Capabilities, Element, EventContext, LayoutContext, PaintContext, PointerEvent,
     PointerEventKind, StableId, style_to_taffy,
 };
-use crate::renderer::{Primitive, Scene};
+use crate::renderer::{Picture, Primitive, Scene};
 use std::any::Any;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use taffy::prelude::*;
@@ -72,6 +72,8 @@ pub struct Canvas {
     on_pointer: Option<PointerFn>,
     pressed: bool,
     cache_key: Option<u64>,
+    /// What the closure painted under the cache key, at these bounds.
+    recorded: Option<(u64, Bounds, Picture)>,
 }
 
 /// A [`Canvas`] painted by `paint(bounds, painter)`.
@@ -83,6 +85,7 @@ pub fn canvas(paint: impl FnMut(Bounds, &mut Painter) + 'static) -> Canvas {
         on_pointer: None,
         pressed: false,
         cache_key: None,
+        recorded: None,
     }
 }
 
@@ -122,14 +125,15 @@ impl Canvas {
     /// Keep what the closure painted while `key` stays the same, as iced's
     /// `canvas::Cache` keeps its geometry.
     ///
-    /// The closure must paint only from `key` and the bounds it is given. A
-    /// canvas rebuilt with the same key, style and id keeps the previous
-    /// instance, closure included, and replays its primitives instead of
-    /// painting: the closure runs again only when the key changes, when layout
-    /// gives the canvas another size or a position off the whole-pixel grid it
-    /// was painted at, or when the previous frame did not paint it (it was out of
-    /// view, or the canvas is new). Change the key whenever what the closure
-    /// draws changes, for example to a revision counter of the data it draws.
+    /// The closure must paint only from `key` and the bounds it is given. Its
+    /// primitives are recorded into a [`Picture`], which the canvas paints
+    /// instead of calling the closure while the key and its bounds stay the
+    /// same, and which the renderer plans once and copies into later frames.
+    /// A canvas rebuilt with the same key, style and id keeps the previous
+    /// instance, closure and picture included, and its paint is replayed: the
+    /// closure runs again only when the key changes or layout gives the canvas
+    /// other bounds. Change the key whenever what the closure draws changes,
+    /// for example to a revision counter of the data it draws.
     ///
     /// A canvas with [`Canvas::on_pointer`] registers a hit region every frame,
     /// so it is painted every frame, key or not.
@@ -195,7 +199,30 @@ impl Element for Canvas {
             cx.register_hit_region(self.id.get(), bounds);
         }
         cx.scene.push_layer(bounds);
-        (self.paint)(bounds, &mut Painter { scene: cx.scene });
+        match self.cache_key {
+            None => (self.paint)(bounds, &mut Painter { scene: cx.scene }),
+            Some(key) => {
+                let picture = match &self.recorded {
+                    Some((kept, at, picture)) if *kept == key && *at == bounds => picture.clone(),
+                    _ => {
+                        let mut recording = Scene::new();
+                        (self.paint)(
+                            bounds,
+                            &mut Painter {
+                                scene: &mut recording,
+                            },
+                        );
+                        let picture = Picture::new(std::mem::take(&mut recording.primitives));
+                        self.recorded = Some((key, bounds, picture.clone()));
+                        picture
+                    }
+                };
+                cx.scene.insert(Primitive::Picture {
+                    picture,
+                    offset: Point::ZERO,
+                });
+            }
+        }
         cx.scene.pop_layer();
     }
 
@@ -222,5 +249,49 @@ impl Element for Canvas {
         });
         // Moves keep propagating so hover elsewhere stays current, as in `Div`.
         !matches!(event.kind, PointerEventKind::Move)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::geometry::Size;
+    use crate::elements::div;
+    use crate::testing::mount;
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    #[test]
+    fn a_cached_canvas_paints_again_only_when_its_key_changes() {
+        let (calls, key) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(1)));
+        let (counted, keyed) = (Rc::clone(&calls), Rc::clone(&key));
+        let mut session = mount(Size::new(100.0, 100.0), move |_| {
+            let counted = Rc::clone(&counted);
+            div().child(
+                canvas(move |bounds, painter| {
+                    counted.set(counted.get() + 1);
+                    painter.fill(bounds, Color::hex(0x336699));
+                })
+                .cache_key(keyed.get())
+                .w(40.0)
+                .h(30.0),
+            )
+        })
+        .expect("mount");
+        for _ in 0..3 {
+            session.app_context_mut().request_rebuild();
+            session.frame().expect("frame");
+        }
+        assert_eq!(calls.get(), 1, "painted once for the key, rebuilt or not");
+        let pictures = session
+            .primitives()
+            .iter()
+            .filter(|primitive| matches!(primitive, Primitive::Picture { .. }))
+            .count();
+        assert_eq!(pictures, 1);
+        key.set(2);
+        session.app_context_mut().request_rebuild();
+        session.frame().expect("frame");
+        assert_eq!(calls.get(), 2, "painted again for the new key");
     }
 }

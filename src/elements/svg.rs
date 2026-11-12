@@ -1,8 +1,8 @@
 //! SVG icons drawn as path primitives.
 //!
 //! [`svg`] parses a practical subset of SVG (see [`parse`]) once per markup and
-//! turns it into filled paths once per size and tint, kept for every element
-//! that shows the same icon at the same size. What it cannot draw is an error
+//! turns it into a [`Picture`] of filled paths once per size and tint, kept for
+//! every element that shows the same icon at the same size. What it cannot draw is an error
 //! naming the element, shown in place of the icon.
 
 mod geometry;
@@ -18,7 +18,7 @@ use crate::elements::element::{
     Capabilities, Element, LayoutContext, PaintContext, style_to_taffy,
 };
 use crate::elements::text::TextAlign;
-use crate::renderer::Primitive;
+use crate::renderer::{Picture, Primitive};
 use geometry::{Transform, fill_polygon, stroke_outline};
 use parse::{ColorValue, Document};
 use std::any::Any;
@@ -60,7 +60,7 @@ struct Caches {
     addressed: HashMap<(usize, usize), ParsedMarkup>,
     next_id: u64,
     /// At the origin.
-    shaped: HashMap<ShapeKey, Rc<[Primitive]>>,
+    shaped: HashMap<ShapeKey, Picture>,
 }
 
 thread_local! {
@@ -116,23 +116,23 @@ fn parsed_by_hash(markup: &str) -> Result<Rc<Parsed>, SvgError> {
 }
 
 /// The icon's paths at the origin, `size` large, painted `tint` if given.
-fn shaped(parsed: &Parsed, size: Size, tint: Option<Rgba>) -> Rc<[Primitive]> {
+fn shaped(parsed: &Parsed, size: Size, tint: Option<Rgba>) -> Picture {
     let key = (
         parsed.id,
         [size.width.to_bits(), size.height.to_bits()],
         tint.map(|tint| tint.to_array().map(f32::to_bits)),
     );
     CACHES.with(|caches| {
-        if let Some(primitives) = caches.borrow().shaped.get(&key) {
-            return Rc::clone(primitives);
+        if let Some(picture) = caches.borrow().shaped.get(&key) {
+            return picture.clone();
         }
-        let primitives: Rc<[Primitive]> = shape(&parsed.document, size, tint).into();
+        let picture = Picture::new(shape(&parsed.document, size, tint));
         let mut caches = caches.borrow_mut();
         if caches.shaped.len() >= SHAPED_ICONS {
             caches.shaped.clear();
         }
-        caches.shaped.insert(key, Rc::clone(&primitives));
-        primitives
+        caches.shaped.insert(key, picture.clone());
+        picture
     })
 }
 
@@ -318,11 +318,12 @@ impl Element for Svg {
             return;
         }
         let tint = self.tint.map(|tint| tint.to_rgba());
-        for primitive in shaped(parsed, bounds.size, tint).iter() {
-            let mut primitive = primitive.clone();
-            primitive.translate(bounds.x(), bounds.y());
-            cx.paint(primitive);
-        }
+        // One primitive however many paths: the renderer keeps what it planned
+        // for the icon where it is drawn.
+        cx.paint(Primitive::Picture {
+            picture: shaped(parsed, bounds.size, tint),
+            offset: bounds.origin,
+        });
     }
 }
 

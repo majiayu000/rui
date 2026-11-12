@@ -286,6 +286,12 @@ fn primitive_line(index: usize, primitive: &Primitive) -> Result<String, Primiti
                 stroke
             )
         }
+        Primitive::Picture { picture, offset } => format!(
+            "primitive[{index}].picture primitives={} offset=({}, {})",
+            picture.primitives().len(),
+            f32_text(offset.x),
+            f32_text(offset.y)
+        ),
         Primitive::PushClip {
             bounds,
             corner_radii,

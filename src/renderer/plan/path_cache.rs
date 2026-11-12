@@ -132,6 +132,8 @@ pub(super) struct PathPrimitive<'a> {
 impl<T: Clone> FramePlanner<T> {
     /// Draws `path` within `visible`, logical pixels, from what was kept for it
     /// if it was drawn before with the same vertices.
+    // Out of line, so the loop over every primitive stays small.
+    #[inline(never)]
     pub(super) fn build_path_primitive(
         &mut self,
         frame: &mut FrameData<T>,

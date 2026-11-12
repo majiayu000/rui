@@ -6,6 +6,8 @@ use crate::core::geometry::{Bounds, Edges, Point, Size};
 use crate::core::style::Corners;
 use crate::elements::fit_bounds;
 use crate::elements::text::TextAlign;
+use crate::renderer::Picture;
+use crate::renderer::picture::moved;
 use crate::{ImageFit, ImageSource};
 use bytemuck::{Pod, Zeroable};
 use std::sync::Arc;
@@ -88,6 +90,9 @@ pub enum Primitive {
         stroke_width: Option<f32>,
     },
 
+    /// Primitives recorded once, drawn moved by `offset`; see [`Picture`].
+    Picture { picture: Picture, offset: Point },
+
     /// Clipping mask push
     PushClip {
         bounds: Bounds,
@@ -107,12 +112,13 @@ pub enum PrimitiveKind {
     Text,
     Image,
     Path,
+    Picture,
     PushClip,
     PopClip,
 }
 
 impl PrimitiveKind {
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::Quad,
         Self::Shadow,
         Self::LinearGradient,
@@ -120,6 +126,7 @@ impl PrimitiveKind {
         Self::Text,
         Self::Image,
         Self::Path,
+        Self::Picture,
         Self::PushClip,
         Self::PopClip,
     ];
@@ -133,6 +140,7 @@ impl PrimitiveKind {
             Self::Text => "text",
             Self::Image => "image",
             Self::Path => "path",
+            Self::Picture => "picture",
             Self::PushClip => "push_clip",
             Self::PopClip => "pop_clip",
         }
@@ -179,6 +187,8 @@ impl Primitive {
                             && exact(vertex.position[1] + offset.y, dy)
                     })
             }
+            // Its primitives are drawn at the offset either way.
+            Self::Picture { offset, .. } => exact(offset.x, dx) && exact(offset.y, dy),
             Self::PopClip => true,
         }
     }
@@ -197,7 +207,7 @@ impl Primitive {
             | Self::Text { bounds, .. }
             | Self::Image { bounds, .. }
             | Self::PushClip { bounds, .. } => shift(bounds),
-            Self::Path { offset, .. } => {
+            Self::Path { offset, .. } | Self::Picture { offset, .. } => {
                 offset.x += dx;
                 offset.y += dy;
             }
@@ -214,6 +224,7 @@ impl Primitive {
             Self::Text { .. } => PrimitiveKind::Text,
             Self::Image { .. } => PrimitiveKind::Image,
             Self::Path { .. } => PrimitiveKind::Path,
+            Self::Picture { .. } => PrimitiveKind::Picture,
             Self::PushClip { .. } => PrimitiveKind::PushClip,
             Self::PopClip => PrimitiveKind::PopClip,
         }
@@ -255,6 +266,9 @@ impl Primitive {
                 stroke_width,
                 ..
             } => return path_reach(vertices, *offset, *stroke_width),
+            Self::Picture { picture, offset } => {
+                return moved(picture.reach(), offset.x, offset.y);
+            }
             // The renderer clips an image to its bounds, so a fit that lands
             // past them (cover, none) draws no further. With its size known, a
             // fit that letterboxes (contain, scale down) draws less.
@@ -298,6 +312,8 @@ pub enum Reach {
 }
 
 /// What a [`Primitive::Path`] can draw on.
+// Kept out of `Primitive::reach`, which runs for every quad drawn.
+#[inline(never)]
 pub(crate) fn path_reach(
     vertices: &[PathVertex],
     offset: Point,
