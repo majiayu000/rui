@@ -89,6 +89,9 @@ struct KeptPath {
     last_used: u64,
 }
 
+/// A path drawn once: its key, its storage, and the frame it was seen.
+type SeenPath = (PathKey, Weak<[PathVertex]>, u64);
+
 /// Paths kept by the identity of their vertices.
 #[derive(Default)]
 pub(super) struct PathCache {
@@ -96,7 +99,7 @@ pub(super) struct PathCache {
     kept: HashKeyed<Vec<KeptPath>>,
     /// Paths drawn once, by key, with their storage, which keeps its address
     /// from being reused, and the frame they were seen.
-    seen: HashKeyed<Vec<(PathKey, Weak<[PathVertex]>, u64)>>,
+    seen: HashKeyed<Vec<SeenPath>>,
     scratch: TileScratch,
 }
 
@@ -112,12 +115,6 @@ impl PathCache {
             paths.retain(|(_, _, last_seen)| *last_seen + UNUSED_FRAMES >= frame);
             !paths.is_empty()
         });
-    }
-
-    /// How many paths are kept.
-    #[cfg(test)]
-    pub(crate) fn len(&self) -> usize {
-        self.kept.values().map(Vec::len).sum()
     }
 }
 

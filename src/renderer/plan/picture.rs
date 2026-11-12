@@ -141,12 +141,6 @@ impl PictureCache {
             }
         }
     }
-
-    /// How many pictures are kept.
-    #[cfg(test)]
-    pub(crate) fn len(&self) -> usize {
-        self.kept.values().map(Vec::len).sum()
-    }
 }
 
 /// Where each of a frame's buffers ended before a picture was planned.
