@@ -255,7 +255,9 @@ version = "0.0.0"
 dependencies = [
  "egui",
  "egui-wgpu",
+ "epaint",
  "image",
+ "png",
  "pollster",
 ]
 
@@ -401,6 +403,7 @@ dependencies = [
  "hashbrown 0.17.1",
  "log",
  "peniko",
+ "png",
  "skrifa",
  "smallvec",
  "vello_common",
@@ -1242,6 +1245,7 @@ dependencies = [
  "guillotiere",
  "log",
  "peniko",
+ "png",
  "smallvec",
  "thiserror",
 ]
@@ -1255,6 +1259,7 @@ dependencies = [
  "bytemuck",
  "glifo",
  "hashbrown 0.17.1",
+ "png",
  "vello_common",
 ]
 

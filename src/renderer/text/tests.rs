@@ -528,6 +528,7 @@ fn retained_metrics_stay_bounded_for_ever_changing_text() {
                 line_height_bits: 1.2f32.to_bits(),
                 font_weight: 400,
                 font_family: "test".to_string(),
+                direction: BaseDirection::Auto,
             },
             TextMetrics::empty(),
         );
@@ -552,6 +553,7 @@ fn retained_metrics_stay_within_the_byte_budget() {
                 line_height_bits: 1.2f32.to_bits(),
                 font_weight: 400,
                 font_family: "test".to_string(),
+                direction: BaseDirection::Auto,
             },
             TextMetrics::empty(),
         );
@@ -566,6 +568,7 @@ fn retained_metrics_stay_within_the_byte_budget() {
             line_height_bits: 1.2f32.to_bits(),
             font_weight: 400,
             font_family: "test".to_string(),
+            direction: BaseDirection::Auto,
         },
         TextMetrics::empty(),
     );
@@ -701,6 +704,30 @@ fn fallback_follows_the_chain_for_each_script() {
             .iter()
             .all(|cluster| cluster.font_family == "SF Arabic")
     );
+}
+
+/// Devanagari and Thai fall back to the faces macOS uses for them, and the
+/// Devanagari face joins न्द into one conjunct, which Arial Unicode does not.
+#[cfg(target_os = "macos")]
+#[test]
+fn devanagari_and_thai_take_the_system_faces() {
+    let mut cache = TextMeasureCache::new();
+    const TEXT: &str = "hi हिन्दी ไทย";
+    let plan = shape(&mut cache, request(TEXT));
+    let family_of = |text: &str| {
+        let start = TEXT.find(text).expect("text in the plan");
+        let cluster = plan.clusters().iter().find(|c| c.byte_start == start);
+        cluster.map(|c| c.font_family.clone()).expect("a cluster")
+    };
+    assert_eq!(family_of("ह"), "Kohinoor Devanagari");
+    assert_eq!(family_of("ไ"), "Thonburi");
+    // ह ि न ् द ी: the vowel sign, ह, half न, द and ी.
+    let devanagari = plan
+        .glyphs()
+        .iter()
+        .filter(|glyph| cache.fonts[glyph.font_index].family == "Kohinoor Devanagari")
+        .count();
+    assert_eq!(devanagari, 5, "{:?}", plan.glyphs());
 }
 
 #[test]

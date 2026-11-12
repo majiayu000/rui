@@ -12,7 +12,7 @@
 //! evicted page is emptied and reused; its glyphs are rasterized again when next
 //! drawn, and the renderer clears its texture ([`TextGlyphCache::take_cleared_pages`]).
 
-use super::hash::{FastHasher, FastMap};
+use super::hash::FastMap;
 use super::{TextError, TextMeasureCache, TextMetrics, TextRequest, font_io_text_error};
 use crate::renderer::resources::{
     RendererResourceError, RendererResourceKind, RendererResourceStats,
@@ -21,7 +21,7 @@ use color::color_bitmap;
 pub use placed::GlyphSprite;
 use placed::PlacedText;
 use rusttype::{GlyphId, Scale, point};
-use std::hash::{Hash, Hasher};
+use shaped_entry::{ShapedEntry, shape_hash};
 use std::sync::Arc;
 
 /// Side of a new atlas page in pixels. A glyph larger than this gets a page of its own.
@@ -282,6 +282,8 @@ pub struct PlacedGlyph {
     pub x: f32,
     /// Baseline, measured down from the top of the line box.
     pub baseline_y: f32,
+    /// Font size over the text's: 1, or what gives a fallback face the text's em.
+    pub font_scale: f32,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -319,37 +321,6 @@ struct GlyphKey {
     glyph_id: u16,
     size_bits: u32,
     subpixel: u8,
-}
-
-struct ShapedEntry {
-    content: String,
-    font_size: f32,
-    font_weight: u16,
-    font_family: Option<String>,
-    line_height: f32,
-    text: Option<Arc<ShapedText>>,
-    last_used: u64,
-}
-
-impl ShapedEntry {
-    fn matches(&self, request: &TextRequest<'_>) -> bool {
-        self.content == request.content
-            && self.font_size.to_bits() == request.font_size.to_bits()
-            && self.font_weight == request.font_weight
-            && self.font_family.as_deref() == request.font_family
-            && self.line_height.to_bits() == request.line_height.to_bits()
-    }
-}
-
-/// Hashes a request without copying its text, so a hit allocates nothing.
-fn shape_hash(request: &TextRequest<'_>) -> u64 {
-    let mut hasher = FastHasher::default();
-    request.content.hash(&mut hasher);
-    request.font_size.to_bits().hash(&mut hasher);
-    request.font_weight.hash(&mut hasher);
-    request.font_family.hash(&mut hasher);
-    request.line_height.to_bits().hash(&mut hasher);
-    hasher.finish()
 }
 
 pub struct TextGlyphCache {
@@ -563,21 +534,9 @@ impl TextGlyphCache {
         let text = (!metrics.ink_bounds.is_empty()).then(|| {
             let fonts = self.measurer.fonts.as_slice();
             let scale = Scale::uniform(request.font_size);
-            let glyphs = parts
-                .glyphs
-                .iter()
-                .filter_map(|glyph| {
-                    let font = fonts.get(glyph.font_index)?;
-                    let ascent = font.font().v_metrics(scale).ascent;
-                    Some(PlacedGlyph {
-                        font_index: glyph.font_index as u32,
-                        glyph_id: glyph.glyph_id,
-                        x: glyph.x_offset,
-                        baseline_y: ascent + glyph.y_offset,
-                    })
-                })
-                .collect();
             let v_metrics = fonts[primary_index].font().v_metrics(scale);
+            let glyphs =
+                placed::place_glyphs(fonts, primary_index, &parts.glyphs, v_metrics.ascent);
             Arc::new(ShapedText {
                 metrics,
                 glyphs,
@@ -594,6 +553,7 @@ impl TextGlyphCache {
                 font_weight: request.font_weight,
                 font_family: request.font_family.map(str::to_string),
                 line_height: request.line_height,
+                direction: request.direction,
                 text: text.clone(),
                 last_used: self.frame,
             },
@@ -610,6 +570,7 @@ impl TextGlyphCache {
         device_font_size: f32,
         subpixel: u8,
     ) -> Result<Option<AtlasGlyph>, TextError> {
+        let device_font_size = device_font_size * glyph.font_scale;
         let key = GlyphKey {
             font_index: glyph.font_index,
             glyph_id: glyph.glyph_id,
@@ -823,5 +784,6 @@ impl Default for TextGlyphCache {
 
 mod color;
 mod placed;
+mod shaped_entry;
 #[cfg(test)]
 mod tests;

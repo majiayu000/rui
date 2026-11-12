@@ -202,8 +202,9 @@ unrelated Python process was using about one core). Earlier runs were at 80–22
 | GPUI | 68.7–77.5 ms | 113.9–115.7 ms | 182.8–191.4 ms | 76–102 MB |
 
 Both startups are warm: the system Metal shader cache already held each side's
-shaders. A cold RUI start still compiles its sprite shader (about 195 ms, #226),
-which a build-time `metallib` would remove; GPUI ships one by default but is built
+shaders. RUI now embeds its shaders precompiled, so a cold start no longer compiles
+them either: first frame p50 69 ms against 207 ms before (#177,
+`docs/performance-architecture.md`). GPUI ships a metallib by default but is built
 here with `runtime_shaders`.
 
 | Case | By instructions | By wall p50 |

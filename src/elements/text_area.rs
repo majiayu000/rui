@@ -21,6 +21,7 @@ use crate::elements::element::{
     style_to_taffy,
 };
 use crate::renderer::Primitive;
+use crate::renderer::text::BaseDirection;
 use crate::renderer::text::TextMeasureCache;
 use taffy::prelude::*;
 
@@ -542,6 +543,7 @@ impl Element for TextArea {
                 font_family: None,
                 line_height: 1.0,
                 align: crate::elements::text::TextAlign::Left,
+                direction: BaseDirection::Auto,
             });
         }
 

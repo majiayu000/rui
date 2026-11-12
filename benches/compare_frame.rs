@@ -32,13 +32,16 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 use taffy::prelude::TaffyTree;
 
-const CASES: [&str; 13] = [
+const CASES: [&str; 16] = [
     "startup",
     "list_full",
+    "list_full_rows",
     "list_virtual_1k",
     "list_virtual_100k",
     "text_paragraphs",
+    "text_complex",
     "quad_grid",
+    "quad_grid_cached",
     "resize_full",
     "resize_virtual",
     "list_full_one_row",
@@ -48,6 +51,8 @@ const CASES: [&str; 13] = [
     "paths_icons",
 ];
 mod compare_paths;
+#[path = "../benchmarks/complex_text.rs"]
+mod complex_text;
 #[path = "../benchmarks/gpui_compare/gpu_time.rs"]
 mod gpu_time;
 
@@ -203,7 +208,7 @@ fn paragraph(index: usize) -> String {
         .join(" ")
 }
 
-fn paragraphs(revision: usize) -> impl Element {
+fn paragraphs(revision: usize, paragraph: fn(usize) -> String) -> impl Element {
     div()
         .w_full()
         .flex_col()
@@ -388,6 +393,37 @@ fn quad_grid(changed: usize) -> impl Element {
     .h(GRID.1 as f32 * CELL.1)
 }
 
+/// The grid of `quad_grid` with no cell changed, for a view that never renders again.
+fn static_grid() -> impl Element {
+    canvas(move |bounds, painter| {
+        for row in 0..GRID.1 {
+            for column in 0..GRID.0 {
+                let cell = Bounds::from_xywh(
+                    bounds.x() + column as f32 * CELL.0,
+                    bounds.y() + row as f32 * CELL.1,
+                    CELL.0,
+                    CELL.1,
+                );
+                painter.fill(cell, Color::hex(cell_color(row, column)));
+            }
+        }
+    })
+    .w(GRID.0 as f32 * CELL.0)
+    .h(GRID.1 as f32 * CELL.1)
+}
+
+/// Cell `changed` of the grid, white, placed absolutely over the grid.
+fn changed_cell(changed: usize) -> impl Element {
+    div()
+        .absolute()
+        .pl((changed % GRID.0) as f32 * CELL.0)
+        .pt((changed / GRID.0) as f32 * CELL.1)
+        .child(div().w(CELL.0).h(CELL.1).bg(Color::hex(0xffffff)))
+}
+
+/// Which cell of `quad_grid_cached` is white, kept in an entity.
+struct ChangedCell(usize);
+
 /// What one runtime keeps across frames: layout tree, measure cache, scene, renderer.
 struct Harness {
     taffy: TaffyTree<ElementId>,
@@ -441,6 +477,35 @@ impl Harness {
                 .render_offscreen(&self.scene, viewport, SCALE_FACTOR)?;
             Ok(())
         })
+    }
+
+    /// With `RUI_COMPARE_PNG=<dir>`, the last frame's scene drawn again and saved as
+    /// `<dir>/rui_<case>.png`, to check what the fixture shows.
+    fn save_png_if_asked(
+        &mut self,
+        case: &str,
+        viewport: Size,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let Some(dir) = std::env::var_os("RUI_COMPARE_PNG") else {
+            return Ok(());
+        };
+        let mut pixels =
+            self.renderer
+                .capture_frame_pixels_at_scale(&self.scene, viewport, SCALE_FACTOR)?;
+        // Opaque, to view: the fixture paints no background of its own.
+        for pixel in pixels.as_chunks_mut::<4>().0 {
+            pixel[3] = 255;
+        }
+        let path = std::path::Path::new(&dir).join(format!("rui_{case}.png"));
+        image::save_buffer(
+            &path,
+            &pixels,
+            (viewport.width * SCALE_FACTOR) as u32,
+            (viewport.height * SCALE_FACTOR) as u32,
+            image::ColorType::Rgba8,
+        )?;
+        eprintln!("saved {}", path.display());
+        Ok(())
     }
 
     fn draw(
@@ -531,7 +596,9 @@ fn run(case: &str) -> Result<(), Box<dyn std::error::Error>> {
         // From before the renderer exists to the first long-list frame submitted.
         // As the native runner starts: the renderer is created on another thread
         // while the first frame is built, laid out and painted, and the first
-        // present waits for it. `renderer_wait_ms` is what that wait still took.
+        // present waits for it. `layout_ms` is building, laying out and painting
+        // that frame, `renderer_wait_ms` what the wait still took after it, and
+        // `render_ms` the first render, glyph rasterization and atlas included.
         "startup" => {
             let to_fixture = ms_since_process_start();
             let t0 = Instant::now();
@@ -555,8 +622,10 @@ fn run(case: &str) -> Result<(), Box<dyn std::error::Error>> {
                 renderer.render_offscreen(&scene, viewport, SCALE_FACTOR)
             })?;
             let first_frame = t0.elapsed().as_secs_f64() * 1e3;
+            let layout = (laid_out - t0).as_secs_f64() * 1e3;
+            let render = first_frame - layout - renderer_wait;
             println!(
-                "rui startup process_to_fixture_ms={to_fixture:.1} first_frame_ms={first_frame:.1} process_to_first_frame_ms={:.1} footprint_mb={:.1} renderer_wait_ms={renderer_wait:.1}",
+                "rui startup process_to_fixture_ms={to_fixture:.1} first_frame_ms={first_frame:.1} process_to_first_frame_ms={:.1} footprint_mb={:.1} layout_ms={layout:.1} renderer_wait_ms={renderer_wait:.1} render_ms={render:.1}",
                 ms_since_process_start(),
                 footprint_mb()
             );
@@ -597,6 +666,40 @@ fn run(case: &str) -> Result<(), Box<dyn std::error::Error>> {
                 harness.app_frame(&mut context, &mut root, &mut build, viewport)
             })?;
         }
+        // `list_full` with each row a view of its own entity: the selection moves
+        // as in `list_full`, and only the two rows it leaves and enters are
+        // notified and rendered again.
+        "list_full_rows" => {
+            let mut harness = Harness::new()?;
+            let mut context = AppContext::new();
+            let rows: Vec<Entity<ListRow>> = (0..LIST_ROWS)
+                .map(|index| {
+                    context.create(ListRow {
+                        index,
+                        selected: index == 0,
+                    })
+                })
+                .collect();
+            let items = rows.clone();
+            let mut build = move |cx: &mut AppContext| {
+                div()
+                    .w_full()
+                    .flex_col()
+                    .children(cx.rows(&items, |row: &ListRow, _| row_with(row.index, row.selected)))
+            };
+            let mut root = div();
+            measure(case, &mut harness, |harness, turn| {
+                let selected = turn % LIST_ROWS;
+                let previous = (turn + LIST_ROWS - 1) % LIST_ROWS;
+                for (index, on) in [(previous, false), (selected, true)] {
+                    if let Some(mut row) = context.get_mut(rows[index]) {
+                        row.selected = on;
+                    }
+                    context.notify(rows[index].id());
+                }
+                harness.app_frame(&mut context, &mut root, &mut build, viewport)
+            })?;
+        }
         "list_virtual_1k" | "list_virtual_100k" => {
             let count = if case == "list_virtual_1k" {
                 1_000
@@ -611,16 +714,46 @@ fn run(case: &str) -> Result<(), Box<dyn std::error::Error>> {
                 harness.frame(virtual_rows(&handle, count, selected), viewport)
             })?;
         }
-        "text_paragraphs" => {
+        // `text_complex` is `text_paragraphs` in seven scripts and emoji.
+        "text_paragraphs" | "text_complex" => {
+            let content = if case == "text_paragraphs" {
+                paragraph
+            } else {
+                complex_text::complex_paragraph
+            };
             let mut harness = Harness::new()?;
             measure(case, &mut harness, |harness, turn| {
-                harness.frame(paragraphs(turn), viewport)
+                harness.frame(paragraphs(turn, content), viewport)
             })?;
+            harness.save_png_if_asked(case, viewport)?;
         }
         "quad_grid" => {
             let mut harness = Harness::new()?;
             measure(case, &mut harness, |harness, turn| {
                 harness.frame(quad_grid(turn % (GRID.0 * GRID.1)), viewport)
+            })?;
+        }
+        // `quad_grid` as a static grid in a view that is never notified, so its
+        // paint is replayed, under the changed cell in a view of its own.
+        "quad_grid_cached" => {
+            let mut harness = Harness::new()?;
+            let mut context = AppContext::new();
+            let grid = [context.create(())];
+            let cell = [context.create(ChangedCell(0))];
+            let mut build = move |cx: &mut AppContext| {
+                div()
+                    .w(GRID.0 as f32 * CELL.0)
+                    .h(GRID.1 as f32 * CELL.1)
+                    .children(cx.rows(&grid, |_: &(), _| static_grid()))
+                    .children(cx.rows(&cell, |cell: &ChangedCell, _| changed_cell(cell.0)))
+            };
+            let mut root = div();
+            measure(case, &mut harness, |harness, turn| {
+                if let Some(mut changed) = context.get_mut(cell[0]) {
+                    changed.0 = turn % (GRID.0 * GRID.1);
+                }
+                context.notify(cell[0].id());
+                harness.app_frame(&mut context, &mut root, &mut build, viewport)
             })?;
         }
         "resize_full" => {

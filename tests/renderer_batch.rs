@@ -8,6 +8,7 @@ use rui::core::geometry::{Bounds, Edges, Size};
 use rui::core::style::Corners;
 use rui::elements::text::TextAlign;
 use rui::renderer::metal::MetalRenderer;
+use rui::renderer::text::BaseDirection;
 use rui::renderer::{PathVertex, Primitive, RendererError, Scene};
 use rui::{ImageFit, ImageSource};
 
@@ -50,6 +51,7 @@ fn label(x: f32, y: f32, content: &str) -> Primitive {
         font_family: None,
         line_height: 1.2,
         align: TextAlign::Left,
+        direction: BaseDirection::Auto,
     }
 }
 

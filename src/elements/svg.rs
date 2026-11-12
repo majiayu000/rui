@@ -19,6 +19,7 @@ use crate::elements::element::{
 };
 use crate::elements::text::TextAlign;
 use crate::renderer::Primitive;
+use crate::renderer::text::BaseDirection;
 use geometry::{Transform, fill_polygon, stroke_outline};
 use parse::{ColorValue, Document};
 use std::any::Any;
@@ -341,6 +342,7 @@ fn paint_error(cx: &mut PaintContext, bounds: Bounds, message: &str) {
         font_family: None,
         line_height: 1.2,
         align: TextAlign::Left,
+        direction: BaseDirection::Auto,
     });
 }
 

@@ -9,6 +9,7 @@ use crate::elements::element::{
     Capabilities, Element, LayoutContext, PaintContext, RichLines, RichWrapRequest, style_to_taffy,
 };
 use crate::renderer::Primitive;
+use crate::renderer::text::BaseDirection;
 use crate::renderer::text::{RichPieceText, RichSpan};
 use std::any::Any;
 use std::ops::Range;
@@ -377,6 +378,7 @@ impl Element for StyledText {
                         .cloned(),
                     line_height: refinement.line_height.unwrap_or(inherited.line_height),
                     align: TextAlign::Left,
+                    direction: BaseDirection::Auto,
                 });
             }
             y += line.height;

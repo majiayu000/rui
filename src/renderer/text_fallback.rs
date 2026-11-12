@@ -165,6 +165,8 @@ fn preferred_families(script: RunScript) -> &'static [&'static str] {
                 "DejaVu Sans",
             ],
             b"Hebr" => &["SF Hebrew", "Arial", "Arial Unicode", "DejaVu Sans"],
+            b"Deva" => &["Kohinoor Devanagari", "Noto Sans Devanagari"],
+            b"Thai" => &["Thonburi", "Noto Sans Thai"],
             _ => &[],
         },
     }

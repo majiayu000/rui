@@ -14,6 +14,7 @@ use crate::elements::element::{
     style_to_taffy,
 };
 use crate::renderer::Primitive;
+use crate::renderer::text::BaseDirection;
 use taffy::prelude::*;
 
 pub struct Button {
@@ -214,6 +215,7 @@ impl Element for Button {
             font_family: None,
             line_height: self.theme.typography.line_height,
             align: crate::elements::text::TextAlign::Center,
+            direction: BaseDirection::Auto,
         });
     }
 

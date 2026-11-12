@@ -1,6 +1,9 @@
 //! Text input element
 
 mod presentation;
+mod state;
+
+pub use state::{InputState, InputType};
 
 use crate::advanced_ui::{ControlSize, ControlState, Theme};
 use crate::core::ElementId;
@@ -22,6 +25,7 @@ use crate::elements::element::{
     style_to_taffy,
 };
 use crate::renderer::Primitive;
+use crate::renderer::text::BaseDirection;
 use crate::renderer::text::TextMeasureCache;
 use taffy::prelude::*;
 
@@ -29,33 +33,6 @@ const INPUT_HORIZONTAL_PADDING: f32 = 12.0;
 const INPUT_CARET_WIDTH: f32 = 1.5;
 const INPUT_MARKED_UNDERLINE_HEIGHT: f32 = 2.0;
 const PASSWORD_MASK: &str = "\u{2022}";
-
-/// Input type variants
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum InputType {
-    #[default]
-    Text,
-    Password,
-    Email,
-    Number,
-    Search,
-}
-
-/// Input state
-#[derive(Debug, Clone, Default)]
-pub struct InputState {
-    pub value: String,
-    pub cursor_position: usize,
-    pub selection_start: Option<usize>,
-    pub selection_end: Option<usize>,
-    pub composition_range: Option<TextRange>,
-    pub marked_text: Option<String>,
-    pub focused: bool,
-    pub hovered: bool,
-    pub disabled: bool,
-    pub read_only: bool,
-    pub invalid: bool,
-}
 
 #[derive(Debug, Clone, Copy)]
 struct InputPaintTokens {
@@ -642,6 +619,7 @@ impl Element for Input {
                 font_family: None,
                 line_height: 1.0,
                 align: crate::elements::text::TextAlign::Left,
+                direction: BaseDirection::Auto,
             });
         }
 

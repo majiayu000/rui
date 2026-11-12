@@ -7,6 +7,7 @@ use crate::core::frame_pipeline::FrameStageDurations;
 use crate::core::geometry::{Bounds, Edges, Size};
 use crate::core::style::Corners;
 use crate::elements::text::TextAlign;
+use crate::renderer::text::BaseDirection;
 use crate::renderer::{Primitive, Reach, Scene};
 use std::fmt::Write as _;
 use std::time::{Duration, Instant};
@@ -171,6 +172,7 @@ impl Profiler {
                 font_family: Some(std::sync::Arc::from(FONT_FAMILY)),
                 line_height: LINE_HEIGHT,
                 align: TextAlign::Left,
+                direction: BaseDirection::Auto,
             });
         }
     }

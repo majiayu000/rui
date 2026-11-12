@@ -12,6 +12,7 @@ use crate::elements::element::{
 };
 use crate::elements::text::{FontWeight, TextAlign};
 use crate::renderer::Primitive;
+use crate::renderer::text::BaseDirection;
 use crate::renderer::text::TextMeasureCache;
 use smallvec::SmallVec;
 use taffy::prelude::*;
@@ -483,6 +484,7 @@ impl Element for List {
                     font_family: None,
                     line_height: 1.4,
                     align: TextAlign::Right,
+                    direction: BaseDirection::Auto,
                 });
             }
 

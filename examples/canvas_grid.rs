@@ -7,6 +7,7 @@ use rui::elements::element::PointerEventKind;
 use rui::elements::text::TextAlign;
 use rui::prelude::*;
 use rui::renderer::Primitive;
+use rui::renderer::text::BaseDirection;
 
 const COLUMNS: usize = 200;
 const ROWS: usize = 60;
@@ -51,6 +52,7 @@ fn main() {
                         font_family: Some("SF Mono".into()),
                         line_height: 1.0,
                         align: TextAlign::Left,
+                        direction: BaseDirection::Auto,
                     });
                 }
             })

@@ -22,6 +22,7 @@ use crate::core::style::Corners;
 use crate::elements::text::TextAlign;
 use crate::renderer::metal::tests::{HEIGHT, WIDTH, random_scene};
 use crate::renderer::metal::{self, MetalRenderer};
+use crate::renderer::text::BaseDirection;
 use crate::renderer::{PathVertex, Primitive, RendererError, Scene};
 use crate::{ImageFit, ImageSource};
 
@@ -153,6 +154,7 @@ fn fixture_scene() -> Scene {
         font_family: None,
         line_height: 1.2,
         align: TextAlign::Left,
+        direction: BaseDirection::Auto,
     });
     scene.insert(Primitive::PopClip);
     scene.insert(Primitive::Image {
@@ -192,6 +194,7 @@ fn fixture_scene() -> Scene {
         font_family: None,
         line_height: 1.2,
         align: TextAlign::Center,
+        direction: BaseDirection::Auto,
     });
     scene
 }

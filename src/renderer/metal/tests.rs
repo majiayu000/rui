@@ -6,6 +6,7 @@ use crate::core::color::Rgba;
 use crate::core::geometry::{Bounds, Edges, Size};
 use crate::core::style::Corners;
 use crate::elements::text::TextAlign;
+use crate::renderer::text::BaseDirection;
 use crate::renderer::{PathVertex, Primitive, RendererError, Scene};
 use crate::{ImageFit, ImageSource};
 
@@ -98,6 +99,7 @@ pub(crate) fn random_scene(seed: u64) -> Scene {
                 line_height: 1.2,
                 align: [TextAlign::Left, TextAlign::Center, TextAlign::Right]
                     [rng.below(3) as usize],
+                direction: BaseDirection::Auto,
             },
             14 => {
                 let (width, height) = (1 + rng.below(6) as u32, 1 + rng.below(6) as u32);

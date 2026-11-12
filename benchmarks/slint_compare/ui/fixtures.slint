@@ -1,0 +1,88 @@
+// RUI's `benches/compare_frame.rs` fixtures in Slint markup. Every window is
+// 1440x900 logical px with 14 px Arial, RUI's default face.
+import { ListView, ScrollView } from "std-widgets.slint";
+import "/System/Library/Fonts/Supplemental/Arial.ttf";
+
+// A background, a title on the left and a time on the right.
+component Row inherits Rectangle {
+    in property <int> index;
+    in property <bool> selected;
+    height: 28px;
+    background: root.selected ? #2d3748 : #1a202c;
+    HorizontalLayout {
+        alignment: space-between;
+        Text {
+            text: "task \{root.index}: fix the failing check";
+            color: white;
+            vertical-alignment: center;
+        }
+        Text {
+            text: "\{mod(root.index, 60)} min";
+            color: white;
+            vertical-alignment: center;
+        }
+    }
+}
+
+component Fixture inherits Window {
+    width: 1440px;
+    height: 900px;
+    background: black;
+    default-font-family: "Arial";
+    default-font-size: 14px;
+}
+
+// 2000 rows, all instantiated, in a scroll view.
+export component ListFull inherits Fixture {
+    in property <int> selected;
+    ScrollView {
+        VerticalLayout {
+            for index in 2000: Row {
+                index: index;
+                selected: index == root.selected;
+            }
+        }
+    }
+}
+
+// `count` rows; the ListView instantiates the ones on screen.
+export component ListVirtual inherits Fixture {
+    in property <int> count;
+    in property <int> selected;
+    in-out property <length> scroll <=> list.content-y;
+    list := ListView {
+        for index in root.count: Row {
+            index: index;
+            selected: index == root.selected;
+        }
+    }
+}
+
+// 200 wrapped paragraphs, margin 16, spacing 8.
+export component Paragraphs inherits Fixture {
+    in property <[string]> paragraphs;
+    ScrollView {
+        VerticalLayout {
+            padding: 16px;
+            spacing: 8px;
+            for content in root.paragraphs: Text {
+                text: content;
+                color: white;
+                wrap: word-wrap;
+                line-height-factor: 1.4;
+            }
+        }
+    }
+}
+
+// A 200x60 grid of 7x15 cells, one Rectangle per cell, colored from a model.
+export component QuadGrid inherits Fixture {
+    in property <[color]> cells;
+    for cell[index] in root.cells: Rectangle {
+        x: mod(index, 200) * 7px;
+        y: floor(index / 200) * 15px;
+        width: 7px;
+        height: 15px;
+        background: cell;
+    }
+}

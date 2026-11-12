@@ -18,11 +18,13 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 mod atlas;
+mod complex_breaks;
 pub(crate) mod hash;
 mod lru;
 mod rich;
 mod wrap;
 
+pub use crate::renderer::text_bidi::BaseDirection;
 pub use crate::renderer::text_shaping::{
     TextCluster, TextDirection, TextRun, TextScript, TextShapeDiagnostic, TextShapePlan,
 };
@@ -30,8 +32,8 @@ pub use atlas::{
     ATLAS_PAGE_SIZE, AtlasGlyph, AtlasRect, AtlasSlot, GlyphAtlas, GlyphSprite, GlyphUpload,
     PlacedGlyph, SUBPIXEL_VARIANTS, ShapedText, TextGlyphCache,
 };
-pub use rich::{RichLine, RichPiece, RichPieceText, RichSpan, RichWrapped};
 pub(crate) use hash::FastMap;
+pub use rich::{RichLine, RichPiece, RichPieceText, RichSpan, RichWrapped};
 pub use wrap::{TextLine, WrappedText};
 
 pub const TEXT_BOUNDS_TOLERANCE: f32 = 1.0;
@@ -58,6 +60,8 @@ pub struct TextRequest<'a> {
     pub font_weight: u16,
     pub font_family: Option<&'a str>,
     pub line_height: f32,
+    /// The base direction of the paragraph the text is a line of.
+    pub direction: BaseDirection,
 }
 
 impl<'a> TextRequest<'a> {
@@ -74,7 +78,13 @@ impl<'a> TextRequest<'a> {
             font_weight,
             font_family,
             line_height,
+            direction: BaseDirection::Auto,
         }
+    }
+
+    /// The same request laid out at the paragraph level `direction` gives.
+    pub fn with_direction(self, direction: BaseDirection) -> Self {
+        Self { direction, ..self }
     }
 }
 
@@ -109,6 +119,7 @@ struct TextMeasureKey {
     line_height_bits: u32,
     font_weight: u16,
     font_family: String,
+    direction: BaseDirection,
 }
 
 impl TextMeasureKey {
@@ -119,6 +130,7 @@ impl TextMeasureKey {
             line_height_bits: request.line_height.to_bits(),
             font_weight: request.font_weight,
             font_family: resolved_family.to_string(),
+            direction: request.direction,
         }
     }
 
@@ -128,6 +140,7 @@ impl TextMeasureKey {
             && self.line_height_bits == request.line_height.to_bits()
             && self.font_weight == request.font_weight
             && self.font_family == resolved_family
+            && self.direction == request.direction
     }
 
     fn hasher(&self) -> FastHasher {
@@ -137,6 +150,7 @@ impl TextMeasureKey {
         self.line_height_bits.hash(&mut hasher);
         self.font_weight.hash(&mut hasher);
         self.font_family.hash(&mut hasher);
+        self.direction.hash(&mut hasher);
         hasher
     }
 
@@ -153,6 +167,7 @@ fn request_hasher(request: &TextRequest<'_>, resolved_family: &str) -> FastHashe
     request.line_height.to_bits().hash(&mut hasher);
     request.font_weight.hash(&mut hasher);
     resolved_family.hash(&mut hasher);
+    request.direction.hash(&mut hasher);
     hasher
 }
 
@@ -572,7 +587,8 @@ impl TextRasterCache {
             request.font_weight,
             request.font_family,
             request.line_height,
-        );
+        )
+        .with_direction(request.direction);
         self.measurer.sync_font_snapshot();
         self.invalidate_for_font_generation_change();
         if let Some(error) = self.measurer.font_error.as_ref() {
@@ -596,7 +612,13 @@ impl TextRasterCache {
             return Ok(None);
         }
 
-        let pixels = rasterize_with_plan(self.measurer.fonts.as_slice(), request, metrics, &plan);
+        let pixels = rasterize_with_plan(
+            self.measurer.fonts.as_slice(),
+            primary_index,
+            request,
+            metrics,
+            &plan,
+        );
         let allocation = self.resources.resolve(key.clone(), pixels.len())?;
         self.drop_evicted(allocation.evicted);
 
@@ -642,3 +664,6 @@ impl Default for TextRasterCache {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod bidi_tests;
