@@ -6,9 +6,8 @@
 //! left. Text with nothing that can start a right-to-left run skips all of it.
 
 use crate::renderer::text::TextRequest;
-use crate::renderer::text_shaping::{
-    ClusterDraft, GlyphDraft, InkBounds, ShapedRun, TextShapingFont,
-};
+use crate::renderer::text_glyph_box::InkBounds;
+use crate::renderer::text_shaping::{ClusterDraft, GlyphDraft, ShapedRun, TextShapingFont};
 use rusttype::{Scale, point};
 use unicode_bidi::{BidiClass, BidiInfo, Level, bidi_class};
 

@@ -1,4 +1,4 @@
-use crate::core::geometry::{Bounds, Size};
+use crate::core::geometry::Size;
 use crate::renderer::text::{TextMetrics, TextRequest};
 use crate::renderer::text_ascii::AsciiCoverage;
 use crate::renderer::text_bidi::{ink_of, line_levels, place_visually};
@@ -7,7 +7,7 @@ use crate::renderer::text_classify::{
 };
 use crate::renderer::text_cluster_position::apply_exact_cluster_positions;
 use crate::renderer::text_fallback::{RunScript, assign_fonts, script_runs};
-use crate::renderer::text_glyph_box::GlyphBoxes;
+use crate::renderer::text_glyph_box::{GlyphBoxes, InkBounds};
 pub use crate::renderer::text_plan::{
     ShapedGlyph, TextCluster, TextDirection, TextRun, TextScript, TextShapeDiagnostic,
     TextShapePlan,
@@ -300,45 +300,6 @@ impl ShapedParts<'_> {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct InkBounds {
-    min_x: i32,
-    min_y: i32,
-    max_x: i32,
-    max_y: i32,
-}
-
-impl InkBounds {
-    pub(crate) fn empty() -> Self {
-        Self {
-            min_x: i32::MAX,
-            min_y: i32::MAX,
-            max_x: i32::MIN,
-            max_y: i32::MIN,
-        }
-    }
-
-    pub(crate) fn include(&mut self, bounds: rusttype::Rect<i32>) {
-        self.min_x = self.min_x.min(bounds.min.x);
-        self.min_y = self.min_y.min(bounds.min.y);
-        self.max_x = self.max_x.max(bounds.max.x);
-        self.max_y = self.max_y.max(bounds.max.y);
-    }
-
-    fn to_bounds(self) -> Bounds {
-        if self.min_x < self.max_x && self.min_y < self.max_y {
-            Bounds::from_xywh(
-                self.min_x as f32,
-                self.min_y as f32,
-                (self.max_x - self.min_x) as f32,
-                (self.max_y - self.min_y) as f32,
-            )
-        } else {
-            Bounds::from_xywh(0.0, 0.0, 0.0, 0.0)
-        }
-    }
-}
-
 pub(crate) fn shape_with_fonts(
     fonts: &[TextShapingFont],
     primary_index: usize,
@@ -369,7 +330,7 @@ pub(crate) fn shape_parts<'a>(
             &mut clusters[run.clusters.clone()],
         );
     }
-    let mut glyphs = Vec::new();
+    let mut glyphs = Vec::with_capacity(clusters.len());
     let mut ligatures = Vec::new();
     let mut ink_bounds = InkBounds::empty();
     let mut cursor_x = 0.0;
@@ -497,31 +458,32 @@ pub(crate) fn build_cluster_drafts<'a>(
     primary_index: usize,
     request: TextRequest<'a>,
 ) -> Vec<ClusterDraft<'a>> {
-    request
-        .content
-        .grapheme_indices(true)
-        .filter_map(|(byte_start, cluster_text)| {
-            if cluster_text.chars().all(char::is_control) {
-                return None;
-            }
-
-            let byte_end = byte_start + cluster_text.len();
-            let script = classify_script(cluster_text);
-            let direction = classify_direction(cluster_text);
-
-            Some(ClusterDraft {
-                byte_start,
-                byte_end,
-                text: cluster_text,
-                script,
-                direction,
-                bidi_level: 0,
-                font_index: primary_index,
-                x_offset: 0.0,
-                advance_width: 0.0,
-            })
+    let draft = |(byte_start, cluster_text): (usize, &'a str)| {
+        if cluster_text.chars().all(char::is_control) {
+            return None;
+        }
+        Some(ClusterDraft {
+            byte_start,
+            byte_end: byte_start + cluster_text.len(),
+            text: cluster_text,
+            script: classify_script(cluster_text),
+            direction: classify_direction(cluster_text),
+            bidi_level: 0,
+            font_index: primary_index,
+            x_offset: 0.0,
+            advance_width: 0.0,
         })
-        .collect()
+    };
+    let content = request.content;
+    if content.is_ascii() {
+        // Every ASCII character is a grapheme of its own, but for CR LF, which
+        // is control and dropped either way.
+        (0..content.len())
+            .filter_map(|index| draft((index, &content[index..index + 1])))
+            .collect()
+    } else {
+        content.grapheme_indices(true).filter_map(draft).collect()
+    }
 }
 
 fn diagnostics_for_clusters(
@@ -657,7 +619,7 @@ fn shape_run_glyphs(
     let rust_scale = Scale::uniform(request.font_size);
     let v_metrics = font.font().v_metrics(rust_scale);
     let mut cursor_x = start_x;
-    let mut glyphs = Vec::new();
+    let mut glyphs = Vec::with_capacity(shaped.len());
     let run_end = clusters.last().map(|cluster| cluster.byte_end).unwrap_or(0);
     let mut shaped_cluster_starts = shaped
         .glyph_infos()

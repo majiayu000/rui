@@ -5,8 +5,9 @@
 //! so the boxes are kept per font, in font units, and placed as rusttype places
 //! them.
 
-use rustybuzz::Face;
+use crate::core::geometry::Bounds;
 use rusttype::{Font, Point, Rect, point};
+use rustybuzz::Face;
 use std::sync::{Mutex, PoisonError};
 
 /// Font-unit boxes by glyph id: `x_min, y_min, x_max, y_max`, `None` for a glyph
@@ -54,5 +55,45 @@ impl GlyphBoxes {
             face.glyph_bounding_box(rustybuzz::ttf_parser::GlyphId(id))
                 .map(|rect| [rect.x_min, rect.y_min, rect.x_max, rect.y_max])
         })
+    }
+}
+
+/// The pixel box around every glyph included, empty until one is.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct InkBounds {
+    min_x: i32,
+    min_y: i32,
+    max_x: i32,
+    max_y: i32,
+}
+
+impl InkBounds {
+    pub(crate) fn empty() -> Self {
+        Self {
+            min_x: i32::MAX,
+            min_y: i32::MAX,
+            max_x: i32::MIN,
+            max_y: i32::MIN,
+        }
+    }
+
+    pub(crate) fn include(&mut self, bounds: rusttype::Rect<i32>) {
+        self.min_x = self.min_x.min(bounds.min.x);
+        self.min_y = self.min_y.min(bounds.min.y);
+        self.max_x = self.max_x.max(bounds.max.x);
+        self.max_y = self.max_y.max(bounds.max.y);
+    }
+
+    pub(crate) fn to_bounds(self) -> Bounds {
+        if self.min_x < self.max_x && self.min_y < self.max_y {
+            Bounds::from_xywh(
+                self.min_x as f32,
+                self.min_y as f32,
+                (self.max_x - self.min_x) as f32,
+                (self.max_y - self.min_y) as f32,
+            )
+        } else {
+            Bounds::from_xywh(0.0, 0.0, 0.0, 0.0)
+        }
     }
 }
