@@ -43,6 +43,22 @@ fn reserve<T: Pod>(bytes: &mut Vec<u8>, values: &[T]) -> (u64, u64) {
     (offset as u64, (bytes.len() - offset) as u64)
 }
 
+/// [`reserve`] for values in parts, laid out one after another.
+fn reserve_parts<'a, T: Pod>(
+    bytes: &mut Vec<u8>,
+    parts: impl Iterator<Item = &'a [T]>,
+) -> (u64, u64) {
+    let offset = bytes.len().next_multiple_of(OFFSET_ALIGNMENT);
+    bytes.resize(offset, 0);
+    for part in parts {
+        bytes.extend_from_slice(bytemuck::cast_slice(part));
+    }
+    if bytes.len() == offset {
+        bytes.resize(offset + std::mem::size_of::<T>(), 0);
+    }
+    (offset as u64, (bytes.len() - offset) as u64)
+}
+
 fn binding(buffer: &wgpu::Buffer, (offset, size): (u64, u64)) -> wgpu::BindingResource<'_> {
     wgpu::BindingResource::Buffer(wgpu::BufferBinding {
         buffer,
@@ -112,7 +128,7 @@ impl WgpuRenderer {
         let clear_at = reserve(&mut bytes, &[clear_color]);
         let sprite_data = [
             reserve(&mut bytes, &frame.plan.refs),
-            reserve(&mut bytes, &frame.quads),
+            reserve_parts(&mut bytes, frame.quad_parts()),
             reserve(&mut bytes, &frame.shadows),
             reserve(&mut bytes, &frame.glyphs),
             reserve(&mut bytes, &frame.clip_edges),

@@ -39,6 +39,7 @@ use path_tiles::PathTiles;
 use picture::PictureCache;
 use sprites::PathSprites;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// The clear color, linear: 0.1 in sRGB.
 pub(crate) fn clear_linear() -> f64 {
@@ -114,6 +115,11 @@ pub(crate) struct ImageDraw<T> {
 pub(crate) struct FrameData<T> {
     pub plan: FramePlan,
     pub quads: Vec<GpuQuad>,
+    /// Quads of kept pictures, shared rather than copied, which go after
+    /// `quads` in the instance buffer. Until the frame is planned, items index
+    /// them from the first with [`KEPT_QUAD`] set.
+    pub kept_quads: Vec<Arc<[GpuQuad]>>,
+    kept_quad_count: u32,
     pub shadows: Vec<GpuShadow>,
     pub glyphs: Vec<GpuGlyph>,
     pub images: Vec<ImageDraw<T>>,
@@ -139,6 +145,8 @@ impl<T> Default for FrameData<T> {
         Self {
             plan: FramePlan::default(),
             quads: Vec::new(),
+            kept_quads: Vec::new(),
+            kept_quad_count: 0,
             shadows: Vec::new(),
             glyphs: Vec::new(),
             images: Vec::new(),
@@ -150,6 +158,30 @@ impl<T> Default for FrameData<T> {
             clip_bounds: Vec::new(),
             damage: None,
         }
+    }
+}
+
+/// Set in the start of an item of kept quads until the frame is planned.
+pub(super) const KEPT_QUAD: u32 = 1 << 28;
+
+impl<T> FrameData<T> {
+    /// Every quad of the frame in buffer order: its own, then the kept ones.
+    pub(crate) fn quad_parts(&self) -> impl Iterator<Item = &[GpuQuad]> {
+        std::iter::once(self.quads.as_slice()).chain(self.kept_quads.iter().map(|quads| &quads[..]))
+    }
+
+    /// How many quads [`Self::quad_parts`] holds.
+    pub(crate) fn quad_count(&self) -> usize {
+        self.quads.len() + self.kept_quad_count as usize
+    }
+
+    /// Shares `quads` into the frame; returns the index of the first, with
+    /// [`KEPT_QUAD`] set.
+    pub(super) fn keep_quads(&mut self, quads: &Arc<[GpuQuad]>) -> u32 {
+        let start = self.kept_quad_count | KEPT_QUAD;
+        self.kept_quad_count += quads.len() as u32;
+        self.kept_quads.push(Arc::clone(quads));
+        start
     }
 }
 

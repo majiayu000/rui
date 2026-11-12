@@ -17,6 +17,8 @@ impl<T> FrameData<T> {
     pub(super) fn clear(&mut self) {
         self.plan.clear();
         self.quads.clear();
+        self.kept_quads.clear();
+        self.kept_quad_count = 0;
         self.shadows.clear();
         self.glyphs.clear();
         self.images.clear();
@@ -216,6 +218,9 @@ impl<T: Clone> FramePlanner<T> {
             self.build_primitive(frame, primitive, &mut walk, upload)?;
         }
 
+        if !frame.kept_quads.is_empty() {
+            frame.plan.place_kept_quads(frame.quads.len() as u32);
+        }
         // Text runs are pushed without their extent, which only ordering needs.
         let FrameData {
             plan,

@@ -329,3 +329,39 @@ fn wgpu_redraws_retained_damage_as_metal_does() {
         "a fresh retained target draws the full frame"
     );
 }
+
+#[test]
+fn wgpu_draws_kept_pictures_as_metal_does() {
+    let Some((mut metal, mut wgpu)) = renderers() else {
+        return;
+    };
+    let viewport = Size::new(WIDTH, HEIGHT);
+    // Without images, which keep a picture from being kept.
+    let primitives: Vec<_> = fixture_scene()
+        .primitives()
+        .iter()
+        .filter(|primitive| !matches!(primitive, Primitive::Image { .. }))
+        .cloned()
+        .collect();
+    let picture = crate::renderer::Picture::new(primitives);
+    let mut scene = Scene::new();
+    scene.insert(Primitive::Picture {
+        picture,
+        offset: crate::core::geometry::Point::new(3.0, 2.0),
+    });
+    // Planned, then kept, then copied from what was kept.
+    for pass in 0..3 {
+        let expected = metal
+            .capture_frame_pixels(&scene, viewport)
+            .expect("metal capture");
+        let actual = wgpu
+            .capture_frame_pixels(&scene, viewport)
+            .expect("wgpu capture");
+        assert_close(
+            &expected,
+            &actual,
+            WIDTH as usize,
+            &format!("picture, frame {pass}"),
+        );
+    }
+}

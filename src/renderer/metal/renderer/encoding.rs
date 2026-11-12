@@ -105,7 +105,10 @@ impl MetalRenderer {
         let mut layout = BufferLayout::default();
         let refs_at = layout.reserve(&frame.plan.refs);
         let sprite_data = [
-            (2, layout.reserve(&frame.quads)),
+            (
+                2,
+                layout.reserve_count::<crate::renderer::primitives::GpuQuad>(frame.quad_count()),
+            ),
             (3, layout.reserve(&frame.shadows)),
             (4, layout.reserve(&frame.glyphs)),
             (5, layout.reserve(&frame.clip_edges)),
@@ -114,7 +117,11 @@ impl MetalRenderer {
         let edges_at = layout.reserve(&frame.path_edges);
         let instances = self.instances.acquire(&self.device, layout.bytes());
         write_slice(&instances, refs_at, &frame.plan.refs);
-        write_slice(&instances, sprite_data[0].1, &frame.quads);
+        let mut at = sprite_data[0].1;
+        for quads in frame.quad_parts() {
+            write_slice(&instances, at, quads);
+            at += std::mem::size_of_val(quads);
+        }
         write_slice(&instances, sprite_data[1].1, &frame.shadows);
         write_slice(&instances, sprite_data[2].1, &frame.glyphs);
         write_slice(&instances, sprite_data[3].1, &frame.clip_edges);

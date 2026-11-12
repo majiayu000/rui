@@ -144,6 +144,22 @@ impl FramePlan {
         self.items.push(Item { kind, clip, rect });
     }
 
+    /// Points items of kept quads at where they go in the buffer: after the
+    /// frame's own `quads`.
+    pub(super) fn place_kept_quads(&mut self, quads: u32) {
+        for item in &mut self.items {
+            if let ItemKind::Sprites {
+                kind: KIND_QUAD,
+                start,
+                ..
+            } = &mut item.kind
+                && *start & super::KEPT_QUAD != 0
+            {
+                *start = quads + (*start & !super::KEPT_QUAD);
+            }
+        }
+    }
+
     /// The items pushed so far, in order.
     pub(super) fn items(&self) -> &[Item] {
         &self.items

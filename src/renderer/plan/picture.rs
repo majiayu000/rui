@@ -78,7 +78,7 @@ struct PlannedPicture {
     key: PictureKey,
     /// Holds the storage the key points at, so no other picture takes its address.
     _picture: Picture,
-    quads: Vec<GpuQuad>,
+    quads: Arc<[GpuQuad]>,
     shadows: Vec<GpuShadow>,
     glyphs: Vec<GpuGlyph>,
     path_tiles: Vec<GpuPathTile>,
@@ -269,7 +269,7 @@ impl<T: Clone> FramePlanner<T> {
         }
         planned.last_used = picture_cache.frame;
         let marks = Marks::of(frame);
-        frame.quads.extend_from_slice(&planned.quads);
+        let kept_quads = (!planned.quads.is_empty()).then(|| frame.keep_quads(&planned.quads));
         frame.shadows.extend_from_slice(&planned.shadows);
         frame.glyphs.extend_from_slice(&planned.glyphs);
         frame.path_edges.extend_from_slice(&planned.path_edges);
@@ -302,9 +302,13 @@ impl<T: Clone> FramePlanner<T> {
             else {
                 unreachable!("pictures with images are not kept");
             };
+            let start = match (kind, kept_quads) {
+                (KIND_QUAD, Some(kept)) => kept + start,
+                _ => start + marks.start_of(kind) as u32,
+            };
             let kind = ItemKind::Sprites {
                 kind,
-                start: start + marks.start_of(kind) as u32,
+                start,
                 count,
                 pages,
                 simple,
@@ -379,7 +383,7 @@ impl<T: Clone> FramePlanner<T> {
         Some(PlannedPicture {
             key,
             _picture: picture.clone(),
-            quads: frame.quads[marks.quads..].to_vec(),
+            quads: frame.quads[marks.quads..].into(),
             shadows: frame.shadows[marks.shadows..].to_vec(),
             glyphs: frame.glyphs[marks.glyphs..].to_vec(),
             path_tiles: frame.path_tiles[marks.path_tiles..]
