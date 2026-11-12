@@ -15,13 +15,13 @@
 //! Draw calls and instances come from `MetalRenderer::last_frame_stats`. GPU time comes
 //! from the same sampled frames through `benchmarks/gpui_compare/gpu_time.rs`, which
 //! GPUI's side uses too: each committed command buffer's `GPUEndTime - GPUStartTime`.
+use rui::core::entity::Entity;
 use rui::core::frame_pipeline::FramePipeline;
 use rui::elements::element::{Element, LayoutNodes};
 use rui::elements::{VirtualListHandle, canvas, shared_styled_text, span_range, virtual_list};
 use rui::renderer::metal::MetalRenderer;
 use rui::renderer::text::TextMeasureCache;
 use rui::renderer::{RendererResourceLimits, Scene};
-use rui::core::entity::Entity;
 use rui::{AppContext, Bounds, Color, ElementId, Size, div, text};
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::RefCell;
@@ -32,7 +32,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 use taffy::prelude::TaffyTree;
 
-const CASES: [&str; 11] = [
+const CASES: [&str; 13] = [
     "startup",
     "list_full",
     "list_virtual_1k",
@@ -44,7 +44,10 @@ const CASES: [&str; 11] = [
     "list_full_one_row",
     "editor_scroll",
     "editor_edit",
+    "paths",
+    "paths_icons",
 ];
+mod compare_paths;
 #[path = "../benchmarks/gpui_compare/gpu_time.rs"]
 mod gpu_time;
 
@@ -579,9 +582,10 @@ fn run(case: &str) -> Result<(), Box<dyn std::error::Error>> {
                 .collect();
             let items = rows.clone();
             let mut build = move |cx: &mut AppContext| {
-                div().w_full().flex_col().children(cx.rows(&items, |row: &ListRow, _| {
-                    row_with(row.index, row.selected)
-                }))
+                div()
+                    .w_full()
+                    .flex_col()
+                    .children(cx.rows(&items, |row: &ListRow, _| row_with(row.index, row.selected)))
             };
             let mut root = div();
             measure(case, &mut harness, |harness, turn| {
@@ -657,6 +661,26 @@ fn run(case: &str) -> Result<(), Box<dyn std::error::Error>> {
                 edited.lines[cursor] = CodeLine::new(&edited.tokens[cursor]);
                 drop(edited);
                 harness.frame(code_view(&handle, &document, cursor), viewport)
+            })?;
+        }
+        // 2 000 fills, 500 strokes, 200 circles; one fill turns each frame.
+        "paths" => {
+            let mut harness = Harness::new()?;
+            let shapes = compare_paths::scene();
+            let root = |turn| compare_paths::backdrop(compare_paths::paths(&shapes, turn));
+            compare_paths::save_png(case, &mut harness, root(0), viewport)?;
+            measure(case, &mut harness, |harness, turn| {
+                harness.frame(root(turn), viewport)
+            })?;
+        }
+        // 300 SVG icons of 20 paths; one moves each frame.
+        "paths_icons" => {
+            let mut harness = Harness::new()?;
+            let markup = compare_paths::icon_markup();
+            let root = |turn| compare_paths::backdrop(compare_paths::icons(&markup, turn));
+            compare_paths::save_png(case, &mut harness, root(0), viewport)?;
+            measure(case, &mut harness, |harness, turn| {
+                harness.frame(root(turn), viewport)
             })?;
         }
         _ => return Err(format!("unknown case {case}; cases: {}", CASES.join(" ")).into()),

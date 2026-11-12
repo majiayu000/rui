@@ -20,13 +20,17 @@ use std::time::Instant;
 #[path = "../../gpui_compare/gpu_time.rs"]
 mod gpu_time;
 
-const CASES: [&str; 6] = [
+mod paths;
+
+const CASES: [&str; 8] = [
     "startup",
     "list_full",
     "list_virtual_1k",
     "list_virtual_100k",
     "text_paragraphs",
     "quad_grid",
+    "paths",
+    "paths_icons",
 ];
 const WARMUP: usize = 10;
 const GPU_SETTLE: std::time::Duration = std::time::Duration::from_millis(100);
@@ -133,11 +137,7 @@ fn row(ui: &mut egui::Ui, index: usize, selected: bool) {
         egui::Sense::hover(),
     );
     let painter = ui.painter();
-    painter.rect_filled(
-        rect,
-        0.0,
-        hex(if selected { 0x2d3748 } else { 0x1a202c }),
-    );
+    painter.rect_filled(rect, 0.0, hex(if selected { 0x2d3748 } else { 0x1a202c }));
     let font = FontId::proportional(FONT_SIZE);
     painter.text(
         rect.left_center(),
@@ -230,6 +230,7 @@ struct Harness {
     device: wgpu::Device,
     queue: wgpu::Queue,
     renderer: egui_wgpu::Renderer,
+    texture: wgpu::Texture,
     target: wgpu::TextureView,
     start: Instant,
 }
@@ -258,7 +259,7 @@ impl Harness {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: FORMAT,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
         let target = texture.create_view(&Default::default());
@@ -267,6 +268,7 @@ impl Harness {
             device,
             queue,
             renderer,
+            texture,
             target,
             start: Instant::now(),
         })
@@ -279,9 +281,7 @@ impl Harness {
             ..Default::default()
         };
         let output = self.ctx.run_ui(input, ui);
-        let primitives = self
-            .ctx
-            .tessellate(output.shapes, output.pixels_per_point);
+        let primitives = self.ctx.tessellate(output.shapes, output.pixels_per_point);
         for (id, deltas) in &output.textures_delta.set {
             for delta in deltas {
                 self.renderer
@@ -440,6 +440,24 @@ fn run(case: &str) -> Result<(), Box<dyn std::error::Error>> {
             let mut harness = Harness::new()?;
             measure(case, &mut harness, |harness, turn| {
                 harness.frame(|ui| quad_grid(ui, turn % (GRID.0 * GRID.1)));
+            });
+        }
+        "paths" => {
+            let mut harness = Harness::new()?;
+            let scene = paths::Paths::new();
+            harness.frame(|ui| scene.paint(ui, 0));
+            paths::save_png(&harness, case)?;
+            measure(case, &mut harness, |harness, turn| {
+                harness.frame(|ui| scene.paint(ui, turn));
+            });
+        }
+        "paths_icons" => {
+            let mut harness = Harness::new()?;
+            let scene = paths::Icons::new();
+            harness.frame(|ui| scene.paint(ui, 0));
+            paths::save_png(&harness, case)?;
+            measure(case, &mut harness, |harness, turn| {
+                harness.frame(|ui| scene.paint(ui, turn));
             });
         }
         _ => return Err(format!("unknown case {case}; cases: {}", CASES.join(" ")).into()),
