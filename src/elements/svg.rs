@@ -36,6 +36,9 @@ const TOLERANCE: f32 = 0.05;
 /// Icons at a size and tint kept; past this the cache starts over.
 const SHAPED_ICONS: usize = 1024;
 
+/// Markup kept by address; past this that cache starts over.
+const ADDRESSED_MARKUP: usize = 1024;
+
 /// A parsed document, with an id the shaped icons are kept by.
 struct Parsed {
     id: u64,
@@ -52,6 +55,10 @@ type ShapeKey = (u64, [u32; 2], Option<[u32; 4]>);
 struct Caches {
     /// By markup hash, with the markup to tell collisions apart.
     documents: HashMap<u64, Vec<ParsedMarkup>>,
+    /// By the address and length of markup passed before, with the markup to
+    /// check it is unchanged: markup kept in one place, as `include_str!` keeps
+    /// it, is found every frame by comparing it rather than hashing it.
+    addressed: HashMap<(usize, usize), ParsedMarkup>,
     next_id: u64,
     /// At the origin.
     shaped: HashMap<ShapeKey, Rc<[Primitive]>>,
@@ -62,6 +69,29 @@ thread_local! {
 }
 
 fn parsed(markup: &str) -> Result<Rc<Parsed>, SvgError> {
+    let address = (markup.as_ptr() as usize, markup.len());
+    let found = CACHES.with(|caches| {
+        let caches = caches.borrow();
+        let (kept, parsed) = caches.addressed.get(&address)?;
+        (**kept == *markup).then(|| parsed.clone())
+    });
+    if let Some(parsed) = found {
+        return parsed;
+    }
+    let parsed = parsed_by_hash(markup);
+    CACHES.with(|caches| {
+        let mut caches = caches.borrow_mut();
+        if caches.addressed.len() >= ADDRESSED_MARKUP {
+            caches.addressed.clear();
+        }
+        caches
+            .addressed
+            .insert(address, (markup.into(), parsed.clone()));
+    });
+    parsed
+}
+
+fn parsed_by_hash(markup: &str) -> Result<Rc<Parsed>, SvgError> {
     let mut hasher = DefaultHasher::new();
     markup.hash(&mut hasher);
     let hash = hasher.finish();

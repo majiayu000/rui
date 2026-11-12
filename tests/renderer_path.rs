@@ -59,6 +59,20 @@ fn stroked_path_covers_the_line_and_nothing_else() {
 }
 
 #[test]
+fn stroked_corner_is_mitered() {
+    // Right, then down, 8 wide: the outer corner reaching (64, 16) is the miter's,
+    // which butt-ended segments alone leave empty.
+    let Some(pixels) = draw(&[(10.0, 20.0), (60.0, 20.0), (60.0, 55.0)], Some(8.0)) else {
+        return;
+    };
+    assert!(
+        is_green(&pixels, 62, 17),
+        "in the miter, outside both segments"
+    );
+    assert!(!is_green(&pixels, 66, 13), "past the miter tip");
+}
+
+#[test]
 fn an_edge_on_a_tile_boundary_crossing_no_column_is_drawn() {
     // Too large for one instance, so drawn as tiles; its left edge lies on the
     // boundary of the second column of 16 px tiles.

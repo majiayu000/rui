@@ -2,8 +2,9 @@
 
 use super::frame::{ItemKind, Pages};
 use super::order::Rect;
-use super::path::{PathGeometry, SpriteLookup};
+use super::path::PathGeometry;
 use super::retained::{damage_scissor, intersect_scissors};
+use super::sprites::SpriteLookup;
 use super::*;
 use crate::core::geometry::Bounds;
 use crate::elements::fit_bounds;

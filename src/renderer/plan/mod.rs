@@ -12,6 +12,8 @@ mod order;
 mod path;
 mod retained;
 mod simple;
+mod sprites;
+mod stroke;
 
 pub(crate) use frame::{
     Draw, KIND_COLOR_GLYPH, KIND_GLYPH, KIND_PATH, KIND_PATH_SPRITE, KIND_QUAD, KIND_SHADOW,
@@ -28,7 +30,8 @@ use crate::renderer::{
     RendererResourceKind, RendererResourceLimits, RendererResourceStats,
 };
 use frame::FramePlan;
-use path::{PathGeometry, PathSprites, PathTiles};
+use path::{PathGeometry, PathTiles};
+use sprites::PathSprites;
 use std::collections::HashMap;
 
 /// The clear color, linear: 0.1 in sRGB.

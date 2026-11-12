@@ -233,14 +233,36 @@ fn reference_coverage(
                 }
                 winding != 0
             }
-            Some(stroke) => points.windows(2).any(|pair| {
-                let ((ax, ay), (bx, by)) = (pair[0], pair[1]);
-                let length = ((bx - ax).powi(2) + (by - ay).powi(2)).sqrt();
-                let (ux, uy) = ((bx - ax) / length, (by - ay) / length);
-                let along = (x - ax) * ux + (y - ay) * uy;
-                let across = (y - ay) * ux - (x - ax) * uy;
-                (0.0..=length).contains(&along) && across.abs() <= stroke * scale * 0.5
-            }),
+            Some(stroke) => {
+                let half = stroke * scale * 0.5;
+                let segment = points.windows(2).any(|pair| {
+                    let ((ax, ay), (bx, by)) = (pair[0], pair[1]);
+                    let length = ((bx - ax).powi(2) + (by - ay).powi(2)).sqrt();
+                    let (ux, uy) = ((bx - ax) / length, (by - ay) / length);
+                    let along = (x - ax) * ux + (y - ay) * uy;
+                    let across = (y - ay) * ux - (x - ax) * uy;
+                    (0.0..=length).contains(&along) && across.abs() <= half
+                });
+                // A miter join: within half the width of both segments' lines,
+                // past both segments' ends at the vertex, on the outer side,
+                // and within the miter limit of 4 widths from the vertex.
+                let join = points.windows(3).any(|three| {
+                    let unit = |(ax, ay): (f32, f32), (bx, by): (f32, f32)| {
+                        let length = ((bx - ax).powi(2) + (by - ay).powi(2)).sqrt();
+                        ((bx - ax) / length, (by - ay) / length)
+                    };
+                    let (corner, d0, d1) =
+                        (three[1], unit(three[0], three[1]), unit(three[1], three[2]));
+                    let (dx, dy) = (x - corner.0, y - corner.1);
+                    let cos_angle = -(d0.0 * d1.0 + d0.1 * d1.1);
+                    let miter = 1.0 / ((1.0 - cos_angle) * 0.5).sqrt();
+                    let past_both = dx * d0.0 + dy * d0.1 >= 0.0 && dx * d1.0 + dy * d1.1 <= 0.0;
+                    let near_both = (dy * d0.0 - dx * d0.1).abs() <= half
+                        && (dy * d1.0 - dx * d1.1).abs() <= half;
+                    miter <= 4.0 && past_both && near_both
+                });
+                segment || join
+            }
         }
     };
     let mut coverage = Vec::with_capacity(width * height);

@@ -23,7 +23,9 @@ mod complex_text;
 #[path = "../../gpui_compare/gpu_time.rs"]
 mod gpu_time;
 
-const CASES: [&str; 7] = [
+mod paths;
+
+const CASES: [&str; 9] = [
     "startup",
     "list_full",
     "list_virtual_1k",
@@ -31,6 +33,8 @@ const CASES: [&str; 7] = [
     "text_paragraphs",
     "text_complex",
     "quad_grid",
+    "paths",
+    "paths_icons",
 ];
 const WARMUP: usize = 10;
 const GPU_SETTLE: std::time::Duration = std::time::Duration::from_millis(100);
@@ -476,6 +480,24 @@ fn run(case: &str) -> Result<(), Box<dyn std::error::Error>> {
             let mut harness = Harness::new()?;
             measure(case, &mut harness, |harness, turn| {
                 harness.frame(|ui| quad_grid(ui, turn % (GRID.0 * GRID.1)));
+            });
+        }
+        "paths" => {
+            let mut harness = Harness::new()?;
+            let scene = paths::Paths::new();
+            harness.frame(|ui| scene.paint(ui, 0));
+            paths::save_png(&harness, case)?;
+            measure(case, &mut harness, |harness, turn| {
+                harness.frame(|ui| scene.paint(ui, turn));
+            });
+        }
+        "paths_icons" => {
+            let mut harness = Harness::new()?;
+            let scene = paths::Icons::new();
+            harness.frame(|ui| scene.paint(ui, 0));
+            paths::save_png(&harness, case)?;
+            measure(case, &mut harness, |harness, turn| {
+                harness.frame(|ui| scene.paint(ui, turn));
             });
         }
         _ => return Err(format!("unknown case {case}; cases: {}", CASES.join(" ")).into()),

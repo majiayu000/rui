@@ -2,8 +2,9 @@
 //!
 //! A path's edges are kept in device pixels. A fill covers what its closed
 //! polygon winds around (nonzero rule); a stroke covers each segment's
-//! rectangle, `stroke_width` wide with butt ends, all wound the same way, so a
-//! stroke is a polygon too and joints are not covered twice. Coverage is the
+//! rectangle, `stroke_width` wide with butt ends, and a miter join at each
+//! vertex (see [`super::stroke`]), all wound the same way, so a stroke is a
+//! polygon too and joints are not covered twice. Coverage is the
 //! exact share of the pixel square inside: each edge adds the signed area of
 //! the square to its left, which sums to the integral of the winding number
 //! over the square, and that is clamped to one, as font rasterizers do.
@@ -16,10 +17,11 @@
 //! is the same function on the CPU; it rasterizes paths into the atlas and is
 //! what the GPU output is checked against.
 
+use super::sprites::hash_edges;
+use super::stroke::stroke_edges;
 use crate::core::color::Rgba;
 use crate::renderer::RendererError;
 use crate::renderer::primitives::PathVertex;
-use crate::renderer::text::AtlasSlot;
 use bytemuck::{Pod, Zeroable};
 use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hasher};
@@ -33,11 +35,11 @@ const SMALL_PATH: f32 = 64.0;
 const SMALL_PATH_EDGES: usize = 32;
 
 /// Maps keyed by a hash already computed.
-type HashKeyed<V> = HashMap<u64, V, BuildHasherDefault<KeyHasher>>;
+pub(super) type HashKeyed<V> = HashMap<u64, V, BuildHasherDefault<KeyHasher>>;
 
 /// Passes a `u64` key through as its own hash.
 #[derive(Default)]
-struct KeyHasher(u64);
+pub(super) struct KeyHasher(u64);
 
 impl Hasher for KeyHasher {
     fn finish(&self) -> u64 {
@@ -126,29 +128,7 @@ impl PathGeometry {
                     ));
                 }
                 let half_width = width * 0.5 * scale_factor;
-                for pair in vertices.windows(2) {
-                    let [x0, y0] = device(&pair[0]);
-                    let [x1, y1] = device(&pair[1]);
-                    let length = ((x1 - x0) * (x1 - x0) + (y1 - y0) * (y1 - y0)).sqrt();
-                    if length <= f32::EPSILON {
-                        continue;
-                    }
-                    // The segment's rectangle, wound the same way for every
-                    // direction: the normal turns with the segment.
-                    let nx = -(y1 - y0) / length * half_width;
-                    let ny = (x1 - x0) / length * half_width;
-                    let corners = [
-                        [x0 + nx, y0 + ny],
-                        [x1 + nx, y1 + ny],
-                        [x1 - nx, y1 - ny],
-                        [x0 - nx, y0 - ny],
-                    ];
-                    for index in 0..4 {
-                        let [ax, ay] = corners[index];
-                        let [bx, by] = corners[(index + 1) % 4];
-                        self.edges.push([ax, ay, bx, by]);
-                    }
-                }
+                stroke_edges(vertices.iter().map(device), half_width, &mut self.edges);
                 if self.edges.is_empty() {
                     return Err(RendererError::render_failed(
                         "stroked path primitive contains only degenerate segments",
@@ -644,156 +624,6 @@ fn bucket(
     }
 }
 
-/// Largest path, in device pixels on either side, kept in the atlas.
-const MAX_SPRITE_SIZE: f32 = 128.0;
-
-/// Paths seen without a slot are forgotten after this many frames.
-const UNPLACED_FRAMES: u64 = 2;
-
-/// Where a path sits on the device pixel grid when drawn from the atlas: its
-/// whole-pixel origin and size.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(super) struct SpriteCell {
-    pub origin: [f32; 2],
-    pub width: u32,
-    pub height: u32,
-}
-
-struct SpriteEntry {
-    /// Edges relative to the cell origin.
-    edges: Vec<[f32; 4]>,
-    /// The slot and the generation of its page when the path was placed.
-    slot: Option<(AtlasSlot, u64)>,
-    last_seen: u64,
-}
-
-/// Small paths drawn again on a later frame, rasterized once into the glyph
-/// atlas. A path's shape relative to its pixel cell is the key, so the same
-/// icon at any whole-pixel position shares one entry. Paths seen only once, or
-/// at a new fractional offset every frame, stay analytic.
-#[derive(Default)]
-pub(super) struct PathSprites {
-    frame: u64,
-    epoch: u64,
-    entries: HashKeyed<Vec<SpriteEntry>>,
-    /// Keys of shapes seen without an entry, and the frame they were last seen:
-    /// a shape is kept only once it comes back.
-    seen: HashKeyed<u64>,
-    relative: Vec<[f32; 4]>,
-}
-
-/// What to draw a path with.
-pub(super) enum SpriteLookup {
-    /// Too large, or not seen on an earlier frame: draw tiles.
-    Analytic,
-    /// In the atlas already, placed in this generation of its page, under this
-    /// key: if the page was emptied since, rasterize it and `place` it again.
-    Placed(AtlasSlot, u64, SpriteCell, u64),
-    /// Seen on an earlier frame: rasterize it and `place` the result under
-    /// this key.
-    Rasterize(SpriteCell, u64),
-}
-
-impl PathSprites {
-    /// Starts a frame; slots from before an atlas reset at `epoch` are dropped.
-    pub(super) fn begin_frame(&mut self, epoch: u64) {
-        self.frame += 1;
-        self.sync_epoch(epoch);
-        let frame = self.frame;
-        self.entries.retain(|_, entries| {
-            entries
-                .retain(|entry| entry.slot.is_some() || entry.last_seen + UNPLACED_FRAMES >= frame);
-            !entries.is_empty()
-        });
-        self.seen
-            .retain(|_, last_seen| *last_seen + UNPLACED_FRAMES >= frame);
-    }
-
-    /// Forgets every slot when the atlas they were placed in was emptied.
-    pub(super) fn sync_epoch(&mut self, epoch: u64) {
-        if epoch != self.epoch {
-            self.entries.clear();
-            self.seen.clear();
-            self.epoch = epoch;
-        }
-    }
-
-    pub(super) fn lookup(&mut self, geometry: &PathGeometry) -> SpriteLookup {
-        let [x0, y0, x1, y1] = geometry.bounds;
-        let origin = [x0.floor(), y0.floor()];
-        let (width, height) = (x1.ceil() - origin[0], y1.ceil() - origin[1]);
-        if width > MAX_SPRITE_SIZE || height > MAX_SPRITE_SIZE {
-            return SpriteLookup::Analytic;
-        }
-        let cell = SpriteCell {
-            origin,
-            width: width as u32,
-            height: height as u32,
-        };
-        self.relative.clear();
-        self.relative
-            .extend(geometry.edges.iter().map(|&[ax, ay, bx, by]| {
-                [
-                    ax - origin[0],
-                    ay - origin[1],
-                    bx - origin[0],
-                    by - origin[1],
-                ]
-            }));
-        let mut hash = 0xcbf2_9ce4_8422_2325u64;
-        for bits in self.relative.iter().flatten().map(|value| value.to_bits()) {
-            hash = (hash ^ u64::from(bits)).wrapping_mul(0x0000_0100_0000_01b3);
-        }
-        let frame = self.frame;
-        let relative = &self.relative;
-        if let Some(entry) = self
-            .entries
-            .get_mut(&hash)
-            .and_then(|entries| entries.iter_mut().find(|entry| entry.edges == *relative))
-        {
-            entry.last_seen = frame;
-            return match entry.slot {
-                Some((slot, generation)) => SpriteLookup::Placed(slot, generation, cell, hash),
-                None => SpriteLookup::Rasterize(cell, hash),
-            };
-        }
-        match self.seen.insert(hash, frame) {
-            // Back from an earlier frame: keep it.
-            Some(last_seen) if last_seen < frame => {
-                self.entries.entry(hash).or_default().push(SpriteEntry {
-                    edges: relative.clone(),
-                    slot: None,
-                    last_seen: frame,
-                });
-                SpriteLookup::Rasterize(cell, hash)
-            }
-            _ => SpriteLookup::Analytic,
-        }
-    }
-
-    /// How many paths have a slot.
-    #[cfg(test)]
-    pub(crate) fn placed(&self) -> usize {
-        self.entries
-            .values()
-            .flatten()
-            .filter(|entry| entry.slot.is_some())
-            .count()
-    }
-
-    /// Records the slot of the path `lookup` last asked to rasterize as `key`.
-    pub(super) fn place(&mut self, key: u64, slot: AtlasSlot, generation: u64) {
-        let relative = &self.relative;
-        if let Some(entry) = self
-            .entries
-            .get_mut(&key)
-            .and_then(|entries| entries.iter_mut().find(|entry| entry.edges == *relative))
-        {
-            entry.slot = Some((slot, generation));
-        }
-    }
-}
-
 /// Analytic paths unused for this many frames lose their kept tiles.
 const UNUSED_TILE_FRAMES: u64 = 2;
 
@@ -844,17 +674,9 @@ impl PathTiles {
         tiles: &mut Vec<GpuPathTile>,
         edges: &mut Vec<[f32; 4]>,
     ) -> Option<[f32; 4]> {
-        let mut hash = 0xcbf2_9ce4_8422_2325u64;
-        for bits in geometry
-            .edges
-            .iter()
-            .flatten()
-            .chain(&visible)
-            .chain(std::iter::once(&scale_factor))
-            .map(|value| value.to_bits())
-        {
-            hash = (hash ^ u64::from(bits)).wrapping_mul(0x0000_0100_0000_01b3);
-        }
+        let hash = hash_edges(&geometry.edges)
+            ^ hash_edges(&[visible]).rotate_left(1)
+            ^ u64::from(scale_factor.to_bits());
         let frame = self.frame;
         let kept = self.entries.get_mut(&hash).and_then(|paths| {
             paths.iter().position(|path| {

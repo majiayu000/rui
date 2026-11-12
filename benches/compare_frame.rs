@@ -32,7 +32,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 use taffy::prelude::TaffyTree;
 
-const CASES: [&str; 14] = [
+const CASES: [&str; 16] = [
     "startup",
     "list_full",
     "list_full_rows",
@@ -47,7 +47,10 @@ const CASES: [&str; 14] = [
     "list_full_one_row",
     "editor_scroll",
     "editor_edit",
+    "paths",
+    "paths_icons",
 ];
+mod compare_paths;
 #[path = "../benchmarks/complex_text.rs"]
 mod complex_text;
 #[path = "../benchmarks/gpui_compare/gpu_time.rs"]
@@ -791,6 +794,26 @@ fn run(case: &str) -> Result<(), Box<dyn std::error::Error>> {
                 edited.lines[cursor] = CodeLine::new(&edited.tokens[cursor]);
                 drop(edited);
                 harness.frame(code_view(&handle, &document, cursor), viewport)
+            })?;
+        }
+        // 2 000 fills, 500 strokes, 200 circles; one fill turns each frame.
+        "paths" => {
+            let mut harness = Harness::new()?;
+            let shapes = compare_paths::scene();
+            let root = |turn| compare_paths::backdrop(compare_paths::paths(&shapes, turn));
+            compare_paths::save_png(case, &mut harness, root(0), viewport)?;
+            measure(case, &mut harness, |harness, turn| {
+                harness.frame(root(turn), viewport)
+            })?;
+        }
+        // 300 SVG icons of 20 paths; one moves each frame.
+        "paths_icons" => {
+            let mut harness = Harness::new()?;
+            let markup = compare_paths::icon_markup();
+            let root = |turn| compare_paths::backdrop(compare_paths::icons(&markup, turn));
+            compare_paths::save_png(case, &mut harness, root(0), viewport)?;
+            measure(case, &mut harness, |harness, turn| {
+                harness.frame(root(turn), viewport)
             })?;
         }
         _ => return Err(format!("unknown case {case}; cases: {}", CASES.join(" ")).into()),

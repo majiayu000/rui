@@ -75,7 +75,9 @@ pub enum Primitive {
         opacity: f32,
     },
 
-    /// Path (for custom vector graphics)
+    /// Path (for custom vector graphics): a polygon filled by the nonzero
+    /// rule, or with `stroke_width` a polyline stroked with butt ends and miter
+    /// joins, beveled past a miter limit of 4. Curves are flattened by the caller.
     Path {
         vertices: Vec<PathVertex>,
         color: Rgba,
