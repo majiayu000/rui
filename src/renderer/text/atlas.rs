@@ -282,6 +282,8 @@ pub struct PlacedGlyph {
     pub x: f32,
     /// Baseline, measured down from the top of the line box.
     pub baseline_y: f32,
+    /// Font size over the text's: 1, or what gives a fallback face the text's em.
+    pub font_scale: f32,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -563,21 +565,9 @@ impl TextGlyphCache {
         let text = (!metrics.ink_bounds.is_empty()).then(|| {
             let fonts = self.measurer.fonts.as_slice();
             let scale = Scale::uniform(request.font_size);
-            let glyphs = parts
-                .glyphs
-                .iter()
-                .filter_map(|glyph| {
-                    let font = fonts.get(glyph.font_index)?;
-                    let ascent = font.font().v_metrics(scale).ascent;
-                    Some(PlacedGlyph {
-                        font_index: glyph.font_index as u32,
-                        glyph_id: glyph.glyph_id,
-                        x: glyph.x_offset,
-                        baseline_y: ascent + glyph.y_offset,
-                    })
-                })
-                .collect();
             let v_metrics = fonts[primary_index].font().v_metrics(scale);
+            let glyphs =
+                placed::place_glyphs(fonts, primary_index, &parts.glyphs, v_metrics.ascent);
             Arc::new(ShapedText {
                 metrics,
                 glyphs,
@@ -610,6 +600,7 @@ impl TextGlyphCache {
         device_font_size: f32,
         subpixel: u8,
     ) -> Result<Option<AtlasGlyph>, TextError> {
+        let device_font_size = device_font_size * glyph.font_scale;
         let key = GlyphKey {
             font_index: glyph.font_index,
             glyph_id: glyph.glyph_id,

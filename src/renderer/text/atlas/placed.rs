@@ -4,9 +4,32 @@
 //! drawn. A text drawn again at the same horizontal position, with none of the
 //! atlas evicted since, reuses its sprites and only marks their pages drawn.
 
-use super::{SUBPIXEL_VARIANTS, ShapedText, TextError, TextGlyphCache};
+use super::{PlacedGlyph, SUBPIXEL_VARIANTS, ShapedText, TextError, TextGlyphCache};
 use crate::renderer::resources::{RendererResourceError, RendererResourceKind};
+use crate::renderer::text_face_size::face_size;
+use crate::renderer::text_shaping::{GlyphDraft, TextShapingFont};
 use std::sync::Arc;
+
+/// `glyphs`, shaped in text whose requested face is `fonts[primary]`, each on
+/// that face's baseline, `ascent` below the line top, at its face's size.
+pub(super) fn place_glyphs(
+    fonts: &[TextShapingFont],
+    primary: usize,
+    glyphs: &[GlyphDraft],
+    ascent: f32,
+) -> Vec<PlacedGlyph> {
+    glyphs
+        .iter()
+        .filter(|glyph| glyph.font_index < fonts.len())
+        .map(|glyph| PlacedGlyph {
+            font_index: glyph.font_index as u32,
+            glyph_id: glyph.glyph_id,
+            x: glyph.x_offset,
+            baseline_y: ascent + glyph.y_offset,
+            font_scale: face_size(fonts, primary, glyph.font_index, 1.0),
+        })
+        .collect()
+}
 
 /// One inked glyph of a placed text: its atlas sprite, left edge and size in
 /// logical pixels; its vertical place is left to the line it is drawn on.

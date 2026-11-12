@@ -269,12 +269,13 @@ fn bitmap_emoji_become_color_glyphs() {
         .expect("an emoji has pixels");
     assert!(emoji.color, "{emoji:?}");
     let size = (emoji.slot.rect.width, emoji.slot.rect.height);
-    // A 28 px font, descent to ascent, is about 21 px per em in Apple Color
-    // Emoji, the size of its square images and of its advance.
+    // A fallback face is drawn at the size that gives it the requested face's
+    // em, about 25 px for 28 px of Arial; its square images match its advance.
+    assert!(glyph.font_scale > 1.0, "{glyph:?}");
     let advance = cache.measurer.fonts[glyph.font_index as usize]
         .font()
         .glyph(GlyphId(glyph.glyph_id))
-        .scaled(Scale::uniform(28.0))
+        .scaled(Scale::uniform(28.0 * glyph.font_scale))
         .h_metrics()
         .advance_width;
     assert!(

@@ -6,6 +6,7 @@
 //! left. Text with nothing that can start a right-to-left run skips all of it.
 
 use crate::renderer::text::TextRequest;
+use crate::renderer::text_face_size::face_size;
 use crate::renderer::text_glyph_box::InkBounds;
 use crate::renderer::text_shaping::{ClusterDraft, GlyphDraft, ShapedRun, TextShapingFont};
 use rusttype::{Scale, point};
@@ -70,16 +71,20 @@ pub(crate) fn place_visually(
 /// The ink of `glyphs` where they are now, as shaping measures it.
 pub(crate) fn ink_of(
     fonts: &[TextShapingFont],
+    primary_index: usize,
     request: TextRequest<'_>,
     glyphs: &[GlyphDraft],
 ) -> InkBounds {
-    let scale = Scale::uniform(request.font_size);
+    let baseline = fonts[primary_index]
+        .font()
+        .v_metrics(Scale::uniform(request.font_size))
+        .ascent;
     let mut ink = InkBounds::empty();
     for glyph in glyphs {
         let font = &fonts[glyph.font_index];
-        let ascent = font.font().v_metrics(scale).ascent;
-        let position = point(glyph.x_offset, ascent + glyph.y_offset);
-        if let Some(bounds) = font.pixel_bounds(glyph.glyph_id, request.font_size, position) {
+        let size = face_size(fonts, primary_index, glyph.font_index, request.font_size);
+        let position = point(glyph.x_offset, baseline + glyph.y_offset);
+        if let Some(bounds) = font.pixel_bounds(glyph.glyph_id, size, position) {
             ink.include(bounds);
         }
     }
