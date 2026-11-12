@@ -2,16 +2,18 @@
 //!
 //! It draws the frames `renderer::plan` builds, as the Metal backend does, with
 //! WGSL ports of the Metal shaders (ADR 0002). It renders into textures: an
-//! offscreen capture, a [`RetainedTarget`], or a caller's `Bgra8UnormSrgb`
-//! surface texture.
+//! offscreen capture, a [`RetainedTarget`], a caller's `Bgra8UnormSrgb`
+//! surface texture, or a window through [`WindowSurface`].
 
 mod atlas;
 mod encode;
 mod shaders;
+mod surface;
 mod target;
 #[cfg(all(test, target_os = "macos", feature = "metal"))]
 mod tests;
 
+pub use surface::WindowSurface;
 pub use target::RetainedTarget;
 
 use crate::core::geometry::Size;
@@ -162,10 +164,15 @@ impl WgpuRenderer {
     /// Opens the default adapter of the platform's native backends.
     pub fn with_resource_limits(limits: RendererResourceLimits) -> Result<Self, RendererError> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-        let adapter = pollster::block_on(
-            instance.request_adapter(&wgpu::RequestAdapterOptions::default()),
-        )
-        .map_err(|err| RendererError::backend_unavailable(format!("no wgpu adapter: {err}")))?;
+        let adapter = request_adapter(&instance, None)?;
+        Self::on_adapter(&adapter, limits)
+    }
+
+    /// A renderer on a device of `adapter`.
+    fn on_adapter(
+        adapter: &wgpu::Adapter,
+        limits: RendererResourceLimits,
+    ) -> Result<Self, RendererError> {
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("rui"),
             required_limits: wgpu::Limits::default(),
@@ -399,6 +406,19 @@ impl Renderer for WgpuRenderer {
         )
         .with_unsupported_primitives(RendererPrimitiveSupport::wgpu().unsupported_primitives())
     }
+}
+
+/// The default adapter of the instance's backends, able to present to
+/// `surface` when one is given.
+fn request_adapter(
+    instance: &wgpu::Instance,
+    surface: Option<&wgpu::Surface<'_>>,
+) -> Result<wgpu::Adapter, RendererError> {
+    pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+        compatible_surface: surface,
+        ..Default::default()
+    }))
+    .map_err(|err| RendererError::backend_unavailable(format!("no wgpu adapter: {err}")))
 }
 
 fn check_format(texture: &wgpu::Texture) -> Result<(), RendererError> {

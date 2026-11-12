@@ -49,3 +49,36 @@ jobs:
 
       - name: Performance gate
         run: cargo bench --bench perf_gate
+
+  winit-linux:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check the winit runner and examples
+        run: cargo check --locked --no-default-features --features winit --lib --example hello_world --example counter
+
+      - name: Library tests without Metal
+        run: cargo test --locked --no-default-features --features winit --lib
+
+      - name: Open hello_world on lavapipe under Xvfb
+        run: |
+          sudo apt-get update
+          # winit loads the X11 and xkbcommon libraries at runtime.
+          sudo apt-get install -y xvfb mesa-vulkan-drivers libxkbcommon-x11-0 libxcursor1 libxrandr2 libxi6
+          cargo build --locked --no-default-features --features winit --example hello_world
+          # The example runs until its window closes: surviving the timeout
+          # means the window, surface, device and first frames came up.
+          status=0
+          RUST_LOG=rui=info timeout 10 xvfb-run -a target/debug/examples/hello_world 2> run.log || status=$?
+          cat run.log
+          test "$status" -eq 124
+          grep -q "winit window presenting through" run.log
