@@ -342,9 +342,11 @@ pub struct GpuQuad {
 impl GpuQuad {
     /// A solid fill with square corners and no border.
     pub(crate) fn is_plain(&self) -> bool {
-        self.corner_radii == [0.0; 4]
-            && self.border_widths == [0.0; 4]
-            && self.gradient_params[0] < 0.5
+        // Zero or negative zero in every radius and width: no bit but the signs.
+        const SIGNS: u128 = 0x8000_0000_8000_0000_8000_0000_8000_0000;
+        let bits = bytemuck::cast::<_, u128>(self.corner_radii)
+            | bytemuck::cast::<_, u128>(self.border_widths);
+        (bits & !SIGNS == 0) & (self.gradient_params[0] < 0.5)
     }
 
     pub fn solid(
