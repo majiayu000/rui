@@ -44,7 +44,7 @@ to Metal without waiting for the GPU.
 | Case | Content | Change per frame | RUI | GPUI |
 |---|---|---|---|---|
 | `list_full` | 2000 rows of 28 px, each a background, a title and a time | the selected row moves | `div` column | `div` column, root notified |
-| `list_full_one_row` | same | one row toggles its selection | same frame as `list_full`: RUI has no per-view cache | each row a view drawn with `.cached(..)`, only that row notified |
+| `list_full_one_row` | same | one row toggles its selection | each row a view of its own entity (`cx.rows`), only that row notified | each row a view drawn with `.cached(..)`, only that row notified |
 | `list_virtual_1k`, `list_virtual_100k` | same rows, 1000 or 100 000, scrolled to the middle | the selection moves within the visible rows | `virtual_list` | `uniform_list` |
 | `text_paragraphs` | 200 wrapped paragraphs of 8 to 127 words, padding 16, gap 8 | paragraph 3 (on screen) gets a new revision suffix | `text(..).wrap()` | string children, which wrap by default |
 | `quad_grid` | 200x60 cells of 7x15 px, one color each | one cell turns white | one `canvas`, `Painter::fill` | one `canvas`, `window.paint_quad(fill(..))` |
@@ -108,6 +108,21 @@ examples and GPUI's `primitives` bench paint this way.
   - Neither side opens an on-screen window or waits for a presented frame. Startup of
     a real app window is not measured here.
 
+## One changed row with rows as views
+
+`list_full_one_row` used to run the same rebuilt-from-the-root frame as
+`list_full` on RUI's side. It now matches GPUI's: each of the 2000 rows is a view
+of its own entity, written with `cx.rows`, and each frame toggles one row's
+selection and notifies only that row. Three runs, load average 7–47:
+
+| Side | Instructions (M) / frame | ms p50 | Allocations / frame | Draw calls |
+|---|---|---|---|---|
+| RUI | 2.38 | 0.15–0.22 | 20 | 1 |
+| GPUI `.cached()` (final results below) | 252.9–253.1 | 24.3–24.5 | 6 092 | 3 983 |
+
+RUI is 106x ahead by instructions and allocates 300x less. It was the last
+fixture where RUI allocated more than GPUI.
+
 ## Shared text and identity-kept layout (RUI `8099b1f`)
 
 RUI side only, from `benches/compare_frame.rs`, against the GPUI numbers of the
@@ -144,9 +159,9 @@ they moved by under 1%. Two changes since `27a9be7`:
 - **Cost:** `perf_gate`'s `list.one_row_changed_rows` and `_views`, which keep
   2000 row subtrees a frame, rise from 2.0 M to 2.5 M instructions: each kept
   subtree's nodes are now copied into the new pass's list. Both stay in budget.
-- **Still behind on allocations:** `list_full_one_row` (14 015 against GPUI's
-  `.cached()` 6 092), because this fixture rebuilds from the root (see the
-  verdict below), and `quad_grid` by 2.
+- **Still behind on allocations:** `quad_grid`, by 2. `list_full_one_row` drew the
+  rebuilt list here; with rows as views (above) it allocates 20 against GPUI's
+  6 092.
 
 ## Final results (RUI `c2e3596`)
 
@@ -449,8 +464,8 @@ Where RUI is still behind:
   the resize cases.
 - `virtual_list` builds 2 rows beyond each edge; `uniform_list` builds only the visible
   rows. In the editor cases that is 49 rows against 45.
-- `list_full_one_row` on RUI is the same frame as `list_full`: RUI has no per-view
-  cache, so there is no closer equivalent of GPUI's `.cached()` path.
+- Runs before "One changed row with rows as views" drew `list_full_one_row` on RUI
+  as the same frame as `list_full`, rebuilt from the root.
 - Resize on GPUI calls what its resize callback calls (`window.resize`,
   `window.bounds_changed`) from inside a frame update, since `simulate_resize` cannot be
   called there. Neither side resizes a real `CAMetalLayer`.
