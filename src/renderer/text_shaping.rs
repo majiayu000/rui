@@ -6,6 +6,7 @@ use crate::renderer::text_classify::{
     classify_direction, classify_script, is_default_ignorable, resolve_text_direction,
 };
 use crate::renderer::text_cluster_position::apply_exact_cluster_positions;
+use crate::renderer::text_default_instance::default_instance_face;
 use crate::renderer::text_face_size::face_size;
 use crate::renderer::text_fallback::{RunScript, assign_fonts, script_runs};
 use crate::renderer::text_glyph_box::{GlyphBoxes, InkBounds};
@@ -103,7 +104,7 @@ impl TextShapingFont {
         // `&self`.
         let bytes: &'static [u8] = unsafe { std::mem::transmute(data.as_slice()) };
         let font = Font::try_from_bytes_and_index(bytes, index)?;
-        let face = Face::from_slice(bytes, index)?;
+        let face = default_instance_face(bytes, index)?;
         let unscaled = font.v_metrics_unscaled();
         let height_em = (unscaled.ascent - unscaled.descent) / f32::from(font.units_per_em());
         Some(Self {

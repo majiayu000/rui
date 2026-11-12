@@ -10,6 +10,7 @@ use super::{
 use crate::core::SharedStr;
 use crate::core::geometry::Size;
 use crate::renderer::text_shaping::{ClusterDraft, TextScript};
+use smallvec::SmallVec;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
@@ -281,7 +282,7 @@ impl TextMeasureCache {
     ) -> WrapResult<WrappedText> {
         let line_limit = max_lines.unwrap_or(usize::MAX);
         let paragraphs: Vec<&str> = request.content.split('\n').collect();
-        let directions: Vec<BaseDirection> = paragraphs
+        let directions: SmallVec<[BaseDirection; 8]> = paragraphs
             .iter()
             .map(|paragraph| request.direction.resolve(paragraph))
             .collect();

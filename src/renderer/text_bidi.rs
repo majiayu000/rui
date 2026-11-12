@@ -50,13 +50,14 @@ impl BaseDirection {
 /// Whether `text` has anything that can start a right-to-left run.
 fn has_rtl(text: &str) -> bool {
     // Nothing below U+0590 is right to left or starts a right-to-left run.
-    text.chars().any(|ch| {
-        ch >= '\u{590}'
-            && matches!(
-                bidi_class(ch),
-                BidiClass::R | BidiClass::AL | BidiClass::RLE | BidiClass::RLO | BidiClass::RLI
-            )
-    })
+    !text.is_ascii()
+        && text.chars().any(|ch| {
+            ch >= '\u{590}'
+                && matches!(
+                    bidi_class(ch),
+                    BidiClass::R | BidiClass::AL | BidiClass::RLE | BidiClass::RLO | BidiClass::RLI
+                )
+        })
 }
 
 /// The resolved level of each byte of `text` laid out as one line (rule L1
