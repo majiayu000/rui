@@ -217,3 +217,44 @@ fn invalid_paths_fail_explicitly() {
     ];
     assert!(geometry.set(&nan, [0.0; 2], None, 1.0).is_err());
 }
+
+#[test]
+fn tiles_cut_by_the_visible_area_keep_what_is_inside() {
+    let star = |x: f32| -> Vec<(f32, f32)> {
+        (0..10)
+            .map(|point| {
+                let angle = point as f32 * std::f32::consts::PI / 5.0;
+                let radius = if point % 2 == 0 { 70.0 } else { 30.0 };
+                (x + angle.sin() * radius, 90.0 - angle.cos() * radius)
+            })
+            .collect()
+    };
+    let square = vec![
+        (-100.0, -100.0),
+        (100.0, -100.0),
+        (100.0, 100.0),
+        (-100.0, 100.0),
+    ];
+    // Stars across the left side of the area, and a square around all of it,
+    // whose edges are all outside.
+    let mut cases: Vec<_> = [-90.0, -70.0, -33.3, -5.5, 6.0]
+        .map(|x| (star(x), [0.0, 0.0, 1000.0, 1000.0]))
+        .into();
+    cases.push((square, [20.0, 10.0, 60.0, 40.0]));
+    for (points, visible) in cases {
+        let path = geometry(&points, None);
+        let (tiles, edges) = tiled(&path, visible);
+        for y in visible[1] as usize..200.min(visible[3] as usize) {
+            for x in visible[0] as usize..120.min(visible[2] as usize) {
+                let point = [x as f32 + 0.5, y as f32 + 0.5];
+                let whole = coverage(&path.edges, point);
+                let tiled = tile_coverage(&tiles, &edges, point);
+                assert!(
+                    (whole - tiled).abs() < 1e-3,
+                    "{:?} at {point:?}: {whole} vs {tiled}",
+                    points[0]
+                );
+            }
+        }
+    }
+}

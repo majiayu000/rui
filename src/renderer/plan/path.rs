@@ -298,6 +298,9 @@ impl PathGeometry {
             let left = column(xa.min(xb));
             let right = (xa.max(xb) / size).ceil() as i64 - 1;
             if right < first && left < first {
+                // Left of the area, it adds to none of its pixels, but what lies
+                // right of it may be inside up to the area's left side.
+                leftmost = leftmost.min(left);
                 continue;
             }
             if left > last {
@@ -316,10 +319,11 @@ impl PathGeometry {
                 leave: left,
             });
         }
-        if scratch.band.is_empty() {
+        // Nothing left of every edge is inside, so with every edge right of
+        // the area, all of it is outside.
+        if leftmost == i64::MAX {
             return;
         }
-        // Nothing left of every edge is inside.
         let first = first.max(leftmost);
         let columns = (last - first + 1) as usize;
         bucket(
