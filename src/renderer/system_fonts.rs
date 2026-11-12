@@ -7,13 +7,17 @@
 //! into the rest of the process lifetime.
 
 use crate::renderer::text_shaping::{FontBytes, TextShapingFont};
+use std::borrow::Cow;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 /// Maximum number of faces probed inside a single font collection file.
 const MAX_FACES_PER_FILE: u32 = 16;
 
-const FONT_CANDIDATES: [(&str, &str); 22] = [
+/// Font files by family, probed in order; missing files are skipped. macOS
+/// first, then the paths Debian, Fedora and Arch install common families to.
+#[cfg(not(windows))]
+const FONT_CANDIDATES: [(&str, &str); 29] = [
     ("Arial", "/System/Library/Fonts/Supplemental/Arial.ttf"),
     ("Arial", "/System/Library/Fonts/Supplemental/Arial Bold.ttf"),
     ("Arial", "/Library/Fonts/Arial.ttf"),
@@ -60,7 +64,64 @@ const FONT_CANDIDATES: [(&str, &str); 22] = [
         "Noto Color Emoji",
         "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf",
     ),
+    (
+        "Liberation Sans",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+    ),
+    (
+        "Noto Sans",
+        "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+    ),
+    (
+        "DejaVu Sans",
+        "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf",
+    ),
+    (
+        "Liberation Sans",
+        "/usr/share/fonts/liberation-sans/LiberationSans-Regular.ttf",
+    ),
+    (
+        "Noto Sans",
+        "/usr/share/fonts/google-noto/NotoSans-Regular.ttf",
+    ),
+    ("DejaVu Sans", "/usr/share/fonts/TTF/DejaVuSans.ttf"),
+    ("Noto Sans", "/usr/share/fonts/noto/NotoSans-Regular.ttf"),
 ];
+
+/// Font files by family under the Windows fonts directory.
+#[cfg(windows)]
+const WINDOWS_FONT_CANDIDATES: [(&str, &str); 7] = [
+    ("Segoe UI", "segoeui.ttf"),
+    ("Segoe UI", "segoeuib.ttf"),
+    ("Arial", "arial.ttf"),
+    ("Arial", "arialbd.ttf"),
+    ("Segoe UI Symbol", "seguisym.ttf"),
+    ("Microsoft YaHei", "msyh.ttc"),
+    ("Consolas", "consola.ttf"),
+];
+
+#[cfg(not(windows))]
+fn font_candidates() -> impl Iterator<Item = (&'static str, Cow<'static, str>)> {
+    FONT_CANDIDATES
+        .into_iter()
+        .map(|(family, path)| (family, Cow::Borrowed(path)))
+}
+
+#[cfg(windows)]
+fn font_candidates() -> impl Iterator<Item = (&'static str, Cow<'static, str>)> {
+    let fonts = std::path::Path::new(
+        &std::env::var_os("SystemRoot").unwrap_or_else(|| r"C:\Windows".into()),
+    )
+    .join("Fonts");
+    WINDOWS_FONT_CANDIDATES
+        .into_iter()
+        .map(move |(family, file)| {
+            (
+                family,
+                Cow::Owned(fonts.join(file).to_string_lossy().into_owned()),
+            )
+        })
+}
 
 /// A lazily populated, process-wide resource set that tolerates load failures.
 ///
@@ -245,12 +306,12 @@ fn has_available_candidate_with(
     family: &str,
     mut try_exists: impl FnMut(&str) -> std::io::Result<bool>,
 ) -> Result<bool, FontLoadError> {
-    for (candidate_family, path) in FONT_CANDIDATES {
+    for (candidate_family, path) in font_candidates() {
         if candidate_family.eq_ignore_ascii_case(family) {
-            match try_exists(path) {
+            match try_exists(&path) {
                 Ok(true) => return Ok(true),
                 Ok(false) => {}
-                Err(error) => return Err(FontLoadError::new(path, error)),
+                Err(error) => return Err(FontLoadError::new(&path, error)),
             }
         }
     }
@@ -265,8 +326,8 @@ pub(crate) fn system_font_load_count() -> usize {
 fn load_system_fonts_uncached() -> ResourceLoad<TextShapingFont> {
     let mut fonts = Vec::new();
     let mut first_error = None;
-    for (family, path) in FONT_CANDIDATES {
-        if let Err(error) = load_font_faces(family, path, &mut fonts)
+    for (family, path) in font_candidates() {
+        if let Err(error) = load_font_faces(family, &path, &mut fonts)
             && first_error.is_none()
         {
             first_error = Some(error);
@@ -549,7 +610,7 @@ mod tests {
     #[test]
     fn candidate_metadata_error_preserves_path_and_kind() {
         let error = has_available_candidate_with("Arial", |path| {
-            if path.ends_with("Arial.ttf") {
+            if path.to_ascii_lowercase().ends_with("arial.ttf") {
                 Err(std::io::Error::new(
                     std::io::ErrorKind::PermissionDenied,
                     "metadata denied by test",
@@ -560,7 +621,7 @@ mod tests {
         })
         .expect_err("metadata errors must not look like an unavailable font family");
 
-        assert!(error.path.ends_with("Arial.ttf"));
+        assert!(error.path.to_ascii_lowercase().ends_with("arial.ttf"));
         assert_eq!(error.kind, std::io::ErrorKind::PermissionDenied);
         assert!(error.message.contains("metadata denied by test"));
     }
