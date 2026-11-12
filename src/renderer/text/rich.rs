@@ -293,7 +293,7 @@ impl TextMeasureCache {
             });
             paragraphs.push(RichParagraph {
                 offset,
-                layout: BreakParagraph::new(clusters),
+                layout: BreakParagraph::new(clusters, &content[offset..end]),
                 spans: cluster_spans,
                 levels,
             });

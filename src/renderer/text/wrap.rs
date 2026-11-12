@@ -1,5 +1,6 @@
 //! Breaking a paragraph into lines that fit a width.
 
+use super::complex_breaks::dictionary_breaks;
 use super::lru::FrameLru;
 use super::{
     BaseDirection, MAX_RETAINED_METRIC_BYTES, MAX_RETAINED_METRICS, RETAINED_METRIC_BYTES_TARGET,
@@ -301,6 +302,7 @@ impl TextMeasureCache {
                 );
                 entry.paragraphs[index] = Some(BreakParagraph::new(
                     parts.clusters.iter().map(Into::into).collect(),
+                    paragraph,
                 ));
             }
             let layout = entry.paragraphs[index]
@@ -432,8 +434,11 @@ struct Segment {
 }
 
 impl BreakParagraph {
-    /// Lines break after whitespace and before or after a CJK cluster.
-    pub(super) fn new(clusters: Vec<BreakCluster>) -> Self {
+    /// Lines break after whitespace, before or after a CJK cluster, and
+    /// between the dictionary words of `paragraph`, the text the clusters'
+    /// byte offsets index, in scripts written without spaces.
+    pub(super) fn new(clusters: Vec<BreakCluster>, paragraph: &str) -> Self {
+        let mut dictionary_breaks = dictionary_breaks(paragraph).into_iter().peekable();
         let mut prefix = Vec::with_capacity(clusters.len() + 1);
         let mut total = 0.0;
         prefix.push(total);
@@ -456,6 +461,11 @@ impl BreakParagraph {
                 previous == TextScript::Whitespace
                     || cluster.script == TextScript::Cjk
                     || previous == TextScript::Cjk
+                    || {
+                        let start = cluster.byte_start;
+                        while dictionary_breaks.next_if(|&at| at < start).is_some() {}
+                        dictionary_breaks.peek() == Some(&start)
+                    }
             };
             if has_content && opportunity {
                 segments.push(*segment);

@@ -18,6 +18,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 mod atlas;
+mod complex_breaks;
 pub(crate) mod hash;
 mod lru;
 mod rich;
