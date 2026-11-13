@@ -11,6 +11,7 @@
 use super::build::bounds_rect;
 use super::frame::{ItemKind, Pages};
 use super::path::{GpuPathTile, HashKeyed, PathGeometry, TileScratch};
+use super::path_arena::PathArena;
 use super::sprites::{SpriteCell, SpriteLookup};
 use super::*;
 use crate::core::color::Rgba;
@@ -25,7 +26,7 @@ const UNUSED_FRAMES: u64 = 2;
 
 /// What a kept path is found by: its vertex storage and how it is drawn.
 #[derive(Clone, Copy, PartialEq, Eq)]
-struct PathKey {
+pub(super) struct PathKey {
     vertices: usize,
     offset: [u32; 2],
     stroke_width: Option<u32>,
@@ -61,12 +62,31 @@ impl PathKey {
     }
 }
 
-/// Tiles of a kept path for one visible rectangle, edges listed from 0.
-struct KeptTiles {
+/// Tiles of a kept path for one visible rectangle.
+pub(super) struct KeptTiles {
     visible: [f32; 4],
-    tiles: Vec<GpuPathTile>,
-    listed: Vec<[f32; 4]>,
     covered: Option<[f32; 4]>,
+    /// The color it was last drawn in, which tiles in the arena carry.
+    pub color: [f32; 4],
+    pub stored: StoredTiles,
+}
+
+/// Where a kept path's tiles are.
+pub(super) enum StoredTiles {
+    /// Its own, edges listed from 0; `again` once drawn from them twice.
+    Own {
+        tiles: Vec<GpuPathTile>,
+        listed: Vec<[f32; 4]>,
+        again: bool,
+    },
+    /// In the frame's kept prefix of tiles and of edges, from these indices:
+    /// see [`super::path_arena`].
+    Arena {
+        tiles: u32,
+        tile_count: u32,
+        edges: u32,
+        edge_count: u32,
+    },
 }
 
 /// How a kept path is drawn from the atlas.
@@ -79,13 +99,13 @@ enum KeptSprite {
     Placed(AtlasSlot, u64, SpriteCell),
 }
 
-struct KeptPath {
-    key: PathKey,
+pub(super) struct KeptPath {
+    pub key: PathKey,
     /// Holds the storage the key points at, so no other path can take its address.
     _vertices: Arc<[PathVertex]>,
     geometry: PathGeometry,
     sprite: KeptSprite,
-    tiles: Option<KeptTiles>,
+    pub tiles: Option<KeptTiles>,
     last_used: u64,
 }
 
@@ -96,19 +116,27 @@ type SeenPath = (PathKey, Weak<[PathVertex]>, u64);
 #[derive(Default)]
 pub(super) struct PathCache {
     frame: u64,
-    kept: HashKeyed<Vec<KeptPath>>,
+    pub kept: HashKeyed<Vec<KeptPath>>,
     /// Paths drawn once, by key, with their storage, which keeps its address
     /// from being reused, and the frame they were seen.
     seen: HashKeyed<Vec<SeenPath>>,
     scratch: TileScratch,
+    pub arena: PathArena,
 }
 
 impl PathCache {
     pub(super) fn begin_frame(&mut self) {
         self.frame += 1;
         let frame = self.frame;
+        let arena = &mut self.arena;
         self.kept.retain(|_, paths| {
-            paths.retain(|path| path.last_used + UNUSED_FRAMES >= frame);
+            paths.retain(|path| {
+                let used = path.last_used + UNUSED_FRAMES >= frame;
+                if !used {
+                    arena.forget(path.tiles.as_ref());
+                }
+                used
+            });
             !paths.is_empty()
         });
         self.seen.retain(|_, paths| {
@@ -260,14 +288,16 @@ impl<T: Clone> FramePlanner<T> {
         let cache = &mut self.path_cache;
         let kept = &mut cache.kept.get_mut(&hash).expect("kept path")[index];
         let visible_edges = frame.clip_edges[clip as usize];
+        let color = color.to_array();
         if kept
             .tiles
             .as_ref()
             .is_none_or(|tiles| tiles.visible != visible_edges)
         {
+            cache.arena.forget(kept.tiles.as_ref());
             let (mut tiles, mut listed) = (Vec::new(), Vec::new());
             let covered = kept.geometry.push_tiles(
-                color,
+                Rgba::TRANSPARENT,
                 scale_factor,
                 visible_edges,
                 &mut cache.scratch,
@@ -276,30 +306,69 @@ impl<T: Clone> FramePlanner<T> {
             );
             kept.tiles = Some(KeptTiles {
                 visible: visible_edges,
-                tiles,
-                listed,
                 covered,
+                color,
+                stored: StoredTiles::Own {
+                    tiles,
+                    listed,
+                    again: false,
+                },
             });
         }
-        let tiles = kept.tiles.as_ref().expect("tiled above");
+        let tiles = kept.tiles.as_mut().expect("tiled above");
         let Some(rect) = tiles.covered else {
             return Ok(());
         };
         let start = frame.path_tiles.len() as u32;
         let base = frame.path_edges.len() as u32;
-        frame.path_edges.extend_from_slice(&tiles.listed);
-        let color = color.to_array();
-        frame
-            .path_tiles
-            .extend(tiles.tiles.iter().map(|tile| GpuPathTile {
-                color,
-                edges: [tile.edges[0] + base, tile.edges[1]],
-                ..*tile
-            }));
+        let (start, count) = match &mut tiles.stored {
+            // Drawn again as the arena has it: nothing to copy.
+            &mut StoredTiles::Arena {
+                tiles: at,
+                tile_count,
+                ..
+            } if tiles.color == color && !frame.recording => (at, tile_count),
+            &mut StoredTiles::Arena {
+                tiles: at,
+                tile_count,
+                edges,
+                edge_count,
+            } => {
+                let listed = edges as usize..(edges + edge_count) as usize;
+                frame.path_edges.extend_from_within(listed);
+                for at in at..at + tile_count {
+                    let tile = frame.path_tiles[at as usize];
+                    frame.path_tiles.push(GpuPathTile {
+                        color,
+                        edges: [tile.edges[0] - edges + base, tile.edges[1]],
+                        ..tile
+                    });
+                }
+                (start, tile_count)
+            }
+            StoredTiles::Own {
+                tiles: own,
+                listed,
+                again,
+            } => {
+                frame.path_edges.extend_from_slice(listed);
+                frame.path_tiles.extend(own.iter().map(|tile| GpuPathTile {
+                    color,
+                    edges: [tile.edges[0] + base, tile.edges[1]],
+                    ..*tile
+                }));
+                if std::mem::replace(again, true) {
+                    cache.arena.promote(hash, kept.key);
+                }
+                // The color they move into the arena in.
+                tiles.color = color;
+                (start, own.len() as u32)
+            }
+        };
         let kind = ItemKind::Sprites {
             kind: KIND_PATH,
             start,
-            count: frame.path_tiles.len() as u32 - start,
+            count,
             pages: Pages::default(),
             simple: false,
         };

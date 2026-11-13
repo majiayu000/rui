@@ -200,15 +200,18 @@ impl<T: Clone> FramePlanner<T> {
         let marks = Marks::of(frame);
         let entry_clip = walk.clip;
         let epoch = self.text_cache.epoch();
-        for primitive in picture.primitives() {
+        frame.recording = true;
+        let built = picture.primitives().iter().try_for_each(|primitive| {
             if offset == Point::ZERO {
-                self.build_inner_primitive(frame, primitive, walk, upload)?;
+                self.build_inner_primitive(frame, primitive, walk, upload)
             } else {
                 let mut primitive = primitive.clone();
                 primitive.translate(offset.x, offset.y);
-                self.build_inner_primitive(frame, &primitive, walk, upload)?;
+                self.build_inner_primitive(frame, &primitive, walk, upload)
             }
-        }
+        });
+        frame.recording = false;
+        built?;
         if keeps
             && self.text_cache.epoch() == epoch
             && self.picture_cache.returning(key, hash, picture)
