@@ -7,7 +7,7 @@ mod router;
 mod types;
 
 pub(crate) use dispatch::{route_action, route_key_event};
-pub(crate) use focus::sync_focus;
+pub(crate) use focus::{focus_order, scope_contains, sync_focus};
 pub(crate) const ACCESSIBILITY_DECREMENT_ACTION: &str = "__rui_accessibility_decrement";
 pub(crate) const ACCESSIBILITY_INCREMENT_ACTION: &str = "__rui_accessibility_increment";
 pub(crate) const ACCESSIBILITY_SCROLL_BACKWARD_ACTION: &str = "__rui_accessibility_scroll_backward";

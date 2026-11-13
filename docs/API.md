@@ -604,8 +604,8 @@ five (`cargo run --example controls`).
 `SplitAxis::Horizontal` (the default) puts the panes side by side, and
 `SplitAxis::Vertical` stacks them. Give pane content `w_full()` / `h_full()` to
 fill its pane. A drag or an open list survives the render its own `on_change`
-causes. The select list opens in the layout flow below the button, as a
-popover does, so content below a select moves down while it is open.
+causes. The select list opens in an overlay below the button (above it when
+there is no room below), so content below a select stays where it is.
 
 ```rust
 ui::slider("Volume", self.volume)
@@ -614,6 +614,31 @@ ui::slider("Volume", self.volume)
 ui::select("Fruit", [("apple", "Apple"), ("cherry", "Cherry")], self.fruit.clone())
     .on_change(cx.text_listener(|this, value, _| this.fruit = value));
 ```
+
+#### Overlays
+
+The select list, `popover` content, `tooltip` bubbles and `dialog`s float in
+an overlay layer over the page:
+
+- They take no part in their parent's layout. Their content is laid out
+  against the window, then placed next to its anchor (`Popover::side(Side)` and
+  `Popover::align(Align)`, below and at the start by default) or centred in the
+  window (`dialog`). Placed content flips to the other side when it does not
+  fit and the other side has more room, then shifts to stay inside the window
+  (`rui::elements::overlay::place_anchored`).
+- They draw after the rest of the frame, in the order they opened, and are
+  hit before it; ancestor clips such as a scroll view's do not cut them off.
+- A press outside an open select or popover closes it, and Escape closes the
+  topmost overlay that Escape closes.
+- A modal dialog's backdrop covers the whole window and takes the pointer
+  from the page. While it is open, Tab and Shift+Tab move only among the
+  dialog's controls, so Return cannot reach the page; opening it focuses its
+  first control, and closing it gives focus back to the element that had it.
+
+Custom elements open an overlay by laying its content out with
+`elements::overlay::OverlaySlot`, painting it with
+`PaintContext::paint_overlay(Overlay, bounds, ..)`, and dispatching events to
+it with `EventContext::for_overlay(bounds)`.
 
 ---
 

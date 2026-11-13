@@ -17,6 +17,8 @@ use crate::elements::element::{
     Element, EventContext, LayoutContext, PaintContext, PointerEvent, PointerEventKind,
     style_to_taffy,
 };
+use crate::elements::overlay::{Align, OverlaySlot, Placement, Side, place_anchored};
+use crate::renderer::Overlay;
 use crate::renderer::Primitive;
 use crate::renderer::text::BaseDirection;
 use std::any::TypeId;
@@ -31,7 +33,8 @@ const TYPE_AHEAD_TIMEOUT: Duration = Duration::from_millis(500);
 type SelectChangeHandler = Box<dyn Fn(&str)>;
 
 /// A pop-up button showing the selected item; activating it opens a
-/// [`Menu`] of the items below it, in the layout flow like a popover.
+/// [`Menu`] of the items in an overlay below it (above it when there is no
+/// room below), over the content after it.
 pub struct Select {
     id: StableId,
     label: String,
@@ -45,7 +48,7 @@ pub struct Select {
     /// The open list, and the value it reported picked.
     menu: Option<Menu>,
     picked: Rc<RefCell<Option<String>>>,
-    nodes: Option<(NodeId, NodeId)>,
+    slot: OverlaySlot,
     type_ahead: String,
     typed_at: Option<Instant>,
 }
@@ -75,7 +78,7 @@ impl Select {
             on_change: None,
             menu: None,
             picked: Rc::default(),
-            nodes: None,
+            slot: OverlaySlot::default(),
             type_ahead: String::new(),
             typed_at: None,
         }
@@ -282,14 +285,15 @@ impl Select {
             + CHEVRON_WIDTH
     }
 
-    fn trigger_bounds(
-        &self,
-        bounds: Bounds,
-        cx_child: impl Fn(NodeId) -> Option<Bounds>,
-    ) -> Bounds {
-        self.nodes
-            .and_then(|(trigger, _)| cx_child(trigger))
-            .unwrap_or(bounds)
+    /// Where the open list goes below the `trigger`.
+    fn menu_bounds(&self, taffy: &TaffyTree<ElementId>, trigger: Bounds, window: Bounds) -> Bounds {
+        let gap = self.theme.control_gap() * 0.5;
+        place_anchored(
+            trigger,
+            self.slot.size(taffy).unwrap_or_default(),
+            window,
+            Placement::new(Side::Bottom, Align::Start, gap),
+        )
     }
 
     fn has_focus(&self, cx: &EventContext) -> bool {
@@ -315,30 +319,18 @@ impl Element for Select {
         let mut trigger = taffy::Style::default();
         trigger.size.width = Dimension::Length(self.trigger_width(cx));
         trigger.size.height = Dimension::Length(self.theme.control_height(self.size));
-        let Some(menu) = self.menu.as_mut() else {
-            self.nodes = None;
-            let mut style = style_to_taffy(&self.style);
-            style.size = trigger.size;
-            return cx
-                .new_leaf(style)
-                .unwrap_or_else(|err| panic!("failed to create select layout node: {err}"));
-        };
-        let trigger_node = cx
-            .new_leaf(trigger)
-            .unwrap_or_else(|err| panic!("failed to create select layout node: {err}"));
-        let menu_node = menu.layout(cx);
-        self.nodes = Some((trigger_node, menu_node));
+        match self.menu.as_mut() {
+            Some(menu) => self.slot.layout_with(cx, |cx| menu.layout(cx)),
+            None => self.slot.clear(),
+        }
         let mut style = style_to_taffy(&self.style);
-        style.display = Display::Flex;
-        style.flex_direction = FlexDirection::Column;
-        style.align_items = Some(AlignItems::FlexStart);
-        style.gap.height = LengthPercentage::Length(self.theme.control_gap() * 0.5);
-        cx.new_with_children(style, &[trigger_node, menu_node])
+        style.size = trigger.size;
+        cx.new_leaf(style)
             .unwrap_or_else(|err| panic!("failed to create select layout node: {err}"))
     }
 
     fn paint(&mut self, cx: &mut PaintContext) {
-        let trigger = self.trigger_bounds(cx.bounds(), |node| cx.child_bounds(node));
+        let trigger = cx.bounds();
         cx.register_hit_region(self.id.get(), trigger);
 
         let mut state: ControlState = self.state.into();
@@ -392,9 +384,13 @@ impl Element for Select {
             });
         }
 
-        if let (Some(menu), Some((_, node))) = (self.menu.as_mut(), self.nodes) {
-            let bounds = cx.child_bounds(node).unwrap_or(cx.bounds());
-            menu.paint(&mut cx.with_bounds(bounds));
+        let menu_bounds = self.menu_bounds(cx.taffy, trigger, cx.window());
+        if let Some(menu) = self.menu.as_mut() {
+            cx.paint_overlay(
+                Overlay::popup(self.id.get(), menu_bounds),
+                menu_bounds,
+                |cx| menu.paint(cx),
+            );
         }
     }
 
@@ -422,9 +418,10 @@ impl Element for Select {
     }
 
     fn handle_pointer_event(&mut self, cx: &mut EventContext, event: &PointerEvent) -> bool {
-        if let (Some(menu), Some((_, node))) = (self.menu.as_mut(), self.nodes) {
-            let bounds = cx.child_bounds(node).unwrap_or(cx.bounds());
-            let mut menu_cx = cx.with_bounds(bounds);
+        let trigger = cx.layout_bounds();
+        let menu_bounds = self.menu_bounds(cx.taffy, trigger, cx.window());
+        if let Some(menu) = self.menu.as_mut() {
+            let mut menu_cx = cx.for_overlay(menu_bounds);
             let in_menu = menu_cx.contains_pointer(event.position);
             let handled = menu.handle_pointer_event(&mut menu_cx, event);
             if self.commit_picked(cx) {
@@ -437,8 +434,7 @@ impl Element for Select {
             }
         }
 
-        let trigger = self.trigger_bounds(cx.bounds(), |node| cx.child_bounds(node));
-        let inside = cx.with_bounds(trigger).contains_pointer(event.position);
+        let inside = cx.contains_pointer(event.position);
         match event.kind {
             PointerEventKind::Move => {
                 self.state.update_hover_inside(inside, cx);

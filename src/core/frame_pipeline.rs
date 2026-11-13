@@ -169,8 +169,11 @@ impl FramePipeline {
     {
         let mut repainted = Scene::new();
         root.paint(
-            &mut PaintContext::without_replay(&mut repainted, bounds, taffy).with_focus(focused),
+            &mut PaintContext::without_replay(&mut repainted, bounds, taffy)
+                .with_focus(focused)
+                .with_window(viewport.unwrap_or(bounds)),
         );
+        repainted.finish();
         let seen = |primitives: &[crate::renderer::Primitive]| {
             primitives
                 .iter()
@@ -379,6 +382,7 @@ impl FramePipeline {
         let mut present_frame = Some(present_frame);
         let mut presentation = None;
         let mut presented = false;
+        let mut modal_focus_moved = false;
 
         for stage in FrameStage::ORDER {
             match stage {
@@ -414,6 +418,10 @@ impl FramePipeline {
                 FrameStage::Paint => {
                     let started_at = Instant::now();
                     presenter.paint();
+                    modal_focus_moved = presenter.sync_modal_focus();
+                    if modal_focus_moved {
+                        context.record_focus(presenter.focused_element());
+                    }
                     durations.paint_ns = started_at.elapsed().as_nanos();
                     presenter.paint_devtools_overlay();
                 }
@@ -426,6 +434,10 @@ impl FramePipeline {
                 }
                 FrameStage::Finish => {
                     Self::finish_frame(context);
+                    if modal_focus_moved {
+                        // The focus a modal moved shows in the next frame.
+                        context.preserve_frame_work();
+                    }
                     match presentation.take() {
                         Some(FramePresentation::Presented(diagnostics)) => {
                             presenter.complete_presented_frame(diagnostics);

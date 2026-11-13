@@ -1,16 +1,17 @@
 use crate::advanced_ui::state::{InteractionState, require_non_empty};
 use crate::advanced_ui::tokens::{ControlSize, Theme};
 use crate::core::ElementId;
-use crate::core::geometry::{Bounds, Edges};
+use crate::core::geometry::{Bounds, Edges, Size};
 use crate::core::style::{Corners, Style};
 use crate::core::text_editing::{TextInputCommand, TextInputEvent, TextInputSnapshot};
 use crate::elements::element::StableId;
 use crate::elements::element::{
     AnyElement, Element, EventContext, LayoutContext, PaintContext, PointerEvent, PointerEventKind,
 };
-use crate::renderer::Primitive;
+use crate::elements::overlay::{Align, Placement, Side, place_anchored};
 use crate::renderer::text::BaseDirection;
 use crate::renderer::text::{TextMeasureCache, TextRequest};
+use crate::renderer::{Overlay, Primitive};
 use taffy::prelude::NodeId;
 
 pub struct Tooltip {
@@ -103,31 +104,20 @@ impl Element for Tooltip {
             let padding = self.theme.control_gap();
             let width = content_width.ceil() + padding * 2.0;
             let height = (font_size * self.theme.typography.line_height + padding).max(20.0);
-            let tooltip_bounds = Bounds::from_xywh(
-                bounds.x(),
-                (bounds.y() - height - padding).max(0.0),
-                width,
-                height,
+            // Above the child, below it when there is no room above.
+            let tooltip_bounds = place_anchored(
+                bounds,
+                Size::new(width, height),
+                cx.window(),
+                Placement::new(Side::Top, Align::Start, padding),
             );
-
-            cx.paint(Primitive::Quad {
-                bounds: tooltip_bounds,
-                background: self.theme.colors.tooltip_background.to_rgba(),
-                border_color: crate::core::color::Color::TRANSPARENT.to_rgba(),
-                border_widths: Edges::ZERO,
-                corner_radii: Corners::all(self.theme.control_radius()),
-            });
-            cx.paint(Primitive::Text {
-                bounds: tooltip_bounds,
-                content: self.content.clone().into(),
-                color: self.theme.colors.tooltip_text.to_rgba(),
-                font_size,
-                font_weight: self.theme.typography.label_weight,
-                font_family: None,
-                line_height: self.theme.typography.line_height,
-                align: crate::elements::text::TextAlign::Center,
-                direction: BaseDirection::Auto,
-            });
+            let content = self.content.clone();
+            let theme = self.theme;
+            cx.paint_overlay(
+                Overlay::tooltip(self.id.get(), tooltip_bounds),
+                tooltip_bounds,
+                |cx| paint_bubble(cx, tooltip_bounds, content, font_size, theme),
+            );
         }
     }
 
@@ -223,6 +213,33 @@ impl Element for Tooltip {
     fn contains_id(&self, id: ElementId) -> bool {
         self.id.get() == id || self.child.contains_id(id)
     }
+}
+
+fn paint_bubble(
+    cx: &mut PaintContext,
+    bounds: Bounds,
+    content: String,
+    font_size: f32,
+    theme: Theme,
+) {
+    cx.paint(Primitive::Quad {
+        bounds,
+        background: theme.colors.tooltip_background.to_rgba(),
+        border_color: crate::core::color::Color::TRANSPARENT.to_rgba(),
+        border_widths: Edges::ZERO,
+        corner_radii: Corners::all(theme.control_radius()),
+    });
+    cx.paint(Primitive::Text {
+        bounds,
+        content: content.into(),
+        color: theme.colors.tooltip_text.to_rgba(),
+        font_size,
+        font_weight: theme.typography.label_weight,
+        font_family: None,
+        line_height: theme.typography.line_height,
+        align: crate::elements::text::TextAlign::Center,
+        direction: BaseDirection::Auto,
+    });
 }
 
 pub fn tooltip(child: impl Into<AnyElement>, content: impl Into<String>) -> Tooltip {

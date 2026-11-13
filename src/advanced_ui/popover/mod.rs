@@ -8,28 +8,37 @@ use crate::core::action::{ActionId, ActionOutcome, StandardAction};
 use crate::core::color::Color;
 use crate::core::event::{KeyCode, KeyEvent, ScrollEvent};
 use crate::core::geometry::{Bounds, Edges};
-use crate::core::style::{
-    AlignItems, Corners, Display, FlexDirection, JustifyContent, Position, Style,
-};
+use crate::core::style::{AlignItems, Corners, Display, FlexDirection, Position, Style};
 use crate::core::text_editing::{TextInputCommand, TextInputEvent, TextInputSnapshot};
 use crate::elements::element::StableId;
 use crate::elements::element::{
-    AnyElement, Element, EventContext, LayoutContext, PaintContext, PointerEvent,
+    AnyElement, Element, EventContext, LayoutContext, PaintContext, PointerEvent, PointerEventKind,
     dispatch_action_to_children, style_to_taffy,
 };
-use crate::renderer::Primitive;
+use crate::elements::overlay::{Align, OverlaySlot, Placement, Side, place_anchored};
 use crate::renderer::text::TextMeasureCache;
+use crate::renderer::{Overlay, Primitive};
 use taffy::prelude::*;
+
+mod dialog;
+pub use dialog::Dialog;
 
 type DismissHandler = Box<dyn Fn()>;
 
+/// Content shown next to an anchor, in an overlay over the page: it takes
+/// no room in the layout, flips and shifts to stay in the window, and closes
+/// on a press outside it or on Escape.
 pub struct Popover {
     id: StableId,
     label: String,
     open: bool,
     state: InteractionState,
+    /// The anchor, then the content.
     children: Vec<AnyElement>,
-    child_nodes: Vec<NodeId>,
+    anchor_node: Option<NodeId>,
+    slot: OverlaySlot,
+    side: Side,
+    align: Align,
     theme: Theme,
     style: Style,
     on_dismiss: Option<DismissHandler>,
@@ -51,7 +60,10 @@ impl Popover {
             open: false,
             state: InteractionState::default(),
             children: vec![anchor.into(), content.into()],
-            child_nodes: Vec::new(),
+            anchor_node: None,
+            slot: OverlaySlot::default(),
+            side: Side::Bottom,
+            align: Align::Start,
             theme,
             style: overlay_stack_style(theme),
             on_dismiss: None,
@@ -65,6 +77,18 @@ impl Popover {
 
     pub fn open(mut self, open: bool) -> Self {
         self.open = open;
+        self
+    }
+
+    /// The side of the anchor the content opens on; below by default.
+    pub fn side(mut self, side: Side) -> Self {
+        self.side = side;
+        self
+    }
+
+    /// How the content lines up with the anchor; at its start by default.
+    pub fn align(mut self, align: Align) -> Self {
+        self.align = align;
         self
     }
 
@@ -110,6 +134,28 @@ impl Popover {
         if self.open { 2 } else { 1 }
     }
 
+    /// Where the anchor is, given the popover's own `bounds`.
+    fn anchor_bounds(&self, taffy: &TaffyTree<ElementId>, bounds: Bounds) -> Bounds {
+        self.anchor_node
+            .and_then(|node| child_bounds(taffy, bounds, node))
+            .unwrap_or(bounds)
+    }
+
+    /// Where the open content goes, given the popover's own `bounds`.
+    pub(crate) fn content_bounds(
+        &self,
+        taffy: &TaffyTree<ElementId>,
+        bounds: Bounds,
+        window: Bounds,
+    ) -> Bounds {
+        place_anchored(
+            self.anchor_bounds(taffy, bounds),
+            self.slot.size(taffy).unwrap_or_default(),
+            window,
+            Placement::new(self.side, self.align, self.style.gap),
+        )
+    }
+
     fn dismiss(&mut self, cx: &EventContext) -> bool {
         if !self.open || !self.state.can_activate() {
             return false;
@@ -152,29 +198,36 @@ impl Element for Popover {
     }
 
     fn layout(&mut self, cx: &mut LayoutContext) -> NodeId {
-        let visible = self.visible_child_count();
-        let child_nodes: Vec<NodeId> = self.children[..visible]
-            .iter_mut()
-            .map(|child| child.layout(cx))
-            .collect();
-        let node = cx
-            .new_with_children(style_to_taffy(&self.style), &child_nodes)
-            .unwrap_or_else(|err| panic!("failed to create advanced popover layout node: {err}"));
-        self.child_nodes = child_nodes;
-        node
+        // The anchor first, so it keeps its identity as the content opens.
+        let anchor = self.children[0].layout(cx);
+        self.anchor_node = Some(anchor);
+        if self.open {
+            self.slot.layout(cx, &mut self.children[1]);
+        } else {
+            self.slot.clear();
+        }
+        cx.new_with_children(style_to_taffy(&self.style), &[anchor])
+            .unwrap_or_else(|err| panic!("failed to create advanced popover layout node: {err}"))
     }
 
     fn paint(&mut self, cx: &mut PaintContext) {
         cx.register_hit_region(self.id.get(), cx.bounds());
-        for index in 0..self.visible_child_count() {
-            let node = self.child_nodes[index];
-            let bounds = cx.child_bounds(node).unwrap_or(cx.bounds());
-            if index == 1 {
-                paint_panel(cx, bounds, self.state.invalid(), self.theme);
-            }
-            let mut child_cx = cx.with_bounds(bounds);
-            self.children[index].paint(&mut child_cx);
+        let anchor = self
+            .anchor_node
+            .and_then(|node| cx.child_bounds(node))
+            .unwrap_or(cx.bounds());
+        self.children[0].paint(&mut cx.with_bounds(anchor));
+        if !self.open {
+            return;
         }
+        let content_bounds = self.content_bounds(cx.taffy, cx.bounds(), cx.window());
+        let (id, invalid, theme) = (self.id.get(), self.state.invalid(), self.theme);
+        let content = &mut self.children[1];
+        cx.paint_overlay(Overlay::popup(id, content_bounds), content_bounds, |cx| {
+            cx.register_hit_region(id, content_bounds);
+            paint_panel(cx, content_bounds, invalid, theme);
+            content.paint(cx);
+        });
     }
 
     fn refresh_text_geometry(&mut self, text_measurer: &mut TextMeasureCache) {
@@ -205,19 +258,36 @@ impl Element for Popover {
     }
 
     fn handle_pointer_event(&mut self, cx: &mut EventContext, event: &PointerEvent) -> bool {
-        for index in (0..self.visible_child_count()).rev() {
-            let node = self.child_nodes.get(index).copied();
-            let bounds = node
-                .and_then(|node| cx.child_bounds(node))
-                .unwrap_or(cx.bounds());
-            let mut child_cx = cx.with_bounds(bounds);
-            if self.children[index].handle_pointer_event(&mut child_cx, event) {
+        // The content is over everything, so it goes first.
+        let mut in_content = false;
+        if self.open {
+            let content_bounds = self.content_bounds(cx.taffy, cx.layout_bounds(), cx.window());
+            let mut content_cx = cx.for_overlay(content_bounds);
+            if self.children[1].handle_pointer_event(&mut content_cx, event) {
                 return true;
             }
-            // Panel containment must honor hit_clip so clipped-away panel
-            // area does not swallow pointer events outside the viewport.
-            if index == 1 && child_cx.contains_pointer(event.position) {
+            in_content = content_cx.contains_pointer(event.position);
+            if in_content {
                 return true;
+            }
+        }
+
+        let anchor = self.anchor_bounds(cx.taffy, cx.layout_bounds());
+        let mut anchor_cx = cx.with_bounds(anchor);
+        let in_anchor = anchor_cx.contains_pointer(event.position);
+        if self.children[0].handle_pointer_event(&mut anchor_cx, event) {
+            return true;
+        }
+
+        // A press outside the anchor and the content (and the overlays it
+        // opened, which the hit target is in) closes it.
+        if self.open && matches!(event.kind, PointerEventKind::Down) {
+            let outside = match cx.hit_target() {
+                Some(target) => !self.contains_id(target),
+                None => !in_anchor && !in_content,
+            };
+            if outside {
+                self.dismiss(cx);
             }
         }
         false
@@ -228,21 +298,19 @@ impl Element for Popover {
             return false;
         }
 
-        for index in (0..self.visible_child_count()).rev() {
-            let node = self.child_nodes.get(index).copied();
-            let bounds = node
-                .and_then(|node| cx.child_bounds(node))
-                .unwrap_or(cx.bounds());
-            let mut child_cx = cx.with_bounds(bounds);
-            if self.children[index].handle_scroll_event(&mut child_cx, event) {
-                return true;
-            }
+        let content_bounds = self.content_bounds(cx.taffy, cx.layout_bounds(), cx.window());
+        if self.children[1].handle_scroll_event(&mut cx.for_overlay(content_bounds), event) {
+            return true;
         }
-        false
+        let anchor = self.anchor_bounds(cx.taffy, cx.layout_bounds());
+        self.children[0].handle_scroll_event(&mut cx.with_bounds(anchor), event)
     }
 
     fn handle_key_event(&mut self, cx: &mut EventContext, event: &KeyEvent) -> bool {
-        if matches!(event.key, KeyCode::Escape) && self.dismiss(cx) {
+        if matches!(event.key, KeyCode::Escape)
+            && cx.is_escape_target(self.id.get())
+            && self.dismiss(cx)
+        {
             return true;
         }
 
@@ -261,7 +329,10 @@ impl Element for Popover {
     }
 
     fn dispatch_action(&mut self, cx: &mut EventContext, action: &ActionId) -> ActionOutcome {
-        if matches!(action, ActionId::Standard(StandardAction::Cancel)) {
+        // Escape reaches `handle_key_event` while this is the overlay it closes.
+        if matches!(action, ActionId::Standard(StandardAction::Cancel))
+            && cx.is_escape_target(self.id.get())
+        {
             return ActionOutcome::Ignored;
         }
         let visible = self.visible_child_count();
@@ -319,308 +390,14 @@ impl Element for Popover {
     }
 }
 
-pub struct Dialog {
-    id: StableId,
-    label: String,
-    open: bool,
-    modal: bool,
-    state: InteractionState,
-    content: Vec<AnyElement>,
-    content_node: Option<NodeId>,
-    theme: Theme,
-    style: Style,
-    on_dismiss: Option<DismissHandler>,
-}
-
-impl Dialog {
-    pub fn new(label: impl Into<String>, content: impl Into<AnyElement>) -> Self {
-        let label = label.into();
-        require_non_empty(&label, "dialog accessibility label must not be empty");
-
-        let theme = Theme::default();
-        Self {
-            id: StableId::new(),
-            label,
-            open: true,
-            modal: true,
-            state: InteractionState::default(),
-            content: vec![content.into()],
-            content_node: None,
-            theme,
-            style: dialog_root_style(),
-            on_dismiss: None,
-        }
-    }
-
-    pub fn id(mut self, id: ElementId) -> Self {
-        self.id = StableId::explicit(id);
-        self
-    }
-
-    pub fn open(mut self, open: bool) -> Self {
-        self.open = open;
-        self
-    }
-
-    pub fn modal(mut self, modal: bool) -> Self {
-        self.modal = modal;
-        self
-    }
-
-    pub fn disabled(mut self, disabled: bool) -> Self {
-        self.state.set_disabled(disabled);
-        self
-    }
-
-    pub fn read_only(mut self, read_only: bool) -> Self {
-        self.state.set_read_only(read_only);
-        self
-    }
-
-    pub fn invalid(mut self, invalid: bool) -> Self {
-        self.state.set_invalid(invalid);
-        self
-    }
-
-    pub fn theme(mut self, theme: Theme) -> Self {
-        self.theme = theme;
-        self
-    }
-
-    pub fn on_dismiss(mut self, handler: impl Fn() + 'static) -> Self {
-        self.on_dismiss = Some(Box::new(handler));
-        self
-    }
-
-    pub fn is_open(&self) -> bool {
-        self.open
-    }
-
-    pub fn is_modal(&self) -> bool {
-        self.modal
-    }
-
-    pub fn label(&self) -> &str {
-        &self.label
-    }
-
-    pub fn interaction_state(&self) -> InteractionState {
-        self.state
-    }
-
-    fn dismiss(&mut self, cx: &EventContext) -> bool {
-        if !self.open || !self.state.can_activate() {
-            return false;
-        }
-        self.open = false;
-        if let Some(handler) = &self.on_dismiss {
-            handler();
-        }
-        cx.announce_accessibility_action(self.id.get(), format!("{} dismissed", self.label));
-        cx.request_redraw();
-        true
-    }
-}
-
-impl Element for Dialog {
-    fn accessibility_nodes(
-        &self,
-        cx: &AccessibilityContext,
-    ) -> Result<Vec<AccessibilityNode>, AccessibilityError> {
-        if !self.open {
-            return Ok(Vec::new());
-        }
-        let nodes = self.content[0].accessibility_nodes(cx)?;
-        Ok(self
-            .accessibility(cx)?
-            .map(|node| vec![node.with_children(nodes)])
-            .unwrap_or_default())
-    }
-
-    fn id(&self) -> Option<ElementId> {
-        Some(self.id.get())
-    }
-
-    fn stable_id_mut(&mut self) -> Option<&mut StableId> {
-        Some(&mut self.id)
-    }
-
-    fn style(&self) -> &Style {
-        &self.style
-    }
-
-    fn layout(&mut self, cx: &mut LayoutContext) -> NodeId {
-        if !self.open {
-            let mut closed = style_to_taffy(&self.style);
-            closed.size.width = Dimension::Length(0.0);
-            closed.size.height = Dimension::Length(0.0);
-            self.content_node = None;
-            return cx
-                .new_leaf(closed)
-                .unwrap_or_else(|err| panic!("failed to create closed dialog layout node: {err}"));
-        }
-
-        let content_node = self.content[0].layout(cx);
-        let mut style = style_to_taffy(&self.style);
-        style.size.width = Dimension::Length(cx.available_space.width);
-        style.size.height = Dimension::Length(cx.available_space.height);
-        let node = cx
-            .new_with_children(style, &[content_node])
-            .unwrap_or_else(|err| panic!("failed to create advanced dialog layout node: {err}"));
-        self.content_node = Some(content_node);
-        node
-    }
-
-    fn paint(&mut self, cx: &mut PaintContext) {
-        if !self.open {
-            return;
-        }
-
-        if self.modal {
-            cx.register_hit_region(self.id.get(), cx.bounds());
-            cx.paint(Primitive::Quad {
-                bounds: cx.bounds(),
-                background: Color::rgba(0.0, 0.0, 0.0, 0.32).to_rgba(),
-                border_color: Color::TRANSPARENT.to_rgba(),
-                border_widths: Edges::ZERO,
-                corner_radii: Corners::ZERO,
-            });
-        }
-
-        let content_bounds = self
-            .content_node
-            .and_then(|node| cx.child_bounds(node))
-            .unwrap_or(cx.bounds());
-        cx.register_hit_region(self.id.get(), content_bounds);
-        paint_panel(cx, content_bounds, self.state.invalid(), self.theme);
-        let mut content_cx = cx.with_bounds(content_bounds);
-        self.content[0].paint(&mut content_cx);
-    }
-
-    fn refresh_text_geometry(&mut self, text_measurer: &mut TextMeasureCache) {
-        if self.open {
-            self.content[0].refresh_text_geometry(text_measurer);
-        }
-    }
-
-    fn accessibility(
-        &self,
-        cx: &AccessibilityContext,
-    ) -> Result<Option<AccessibilityNode>, AccessibilityError> {
-        if !self.open {
-            return Ok(None);
-        }
-
-        Ok(Some(
-            AccessibilityNode::label_required(
-                self.id.get(),
-                AccessibilityRole::Dialog,
-                &self.label,
-            )?
-            .with_enabled(!self.state.disabled())
-            .with_read_only(self.state.read_only())
-            .with_invalid(self.state.invalid())
-            .with_focused(cx.a11y_has_focus(self.id.get())),
-        ))
-    }
-
-    fn handle_pointer_event(&mut self, cx: &mut EventContext, event: &PointerEvent) -> bool {
-        if !self.open {
-            return false;
-        }
-
-        let content_bounds = self
-            .content_node
-            .and_then(|node| cx.child_bounds(node))
-            .unwrap_or(cx.bounds());
-        // Clip content containment to hit_clip so oversized dialog content
-        // outside a ScrollView viewport cannot consume the event and block blur.
-        let inside_content = cx
-            .with_bounds(content_bounds)
-            .contains_pointer(event.position);
-        let inside_modal_region = self.modal && cx.contains_pointer(event.position);
-
-        let mut content_cx = cx.with_bounds(content_bounds);
-        if self.content[0].handle_pointer_event(&mut content_cx, event) {
-            return true;
-        }
-
-        inside_content || inside_modal_region
-    }
-
-    fn handle_scroll_event(&mut self, cx: &mut EventContext, event: &ScrollEvent) -> bool {
-        if !self.open || !self.state.can_activate() {
-            return false;
-        }
-
-        let content_bounds = self
-            .content_node
-            .and_then(|node| cx.child_bounds(node))
-            .unwrap_or(cx.bounds());
-        let mut content_cx = cx.with_bounds(content_bounds);
-        self.content[0].handle_scroll_event(&mut content_cx, event)
-    }
-
-    fn handle_key_event(&mut self, cx: &mut EventContext, event: &KeyEvent) -> bool {
-        if !self.open {
-            return false;
-        }
-
-        if matches!(event.key, KeyCode::Escape) && self.dismiss(cx) {
-            return true;
-        }
-
-        if self.content[0].handle_key_event(cx, event) {
-            return true;
-        }
-
-        if self.state.can_activate() {
-            return self.modal;
-        }
-
-        self.modal
-            || cx
-                .focused_id()
-                .is_some_and(|focused| self.content[0].contains_id(focused))
-    }
-
-    fn dispatch_action(&mut self, cx: &mut EventContext, action: &ActionId) -> ActionOutcome {
-        if !self.open || matches!(action, ActionId::Standard(StandardAction::Cancel)) {
-            return ActionOutcome::Ignored;
-        }
-        dispatch_action_to_children(&mut self.content, cx, action)
-    }
-
-    fn handle_text_input_event(&mut self, cx: &mut EventContext, event: &TextInputEvent) -> bool {
-        self.open && self.content[0].handle_text_input_event(cx, event)
-    }
-
-    fn handle_text_input_command(
-        &mut self,
-        cx: &mut EventContext,
-        command: &TextInputCommand,
-    ) -> bool {
-        self.open && self.content[0].handle_text_input_command(cx, command)
-    }
-
-    fn text_input_snapshot(&self, focused: ElementId) -> Option<TextInputSnapshot> {
-        self.open
-            .then(|| self.content[0].text_input_snapshot(focused))
-            .flatten()
-    }
-
-    fn children(&self) -> &[AnyElement] {
-        &self.content
-    }
-
-    fn children_mut(&mut self) -> &mut [AnyElement] {
-        // Closed content too: a view in it must have rendered when it opens.
-        &mut self.content
-    }
-
-    fn contains_id(&self, id: ElementId) -> bool {
-        self.id.get() == id || (self.open && self.content[0].contains_id(id))
-    }
+fn child_bounds(taffy: &TaffyTree<ElementId>, bounds: Bounds, node: NodeId) -> Option<Bounds> {
+    let layout = taffy.layout(node).ok()?;
+    Some(Bounds::from_xywh(
+        bounds.x() + layout.location.x,
+        bounds.y() + layout.location.y,
+        layout.size.width,
+        layout.size.height,
+    ))
 }
 
 fn overlay_stack_style(theme: Theme) -> Style {
@@ -628,18 +405,9 @@ fn overlay_stack_style(theme: Theme) -> Style {
     style.display = Display::Flex;
     style.flex_direction = FlexDirection::Column;
     style.align_items = AlignItems::FlexStart;
+    // The gap between the anchor and the open content.
     style.gap = theme.control_gap() * 0.75;
     style.position = Position::Relative;
-    style
-}
-
-fn dialog_root_style() -> Style {
-    let mut style = Style::new();
-    style.display = Display::Flex;
-    style.flex_direction = FlexDirection::Column;
-    style.justify_content = JustifyContent::Center;
-    style.align_items = AlignItems::Center;
-    style.position = Position::Absolute;
     style
 }
 

@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::devtools::Inspection;
+use crate::renderer::Overlay;
 
 /// Paint context passed during paint phase
 pub struct PaintContext<'a> {
@@ -20,6 +21,8 @@ pub struct PaintContext<'a> {
     /// The part of the window that is seen. Unchanged subtrees entirely outside
     /// it and the active clip are not painted. `None` paints everything.
     pub(super) viewport: Option<Bounds>,
+    /// The window, which overlays are placed against.
+    window: Bounds,
     focused: Option<ElementId>,
     /// Collects every element painted, for the inspector. Only without replay.
     pub(super) inspection: Option<&'a Inspection>,
@@ -46,6 +49,7 @@ impl<'a> PaintContext<'a> {
             unrounded: None,
             last_child: Cell::new(None),
             viewport: None,
+            window: bounds,
             focused: None,
             inspection: None,
         }
@@ -61,6 +65,7 @@ impl<'a> PaintContext<'a> {
     ) -> Self {
         Self {
             viewport,
+            window: viewport.unwrap_or(bounds),
             unrounded: Some(Unrounded {
                 origin: Point::new(0.0, 0.0),
                 size: bounds.size,
@@ -84,6 +89,12 @@ impl<'a> PaintContext<'a> {
 
     pub fn with_focus(mut self, focused: Option<ElementId>) -> Self {
         self.focused = focused;
+        self
+    }
+
+    /// Place overlays against `window` instead of the bounds given.
+    pub(crate) fn with_window(mut self, window: Bounds) -> Self {
+        self.window = window;
         self
     }
 
@@ -155,8 +166,41 @@ impl<'a> PaintContext<'a> {
             unrounded,
             last_child: Cell::new(None),
             viewport: self.viewport,
+            window: self.window,
             focused: self.focused,
             inspection: self.inspection,
         }
+    }
+
+    /// The window the tree is painted in.
+    pub fn window(&self) -> Bounds {
+        self.window
+    }
+
+    /// Paint `overlay` at `bounds` with `paint`: over the rest of the frame,
+    /// hit before it, outside every ancestor clip. Nothing in it is replayed
+    /// from the previous frame, so opening, moving or closing it redraws
+    /// what it covers.
+    pub fn paint_overlay(
+        &mut self,
+        overlay: Overlay,
+        bounds: Bounds,
+        paint: impl FnOnce(&mut PaintContext<'_>),
+    ) {
+        self.scene.begin_overlay(overlay);
+        let mut overlay_cx = PaintContext {
+            scene: self.scene,
+            bounds,
+            taffy: self.taffy,
+            memo: false,
+            unrounded: None,
+            last_child: Cell::new(None),
+            viewport: None,
+            window: self.window,
+            focused: self.focused,
+            inspection: self.inspection,
+        };
+        paint(&mut overlay_cx);
+        self.scene.end_overlay();
     }
 }

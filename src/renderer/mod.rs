@@ -39,7 +39,7 @@ pub use runtime::{
     RecordedScene, RecordingRenderer, Renderer, RendererError, RendererPrimitiveSupport,
 };
 pub(crate) use scene::PaintRecord;
-pub use scene::{HitRegion, Layer, LayerId, Scene, ZIndex};
+pub use scene::{HitRegion, Layer, LayerId, OVERLAY_Z, Overlay, Scene, ZIndex};
 pub use telemetry::{
     RUI_PROFILE_ENV, RendererBatchDiagnostics, RendererFramePhaseDurations, RendererFrameTelemetry,
     RendererTelemetryRecorder,
