@@ -15,9 +15,10 @@ use std::sync::{Arc, Mutex};
 const MAX_FACES_PER_FILE: u32 = 16;
 
 /// Font files by family, probed in order; missing files are skipped. macOS
-/// first, then the paths Debian, Fedora and Arch install common families to.
+/// first, then the paths Debian, Fedora and Arch install common families to,
+/// each Linux text family with its bold face so `bold()` text has one.
 #[cfg(not(windows))]
-const FONT_CANDIDATES: [(&str, &str); 33] = [
+const FONT_CANDIDATES: [(&str, &str); 42] = [
     ("Arial", "/System/Library/Fonts/Supplemental/Arial.ttf"),
     ("Arial", "/System/Library/Fonts/Supplemental/Arial Bold.ttf"),
     ("Arial", "/Library/Fonts/Arial.ttf"),
@@ -53,8 +54,16 @@ const FONT_CANDIDATES: [(&str, &str); 33] = [
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
     ),
     (
+        "DejaVu Sans",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    ),
+    (
         "Liberation Sans",
         "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
+    ),
+    (
+        "Liberation Sans",
+        "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
     ),
     (
         "Noto Sans CJK",
@@ -81,23 +90,45 @@ const FONT_CANDIDATES: [(&str, &str); 33] = [
         "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
     ),
     (
+        "Liberation Sans",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+    ),
+    (
         "Noto Sans",
         "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+    ),
+    (
+        "Noto Sans",
+        "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf",
     ),
     (
         "DejaVu Sans",
         "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf",
     ),
     (
+        "DejaVu Sans",
+        "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans-Bold.ttf",
+    ),
+    (
         "Liberation Sans",
         "/usr/share/fonts/liberation-sans/LiberationSans-Regular.ttf",
+    ),
+    (
+        "Liberation Sans",
+        "/usr/share/fonts/liberation-sans/LiberationSans-Bold.ttf",
     ),
     (
         "Noto Sans",
         "/usr/share/fonts/google-noto/NotoSans-Regular.ttf",
     ),
+    (
+        "Noto Sans",
+        "/usr/share/fonts/google-noto/NotoSans-Bold.ttf",
+    ),
     ("DejaVu Sans", "/usr/share/fonts/TTF/DejaVuSans.ttf"),
+    ("DejaVu Sans", "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf"),
     ("Noto Sans", "/usr/share/fonts/noto/NotoSans-Regular.ttf"),
+    ("Noto Sans", "/usr/share/fonts/noto/NotoSans-Bold.ttf"),
 ];
 
 /// Font files by family under the Windows fonts directory.

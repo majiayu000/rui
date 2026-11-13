@@ -747,16 +747,32 @@ fn each_script_run_is_shaped_once_with_its_spaces() {
     assert_eq!(arabic[0].direction, TextDirection::RightToLeft);
 }
 
-#[cfg(target_os = "macos")]
-#[test]
-fn a_weight_picks_the_closest_face_of_the_family() {
-    let mut cache = TextMeasureCache::new();
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn assert_primary_family_has_a_bold_face(cache: &mut TextMeasureCache) {
     let regular = cache.primary_font_index(None, 400).expect("regular face");
     let bold = cache.primary_font_index(None, 700).expect("bold face");
     assert_eq!(regular, 0);
     assert_ne!(bold, regular);
     assert_eq!(cache.fonts[bold].family, cache.fonts[regular].family);
     assert!(cache.fonts[bold].weight >= 600 && !cache.fonts[bold].italic);
+}
+
+/// Linux loads bold twins next to the regular faces (DejaVu Sans on Debian
+/// and Ubuntu); without them `bold()` text drew regular there.
+#[cfg(target_os = "linux")]
+#[test]
+fn linux_text_has_a_bold_face() {
+    if !std::path::Path::new("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf").exists() {
+        return;
+    }
+    assert_primary_family_has_a_bold_face(&mut TextMeasureCache::new());
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn a_weight_picks_the_closest_face_of_the_family() {
+    let mut cache = TextMeasureCache::new();
+    assert_primary_family_has_a_bold_face(&mut cache);
 
     // Fallback faces follow the weight too.
     let weight_of = |cache: &mut TextMeasureCache, weight: u16| {

@@ -51,7 +51,9 @@ jobs:
         run: cargo bench --bench perf_gate
 
   winit-linux:
-    runs-on: ubuntu-latest
+    # The window references in tests/linux_window/ were drawn by this image's
+    # Mesa lavapipe and DejaVu fonts.
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Check out repository
@@ -63,22 +65,27 @@ jobs:
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
 
+      - name: Install X11, lavapipe and fonts
+        run: |
+          sudo apt-get update
+          # winit loads the X11 and xkbcommon libraries at runtime; xdotool
+          # and ImageMagick drive and capture the windows.
+          sudo apt-get install -y xvfb mesa-vulkan-drivers libxkbcommon-x11-0 libxcursor1 libxrandr2 libxi6 xdotool imagemagick fonts-dejavu-core
+
       - name: Check the winit runner and examples
         run: cargo check --locked --no-default-features --features winit --lib --example hello_world --example counter
 
       - name: Library tests without Metal
         run: cargo test --locked --no-default-features --features winit --lib
 
-      - name: Open hello_world on lavapipe under Xvfb
+      - name: Compare window pixels on lavapipe under Xvfb
         run: |
-          sudo apt-get update
-          # winit loads the X11 and xkbcommon libraries at runtime.
-          sudo apt-get install -y xvfb mesa-vulkan-drivers libxkbcommon-x11-0 libxcursor1 libxrandr2 libxi6
-          cargo build --locked --no-default-features --features winit --example hello_world
-          # The example runs until its window closes: surviving the timeout
-          # means the window, surface, device and first frames came up.
-          status=0
-          RUST_LOG=rui=info timeout 10 xvfb-run -a target/debug/examples/hello_world 2> run.log || status=$?
-          cat run.log
-          test "$status" -eq 124
-          grep -q "winit window presenting through" run.log
+          cargo build --locked --no-default-features --features winit --example hello_world --example counter
+          xvfb-run -a -s "-screen 0 1024x768x24" scripts/linux_window_pixels.sh
+
+      - name: Upload window captures
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-window-pixels
+          path: target/linux-window-pixels
