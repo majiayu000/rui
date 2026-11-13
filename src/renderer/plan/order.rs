@@ -16,7 +16,9 @@ pub(crate) type Rect = [f32; 4];
 #[derive(Default)]
 struct Cell {
     max_order: u32,
-    entries: Vec<u32>,
+    /// The bounds touching the cell and their orders, kept here rather than
+    /// by index so a query reads them in sequence.
+    entries: Vec<(Rect, u32)>,
 }
 
 #[derive(Default)]
@@ -24,7 +26,6 @@ pub(crate) struct OverlapOrder {
     columns: usize,
     rows: usize,
     cells: Vec<Cell>,
-    entries: Vec<(Rect, u32)>,
 }
 
 impl OverlapOrder {
@@ -43,7 +44,6 @@ impl OverlapOrder {
                 cell.entries.clear();
             }
         }
-        self.entries.clear();
     }
 
     /// The order of a primitive covering `rect`, which must lie within the frame
@@ -57,8 +57,7 @@ impl OverlapOrder {
                 if cell.max_order <= below {
                     continue;
                 }
-                for &entry in &cell.entries {
-                    let (other, order) = self.entries[entry as usize];
+                for &(other, order) in &cell.entries {
                     if order > below && overlaps(rect, other) {
                         below = order;
                     }
@@ -66,13 +65,11 @@ impl OverlapOrder {
             }
         }
         let order = below + 1;
-        let entry = self.entries.len() as u32;
-        self.entries.push((rect, order));
         for row in r0..=r1 {
             for column in c0..=c1 {
                 let cell = &mut self.cells[row * self.columns + column];
                 cell.max_order = cell.max_order.max(order);
-                cell.entries.push(entry);
+                cell.entries.push((rect, order));
             }
         }
         order

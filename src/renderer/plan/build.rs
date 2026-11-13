@@ -22,8 +22,8 @@ impl<T> FrameData<T> {
         self.shadows.clear();
         self.glyphs.clear();
         self.images.clear();
-        self.path_tiles.clear();
-        self.path_edges.clear();
+        self.path_tiles.truncate(self.arena.tiles);
+        self.path_edges.truncate(self.arena.edges);
         self.scissors.clear();
         self.clip_edges.clear();
         self.clip_bounds.clear();
@@ -192,6 +192,7 @@ impl<T: Clone> FramePlanner<T> {
         upload: &impl TextureUpload<Texture = T>,
     ) -> Result<(), RendererError> {
         frame.clear();
+        self.path_cache.sync_arena(frame);
         frame.damage = damage.map(|damage| damage_scissor(damage, scale_factor, drawable_size));
         // The damage as the device pixels it covers, which is what gets drawn.
         let redrawn = frame.damage.map(|scissor| {

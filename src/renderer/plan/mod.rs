@@ -10,6 +10,7 @@ mod frame;
 mod instances;
 mod order;
 mod path;
+mod path_arena;
 mod path_cache;
 mod path_tiles;
 mod picture;
@@ -34,6 +35,7 @@ use crate::renderer::{
 };
 use frame::FramePlan;
 use path::PathGeometry;
+use path_arena::ArenaMark;
 use path_cache::PathCache;
 use path_tiles::PathTiles;
 use picture::PictureCache;
@@ -126,6 +128,12 @@ pub(crate) struct FrameData<T> {
     pub path_tiles: Vec<GpuPathTile>,
     /// `[x0, y0, x1, y1]` in device pixels, the edges each path tile reads.
     pub path_edges: Vec<[f32; 4]>,
+    /// The tiles and edges of kept paths at the start of `path_tiles` and
+    /// `path_edges`, which stay from one frame to the next.
+    arena: ArenaMark,
+    /// Whether the primitives being planned are a picture's, which keeps what
+    /// they plan.
+    recording: bool,
     /// The path being built, kept to reuse its storage.
     path: PathGeometry,
     /// Clip rectangles in device pixels, as scissor rectangles and as the
@@ -152,6 +160,8 @@ impl<T> Default for FrameData<T> {
             images: Vec::new(),
             path_tiles: Vec::new(),
             path_edges: Vec::new(),
+            arena: ArenaMark::default(),
+            recording: false,
             path: PathGeometry::default(),
             scissors: Vec::new(),
             clip_edges: Vec::new(),

@@ -446,3 +446,55 @@ fn a_retained_frame_copied_into_a_kept_larger_texture_matches_an_exact_capture()
         .expect("exact capture");
     assert!(drawn == expected, "the retained copy drew different pixels");
 }
+
+#[test]
+fn kept_paths_drawn_from_the_arena_match_a_fresh_renderer() {
+    use std::sync::Arc;
+    let new_renderer = || match MetalRenderer::new() {
+        Ok(renderer) => Some(renderer),
+        Err(RendererError::BackendUnavailable(_)) => None,
+        Err(err) => panic!("metal renderer should initialize: {err}"),
+    };
+    let Some(mut renderer) = new_renderer() else {
+        return;
+    };
+    // Stars too large for the atlas, so they are drawn as tiles.
+    let star = |center: f32, radius: f32| -> Arc<[PathVertex]> {
+        (0..10)
+            .map(|point| {
+                let angle = point as f32 * std::f32::consts::PI / 5.0;
+                let radius = if point % 2 == 0 { radius } else { radius * 0.4 };
+                PathVertex::new(center + angle.sin() * radius, center - angle.cos() * radius)
+            })
+            .collect()
+    };
+    let (small, large) = (star(90.0, 80.0), star(150.0, 140.0));
+    let red = Rgba::new(1.0, 0.2, 0.1, 0.8);
+    let blue = Rgba::new(0.1, 0.3, 1.0, 0.7);
+    // Kept, then drawn from the arena, in another color, with the large one
+    // dropped so the arena is packed, and both again.
+    let mut frames = vec![vec![(&small, red), (&large, blue)]; 6];
+    frames.extend(vec![vec![(&small, blue), (&large, blue)]; 2]);
+    frames.extend(vec![vec![(&small, red)]; 5]);
+    frames.extend(vec![vec![(&small, red), (&large, blue)]; 5]);
+    let viewport = Size::new(300.0, 300.0);
+    for (index, paths) in frames.iter().enumerate() {
+        let mut scene = Scene::new();
+        for (vertices, color) in paths {
+            scene.insert(Primitive::Path {
+                vertices: Arc::clone(vertices),
+                offset: Default::default(),
+                color: *color,
+                stroke_width: None,
+            });
+        }
+        let pixels = renderer
+            .capture_frame_pixels_at_scale(&scene, viewport, 1.0)
+            .expect("capture");
+        let expected = new_renderer()
+            .expect("available")
+            .capture_frame_pixels_at_scale(&scene, viewport, 1.0)
+            .expect("capture");
+        assert!(pixels == expected, "frame {index} differs from a fresh one");
+    }
+}
