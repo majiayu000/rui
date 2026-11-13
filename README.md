@@ -92,7 +92,7 @@ Continue with the [examples guide](docs/EXAMPLES.md) for component demos and the
 ### First-run questions
 
 - **`no example target named hello_world`?** Run the example command inside the cloned RUI repository. In your own project, use `cargo run` for `src/main.rs`.
-- **Can this run on Linux, Windows, or in a headless job?** Experimentally: `cargo run --example hello_world --no-default-features --features winit` uses the winit runner and the wgpu backend (Vulkan or DX12). The same command on macOS runs it on Metal through winit, for testing the runner. CI opens `hello_world` this way on Linux under Xvfb and lavapipe. On X11, winit loads `libxkbcommon-x11` and the Xcursor, Xrandr and Xi libraries at runtime.
+- **Can this run on Linux, Windows, or in a headless job?** Experimentally: `cargo run --example hello_world --no-default-features --features winit` uses the winit runner and the wgpu backend (Vulkan or DX12). The same command on macOS runs it on Metal through winit, for testing the runner. CI opens `hello_world` and `counter` this way on Linux under Xvfb and lavapipe, clicks, presses keys and resizes them with xdotool, and compares screenshots of the windows with `tests/linux_window/` (`scripts/linux_window_pixels.sh`; `RUI_PIXELS_UPDATE=1` rewrites the references). On X11, winit loads `libxkbcommon-x11` and the Xcursor, Xrandr and Xi libraries at runtime.
 - **Does a successful compile prove the UI works?** It checks types and dependencies. Inspect the actual window and interactions separately; [status and limitations](#status-and-limitations) explains the current scope.
 
 ## Examples
