@@ -6,6 +6,7 @@ pub mod element;
 mod image;
 mod input;
 mod list;
+pub mod overlay;
 mod scroll_view;
 mod spinner;
 mod svg;

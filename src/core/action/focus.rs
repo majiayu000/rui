@@ -7,17 +7,12 @@ use crate::elements::Element;
 use crate::elements::element::EventContext;
 
 /// Focus the next (or previous) enabled control after the focused one, in
-/// tree order, wrapping around. Returns whether focus moved.
+/// tree order, wrapping around. Returns whether focus moved. Inside an open
+/// modal overlay, focus stays among the modal's controls.
 pub(crate) fn move_focus<E: Element>(root: &mut E, cx: &mut EventContext, forward: bool) -> bool {
-    let nodes = match root.accessibility_nodes(&AccessibilityContext::new(cx.focused_id())) {
-        Ok(nodes) => nodes,
-        Err(err) => {
-            log::error!("cannot move focus: the tree's accessibility nodes failed: {err}");
-            return false;
-        }
+    let Some(order) = focus_order(root, cx.focused_id(), cx.modal_scope()) else {
+        return false;
     };
-    let mut order = Vec::new();
-    collect_focusable(&nodes, &mut order);
     let Some(last) = order.len().checked_sub(1) else {
         return false;
     };
@@ -40,6 +35,47 @@ pub(crate) fn move_focus<E: Element>(root: &mut E, cx: &mut EventContext, forwar
     sync_focus(root, cx);
     cx.request_redraw();
     true
+}
+
+/// The controls Tab moves between, in tree order: those inside `scope` when
+/// it is in the tree, else all of them. `None` when the tree cannot say.
+pub(crate) fn focus_order<E: Element>(
+    root: &E,
+    focused: Option<ElementId>,
+    scope: Option<ElementId>,
+) -> Option<Vec<ElementId>> {
+    let nodes = match root.accessibility_nodes(&AccessibilityContext::new(focused)) {
+        Ok(nodes) => nodes,
+        Err(err) => {
+            log::error!("cannot move focus: the tree's accessibility nodes failed: {err}");
+            return None;
+        }
+    };
+    let mut order = Vec::new();
+    match scope.and_then(|scope| find_node(&nodes, scope)) {
+        Some(scope) => collect_focusable(scope.a11y_children(), &mut order),
+        None => collect_focusable(&nodes, &mut order),
+    }
+    Some(order)
+}
+
+/// Whether `id` is `scope` or inside it.
+pub(crate) fn scope_contains<E: Element>(root: &E, scope: ElementId, id: ElementId) -> bool {
+    let Ok(nodes) = root.accessibility_nodes(&AccessibilityContext::new(None)) else {
+        return false;
+    };
+    find_node(&nodes, scope)
+        .is_some_and(|scope| find_node(std::slice::from_ref(scope), id).is_some())
+}
+
+fn find_node(nodes: &[AccessibilityNode], id: ElementId) -> Option<&AccessibilityNode> {
+    nodes.iter().find_map(|node| {
+        if node.a11y_id() == id {
+            Some(node)
+        } else {
+            find_node(node.a11y_children(), id)
+        }
+    })
 }
 
 /// Let elements whose focus changed react, running their focus handlers.

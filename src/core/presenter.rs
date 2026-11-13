@@ -23,6 +23,7 @@ use taffy::prelude::TaffyTree;
 mod drag;
 mod focus;
 mod menus;
+mod overlay;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct PresenterFrame {
@@ -72,6 +73,8 @@ pub struct Presenter<E = ()> {
     /// Only while the profiling overlay is on.
     devtools: Option<Box<WindowDevtools>>,
     drag: SharedDrag,
+    /// Open modal overlays, lowest first, with the focus they opened over.
+    modal_openers: Vec<(ElementId, Option<ElementId>)>,
 }
 
 impl<E> Presenter<E> {
@@ -103,6 +106,7 @@ impl<E> Presenter<E> {
             last_frame: None,
             devtools: None,
             drag: SharedDrag::default(),
+            modal_openers: Vec::new(),
         }
     }
 
@@ -446,9 +450,12 @@ where
         &mut self,
         dispatch: impl FnOnce(&mut E, &mut EventContext<'_>) -> R,
     ) -> (R, bool) {
+        let window = self.window_bounds();
         let mut event_cx =
             EventContext::new(self.root_bounds, &self.taffy, &mut self.focused_element);
         event_cx.set_drag(Rc::clone(&self.drag));
+        event_cx.set_overlays(self.scene.overlay_stack());
+        event_cx.set_window(window);
         let value = dispatch(&mut self.root, &mut event_cx);
         let redraw_requested = event_cx.redraw_requested();
         let announcements = event_cx.take_accessibility_announcements();
@@ -472,6 +479,7 @@ where
         // Do not pair the current tree/layout with the previous frame's regions.
         // Only input pays for this early scene collection; the regular paint
         // still follows dispatch so hover/pressed feedback appears this frame.
+        let mut overlays = None;
         let hit_target = if self.scene_dirty {
             // Use a transient scene without replay: advancing the render scene
             // here would break its previous-frame/damage chain, and replay would
@@ -479,9 +487,11 @@ where
             let mut hits = Scene::new();
             self.root.paint(
                 &mut PaintContext::without_replay(&mut hits, self.root_bounds, &self.taffy)
-                    .with_focus(self.focused_element),
+                    .with_focus(self.focused_element)
+                    .with_window(self.window_bounds()),
             );
             hits.finish();
+            overlays = Some(hits.overlay_stack());
             hits.hit_test(event.position)
         } else {
             self.hit_test(event.position)
@@ -489,10 +499,13 @@ where
         let dispatch_target = self.pointer_dispatch_target(hit_target);
         let previous_target = self.previous_pointer_target(event.kind);
         let preview_moved = self.drag_follow_pointer(event);
+        let overlays = overlays.unwrap_or_else(|| self.scene.overlay_stack());
+        let dismissed = self.dismiss_light_overlays(event, &overlays, dispatch_target);
 
         let (stopped, redraw_requested) = self.with_event_context(|root, event_cx| {
             event_cx.set_hit_target(dispatch_target);
             event_cx.set_previous_hit_target(previous_target);
+            event_cx.set_overlays(overlays);
             root.dispatch_pointer_event(event_cx, event).is_stopped()
         });
         let preview_ended = self.drag_end_on_release(event);
@@ -501,7 +514,7 @@ where
 
         PointerDispatch {
             stopped,
-            redraw_requested: redraw_requested || preview_moved || preview_ended,
+            redraw_requested: redraw_requested || preview_moved || preview_ended || dismissed,
         }
     }
 

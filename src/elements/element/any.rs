@@ -465,6 +465,20 @@ impl AnyElement {
             .hit_target()
             .map(|target| self.contains_id(target))
             .unwrap_or(false);
+        // A press outside a light-dismiss overlay reaches its owner first, as
+        // a press outside, so it closes whatever the press lands on.
+        if cx.is_dismiss_pass() {
+            let owns_overlay = !matches_current
+                && cx
+                    .overlays()
+                    .iter()
+                    .any(|overlay| overlay.light_dismiss && self.contains_id(overlay.owner));
+            return owns_overlay
+                && self
+                    .inner
+                    .dispatch_pointer_event(&mut cx.for_blur_dispatch(), event)
+                    .is_stopped();
+        }
         let matches_previous = cx
             .previous_hit_target()
             .map(|target| self.contains_id(target))
