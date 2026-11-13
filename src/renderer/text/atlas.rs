@@ -36,6 +36,10 @@ pub const SOFT_ATLAS_PAGES: usize = 8;
 /// recently drawn strings down to three quarters of it, never one the previous
 /// frame drew, so a frame never evicts what it is still drawing.
 const MAX_RETAINED_SHAPES: usize = 4_096;
+/// Glyphs of the kept shaped strings, trimmed the same way. Each costs about
+/// 70 bytes with its sprite, so this keeps them near 4.5 MB: long paragraphs
+/// that change every frame would otherwise keep 60 MB under the count alone.
+const MAX_RETAINED_SHAPE_GLYPHS: usize = 65_536;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AtlasRect {
@@ -328,6 +332,8 @@ pub struct TextGlyphCache {
     font_generation: usize,
     frame: u64,
     shapes: FastMap<u64, ShapedEntry>,
+    /// Glyphs of the shaped texts in `shapes`.
+    shape_glyphs: usize,
     glyphs: FastMap<GlyphKey, Option<AtlasGlyph>>,
     max_glyphs: usize,
     atlas: GlyphAtlas,
@@ -372,6 +378,7 @@ impl TextGlyphCache {
             font_generation,
             frame: 0,
             shapes: FastMap::default(),
+            shape_glyphs: 0,
             glyphs: FastMap::default(),
             max_glyphs,
             color_atlas: GlyphAtlas::with_bytes_per_pixel(atlas.page_size, atlas.max_bytes, 4),
@@ -392,25 +399,9 @@ impl TextGlyphCache {
     }
 
     pub fn begin_frame(&mut self) {
-        if self.shapes.len() > MAX_RETAINED_SHAPES {
-            let previous = self.frame;
-            let mut frames: Vec<u64> = self
-                .shapes
-                .values()
-                .map(|entry| entry.last_used)
-                .filter(|&frame| frame < previous)
-                .collect();
-            let evict = (self.shapes.len() - MAX_RETAINED_SHAPES * 3 / 4).min(frames.len());
-            if evict > 0 {
-                let (_, &mut newest_evicted, _) = frames.select_nth_unstable(evict - 1);
-                let before = self.shapes.len();
-                self.shapes
-                    .retain(|_, entry| entry.last_used > newest_evicted);
-                self.evicted_shapes += before - self.shapes.len();
-                // A placement whose text is no longer kept is never asked for again.
-                self.placed
-                    .retain(|_, placed| Arc::strong_count(&placed.text) > 1);
-            }
+        if self.shapes.len() > MAX_RETAINED_SHAPES || self.shape_glyphs > MAX_RETAINED_SHAPE_GLYPHS
+        {
+            self.trim_shapes(MAX_RETAINED_SHAPES * 3 / 4, MAX_RETAINED_SHAPE_GLYPHS * 3 / 4);
         }
         self.frame += 1;
     }
@@ -545,7 +536,8 @@ impl TextGlyphCache {
             })
         });
 
-        self.shapes.insert(
+        self.shape_glyphs += text.as_ref().map_or(0, |text| text.glyphs.len());
+        let replaced = self.shapes.insert(
             hash,
             ShapedEntry {
                 content: request.content.to_string(),
@@ -558,6 +550,7 @@ impl TextGlyphCache {
                 last_used: self.frame,
             },
         );
+        self.shape_glyphs -= replaced.map_or(0, |entry| entry.glyphs());
         Ok(text)
     }
 
@@ -763,6 +756,7 @@ impl TextGlyphCache {
     fn invalidate_for_font_generation_change(&mut self) {
         if self.measurer.font_generation != self.font_generation {
             self.shapes.clear();
+            self.shape_glyphs = 0;
             self.glyphs.clear();
             self.atlas.clear();
             self.uploads.clear();

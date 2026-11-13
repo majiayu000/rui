@@ -9,6 +9,9 @@ use metal::{
 
 /// Rows in the staging buffer start on this many bytes.
 const ROW_ALIGNMENT: usize = 4;
+/// Rows of zeros a page is cleared from, band by band, so clearing a page
+/// stages a sixteenth of it rather than all of it.
+const CLEAR_ROWS: u32 = 64;
 
 /// One texture per atlas page, kept in step with one of the text cache's
 /// atlases: R8 coverage, or sRGB RGBA color glyphs.
@@ -82,15 +85,15 @@ impl GlyphPages {
             return None;
         }
 
-        // Staging layout: one zeroed page for every clear to copy from, then each
-        // upload's rows.
+        // Staging layout: one zeroed band for every clear to copy from, then
+        // each upload's rows.
         let bytes_per_pixel = self.bytes_per_pixel;
         let row_bytes =
             |width: u32| (width as usize * bytes_per_pixel).next_multiple_of(ROW_ALIGNMENT);
         let zero_bytes = cleared
             .iter()
             .filter_map(|&page| atlas.page_extent(page))
-            .map(|(width, height)| row_bytes(width) * height as usize)
+            .map(|(width, height)| row_bytes(width) * height.min(CLEAR_ROWS) as usize)
             .max()
             .unwrap_or(0);
         let upload_bytes: usize = uploads
@@ -119,18 +122,24 @@ impl GlyphPages {
             let Some((width, height)) = atlas.page_extent(page) else {
                 continue;
             };
-            blit.copy_from_buffer_to_texture(
-                &buffer,
-                0,
-                row_bytes(width) as u64,
-                0,
-                MTLSize::new(u64::from(width), u64::from(height), 1),
-                &self.textures[page],
-                0,
-                0,
-                MTLOrigin { x: 0, y: 0, z: 0 },
-                MTLBlitOption::empty(),
-            );
+            for y in (0..height).step_by(CLEAR_ROWS as usize) {
+                blit.copy_from_buffer_to_texture(
+                    &buffer,
+                    0,
+                    row_bytes(width) as u64,
+                    0,
+                    MTLSize::new(u64::from(width), u64::from(CLEAR_ROWS.min(height - y)), 1),
+                    &self.textures[page],
+                    0,
+                    0,
+                    MTLOrigin {
+                        x: 0,
+                        y: u64::from(y),
+                        z: 0,
+                    },
+                    MTLBlitOption::empty(),
+                );
+            }
         }
         let mut offset = zero_bytes;
         for upload in &uploads {

@@ -137,6 +137,28 @@ fn strings_drawn_last_frame_survive_shape_eviction() {
     assert_eq!(kept, again);
 }
 
+#[test]
+fn long_strings_that_change_each_frame_are_bounded_by_their_glyphs() {
+    let mut cache = TextGlyphCache::new();
+    let long = "glyphs ".repeat(80);
+    let mut previous = None;
+    for frame in 0..400 {
+        cache.begin_frame();
+        let content = format!("{long}{frame}");
+        let shaped = cache.shape(request(&content)).expect("shape");
+        if let Some(last) = previous.replace(content) {
+            let misses = cache.shape_misses();
+            cache.shape(request(&last)).expect("shape");
+            assert_eq!(cache.shape_misses(), misses, "last frame's string is kept");
+        }
+        assert!(shaped.is_some());
+    }
+    assert!(cache.shapes.len() < 400, "old strings were dropped");
+    assert!(cache.shape_glyphs <= MAX_RETAINED_SHAPE_GLYPHS + 2 * 600);
+    let counted: usize = cache.shapes.values().map(ShapedEntry::glyphs).sum();
+    assert_eq!(cache.shape_glyphs, counted);
+}
+
 /// A cache over an atlas of `pages` pages of 32 x 32, each holding four
 /// 15 x 15 sprites.
 fn small_cache(pages: usize) -> TextGlyphCache {
