@@ -434,6 +434,7 @@ fn measure(case: &str, harness: &mut Harness, mut frame: impl FnMut(&mut Harness
     gpu_time::take();
     let (mut ms, mut instructions, mut allocations) = (Vec::new(), Vec::new(), Vec::new());
     for turn in WARMUP..WARMUP + SAMPLES {
+        gpu_time::set_frame(turn);
         let (i0, a0) = (rusage()[31], ALLOCATIONS.load(Ordering::Relaxed));
         let t0 = Instant::now();
         frame(harness, turn);
@@ -443,26 +444,21 @@ fn measure(case: &str, harness: &mut Harness, mut frame: impl FnMut(&mut Harness
     }
     let footprint = footprint_mb();
     std::thread::sleep(GPU_SETTLE);
-    // A frame's GPU time is the busy time of the command buffers it commits together.
-    let buffers = gpu_time::take();
-    let mut gpu_ms: Vec<f64> = match buffers.len() / SAMPLES {
-        per_frame if per_frame > 0 && buffers.len() % SAMPLES == 0 => buffers
-            .chunks(per_frame)
-            .map(|frame| frame.iter().sum())
-            .collect(),
-        _ => Vec::new(),
-    };
-    // Some frames commit an extra command buffer, so buffers cannot always
-    // be split into frames; the mean busy time per frame is reported either way.
-    let gpu_mean = buffers.iter().sum::<f64>() / SAMPLES as f64;
-    let (gpu_p50, gpu_p95) = if gpu_ms.len() == SAMPLES {
-        (percentile(&mut gpu_ms, 0.5), percentile(&mut gpu_ms, 0.95))
-    } else {
-        eprintln!(
-            "iced {case}: {} command buffers completed for {SAMPLES} frames; GPU percentiles not reported",
-            buffers.len()
-        );
-        (f64::NAN, f64::NAN)
+    // A frame's GPU time is the busy time the command buffers committed in it add
+    // together; some frames commit an extra one.
+    let (gpu_p50, gpu_p95, gpu_mean) = match gpu_time::take_frames(WARMUP..WARMUP + SAMPLES) {
+        Some(mut gpu_ms) => {
+            let mean = gpu_ms.iter().sum::<f64>() / SAMPLES as f64;
+            (
+                percentile(&mut gpu_ms, 0.5),
+                percentile(&mut gpu_ms, 0.95),
+                mean,
+            )
+        }
+        None => {
+            eprintln!("iced {case}: a frame completed no command buffer; GPU time not reported");
+            (f64::NAN, f64::NAN, f64::NAN)
+        }
     };
     println!(
         "iced {case} instructions_m={:.2} ms_p50={:.3} ms_p95={:.3} allocations={:.0} footprint_mb={footprint:.1} gpu_ms_p50={gpu_p50:.3} gpu_ms_p95={gpu_p95:.3} gpu_ms_mean={gpu_mean:.3}",
