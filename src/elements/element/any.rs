@@ -88,6 +88,7 @@ pub fn reconcile(next: &mut dyn Element, previous: &mut dyn Element) -> bool {
     ) {
         next.reconcile_editing_state(previous);
     }
+    crate::advanced_ui::reconcile_transient_state(next, previous);
     // Properties can only justify keeping two pure instances. An interactive
     // container still participates in child reconciliation below.
     let props =

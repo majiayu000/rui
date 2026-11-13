@@ -209,11 +209,21 @@ where
             });
             (handled, focus_redraw || redraw_requested)
         }
-        AccessibilityAction::ScrollForward | AccessibilityAction::ScrollBackward => {
-            let action = if *action == AccessibilityAction::ScrollForward {
-                crate::core::action::ACCESSIBILITY_SCROLL_FORWARD_ACTION
-            } else {
-                crate::core::action::ACCESSIBILITY_SCROLL_BACKWARD_ACTION
+        AccessibilityAction::ScrollForward
+        | AccessibilityAction::ScrollBackward
+        | AccessibilityAction::Increment
+        | AccessibilityAction::Decrement => {
+            let action = match action {
+                AccessibilityAction::ScrollForward => {
+                    crate::core::action::ACCESSIBILITY_SCROLL_FORWARD_ACTION
+                }
+                AccessibilityAction::ScrollBackward => {
+                    crate::core::action::ACCESSIBILITY_SCROLL_BACKWARD_ACTION
+                }
+                AccessibilityAction::Increment => {
+                    crate::core::action::ACCESSIBILITY_INCREMENT_ACTION
+                }
+                _ => crate::core::action::ACCESSIBILITY_DECREMENT_ACTION,
             };
             let (outcome, redraw_requested) = presenter.with_event_context(|root, event_cx| {
                 root.dispatch_action(event_cx, &ActionId::custom(action))

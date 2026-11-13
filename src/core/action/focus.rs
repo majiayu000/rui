@@ -58,6 +58,11 @@ fn takes_focus(role: AccessibilityRole) -> bool {
             | AccessibilityRole::SegmentedControl
             | AccessibilityRole::TabList
             | AccessibilityRole::Menu
+            | AccessibilityRole::ComboBox
+            | AccessibilityRole::RadioGroup
+            | AccessibilityRole::Slider
+            | AccessibilityRole::Splitter
+            | AccessibilityRole::Switch
     )
 }
 
