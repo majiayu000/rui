@@ -4,23 +4,29 @@ use super::*;
 use crate::renderer::plan::TextureUpload;
 
 impl MetalRenderer {
-    /// The kept offscreen texture, at least `width` by `height`. It only grows,
-    /// in steps of [`OFFSCREEN_GROWTH`] pixels, and frames draw into its top
-    /// left, so resizing back and forth reuses one texture.
+    /// The kept offscreen texture, at least `width` by `height`. The first is
+    /// exactly that size; after it, it only grows, in steps of
+    /// [`OFFSCREEN_GROWTH`] pixels, and frames draw into its top left, so
+    /// resizing back and forth reuses one texture.
     pub(super) fn offscreen_texture(&mut self, width: u64, height: u64) -> Texture {
         match &self.offscreen_target {
             Some(texture) if texture.width() >= width && texture.height() >= height => {
                 texture.clone()
             }
             kept => {
-                let (kept_width, kept_height) = kept
-                    .as_ref()
-                    .map_or((0, 0), |texture| (texture.width(), texture.height()));
-                let texture = create_capture_texture(
-                    &self.device,
-                    width.max(kept_width).next_multiple_of(OFFSCREEN_GROWTH),
-                    height.max(kept_height).next_multiple_of(OFFSCREEN_GROWTH),
-                );
+                // Rounded up, a first 2880x1800 texture would be a fifth larger.
+                let (width, height) = match kept {
+                    None => (width, height),
+                    Some(texture) => (
+                        width
+                            .max(texture.width())
+                            .next_multiple_of(OFFSCREEN_GROWTH),
+                        height
+                            .max(texture.height())
+                            .next_multiple_of(OFFSCREEN_GROWTH),
+                    ),
+                };
+                let texture = create_capture_texture(&self.device, width, height);
                 self.offscreen_target = Some(texture.clone());
                 texture
             }
