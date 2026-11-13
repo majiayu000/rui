@@ -17,12 +17,14 @@ use objc2_app_kit::{
     NSAccessibilityFocusedUIElementChangedNotification, NSAccessibilityGroupRole,
     NSAccessibilityIncrementAction, NSAccessibilityLayoutChangedNotification,
     NSAccessibilityListRole, NSAccessibilityMenuItemRole, NSAccessibilityMenuRole,
-    NSAccessibilityOutlineRole, NSAccessibilityPostNotification,
+    NSAccessibilityOutlineRole, NSAccessibilityPopUpButtonRole, NSAccessibilityPostNotification,
     NSAccessibilityPostNotificationWithUserInfo, NSAccessibilityPressAction,
     NSAccessibilityPriorityKey, NSAccessibilityPriorityLevel, NSAccessibilityProgressIndicatorRole,
-    NSAccessibilityRadioButtonRole, NSAccessibilityRole, NSAccessibilityRowRole,
-    NSAccessibilityScrollAreaRole, NSAccessibilitySelectedTextChangedNotification,
-    NSAccessibilityStaticTextRole, NSAccessibilityTabGroupRole, NSAccessibilityTextFieldRole,
+    NSAccessibilityRadioButtonRole, NSAccessibilityRadioGroupRole, NSAccessibilityRole,
+    NSAccessibilityRowRole, NSAccessibilityScrollAreaRole,
+    NSAccessibilitySelectedTextChangedNotification, NSAccessibilitySliderRole,
+    NSAccessibilitySplitterRole, NSAccessibilityStaticTextRole, NSAccessibilitySubrole,
+    NSAccessibilitySwitchSubrole, NSAccessibilityTabGroupRole, NSAccessibilityTextFieldRole,
     NSAccessibilityTitleChangedNotification, NSAccessibilityToolbarRole,
     NSAccessibilityValueChangedNotification, NSView,
 };
@@ -77,12 +79,12 @@ define_class!(
 
         #[unsafe(method(accessibilityPerformIncrement))]
         fn accessibility_perform_increment(&self) -> bool {
-            self.enqueue_action(AccessibilityAction::ScrollForward, None)
+            self.enqueue_action(self.step_action(true), None)
         }
 
         #[unsafe(method(accessibilityPerformDecrement))]
         fn accessibility_perform_decrement(&self) -> bool {
-            self.enqueue_action(AccessibilityAction::ScrollBackward, None)
+            self.enqueue_action(self.step_action(false), None)
         }
 
         #[unsafe(method(accessibilityPerformAction:))]
@@ -91,9 +93,9 @@ define_class!(
                 if action == NSAccessibilityPressAction {
                     self.enqueue_action(AccessibilityAction::Activate, None);
                 } else if action == NSAccessibilityDecrementAction {
-                    self.enqueue_action(AccessibilityAction::ScrollBackward, None);
+                    self.enqueue_action(self.step_action(false), None);
                 } else if action == NSAccessibilityIncrementAction {
-                    self.enqueue_action(AccessibilityAction::ScrollForward, None);
+                    self.enqueue_action(self.step_action(true), None);
                 }
             }
         }
@@ -134,6 +136,12 @@ define_class!(
             {
                 return false.into();
             }
+            if selector == sel!(accessibilityPerformIncrement) {
+                return self.supports(self.step_action(true)).into();
+            }
+            if selector == sel!(accessibilityPerformDecrement) {
+                return self.supports(self.step_action(false)).into();
+            }
             if let Some(action) = action_for_selector(selector) {
                 return self.supports(action).into();
             }
@@ -173,6 +181,10 @@ impl RuiAccessibilityElement {
         self.ivars().actions.borrow().contains(&action)
     }
 
+    fn step_action(&self, forward: bool) -> AccessibilityAction {
+        step_action(&self.ivars().actions.borrow(), forward)
+    }
+
     fn enqueue_action(&self, action: AccessibilityAction, value: Option<String>) -> bool {
         if !self.supports(action) {
             return false;
@@ -202,6 +214,14 @@ impl RuiAccessibilityElement {
     fn set_native_value(&self, value: Option<&AnyObject>) {
         unsafe {
             let _: () = msg_send![super(self), setAccessibilityValue: value];
+        }
+    }
+
+    fn set_native_range(&self, min: f64, max: f64) {
+        let (min, max) = (NSNumber::new_f64(min), NSNumber::new_f64(max));
+        unsafe {
+            let _: () = msg_send![self, setAccessibilityMinValue: &*min];
+            let _: () = msg_send![self, setAccessibilityMaxValue: &*max];
         }
     }
 
@@ -467,10 +487,7 @@ impl AppKitAccessibilityHost {
         element.update_semantics(node.a11y_actions(), bounds);
         element.setAccessibilityElement(true);
         element.setAccessibilityRole(Some(native_role(node.a11y_role())));
-        element.setAccessibilitySubrole(
-            (node.a11y_role() == AccessibilityRole::Dialog)
-                .then_some(unsafe { NSAccessibilityDialogSubrole }),
-        );
+        element.setAccessibilitySubrole(native_subrole(node.a11y_role()));
         element.setAccessibilityEnabled(node.a11y_enabled());
         element.set_native_focused(node.a11y_focused());
         element.setAccessibilityFrameInParentSpace(native_frame_in_parent(bounds, parent_bounds));

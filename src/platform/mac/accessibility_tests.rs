@@ -312,15 +312,64 @@ fn native_selector_mapping_is_limited_to_declared_action_selectors() {
         action_for_selector(sel!(setAccessibilityValue:)),
         Some(AccessibilityAction::SetValue)
     );
-    assert_eq!(
-        action_for_selector(sel!(accessibilityPerformIncrement)),
-        Some(AccessibilityAction::ScrollForward)
-    );
-    assert_eq!(
-        action_for_selector(sel!(accessibilityPerformDecrement)),
-        Some(AccessibilityAction::ScrollBackward)
-    );
     assert_eq!(action_for_selector(sel!(accessibilityLabel)), None);
+}
+
+#[test]
+fn native_increment_steps_range_controls_and_scrolls_scroll_areas() {
+    let scroll = [
+        AccessibilityAction::ScrollForward,
+        AccessibilityAction::ScrollBackward,
+    ];
+    assert_eq!(
+        step_action(&scroll, true),
+        AccessibilityAction::ScrollForward
+    );
+    assert_eq!(
+        step_action(&scroll, false),
+        AccessibilityAction::ScrollBackward
+    );
+    let range = [
+        AccessibilityAction::Increment,
+        AccessibilityAction::Decrement,
+    ];
+    assert_eq!(step_action(&range, true), AccessibilityAction::Increment);
+    assert_eq!(step_action(&range, false), AccessibilityAction::Decrement);
+}
+
+#[test]
+fn range_controls_and_switches_publish_native_roles() {
+    let slider =
+        AccessibilityNode::label_required(ElementId::new(), AccessibilityRole::Slider, "Volume")
+            .and_then(|node| node.value_required("40"))
+            .expect("slider node")
+            .with_numeric_value(crate::core::accessibility::AccessibilityNumericValue::new(
+                40.0, 0.0, 100.0,
+            ))
+            .with_actions([
+                AccessibilityAction::Increment,
+                AccessibilityAction::Decrement,
+            ]);
+    let switch =
+        AccessibilityNode::label_required(ElementId::new(), AccessibilityRole::Switch, "Wi-Fi")
+            .and_then(|node| node.value_required("on"))
+            .expect("switch node")
+            .with_checked(true);
+    let tree = AccessibilityTree::new(vec![slider, switch]);
+    validate_tree(&tree).expect("range controls carry the values they need");
+    let snapshot = MacAccessibilityBridge::new().snapshot_tree(&tree);
+
+    let roles: Vec<_> = snapshot
+        .nodes()
+        .iter()
+        .map(|node| node.native_role())
+        .collect();
+    assert_eq!(roles, ["AXSlider", "AXCheckBox"]);
+    assert_eq!(
+        snapshot.nodes()[0].native_actions(),
+        ["AXIncrement", "AXDecrement"]
+    );
+    assert!(native_subrole(AccessibilityRole::Switch).is_some());
 }
 
 #[test]

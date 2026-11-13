@@ -43,6 +43,11 @@ fn docs_api_covers_public_builders_and_validation_commands() {
         "advanced_ui::data_list(",
         "advanced_ui::data_tree(",
         "advanced_ui::data_table_row(",
+        "advanced_ui::slider(",
+        "advanced_ui::switch(",
+        "advanced_ui::radio_group(",
+        "advanced_ui::select(",
+        "advanced_ui::splitter(",
     ];
 
     for builder in builders {
@@ -103,6 +108,10 @@ fn docs_api_enum_variants_match_source() {
         EnumSurface {
             name: "ControlSize",
             source: include_str!("../src/advanced_ui/tokens.rs"),
+        },
+        EnumSurface {
+            name: "SplitAxis",
+            source: include_str!("../src/advanced_ui/splitter.rs"),
         },
         EnumSurface {
             name: "ControlVariant",

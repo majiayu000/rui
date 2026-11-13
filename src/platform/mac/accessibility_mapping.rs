@@ -3,12 +3,40 @@ fn action_for_selector(selector: Sel) -> Option<AccessibilityAction> {
         Some(AccessibilityAction::Activate)
     } else if selector == sel!(setAccessibilityValue:) {
         Some(AccessibilityAction::SetValue)
-    } else if selector == sel!(accessibilityPerformDecrement) {
-        Some(AccessibilityAction::ScrollBackward)
-    } else if selector == sel!(accessibilityPerformIncrement) {
-        Some(AccessibilityAction::ScrollForward)
     } else {
         None
+    }
+}
+
+/// The action AXIncrement (`forward`) or AXDecrement requests on a node with
+/// `actions`: a range control steps its value, a scroll area scrolls.
+fn step_action(actions: &[AccessibilityAction], forward: bool) -> AccessibilityAction {
+    let (step, scroll) = if forward {
+        (
+            AccessibilityAction::Increment,
+            AccessibilityAction::ScrollForward,
+        )
+    } else {
+        (
+            AccessibilityAction::Decrement,
+            AccessibilityAction::ScrollBackward,
+        )
+    };
+    if actions.contains(&step) {
+        step
+    } else {
+        scroll
+    }
+}
+
+/// The AXSwitch subrole for switches, AXDialog for dialogs.
+fn native_subrole(role: AccessibilityRole) -> Option<&'static NSAccessibilitySubrole> {
+    unsafe {
+        match role {
+            AccessibilityRole::Dialog => Some(NSAccessibilityDialogSubrole),
+            AccessibilityRole::Switch => Some(NSAccessibilitySwitchSubrole),
+            _ => None,
+        }
     }
 }
 
@@ -68,11 +96,21 @@ fn publish_native_value(
     node: &AccessibilityNode,
 ) -> Result<(), AccessibilityError> {
     match node.a11y_role() {
-        AccessibilityRole::Checkbox => {
+        AccessibilityRole::Checkbox | AccessibilityRole::Switch => {
             let value = NSNumber::new_bool(node.a11y_checked().unwrap_or(false));
             element.set_native_value(Some(&value));
         }
-        AccessibilityRole::SegmentedOption | AccessibilityRole::Tab => {
+        AccessibilityRole::Slider | AccessibilityRole::Splitter => {
+            let numeric = node.a11y_numeric_value();
+            let now = numeric.map(|numeric| numeric.now()).unwrap_or_default();
+            element.set_native_value(Some(&NSNumber::new_f64(now)));
+            if let Some(numeric) = numeric {
+                element.set_native_range(numeric.min(), numeric.max());
+            }
+        }
+        AccessibilityRole::SegmentedOption
+        | AccessibilityRole::Tab
+        | AccessibilityRole::RadioButton => {
             let value = NSNumber::new_bool(node.a11y_selected().unwrap_or(false));
             element.set_native_value(Some(&value));
         }
@@ -103,6 +141,9 @@ fn publish_value_description(element: &RuiAccessibilityElement, node: &Accessibi
         AccessibilityRole::ProgressIndicator
             | AccessibilityRole::SegmentedOption
             | AccessibilityRole::Tab
+            | AccessibilityRole::RadioButton
+            | AccessibilityRole::Slider
+            | AccessibilityRole::Splitter
     ) {
         node.a11y_value()
             .or(node.a11y_label())
@@ -277,6 +318,12 @@ fn role_requires_value(role: AccessibilityRole) -> bool {
     matches!(
         role,
         AccessibilityRole::Checkbox
+            | AccessibilityRole::ComboBox
+            | AccessibilityRole::RadioButton
+            | AccessibilityRole::RadioGroup
+            | AccessibilityRole::Slider
+            | AccessibilityRole::Splitter
+            | AccessibilityRole::Switch
             | AccessibilityRole::DataListItem
             | AccessibilityRole::DataTreeItem
             | AccessibilityRole::MenuItem
@@ -294,7 +341,12 @@ fn native_role(role: AccessibilityRole) -> &'static NSAccessibilityRole {
     unsafe {
         match role {
             AccessibilityRole::Button => NSAccessibilityButtonRole,
-            AccessibilityRole::Checkbox => NSAccessibilityCheckBoxRole,
+            AccessibilityRole::Checkbox | AccessibilityRole::Switch => NSAccessibilityCheckBoxRole,
+            AccessibilityRole::ComboBox => NSAccessibilityPopUpButtonRole,
+            AccessibilityRole::RadioButton => NSAccessibilityRadioButtonRole,
+            AccessibilityRole::RadioGroup => NSAccessibilityRadioGroupRole,
+            AccessibilityRole::Slider => NSAccessibilitySliderRole,
+            AccessibilityRole::Splitter => NSAccessibilitySplitterRole,
             AccessibilityRole::DataList => NSAccessibilityListRole,
             AccessibilityRole::DataListItem
             | AccessibilityRole::DataTableRow
@@ -345,7 +397,12 @@ fn snapshot_node(node: &AccessibilityNode) -> MacAccessibilityNodeSnapshot {
 fn native_role_name(role: AccessibilityRole) -> &'static str {
     match role {
         AccessibilityRole::Button => "AXButton",
-        AccessibilityRole::Checkbox => "AXCheckBox",
+        AccessibilityRole::Checkbox | AccessibilityRole::Switch => "AXCheckBox",
+        AccessibilityRole::ComboBox => "AXPopUpButton",
+        AccessibilityRole::RadioButton => "AXRadioButton",
+        AccessibilityRole::RadioGroup => "AXRadioGroup",
+        AccessibilityRole::Slider => "AXSlider",
+        AccessibilityRole::Splitter => "AXSplitter",
         AccessibilityRole::DataList => "AXList",
         AccessibilityRole::DataListItem => "AXRow",
         AccessibilityRole::DataTableCell => "AXCell",
@@ -375,6 +432,8 @@ fn native_action_name(action: AccessibilityAction) -> &'static str {
         AccessibilityAction::SetValue => "AXSetValue",
         AccessibilityAction::ScrollForward => "AXScrollDown",
         AccessibilityAction::ScrollBackward => "AXScrollUp",
+        AccessibilityAction::Increment => "AXIncrement",
+        AccessibilityAction::Decrement => "AXDecrement",
     }
 }
 

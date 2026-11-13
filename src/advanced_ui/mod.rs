@@ -6,8 +6,13 @@ mod data;
 mod menu;
 mod popover;
 mod progress_bar;
+mod radio_group;
 mod segmented_control;
+mod select;
+mod slider;
+mod splitter;
 mod state;
+mod switch;
 mod tabs;
 mod tokens;
 mod toolbar;
@@ -36,11 +41,16 @@ pub use data::{
 pub use menu::{Menu, MenuItem, menu};
 pub use popover::{Dialog, Popover, dialog, popover};
 pub use progress_bar::{ProgressBar, progress_bar};
+pub use radio_group::{RadioGroup, RadioOption, radio_group};
 pub use segmented_control::{SegmentedControl, SegmentedOption, segmented_control};
+pub use select::{Select, select};
+pub use slider::{Slider, slider};
+pub use splitter::{SplitAxis, Splitter, splitter};
 pub use state::{
     IndexedInteractionRelease, IndexedInteractionState, InteractionRelease, InteractionState,
     require_finite, require_finite_non_negative, require_non_empty, validation_border_color,
 };
+pub use switch::{Switch, switch};
 pub use tabs::{Tab, TabList, TabPanel, Tabs, tab, tab_list, tab_panel, tabs};
 pub use tokens::{
     ControlColors, ControlSize, ControlState, ControlVariant, ControlVariantPalette, Theme,
@@ -678,4 +688,27 @@ pub fn text(content: impl Into<crate::core::SharedStr>) -> Text {
 
 pub fn hoverable(child: impl Into<AnyElement>) -> Hoverable {
     Hoverable::new(child)
+}
+
+/// Carry a drag or an open list over to the control rebuilt in its place, so
+/// the render a control's own `on_change` causes does not end the gesture.
+pub(crate) fn reconcile_transient_state(next: &mut dyn Element, previous: &mut dyn Element) {
+    use std::any::Any;
+    let (next, previous) = (next as &mut dyn Any, previous as &mut dyn Any);
+    if let (Some(next), Some(previous)) = (
+        next.downcast_mut::<Slider>(),
+        previous.downcast_ref::<Slider>(),
+    ) {
+        next.reconcile_transient_state(previous);
+    } else if let (Some(next), Some(previous)) = (
+        next.downcast_mut::<Splitter>(),
+        previous.downcast_ref::<Splitter>(),
+    ) {
+        next.reconcile_transient_state(previous);
+    } else if let (Some(next), Some(previous)) = (
+        next.downcast_mut::<Select>(),
+        previous.downcast_mut::<Select>(),
+    ) {
+        next.reconcile_transient_state(previous);
+    }
 }

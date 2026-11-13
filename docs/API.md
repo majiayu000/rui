@@ -21,9 +21,9 @@ Complete API documentation for the RUI framework.
 
 Builders: `div()`, `text(content)`, `button(label)`, `input()`, `image(path)`, `scroll_view()`, `table()`, `row()`, `header_row()`, `cell(content)`, `list()`, `ordered_list()`, `unordered_list()`, `spinner()`.
 
-Advanced UI builders: `advanced_ui::container()`, `advanced_ui::row()`, `advanced_ui::column()`, `advanced_ui::text(content)`, `advanced_ui::hoverable(child)`, `advanced_ui::checkbox(label)`, `advanced_ui::progress_bar(value)`, `advanced_ui::segmented_control(options, selected)`, `advanced_ui::toolbar(label)`, `advanced_ui::tooltip(child, content)`, `advanced_ui::menu(label, items)`, `advanced_ui::popover(label, anchor, content)`, `advanced_ui::dialog(label, content)`, `advanced_ui::tab(value, label)`, `advanced_ui::tab_list(tabs, selected)`, `advanced_ui::tab_panel(value, child)`, `advanced_ui::tabs(tabs, selected)`, `advanced_ui::data_list(items)`, `advanced_ui::data_tree(roots)`, `advanced_ui::data_table_row(cells)`.
+Advanced UI builders: `advanced_ui::container()`, `advanced_ui::row()`, `advanced_ui::column()`, `advanced_ui::text(content)`, `advanced_ui::hoverable(child)`, `advanced_ui::checkbox(label)`, `advanced_ui::progress_bar(value)`, `advanced_ui::segmented_control(options, selected)`, `advanced_ui::toolbar(label)`, `advanced_ui::tooltip(child, content)`, `advanced_ui::menu(label, items)`, `advanced_ui::popover(label, anchor, content)`, `advanced_ui::dialog(label, content)`, `advanced_ui::tab(value, label)`, `advanced_ui::tab_list(tabs, selected)`, `advanced_ui::tab_panel(value, child)`, `advanced_ui::tabs(tabs, selected)`, `advanced_ui::data_list(items)`, `advanced_ui::data_tree(roots)`, `advanced_ui::data_table_row(cells)`, `advanced_ui::slider(label, value)`, `advanced_ui::switch(label)`, `advanced_ui::radio_group(label, options, selected)`, `advanced_ui::select(label, items, selected)`, `advanced_ui::splitter(label, first, second)`.
 
-Enum variants: `InputType::Text`, `InputType::Password`, `InputType::Email`, `InputType::Number`, `InputType::Search`; `ImageFit::Cover`, `ImageFit::Contain`, `ImageFit::Fill`, `ImageFit::None`, `ImageFit::ScaleDown`; `ScrollDirection::Vertical`, `ScrollDirection::Horizontal`, `ScrollDirection::Both`; `ScrollbarVisibility::Auto`, `ScrollbarVisibility::Always`, `ScrollbarVisibility::Never`, `ScrollbarVisibility::Hover`; `ListStyle::Bullet`, `ListStyle::Numbered`, `ListStyle::LowercaseAlpha`, `ListStyle::UppercaseAlpha`, `ListStyle::LowercaseRoman`, `ListStyle::UppercaseRoman`, `ListStyle::None`; `SpinnerType::Dots`, `SpinnerType::Line`, `SpinnerType::Circle`, `SpinnerType::Arrow`, `SpinnerType::Box`, `SpinnerType::Bounce`, `SpinnerType::Grow`, `SpinnerType::Star`; `TextAlign::Left`, `TextAlign::Center`, `TextAlign::Right`; `ControlSize::Small`, `ControlSize::Medium`, `ControlSize::Large`; `ControlVariant::Primary`, `ControlVariant::Secondary`, `ControlVariant::Outline`, `ControlVariant::Ghost`, `ControlVariant::Danger`, `ControlVariant::Success`; `MainAxisAlignment::Start`, `MainAxisAlignment::End`, `MainAxisAlignment::Center`, `MainAxisAlignment::SpaceBetween`, `MainAxisAlignment::SpaceAround`; `CrossAxisAlignment::Start`, `CrossAxisAlignment::End`, `CrossAxisAlignment::Center`, `CrossAxisAlignment::Stretch`; `Easing::Linear`, `Easing::EaseIn`, `Easing::EaseOut`, `Easing::EaseInOut`, `Easing::EaseInQuad`, `Easing::EaseOutQuad`, `Easing::EaseInOutQuad`, `Easing::EaseInCubic`, `Easing::EaseOutCubic`, `Easing::EaseInOutCubic`, `Easing::EaseInQuart`, `Easing::EaseOutQuart`, `Easing::EaseInOutQuart`, `Easing::EaseInExpo`, `Easing::EaseOutExpo`, `Easing::EaseInOutExpo`, `Easing::EaseInBack`, `Easing::EaseOutBack`, `Easing::EaseInOutBack`, `Easing::EaseInElastic`, `Easing::EaseOutElastic`, `Easing::EaseInOutElastic`, `Easing::EaseInBounce`, `Easing::EaseOutBounce`, `Easing::EaseInOutBounce`, `Easing::Spring`, `Easing::Custom`.
+Enum variants: `InputType::Text`, `InputType::Password`, `InputType::Email`, `InputType::Number`, `InputType::Search`; `ImageFit::Cover`, `ImageFit::Contain`, `ImageFit::Fill`, `ImageFit::None`, `ImageFit::ScaleDown`; `ScrollDirection::Vertical`, `ScrollDirection::Horizontal`, `ScrollDirection::Both`; `ScrollbarVisibility::Auto`, `ScrollbarVisibility::Always`, `ScrollbarVisibility::Never`, `ScrollbarVisibility::Hover`; `ListStyle::Bullet`, `ListStyle::Numbered`, `ListStyle::LowercaseAlpha`, `ListStyle::UppercaseAlpha`, `ListStyle::LowercaseRoman`, `ListStyle::UppercaseRoman`, `ListStyle::None`; `SpinnerType::Dots`, `SpinnerType::Line`, `SpinnerType::Circle`, `SpinnerType::Arrow`, `SpinnerType::Box`, `SpinnerType::Bounce`, `SpinnerType::Grow`, `SpinnerType::Star`; `TextAlign::Left`, `TextAlign::Center`, `TextAlign::Right`; `ControlSize::Small`, `ControlSize::Medium`, `ControlSize::Large`; `SplitAxis::Horizontal`, `SplitAxis::Vertical`; `ControlVariant::Primary`, `ControlVariant::Secondary`, `ControlVariant::Outline`, `ControlVariant::Ghost`, `ControlVariant::Danger`, `ControlVariant::Success`; `MainAxisAlignment::Start`, `MainAxisAlignment::End`, `MainAxisAlignment::Center`, `MainAxisAlignment::SpaceBetween`, `MainAxisAlignment::SpaceAround`; `CrossAxisAlignment::Start`, `CrossAxisAlignment::End`, `CrossAxisAlignment::Center`, `CrossAxisAlignment::Stretch`; `Easing::Linear`, `Easing::EaseIn`, `Easing::EaseOut`, `Easing::EaseInOut`, `Easing::EaseInQuad`, `Easing::EaseOutQuad`, `Easing::EaseInOutQuad`, `Easing::EaseInCubic`, `Easing::EaseOutCubic`, `Easing::EaseInOutCubic`, `Easing::EaseInQuart`, `Easing::EaseOutQuart`, `Easing::EaseInOutQuart`, `Easing::EaseInExpo`, `Easing::EaseOutExpo`, `Easing::EaseInOutExpo`, `Easing::EaseInBack`, `Easing::EaseOutBack`, `Easing::EaseInOutBack`, `Easing::EaseInElastic`, `Easing::EaseOutElastic`, `Easing::EaseInOutElastic`, `Easing::EaseInBounce`, `Easing::EaseOutBounce`, `Easing::EaseInOutBounce`, `Easing::Spring`, `Easing::Custom`.
 
 Validation: CI-safe checks are `cargo test --test docs_api_drift`, `cargo test example_smoke`, `cargo test dogfood`, `cargo check`, and `cargo test`. The native macOS GUI smoke is local-only: `scripts/native_dogfood_macos.sh`.
 
@@ -581,6 +581,38 @@ impl View for SyncView {
             .on_change(cx.listener_with(|this, value, _| this.checked = value))
     }
 }
+```
+
+---
+
+### Value Controls
+
+`rui::advanced_ui` has five value controls. Each one is controlled: pass the
+value on every render and update it from `on_change`. Each takes `.theme(theme)`,
+`.disabled(bool)` and `.id(id)`, takes keyboard focus in Tab order, requests focus
+on press, and exposes an accessibility node. `examples/controls.rs` shows all
+five (`cargo run --example controls`).
+
+| Control | Builder | `on_change` gets | Pointer | Keyboard | Accessibility |
+|---------|---------|------------------|---------|----------|---------------|
+| Slider | `slider(label, value)` with `.range(min, max)`, `.step(step)`, `.width(px)`, `.size(ControlSize)`, `.read_only(bool)` | `f32` | Press on the track jumps there; drag the thumb | Left/Down and Right/Up step, Page Up/Down move a tenth of the range, Home/End go to min/max | `Slider` (AXSlider) with value, min and max; Increment/Decrement actions |
+| Switch | `switch(label)` with `.on(bool)`, `.size(ControlSize)`, `.read_only(bool)` | `bool` | Click toggles | Space (and Enter) toggles | `Switch` (AXCheckBox, AXSwitch subrole), checked, value `on`/`off`; Activate |
+| Radio group | `radio_group(label, options, selected)` with `(value, label)` options, `.size(ControlSize)`, `.read_only(bool)` | `&str` value | Click picks an option | Arrows move the selection and wrap; Space selects | `RadioGroup` (AXRadioGroup) with `RadioButton` children marked selected; Activate on each |
+| Select | `select(label, items, selected)` with `(value, label)` or `MenuItem` items (`.disabled(true)` items are skipped), `.size(ControlSize)` | `&str` value | Click opens the list, click an item to pick it, click elsewhere to close | Down/Up/Enter/Space open; in the list Down/Up move, Home/End jump, Enter/Space pick, Escape closes; typing a prefix highlights the first match | `ComboBox` (AXPopUpButton) whose value is the selected label; when open it holds the `Menu` of items; Activate |
+| Splitter | `splitter(label, first, second)` with `.position(px)`, `.limits(min, max)`, `.axis(SplitAxis)`, `.width(px)` / `.height(px)` | `f32` size of the first pane | Drag the divider; the first pane stays within the limits and the second keeps the rest | Arrows along the axis move 10pt, Home/End go to the limits | `Splitter` (AXSplitter) with value, min and max, between the panes' nodes; Increment/Decrement |
+
+`SplitAxis::Horizontal` (the default) puts the panes side by side, and
+`SplitAxis::Vertical` stacks them. Give pane content `w_full()` / `h_full()` to
+fill its pane. A drag or an open list survives the render its own `on_change`
+causes. The select list opens in the layout flow below the button, as a
+popover does, so content below a select moves down while it is open.
+
+```rust
+ui::slider("Volume", self.volume)
+    .step(5.0)
+    .on_change(cx.listener_with(|this, value, _| this.volume = value));
+ui::select("Fruit", [("apple", "Apple"), ("cherry", "Cherry")], self.fruit.clone())
+    .on_change(cx.text_listener(|this, value, _| this.fruit = value));
 ```
 
 ---
