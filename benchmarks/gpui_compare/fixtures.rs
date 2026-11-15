@@ -691,6 +691,12 @@ fn counted(
     }
     // Let the last frames' completed handlers run.
     std::thread::sleep(Duration::from_millis(100));
+    // Startup draws one frame per window, and RUI's startup case takes no GPU time.
+    if name == "startup" {
+        gpu_time::take_tagged();
+        eprintln!("gpui {name} draw_calls={draw_calls} instances={instances}");
+        return;
+    }
     // The frames RUI samples, from every window that reached them.
     let (mut gpu_ms, gpu_windows) =
         gpu_time::steady_samples(&gpu_time::take_tagged(), GPU_WARMUP, GPU_SAMPLES)

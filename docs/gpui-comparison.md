@@ -2,12 +2,10 @@
 
 Both frameworks draw the same fixtures through Metal on one machine. Tracks #197.
 
-> **GPU comparison limit:** the current GPU sampling populations are not equivalent.
-> RUI discards 10 warm-up frames and measures the next 60; GPUI collects all scenes
-> across Criterion warm-up and repeated window lifecycles. GPU columns are
-> descriptive observations, not a controlled cross-framework verdict. The historical
-> measurements below do not establish the current revision's performance or a shader cause.
-> Matching the sampling windows remains separate work tracked in #277.
+> **GPU sampling:** since #277 both sides take GPU time from the same frames, frames
+> 10 to 69 of every window (see [GPU time with matched samples](#gpu-time-with-matched-samples-2026-11-16)).
+> GPU numbers in sections older than that one sampled GPUI across Criterion's warm-up
+> and every window's first frames; they are kept as recorded, not as verdicts.
 
 Run it with:
 
@@ -111,7 +109,15 @@ examples and GPUI's `primitives` bench paint this way.
     therefore start before the previous one ends, so each frame counts from the later
     of its `GPUStartTime` and the previous frame's `GPUEndTime`: the GPU busy time it
     added.
-  - Both benches fail unless exactly one command buffer completed per frame.
+  - Both sides keep the same frames, through one function,
+    `gpu_time::steady_samples`: each command buffer is tagged with its window and
+    its frame in that window, and frames 10 to 69 of every window are kept. RUI draws
+    one window of 70 frames; Criterion opens a new GPUI window for every call, so a
+    GPUI window gives the frames it drew from frame 10 on, and one closed sooner gives
+    none. A sampled frame with no command buffer or two fails the bench. Each side
+    prints how many frames and windows it sampled. `tests/gpu_sample_window.rs`
+    checks the selection without a GPU.
+  - `startup` takes no GPU time on either side: each window draws one frame.
   - Before this, RUI's GPU column came from a separate pass that waited for every
     frame, and GPUI had none.
 - Footprint: `ri_phys_footprint`. RUI: after its 70 frames. GPUI: after the first call
@@ -126,6 +132,35 @@ examples and GPUI's `primitives` bench paint this way.
     `bench_renderer` drew the pending frame; the bench asserts the list was rendered.
   - Neither side opens an on-screen window or waits for a presented frame. Startup of
     a real app window is not measured here.
+
+## GPU time with matched samples (2026-11-16)
+
+RUI `eccaabd` plus the `startup` fix in this change, GPUI `784374c`, Apple M2 Max,
+macOS 27.2.1, `REPEATS=3`, all cases. **Provisional:** the machine was not quiet; the
+load average was 19.2 / 16.2 / 12.7 before the run and 14.0 / 16.3 / 13.5 after
+(a browser, Spotlight indexing and a VM were running). #277 asks for the virtual-list
+and resize cases to be repeated on a quiet machine before a GPU claim.
+
+GPU ms / frame p50, the range over the three runs, and the samples behind it:
+
+| case | RUI | GPUI | GPUI frames (windows) | verdict by GPU p50 (10% noise) |
+|---|---|---|---|---|
+| list_full | 0.089-0.11 | 0.175-0.314 | 126 (16) | RUI ahead 2.5x |
+| list_full_one_row | 0.073-0.148 | 5.229-7.529 | 10 (2) | RUI ahead 57.7x |
+| list_virtual_1k | 0.053-0.085 | 0.097-0.101 | 1491 (28) | RUI ahead 1.4x |
+| list_virtual_100k | 0.082-0.1 | 0.097-0.101 | 1491 (28) | tie (ranges overlap) |
+| text_paragraphs | 0.095-0.129 | 0.111-0.199 | 1124 (25) | tie (ranges overlap) |
+| quad_grid | 0.072-0.147 | 0.254-0.375 | 381 (21) | RUI ahead 2.9x |
+| resize_full | 0.102-0.15 | 0.175-0.283 | 126 (16) | RUI ahead 1.8x |
+| resize_virtual | 0.106-0.116 | 0.11-0.169 | 1373 (27) | tie (ranges overlap) |
+| editor_scroll | 0.056-0.154 | 0.15-0.303 | 1344 (27) | tie (ranges overlap) |
+| editor_edit | 0.072-0.111 | 0.14-0.303 | 1354 (27) | RUI ahead 2.4x |
+
+RUI samples 60 frames from one window in every case. GPUI's `list_full_one_row`
+takes about 22 ms a frame, so its short Criterion windows give only 10 sampled
+frames; the gap there (3983 draw calls a frame against RUI's 1) is far outside that
+sample's spread. No case has RUI behind. The same run's CPU verdicts match the
+earlier ones: RUI ahead in every case, 3.2x to 136x by wall p50.
 
 ## One changed row with rows as views
 
@@ -258,7 +293,7 @@ and its footprint is lower in every case. That is the claim, and its limits:
 
 ## Historical GPU time on both sides (RUI `a5cae0b`)
 
-These measurements used the unequal sampling populations described above. They remain
+These measurements predate #277: GPUI was sampled across Criterion warm-up and every window's first frames. They remain
 historical observations; do not use them as a current regression gate or a causal
 explanation. The runner emits no automatic GPU winner/loser verdict.
 

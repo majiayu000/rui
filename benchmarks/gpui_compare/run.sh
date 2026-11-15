@@ -174,7 +174,7 @@ done
 echo "== load after: $(uptime | sed 's/.*load averages*: //')" | tee -a "$results" >&2
 
 # One row per case and side; each cell is the range over the repeats.
-printf '%s\n\n' 'GPU columns are descriptive only: RUI samples 60 post-warmup frames; GPUI includes all Criterion scenes. Their sampling populations are not equivalent.'
+printf '%s\n\n' 'GPU columns sample the same frames on both sides: frames 10 to 69 of every window (gpu_time::steady_samples). GPU frames shows how many, from how many windows.'
 awk '
   /^(rui|gpui) / {
     key = $2 SUBSEP $1
@@ -204,9 +204,9 @@ awk '
     return sprintf("%g-%g", low[key, metric], high[key, metric])
   }
   END {
-    metric_count = split("instructions_m ms_p50 ms_p95 allocations draw_calls instances gpu_ms_p50 gpu_ms_p95 footprint_mb footprint_end_mb", frame_metrics, " ")
-    print "| case | side | instructions (M) / frame | ms / frame p50 | ms / frame p95 | allocations / frame | draw calls / frame | instances / frame | GPU ms p50 | GPU ms p95 | footprint (MB) | footprint at end (MB) |"
-    print "|---|---|---|---|---|---|---|---|---|---|---|---|"
+    metric_count = split("instructions_m ms_p50 ms_p95 allocations draw_calls instances gpu_ms_p50 gpu_ms_p95 gpu_frames gpu_windows footprint_mb footprint_end_mb", frame_metrics, " ")
+    print "| case | side | instructions (M) / frame | ms / frame p50 | ms / frame p95 | allocations / frame | draw calls / frame | instances / frame | GPU ms p50 | GPU ms p95 | GPU frames | GPU windows | footprint (MB) | footprint at end (MB) |"
+    print "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"
     for (row = 1; row <= rows; row++) {
       split(order[row], parts, SUBSEP)
       if (parts[1] == "startup") continue
@@ -225,15 +225,15 @@ awk '
         cell(order[row], "footprint_mb") " |"
     }
     print ""
-    print "| case | verdict by instructions (5% noise) | verdict by wall p50 (10% noise) |"
-    print "|---|---|---|"
+    print "| case | verdict by instructions (5% noise) | verdict by wall p50 (10% noise) | verdict by GPU p50 (10% noise) |"
+    print "|---|---|---|---|"
     for (row = 1; row <= rows; row++) {
       split(order[row], parts, SUBSEP)
       if (parts[2] != "rui") continue
       if (parts[1] == "startup") {
-        print "| startup | - | " verdict("startup", "process_to_first_frame_ms", 0.10) " (process start to first frame) |"
+        print "| startup | - | " verdict("startup", "process_to_first_frame_ms", 0.10) " (process start to first frame) | - |"
         continue
       }
-      print "| " parts[1] " | " verdict(parts[1], "instructions_m", 0.05) " | " verdict(parts[1], "ms_p50", 0.10) " |"
+      print "| " parts[1] " | " verdict(parts[1], "instructions_m", 0.05) " | " verdict(parts[1], "ms_p50", 0.10) " | " verdict(parts[1], "gpu_ms_p50", 0.10) " |"
     }
   }' "$results"

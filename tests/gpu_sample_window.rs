@@ -1,5 +1,5 @@
 //! The RUI/GPUI comparison keeps the same GPU samples on both sides: frames 10 to 69
-//! of every window that reached them. This checks that choice without a GPU.
+//! of every window, as many as it drew. This checks that choice without a GPU.
 #![cfg(target_os = "macos")]
 
 #[path = "../benchmarks/gpui_compare/gpu_time.rs"]
@@ -32,16 +32,16 @@ fn frames_after_the_sample_are_left_out() {
 
 #[test]
 fn every_window_contributes_its_own_steady_frames() {
-    // Criterion opens a new window per call: each starts its warm-up again, and a
-    // short first call does not reach the sample.
+    // Criterion opens a new window per call, each starting its warm-up again: one
+    // closed during its warm-up gives nothing, a short one its frames from 10 on.
     let mut tagged = window(0, 3);
     tagged.extend(window(1, 200));
-    tagged.extend(window(2, 70));
+    tagged.extend(window(2, 35));
     // Completion order is not frame order.
     tagged.reverse();
-    let (samples, windows) = steady_samples(&tagged, 10, 60).expect("two full windows");
+    let (samples, windows) = steady_samples(&tagged, 10, 60).expect("two windows");
     assert_eq!(windows, 2);
-    assert_eq!(samples.len(), 120);
+    assert_eq!(samples.len(), 60 + 25);
     assert!(samples.iter().all(|&ms| (10.0..70.0).contains(&ms)));
 }
 
@@ -55,5 +55,5 @@ fn a_frame_with_two_buffers_or_none_is_an_error() {
     gap.retain(|&(tag_, _)| tag_ != tag(0, 30));
     assert!(steady_samples(&gap, 10, 60).is_err());
 
-    assert!(steady_samples(&window(0, 40), 10, 60).is_err(), "no window reached frame 69");
+    assert!(steady_samples(&window(0, 10), 10, 60).is_err(), "nothing after warm-up");
 }

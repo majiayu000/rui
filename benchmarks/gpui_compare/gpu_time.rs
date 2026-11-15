@@ -17,7 +17,7 @@
 //!
 //! The comparison tags each frame with its window and its place in that window
 //! ([`tag`]) and keeps the same frames on both sides with [`steady_samples`]: frames
-//! 10 to 69 of every window that reached them, as RUI's one window always does.
+//! 10 to 69 of every window, as many of them as it drew.
 
 use std::ffi::{CStr, c_char, c_ulong, c_void};
 use std::ops::Range;
@@ -157,10 +157,11 @@ pub fn tag(window: usize, frame: usize) -> usize {
 }
 
 /// GPU time per frame, chosen the same way on both sides of the comparison: in each
-/// window, frames `warmup..warmup + samples` (by their [`tag`]), and only from windows
-/// that reached them all. A window whose sampled frame had no command buffer or more
-/// than one is an error, as is no window reaching the sample. Returns the milliseconds
-/// in window and frame order, with how many windows they came from.
+/// window, frames `warmup..warmup + samples` (by their [`tag`]). A window closed
+/// sooner, as each of Criterion's is, gives the frames it drew from `warmup` on; one
+/// closed before `warmup` gives none. A sampled frame with no command buffer or more
+/// than one is an error, as is no frame sampled at all. Returns the milliseconds in
+/// window and frame order, with how many windows they came from.
 #[allow(dead_code)]
 pub fn steady_samples(
     tagged: &[(usize, f64)],
@@ -186,17 +187,20 @@ pub fn steady_samples(
                 return Err(format!("window {index} frame {expected} has no command buffer"));
             }
         }
-        // A window closed before the sample ended, as Criterion's first short calls
-        // are, has its own early frames only; it is left out.
-        if window.len() == samples {
-            chosen.extend(window.iter().map(|&(_, _, busy)| busy));
-            windows += 1;
-        }
+        chosen.extend(window.iter().map(|&(_, _, busy)| busy));
+        windows += 1;
     }
     if windows == 0 {
+        let mut seen: Vec<usize> = tagged.iter().map(|&(tag, _)| tag >> 32).collect();
+        seen.sort_unstable();
+        seen.dedup();
+        let longest = tagged.iter().map(|&(tag, _)| (tag & 0xffff_ffff) + 1).max();
         return Err(format!(
-            "no window reached frames {warmup}..{} with one command buffer each",
-            warmup + samples
+            "no window drew frames {warmup}..{} ({} buffers from {} windows, the longest {} frames)",
+            warmup + samples,
+            tagged.len(),
+            seen.len(),
+            longest.unwrap_or(0)
         ));
     }
     Ok((chosen, windows))
