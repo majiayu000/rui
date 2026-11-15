@@ -99,6 +99,20 @@ pub fn cg_events() -> bool {
     std::env::var("RUI_PROBE_EVENTS").is_ok_and(|kind| kind == "cg")
 }
 
+/// `RUI_PROBE_EVENTS=hid`: post keys at the HID event tap so they travel the
+/// window server and the real input method like typing does.
+pub fn hid_events() -> bool {
+    std::env::var("RUI_PROBE_EVENTS").is_ok_and(|kind| kind == "hid")
+}
+
+fn post_hid_pair(code: u16, flags: u64) {
+    for down in [true, false] {
+        if !crate::cg::post_hid(code, down, flags) {
+            eprintln!("probe: CoreGraphics refused a HID key event");
+        }
+    }
+}
+
 fn key_event(window: &NSWindow, kind: NSEventType, key: Key) -> Retained<NSEvent> {
     let chars = NSString::from_str(key.chars);
     NSEvent::keyEventWithType_location_modifierFlags_timestamp_windowNumber_context_characters_charactersIgnoringModifiers_isARepeat_keyCode(
@@ -119,6 +133,10 @@ fn key_event(window: &NSWindow, kind: NSEventType, key: Key) -> Retained<NSEvent
 /// Queue a key down and up for the window; rui's loop dequeues them and sends
 /// them through `NSApp sendEvent:` like real keystrokes.
 pub fn post_key(window: &NSWindow, key: Key) {
+    if hid_events() {
+        post_hid_pair(key.code, key.flags.bits() as u64);
+        return;
+    }
     let app = app();
     if cg_events() {
         // A CGEvent-backed NSEvent carries no window number, so rui's loop
@@ -138,6 +156,9 @@ pub fn post_key(window: &NSWindow, key: Key) {
 }
 
 pub fn post_key_up(window: &NSWindow, key: Key) {
+    if hid_events() {
+        return;
+    }
     app().postEvent_atStart(&key_event(window, NSEventType::KeyUp, key), false);
 }
 
@@ -157,6 +178,15 @@ pub fn handle_key_in_context(window: &NSWindow, key: Key) -> bool {
 
 /// Press and release Shift alone (a flags-changed pair).
 pub fn post_shift_tap(window: &NSWindow) {
+    if hid_events() {
+        let shift = NSEventModifierFlags::Shift.bits() as u64;
+        for (down, flags) in [(true, shift), (false, 0)] {
+            if !crate::cg::post_hid(56, down, flags) {
+                eprintln!("probe: CoreGraphics refused a HID Shift event");
+            }
+        }
+        return;
+    }
     let app = app();
     if cg_events() {
         let shift = NSEventModifierFlags::Shift.bits() as u64;
