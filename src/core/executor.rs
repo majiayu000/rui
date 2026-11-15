@@ -36,6 +36,21 @@ thread_local! {
     static POLLING_APP: Cell<*mut AppContext> = const { Cell::new(std::ptr::null_mut()) };
 }
 
+/// Restore the previous poll context on both normal return and unwinding.
+struct PollingAppScope(*mut AppContext);
+
+impl PollingAppScope {
+    fn enter(app: *mut AppContext) -> Self {
+        Self(POLLING_APP.with(|polling| polling.replace(app)))
+    }
+}
+
+impl Drop for PollingAppScope {
+    fn drop(&mut self) {
+        POLLING_APP.with(|polling| polling.set(self.0));
+    }
+}
+
 /// The result of a task, shared between the task and its handle.
 struct Completion<T> {
     value: Option<T>,
@@ -151,6 +166,7 @@ impl<T> Drop for Task<T> {
 /// polled, so between two `await`s the task sees and changes app state directly.
 #[derive(Clone)]
 pub struct AsyncApp {
+    owner: RcWeak<RefCell<ForegroundTasks>>,
     background: BackgroundExecutor,
     not_send: PhantomData<*const ()>,
 }
@@ -160,22 +176,23 @@ impl AsyncApp {
     ///
     /// # Panics
     ///
-    /// Outside the poll of a task spawned with [`AppContext::spawn`], or inside
-    /// another `update`.
+    /// Outside the poll of a task spawned with [`AppContext::spawn`] on this
+    /// application, or inside another `update`.
     pub fn update<R>(&self, update: impl FnOnce(&mut AppContext) -> R) -> R {
-        let app = POLLING_APP.with(|polling| polling.replace(std::ptr::null_mut()));
+        let restore = PollingAppScope::enter(std::ptr::null_mut());
+        let app = restore.0;
         if app.is_null() {
             panic!(
                 "AsyncApp::update runs only while its task is polled, and not inside another update"
             );
         }
-        struct Restore(*mut AppContext);
-        impl Drop for Restore {
-            fn drop(&mut self) {
-                POLLING_APP.with(|polling| polling.set(self.0));
-            }
-        }
-        let _restore = Restore(app);
+        // SAFETY: the poll scope keeps this pointer valid, including during
+        // unwinding. Clearing TLS above prevents reentrant mutable access.
+        let owner = unsafe { &(*app).foreground_tasks.tasks };
+        assert!(
+            self.owner.ptr_eq(&Rc::downgrade(owner)),
+            "AsyncApp::update cannot access another application"
+        );
         // SAFETY: `app` was set by `poll_foreground_tasks` from its `&mut
         // AppContext`, which it does not use while the task is polled, and is
         // cleared while this update runs so no second `&mut` can be made.
@@ -212,6 +229,7 @@ impl AppContext {
         Fut::Output: 'static,
     {
         let future = task(AsyncApp {
+            owner: Rc::downgrade(&self.foreground_tasks.tasks),
             background: self.background.clone(),
             not_send: PhantomData,
         });
@@ -269,9 +287,9 @@ impl AppContext {
                 queue: Arc::downgrade(self.update_queue()),
             }));
             let app: *mut AppContext = self;
-            let previous = POLLING_APP.with(|polling| polling.replace(app));
+            let scope = PollingAppScope::enter(app);
             let poll = future.as_mut().poll(&mut Context::from_waker(&waker));
-            POLLING_APP.with(|polling| polling.set(previous));
+            drop(scope);
             polled += 1;
 
             let mut tasks = self.foreground_tasks.tasks.borrow_mut();
@@ -337,8 +355,9 @@ impl AppContext {
 
 /// A future running off the UI thread. Awaiting it gives its output.
 ///
-/// Dropping it cancels the task at its next `await`; [`BackgroundTask::detach`]
-/// lets it run to completion.
+/// Dropping it requests cancellation and schedules disposal of its future. A
+/// currently running poll must return first. [`BackgroundTask::detach`] lets it
+/// run to completion.
 #[must_use = "dropping a BackgroundTask cancels it; call detach() to let it run"]
 pub struct BackgroundTask<T> {
     completion: Arc<Mutex<Completion<T>>>,
@@ -365,6 +384,7 @@ impl<T> Drop for BackgroundTask<T> {
     fn drop(&mut self) {
         if !self.detached {
             self.task.cancelled.store(true, Ordering::Release);
+            Arc::clone(&self.task).wake();
         }
     }
 }
@@ -471,19 +491,22 @@ impl BackgroundExecutor {
         }
     }
 
-    /// Run inline tasks that are ready, in the order they became ready.
+    /// Run the ready batch present at entry, in order. New wakes wait for
+    /// the next round so self-waking tasks cannot monopolize this drain.
     fn run_inline_tasks(&self) -> usize {
         let Some(queue) = &self.inline else {
             return 0;
         };
+        let ready = lock(queue).len();
         let mut ran = 0;
-        loop {
+        for _ in 0..ready {
             let Some(task) = lock(queue).pop_front() else {
-                return ran;
+                break;
             };
             task.run();
             ran += 1;
         }
+        ran
     }
 }
 
@@ -682,3 +705,7 @@ mod tests {
         cx.update(|_| {});
     }
 }
+
+#[cfg(test)]
+#[path = "executor_boundaries_tests.rs"]
+mod boundary_tests;
