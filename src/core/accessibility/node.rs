@@ -15,6 +15,9 @@ pub enum AccessibilityRole {
     DataTree,
     DataTreeItem,
     Dialog,
+    /// A table of cells moved through with the arrow keys, such as a calendar.
+    Grid,
+    GridCell,
     Menu,
     MenuItem,
     Popover,
@@ -23,6 +26,8 @@ pub enum AccessibilityRole {
     RadioGroup,
     SegmentedControl,
     Slider,
+    /// A live region whose arrival is announced, such as a toast.
+    Status,
     Splitter,
     Switch,
     SegmentedOption,
@@ -422,6 +427,20 @@ impl AccessibilityTree {
 
     pub fn find(&self, id: ElementId) -> Option<&AccessibilityNode> {
         self.roots.iter().find_map(|node| find_node(node, id))
+    }
+
+    /// The live regions ([`AccessibilityRole::Status`] nodes) in the tree, in
+    /// tree order.
+    pub fn live_regions(&self) -> Vec<&AccessibilityNode> {
+        let mut found = Vec::new();
+        let mut pending: Vec<&AccessibilityNode> = self.roots.iter().rev().collect();
+        while let Some(node) = pending.pop() {
+            if node.role == AccessibilityRole::Status {
+                found.push(node);
+            }
+            pending.extend(node.children.iter().rev());
+        }
+        found
     }
 }
 

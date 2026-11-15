@@ -52,6 +52,19 @@ All notable project changes should be recorded here.
   platform-dependent stages, `DispatchEvents` and `Present`.
 - Added `AppContext::has_frame_work` as the single definition of an idle frame.
 
+### Advanced UI
+
+- `Toaster` / `Toast` show transient info, success, warning and error
+  notifications stacked in a window corner, closing after a duration that
+  pauses while hovered, with close and action buttons. Toasts are
+  `AccessibilityRole::Status` live regions announced when they appear.
+- `date_picker` is a date field opening a month calendar in an overlay with
+  keyboard navigation, min/max and disabled dates; the calendar is exposed as
+  an `AccessibilityRole::Grid` of `GridCell`s. `CalendarDate` does the date
+  math without a new dependency.
+- **Breaking:** `ThemeColors` gains a `warning` colour, and
+  `AccessibilityRole` gains `Grid`, `GridCell` and `Status`.
+
 ## 0.2.5 - 2026-05-31
 
 ### Accessibility
