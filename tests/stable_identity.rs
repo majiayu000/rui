@@ -210,14 +210,14 @@ fn advanced_ui_composites_keep_their_ids_across_rebuilds() {
     };
     let (first, second) = (ids(), ids());
     // Toolbar, its text, menu with 2 items, control with 2 options, tabs,
-    // tab list with 2 tabs, panel, data list with 2 items.
-    assert_eq!(first.len(), 15, "{first:?}");
+    // tab list with 2 tabs, panel and its text, data list with 2 items.
+    assert_eq!(first.len(), 16, "{first:?}");
     assert_eq!(first, second, "a rebuild must keep every node's id");
     assert!(first.iter().all(|id| !id.is_ephemeral()));
 }
 
 #[test]
-fn only_accessible_text_adds_an_accessibility_node() {
+fn text_is_readable_unless_hidden() {
     let nodes = |root: Div| {
         let mut presenter = Presenter::with_root(VIEWPORT, root);
         if let Err(err) = presenter.layout(VIEWPORT) {
@@ -229,9 +229,9 @@ fn only_accessible_text_adds_an_accessibility_node() {
             Err(err) => panic!("accessibility tree failed: {err}"),
         }
     };
-    assert_eq!(nodes(div().child(rui::elements::text("plain"))), 0);
+    assert_eq!(nodes(div().child(rui::elements::text("read"))), 1);
     assert_eq!(
-        nodes(div().child(rui::elements::text("read").accessible())),
-        1
+        nodes(div().child(rui::elements::text("×").accessibility_hidden())),
+        0
     );
 }

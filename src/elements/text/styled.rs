@@ -1,13 +1,16 @@
 //! Text with runs of different styles in one paragraph.
 
 use super::{FontWeight, TextAlign, TextStyle, TextStyleRefinement};
+use crate::core::accessibility::{
+    AccessibilityContext, AccessibilityError, AccessibilityNode, AccessibilityRole,
+};
 use crate::core::color::Color;
 use crate::core::event::Cursor;
 use crate::core::geometry::{Bounds, Edges, Point};
 use crate::core::style::{Corners, Style};
 use crate::core::{ElementId, SharedStr};
 use crate::elements::element::{
-    Capabilities, Element, EventContext, LayoutContext, PaintContext, PointerEvent,
+    Capabilities, Element, EventContext, LayoutContext, PaintContext, PointerEvent, StableId,
     PointerEventKind, RichLines, RichWrapRequest, style_to_taffy,
 };
 use crate::elements::selection::{LeafFont, LeafLayout, SelectableLeaf};
@@ -172,6 +175,9 @@ impl TextSpan {
 /// and all spans on a line share one baseline.
 pub struct StyledText {
     id: Option<ElementId>,
+    /// The id of its accessibility node, read as static text; `None` once
+    /// [`StyledText::accessibility_hidden`] leaves it out.
+    accessible: Option<StableId>,
     style: Style,
     /// Every span as bytes of `content`, in order, covering it.
     spans: Vec<TextSpan>,
@@ -258,6 +264,7 @@ impl StyledText {
     fn new(content: Arc<str>, spans: Vec<TextSpan>) -> Self {
         Self {
             id: None,
+            accessible: Some(StableId::new()),
             style: Style::new(),
             spans,
             content,
@@ -273,6 +280,15 @@ impl StyledText {
 
     pub fn id(mut self, id: ElementId) -> Self {
         self.id = Some(id);
+        if self.accessible.is_some() {
+            self.accessible = Some(StableId::explicit(id));
+        }
+        self
+    }
+
+    /// Leave the paragraph out of the accessibility tree.
+    pub fn accessibility_hidden(mut self) -> Self {
+        self.accessible = None;
         self
     }
 
@@ -444,8 +460,14 @@ fn fill(bounds: Bounds, color: Color) -> Primitive {
 }
 
 impl Element for StyledText {
+    // Only an id the application set: the accessibility node's adopted id is
+    // derived from the text's place, and layout derives that again each pass.
     fn id(&self) -> Option<ElementId> {
         self.id
+    }
+
+    fn stable_id_mut(&mut self) -> Option<&mut StableId> {
+        self.accessible.as_mut()
     }
 
     fn style(&self) -> &Style {
@@ -475,6 +497,7 @@ impl Element for StyledText {
             && self.style == previous.style
             && self.align == previous.align
             && self.max_lines == previous.max_lines
+            && self.accessible.is_some() == previous.accessible.is_some()
     }
 
     fn layout(&mut self, cx: &mut LayoutContext) -> NodeId {
@@ -528,7 +551,29 @@ impl Element for StyledText {
         node
     }
 
+    /// Read as one piece of static text: the paragraph's characters, in
+    /// order, without the styling its spans add.
+    fn accessibility(
+        &self,
+        cx: &AccessibilityContext,
+    ) -> Result<Option<AccessibilityNode>, AccessibilityError> {
+        let Some(id) = self.accessible.map(|id| id.get()) else {
+            return Ok(None);
+        };
+        if self.content.trim().is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(
+            AccessibilityNode::new(id, AccessibilityRole::Text)
+                .with_label(self.content.to_string())
+                .with_focused(cx.a11y_has_focus(id)),
+        ))
+    }
+
     fn paint(&mut self, cx: &mut PaintContext) {
+        if let Some(id) = self.accessible {
+            cx.register_accessibility_region(id.get(), cx.bounds());
+        }
         if self.content.is_empty() {
             return;
         }
