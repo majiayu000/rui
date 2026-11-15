@@ -10,6 +10,8 @@ use crate::elements::element::{
     Capabilities, Element, EventContext, LayoutContext, PaintContext, PointerEvent,
     PointerEventKind, RichLines, RichWrapRequest, style_to_taffy,
 };
+use crate::elements::selection::{LeafFont, LeafLayout, SelectableLeaf};
+use crate::elements::{SelectionScope, selection_scope};
 use crate::renderer::Primitive;
 use crate::renderer::text::BaseDirection;
 use crate::renderer::text::{RichPiece, RichPieceText, RichSpan, RichWrapped};
@@ -330,6 +332,54 @@ impl StyledText {
     pub fn on_link_rc(mut self, handler: LinkHandler) -> Self {
         self.on_link = Some(handler);
         self
+    }
+
+    /// This paragraph in a [`SelectionScope`] of its own, so it can be
+    /// selected and copied. Text inside a scope is selectable without this.
+    pub fn selectable(self) -> SelectionScope {
+        selection_scope(self)
+    }
+
+    /// What a selection scope needs to know of this paragraph painted at
+    /// `bounds`, once laid out.
+    pub(crate) fn selectable_leaf(
+        &self,
+        bounds: Bounds,
+        clip: Option<Bounds>,
+    ) -> Option<SelectableLeaf> {
+        let lines = self.lines.borrow().clone()?;
+        if self.content.is_empty() {
+            return None;
+        }
+        let inherited = &self.inherited;
+        let fonts = self
+            .spans
+            .iter()
+            .zip(&self.families)
+            .map(|(span, family)| {
+                let refinement = &span.refinement;
+                LeafFont {
+                    size: refinement.font_size.unwrap_or(inherited.font_size),
+                    weight: refinement
+                        .font_weight
+                        .unwrap_or(inherited.font_weight)
+                        .to_value(),
+                    family: family.clone(),
+                    line_height: refinement.line_height.unwrap_or(inherited.line_height),
+                }
+            })
+            .collect();
+        let layout = LeafLayout::Rich {
+            fonts,
+            align: self.align,
+            lines,
+        };
+        Some(SelectableLeaf::new(
+            bounds,
+            clip,
+            SharedStr::new(Arc::clone(&self.content)),
+            layout,
+        ))
     }
 
     /// The whole text, every span's content in order.

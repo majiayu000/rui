@@ -91,8 +91,8 @@ where
 
     for event in &events.ordered_input_events {
         let (handled, redraw_requested, redraw_source) = match event {
-            OrderedInputEvent::Pointer(event) => {
-                let dispatch = presenter.dispatch_pointer_event(event);
+            OrderedInputEvent::Pointer(event, modifiers) => {
+                let dispatch = presenter.dispatch_pointer_event_with(event, *modifiers);
                 if matches!(event.kind, crate::elements::element::PointerEventKind::Move) {
                     crate::platform::mac::cursor::show_cursor(presenter.cursor());
                 }

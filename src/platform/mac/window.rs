@@ -681,6 +681,7 @@ fn mouse_event_from_native_event(
         kind,
         position,
         button,
+        modifiers: modifiers_from_native_event(event),
     })
 }
 

@@ -80,6 +80,8 @@ pub struct EventContext<'a> {
     overlays: Option<Rc<[Overlay]>>,
     /// The press goes only to owners of light-dismiss overlays it is outside.
     dismiss_pass: bool,
+    /// Modifier keys held with the pointer event being dispatched.
+    modifiers: Modifiers,
 }
 
 impl<'a> EventContext<'a> {
@@ -106,6 +108,7 @@ impl<'a> EventContext<'a> {
             window: bounds,
             overlays: None,
             dismiss_pass: false,
+            modifiers: Modifiers::none(),
         }
     }
 
@@ -332,6 +335,7 @@ impl<'a> EventContext<'a> {
             window: self.window,
             overlays: self.overlays.clone(),
             dismiss_pass: self.dismiss_pass,
+            modifiers: self.modifiers,
         }
     }
 
@@ -367,6 +371,7 @@ impl<'a> EventContext<'a> {
             window: self.window,
             overlays: self.overlays.clone(),
             dismiss_pass: self.dismiss_pass,
+            modifiers: self.modifiers,
         }
     }
 
@@ -387,6 +392,16 @@ impl<'a> EventContext<'a> {
 
     pub(crate) fn set_window(&mut self, window: Bounds) {
         self.window = window;
+    }
+
+    /// Modifier keys held with the pointer event being dispatched, such as
+    /// shift for a click that extends a selection.
+    pub fn modifiers(&self) -> Modifiers {
+        self.modifiers
+    }
+
+    pub(crate) fn set_modifiers(&mut self, modifiers: Modifiers) {
+        self.modifiers = modifiers;
     }
 
     pub(crate) fn set_dismiss_pass(&mut self, dismiss_pass: bool) {
@@ -467,6 +482,7 @@ impl<'a> EventContext<'a> {
             window: self.window,
             overlays: self.overlays.clone(),
             dismiss_pass: self.dismiss_pass,
+            modifiers: self.modifiers,
         }
     }
 }

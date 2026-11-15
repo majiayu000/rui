@@ -133,6 +133,16 @@ impl Keymap {
         keymap.bind(KeyCode::C, Modifiers::meta(), StandardAction::Copy)?;
         keymap.bind(KeyCode::X, Modifiers::meta(), StandardAction::Cut)?;
         keymap.bind(KeyCode::V, Modifiers::meta(), StandardAction::Paste)?;
+        // Off macOS, Ctrl is the shortcut modifier for the clipboard too.
+        #[cfg(not(target_os = "macos"))]
+        for (key, action) in [
+            (KeyCode::A, StandardAction::SelectAll),
+            (KeyCode::C, StandardAction::Copy),
+            (KeyCode::X, StandardAction::Cut),
+            (KeyCode::V, StandardAction::Paste),
+        ] {
+            keymap.bind(key, Modifiers::ctrl(), action)?;
+        }
         keymap.bind(
             KeyCode::P,
             Modifiers::meta(),

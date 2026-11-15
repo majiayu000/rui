@@ -108,6 +108,7 @@ pub(super) fn append_pointer_click(events: &mut Vec<MacWindowEvent>, position: P
             kind: PlatformMouseEventKind::Down,
             position,
             button: Some(MouseButton::Left),
+            modifiers: Modifiers::none(),
         }),
     )));
     events.push(MacWindowEvent::Platform(PlatformWindowEvent::Input(
@@ -115,6 +116,7 @@ pub(super) fn append_pointer_click(events: &mut Vec<MacWindowEvent>, position: P
             kind: PlatformMouseEventKind::Up,
             position,
             button: Some(MouseButton::Left),
+            modifiers: Modifiers::none(),
         }),
     )));
 }
