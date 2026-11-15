@@ -611,3 +611,173 @@ fn action_keymap_select_all_reaches_inputs_inside_wrappers() {
         )
     });
 }
+
+#[test]
+fn button_space_activates_once_per_initial_press_with_or_without_character() {
+    let id = ElementId::new();
+    let clicks = Rc::new(Cell::new(0));
+    let observed = clicks.clone();
+    let mut session = mount_or_panic(move |_| {
+        let observed = observed.clone();
+        button("Run")
+            .id(id)
+            .on_click(move || observed.set(observed.get() + 1))
+    });
+    session.request_focus(Some(id));
+    for (index, event) in [
+        KeyEvent::new(KeyCode::Space, Modifiers::none()),
+        KeyEvent::new(KeyCode::Space, Modifiers::none()).with_char(' '),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        assert!(session.dispatch_key_event(&event));
+        assert_eq!(clicks.get(), index + 1);
+        let mut repeat = event.clone();
+        repeat.is_repeat = true;
+        session.dispatch_key_event(&repeat);
+        session.dispatch_key_event(&repeat);
+        assert_eq!(
+            clicks.get(),
+            index + 1,
+            "held Space must not activate again"
+        );
+    }
+    assert!(session.dispatch_key_event(&KeyEvent::new(KeyCode::Enter, Modifiers::none())));
+    assert_eq!(clicks.get(), 3, "existing Enter activation is preserved");
+}
+
+#[test]
+fn button_space_respects_focus_disabled_read_only_and_modifiers() {
+    for (focused, disabled, read_only) in [
+        (false, false, false),
+        (true, true, false),
+        (true, false, true),
+    ] {
+        let id = ElementId::new();
+        let clicks = Rc::new(Cell::new(0));
+        let observed = clicks.clone();
+        let mut session = mount_or_panic(move |_| {
+            let observed = observed.clone();
+            button("Run")
+                .id(id)
+                .disabled(disabled)
+                .read_only(read_only)
+                .on_click(move || observed.set(observed.get() + 1))
+        });
+        if focused {
+            session.request_focus(Some(id));
+        }
+        for event in [
+            KeyEvent::new(KeyCode::Space, Modifiers::none()),
+            KeyEvent::new(KeyCode::Space, Modifiers::none()).with_char(' '),
+        ] {
+            assert!(!session.dispatch_key_event(&event));
+        }
+        assert_eq!(clicks.get(), 0);
+    }
+    let id = ElementId::new();
+    let clicks = Rc::new(Cell::new(0));
+    let observed = clicks.clone();
+    let mut session = mount_or_panic(move |_| {
+        let observed = observed.clone();
+        button("Run")
+            .id(id)
+            .on_click(move || observed.set(observed.get() + 1))
+    });
+    session.request_focus(Some(id));
+    for modifiers in [
+        Modifiers::shift(),
+        Modifiers::ctrl(),
+        Modifiers::alt(),
+        Modifiers::meta(),
+    ] {
+        assert!(
+            !session.dispatch_key_event(&KeyEvent::new(KeyCode::Space, modifiers).with_char(' '))
+        );
+    }
+    assert_eq!(clicks.get(), 0);
+}
+
+#[test]
+fn button_space_does_not_steal_input_or_invoke_app_activation() {
+    let input_id = ElementId::new();
+    let button_id = ElementId::new();
+    let latest = Rc::new(RefCell::new(String::new()));
+    let edits = latest.clone();
+    let clicks = Rc::new(Cell::new(0));
+    let observed = clicks.clone();
+    let submits = Rc::new(Cell::new(0));
+    let submitted = submits.clone();
+    let mut session = mount_or_panic(move |_| {
+        let edits = edits.clone();
+        let observed = observed.clone();
+        let submitted = submitted.clone();
+        rui::elements::div()
+            .child(
+                button("Run")
+                    .id(button_id)
+                    .on_click(move || observed.set(observed.get() + 1)),
+            )
+            .child(
+                input()
+                    .id(input_id)
+                    .on_change(move |value| *edits.borrow_mut() = value.to_string())
+                    .on_submit(move |_| submitted.set(submitted.get() + 1)),
+            )
+    });
+    let app_calls = Rc::new(RefCell::new(Vec::new()));
+    session
+        .app_context_mut()
+        .add_action_handler(RecordingHandler::new(
+            "app",
+            vec![StandardAction::Activate.into()],
+            app_calls.clone(),
+        ));
+    session.request_focus(Some(input_id));
+    let event = KeyEvent::new(KeyCode::Space, Modifiers::none()).with_char(' ');
+    assert!(session.dispatch_key_event(&event));
+    let mut repeat = event;
+    repeat.is_repeat = true;
+    assert!(session.dispatch_key_event(&repeat));
+    assert_eq!(
+        latest.borrow().as_str(),
+        "  ",
+        "input keeps normal and repeated spaces"
+    );
+    assert_eq!(submits.get(), 0);
+    assert_eq!(clicks.get(), 0);
+    assert!(app_calls.borrow().is_empty());
+    session.request_focus(Some(button_id));
+    assert!(session.dispatch_key_event(&KeyEvent::new(KeyCode::Space, Modifiers::none())));
+    assert_eq!(clicks.get(), 1);
+    assert_eq!(latest.borrow().as_str(), "  ");
+    assert!(app_calls.borrow().is_empty());
+}
+
+#[test]
+fn button_space_preserves_explicit_keymap_binding() {
+    let id = ElementId::new();
+    let clicks = Rc::new(Cell::new(0));
+    let observed = clicks.clone();
+    let mut session = mount_or_panic(move |_| {
+        let observed = observed.clone();
+        button("Run")
+            .id(id)
+            .on_click(move || observed.set(observed.get() + 1))
+    });
+    let action = ActionId::custom("app.space");
+    session
+        .app_context_mut()
+        .keymap_mut()
+        .bind(KeyCode::Space, Modifiers::none(), action.clone())
+        .unwrap();
+    let calls = Rc::new(RefCell::new(Vec::new()));
+    session
+        .app_context_mut()
+        .add_action_handler(RecordingHandler::new("app", vec![action], calls.clone()));
+    session.request_focus(Some(id));
+    assert!(session.dispatch_key_event(&KeyEvent::new(KeyCode::Space, Modifiers::none())));
+    assert_eq!(calls.borrow().as_slice(), ["app"]);
+    assert_eq!(clicks.get(), 0);
+}

@@ -6,6 +6,7 @@ pub mod element;
 mod image;
 mod input;
 mod list;
+pub mod overlay;
 mod scroll_view;
 mod spinner;
 mod svg;
@@ -32,3 +33,6 @@ pub use text::{
 pub use text_area::{TextArea, TextAreaState, text_area};
 pub use view_element::{ViewElement, view};
 pub use virtual_list::{VirtualList, VirtualListHandle, virtual_list};
+
+mod variable_list;
+pub use variable_list::{VariableList, VariableListHandle, variable_list};

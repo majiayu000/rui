@@ -1,0 +1,16 @@
+[package]
+name = "vello_compare"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Kept out of RUI's build: Vello and its wgpu are only this harness's.
+[workspace]
+
+[dependencies]
+vello = "=0.12.0"
+pollster = "0.4"
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+[profile.release]
+debug = "line-tables-only"

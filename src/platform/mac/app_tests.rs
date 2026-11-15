@@ -3,7 +3,9 @@ use crate::core::accessibility::{
     AccessibilityAnnouncement, AccessibilityAnnouncementKind, AccessibilityNode,
     AccessibilityRole, AccessibilityTree,
 };
+use crate::core::event::ScrollEvent;
 use crate::core::text_editing::TextInputCommand;
+use crate::platform::window::PlatformImeEvent;
 
 /// Redraw source each `PlatformWindowEvent` variant is classified as, or
 /// `None` when the event must not mark a redraw at all.

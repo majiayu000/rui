@@ -168,7 +168,7 @@ fn advanced_ui_dialog_modal_consumes_inside_pointer_events() {
 }
 
 #[test]
-fn advanced_ui_dialog_content_containment_respects_hit_clip() {
+fn advanced_ui_dialog_content_escapes_ancestor_hit_clip() {
     let mut dialog = Dialog::new("Confirm", container().w(300.0).h(300.0));
     let (taffy, _) = layout(&mut dialog);
     let mut focused = None;
@@ -183,9 +183,10 @@ fn advanced_ui_dialog_content_containment_respects_hit_clip() {
         Bounds::from_xywh(0.0, 0.0, 320.0, 100.0),
     );
 
+    // The dialog is an overlay: it paints outside the clip, so it is hit there.
     assert!(
-        !dialog.handle_pointer_event(&mut cx, &pointer(PointerEventKind::Down, 50.0, 150.0)),
-        "pointer in unclipped content but outside hit_clip must not be consumed"
+        dialog.handle_pointer_event(&mut cx, &pointer(PointerEventKind::Down, 50.0, 150.0)),
+        "pointer on content outside an ancestor's hit_clip reaches the overlay"
     );
     assert!(
         dialog.handle_pointer_event(&mut cx, &pointer(PointerEventKind::Down, 50.0, 40.0)),
@@ -193,26 +194,31 @@ fn advanced_ui_dialog_content_containment_respects_hit_clip() {
     );
 }
 
-fn child_pointer(taffy: &TaffyTree<ElementId>, root: NodeId, index: usize) -> Point {
-    let child = taffy
-        .children(root)
-        .expect("overlay children")
-        .get(index)
-        .copied()
-        .expect("overlay child");
-    let layout = taffy.layout(child).expect("overlay child layout");
-    Point::new(layout.location.x + 8.0, layout.location.y + 8.0)
+const WINDOW: Bounds = Bounds::new(Point::new(0.0, 0.0), Size::new(320.0, 240.0));
+
+type ContentBounds<E> = fn(&E, &TaffyTree<ElementId>) -> Bounds;
+
+fn dialog_content(dialog: &Dialog, taffy: &TaffyTree<ElementId>) -> Bounds {
+    dialog.content_bounds(taffy, WINDOW)
+}
+
+fn popover_content(popover: &Popover, taffy: &TaffyTree<ElementId>) -> Bounds {
+    popover.content_bounds(taffy, WINDOW, WINDOW)
+}
+
+fn content_pointer(bounds: Bounds) -> Point {
+    Point::new(bounds.x() + 8.0, bounds.y() + 8.0)
 }
 
 fn assert_inactive_overlay_keeps_nested_editor<E: Element>(
     label: &str,
     overlay: &mut E,
     field_id: ElementId,
-    content_child: usize,
+    content: ContentBounds<E>,
     is_open: impl Fn(&E) -> bool,
 ) {
-    let (taffy, root) = layout(overlay);
-    let point = child_pointer(&taffy, root, content_child);
+    let (taffy, _) = layout(overlay);
+    let point = content_pointer(content(overlay, &taffy));
     let mut focused = None;
     let mut cx = EventContext::new(
         Bounds::from_xywh(0.0, 0.0, 320.0, 240.0),
@@ -311,11 +317,11 @@ fn assert_enabled_overlay_forwards_child_actions<E: Element>(
     label: &str,
     overlay: &mut E,
     field_id: ElementId,
-    content_child: usize,
+    content: ContentBounds<E>,
     is_open: impl Fn(&E) -> bool,
 ) {
-    let (taffy, root) = layout(overlay);
-    let point = child_pointer(&taffy, root, content_child);
+    let (taffy, _) = layout(overlay);
+    let point = content_pointer(content(overlay, &taffy));
     let mut focused = None;
     let mut cx = EventContext::new(
         Bounds::from_xywh(0.0, 0.0, 320.0, 240.0),
@@ -393,7 +399,7 @@ fn advanced_ui_dialog_inactive_forwards_nested_editor() {
             label,
             &mut dialog,
             field_id,
-            0,
+            dialog_content,
             Dialog::is_open,
         );
     }
@@ -411,7 +417,7 @@ fn advanced_ui_dialog_inactive_forwards_nested_editor() {
         "enabled dialog",
         &mut dialog,
         field_id,
-        0,
+        dialog_content,
         Dialog::is_open,
     );
 }
@@ -508,7 +514,7 @@ fn advanced_ui_popover_inactive_forwards_nested_editor() {
         "read_only popover",
         &mut popover,
         field_id,
-        1,
+        popover_content,
         Popover::is_open,
     );
 
@@ -527,7 +533,7 @@ fn advanced_ui_popover_inactive_forwards_nested_editor() {
         "enabled popover",
         &mut popover,
         field_id,
-        1,
+        popover_content,
         Popover::is_open,
     );
 }

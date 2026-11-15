@@ -22,6 +22,9 @@ jobs:
       - name: Check minimum Rust and acceptance examples
         run: cargo +1.88.0 check --locked --lib --example counter --example native_dogfood
 
+      - name: Check minimum Rust with the wgpu backend
+        run: cargo +1.88.0 check --locked --lib --features wgpu
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -29,6 +32,9 @@ jobs:
 
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
+
+      - name: Compare runner regression (no GPU workload)
+        run: python3 benchmarks/gpui_compare/test_runner.py
 
       - name: cargo check
         run: cargo check
@@ -39,5 +45,50 @@ jobs:
       - name: cargo clippy
         run: cargo clippy --all-targets
 
+      - name: wgpu backend against Metal
+        run: |
+          cargo clippy --all-targets --features wgpu
+          cargo test --features wgpu --lib renderer::wgpu
+
       - name: Performance gate
         run: cargo bench --bench perf_gate
+
+  winit-linux:
+    # The window references in tests/linux_window/ were drawn by this image's
+    # Mesa lavapipe and DejaVu fonts.
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install X11, lavapipe and fonts
+        run: |
+          sudo apt-get update
+          # winit loads the X11 and xkbcommon libraries at runtime; xdotool
+          # and ImageMagick drive and capture the windows.
+          sudo apt-get install -y xvfb mesa-vulkan-drivers libxkbcommon-x11-0 libxcursor1 libxrandr2 libxi6 xdotool imagemagick fonts-dejavu-core
+
+      - name: Check the winit runner and examples
+        run: cargo check --locked --no-default-features --features winit --lib --example hello_world --example counter
+
+      - name: Library tests without Metal
+        run: cargo test --locked --no-default-features --features winit --lib
+
+      - name: Compare window pixels on lavapipe under Xvfb
+        run: |
+          cargo build --locked --no-default-features --features winit --example hello_world --example counter
+          xvfb-run -a -s "-screen 0 1024x768x24" scripts/linux_window_pixels.sh
+
+      - name: Upload window captures
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-window-pixels
+          path: target/linux-window-pixels

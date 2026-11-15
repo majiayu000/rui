@@ -12,6 +12,7 @@ use crate::elements::element::{
 };
 use crate::elements::text::{FontWeight, TextAlign};
 use crate::renderer::Primitive;
+use crate::renderer::text::BaseDirection;
 use crate::renderer::text::TextMeasureCache;
 use smallvec::SmallVec;
 use taffy::prelude::*;
@@ -476,13 +477,14 @@ impl Element for List {
 
                 cx.paint(Primitive::Text {
                     bounds: marker_bounds,
-                    content: marker_text,
+                    content: marker_text.into(),
                     color: self.marker_color.to_rgba(),
                     font_size: self.marker_font_size,
                     font_weight: FontWeight::Regular.to_value(),
                     font_family: None,
                     line_height: 1.4,
                     align: TextAlign::Right,
+                    direction: BaseDirection::Auto,
                 });
             }
 

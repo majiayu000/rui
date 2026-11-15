@@ -9,6 +9,6 @@ pub use announcement::{AccessibilityAnnouncement, AccessibilityAnnouncementKind}
 pub use bridge::{AccessibilityBridge, UnsupportedAccessibilityBridge};
 pub use error::AccessibilityError;
 pub use node::{
-    AccessibilityAction, AccessibilityContext, AccessibilityNode, AccessibilityRole,
-    AccessibilityScrollPosition, AccessibilityTextRange, AccessibilityTree,
+    AccessibilityAction, AccessibilityContext, AccessibilityNode, AccessibilityNumericValue,
+    AccessibilityRole, AccessibilityScrollPosition, AccessibilityTextRange, AccessibilityTree,
 };

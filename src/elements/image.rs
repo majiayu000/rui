@@ -8,6 +8,7 @@ use crate::elements::element::{
     Capabilities, Element, LayoutContext, PaintContext, style_to_taffy,
 };
 use crate::renderer::Primitive;
+use crate::renderer::text::BaseDirection;
 use std::any::Any;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -394,13 +395,14 @@ impl Element for Image {
                 let text_y = bounds.y() + bounds.height() / 2.0 - 7.0;
                 cx.paint(Primitive::Text {
                     bounds: Bounds::from_xywh(text_x, text_y, bounds.width() - 16.0, 14.0),
-                    content: message.to_string(),
+                    content: message.to_string().into(),
                     color: Color::hex(0xb91c1c).to_rgba(),
                     font_size: 12.0,
                     font_weight: 400,
                     font_family: None,
                     line_height: 1.2,
                     align: crate::elements::text::TextAlign::Center,
+                    direction: BaseDirection::Auto,
                 });
             }
         }

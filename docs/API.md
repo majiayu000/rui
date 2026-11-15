@@ -21,9 +21,9 @@ Complete API documentation for the RUI framework.
 
 Builders: `div()`, `text(content)`, `button(label)`, `input()`, `image(path)`, `scroll_view()`, `table()`, `row()`, `header_row()`, `cell(content)`, `list()`, `ordered_list()`, `unordered_list()`, `spinner()`.
 
-Advanced UI builders: `advanced_ui::container()`, `advanced_ui::row()`, `advanced_ui::column()`, `advanced_ui::text(content)`, `advanced_ui::hoverable(child)`, `advanced_ui::checkbox(label)`, `advanced_ui::progress_bar(value)`, `advanced_ui::segmented_control(options, selected)`, `advanced_ui::toolbar(label)`, `advanced_ui::tooltip(child, content)`, `advanced_ui::menu(label, items)`, `advanced_ui::popover(label, anchor, content)`, `advanced_ui::dialog(label, content)`, `advanced_ui::tab(value, label)`, `advanced_ui::tab_list(tabs, selected)`, `advanced_ui::tab_panel(value, child)`, `advanced_ui::tabs(tabs, selected)`, `advanced_ui::data_list(items)`, `advanced_ui::data_tree(roots)`, `advanced_ui::data_table_row(cells)`.
+Advanced UI builders: `advanced_ui::container()`, `advanced_ui::row()`, `advanced_ui::column()`, `advanced_ui::text(content)`, `advanced_ui::hoverable(child)`, `advanced_ui::checkbox(label)`, `advanced_ui::progress_bar(value)`, `advanced_ui::segmented_control(options, selected)`, `advanced_ui::toolbar(label)`, `advanced_ui::tooltip(child, content)`, `advanced_ui::menu(label, items)`, `advanced_ui::popover(label, anchor, content)`, `advanced_ui::dialog(label, content)`, `advanced_ui::tab(value, label)`, `advanced_ui::tab_list(tabs, selected)`, `advanced_ui::tab_panel(value, child)`, `advanced_ui::tabs(tabs, selected)`, `advanced_ui::data_list(items)`, `advanced_ui::data_tree(roots)`, `advanced_ui::data_table_row(cells)`, `advanced_ui::slider(label, value)`, `advanced_ui::switch(label)`, `advanced_ui::radio_group(label, options, selected)`, `advanced_ui::select(label, items, selected)`, `advanced_ui::splitter(label, first, second)`.
 
-Enum variants: `InputType::Text`, `InputType::Password`, `InputType::Email`, `InputType::Number`, `InputType::Search`; `ImageFit::Cover`, `ImageFit::Contain`, `ImageFit::Fill`, `ImageFit::None`, `ImageFit::ScaleDown`; `ScrollDirection::Vertical`, `ScrollDirection::Horizontal`, `ScrollDirection::Both`; `ScrollbarVisibility::Auto`, `ScrollbarVisibility::Always`, `ScrollbarVisibility::Never`, `ScrollbarVisibility::Hover`; `ListStyle::Bullet`, `ListStyle::Numbered`, `ListStyle::LowercaseAlpha`, `ListStyle::UppercaseAlpha`, `ListStyle::LowercaseRoman`, `ListStyle::UppercaseRoman`, `ListStyle::None`; `SpinnerType::Dots`, `SpinnerType::Line`, `SpinnerType::Circle`, `SpinnerType::Arrow`, `SpinnerType::Box`, `SpinnerType::Bounce`, `SpinnerType::Grow`, `SpinnerType::Star`; `TextAlign::Left`, `TextAlign::Center`, `TextAlign::Right`; `ControlSize::Small`, `ControlSize::Medium`, `ControlSize::Large`; `ControlVariant::Primary`, `ControlVariant::Secondary`, `ControlVariant::Outline`, `ControlVariant::Ghost`, `ControlVariant::Danger`, `ControlVariant::Success`; `MainAxisAlignment::Start`, `MainAxisAlignment::End`, `MainAxisAlignment::Center`, `MainAxisAlignment::SpaceBetween`, `MainAxisAlignment::SpaceAround`; `CrossAxisAlignment::Start`, `CrossAxisAlignment::End`, `CrossAxisAlignment::Center`, `CrossAxisAlignment::Stretch`; `Easing::Linear`, `Easing::EaseIn`, `Easing::EaseOut`, `Easing::EaseInOut`, `Easing::EaseInQuad`, `Easing::EaseOutQuad`, `Easing::EaseInOutQuad`, `Easing::EaseInCubic`, `Easing::EaseOutCubic`, `Easing::EaseInOutCubic`, `Easing::EaseInQuart`, `Easing::EaseOutQuart`, `Easing::EaseInOutQuart`, `Easing::EaseInExpo`, `Easing::EaseOutExpo`, `Easing::EaseInOutExpo`, `Easing::EaseInBack`, `Easing::EaseOutBack`, `Easing::EaseInOutBack`, `Easing::EaseInElastic`, `Easing::EaseOutElastic`, `Easing::EaseInOutElastic`, `Easing::EaseInBounce`, `Easing::EaseOutBounce`, `Easing::EaseInOutBounce`, `Easing::Spring`, `Easing::Custom`.
+Enum variants: `InputType::Text`, `InputType::Password`, `InputType::Email`, `InputType::Number`, `InputType::Search`; `ImageFit::Cover`, `ImageFit::Contain`, `ImageFit::Fill`, `ImageFit::None`, `ImageFit::ScaleDown`; `ScrollDirection::Vertical`, `ScrollDirection::Horizontal`, `ScrollDirection::Both`; `ScrollbarVisibility::Auto`, `ScrollbarVisibility::Always`, `ScrollbarVisibility::Never`, `ScrollbarVisibility::Hover`; `ListStyle::Bullet`, `ListStyle::Numbered`, `ListStyle::LowercaseAlpha`, `ListStyle::UppercaseAlpha`, `ListStyle::LowercaseRoman`, `ListStyle::UppercaseRoman`, `ListStyle::None`; `SpinnerType::Dots`, `SpinnerType::Line`, `SpinnerType::Circle`, `SpinnerType::Arrow`, `SpinnerType::Box`, `SpinnerType::Bounce`, `SpinnerType::Grow`, `SpinnerType::Star`; `TextAlign::Left`, `TextAlign::Center`, `TextAlign::Right`; `ControlSize::Small`, `ControlSize::Medium`, `ControlSize::Large`; `SplitAxis::Horizontal`, `SplitAxis::Vertical`; `ControlVariant::Primary`, `ControlVariant::Secondary`, `ControlVariant::Outline`, `ControlVariant::Ghost`, `ControlVariant::Danger`, `ControlVariant::Success`; `MainAxisAlignment::Start`, `MainAxisAlignment::End`, `MainAxisAlignment::Center`, `MainAxisAlignment::SpaceBetween`, `MainAxisAlignment::SpaceAround`; `CrossAxisAlignment::Start`, `CrossAxisAlignment::End`, `CrossAxisAlignment::Center`, `CrossAxisAlignment::Stretch`; `Easing::Linear`, `Easing::EaseIn`, `Easing::EaseOut`, `Easing::EaseInOut`, `Easing::EaseInQuad`, `Easing::EaseOutQuad`, `Easing::EaseInOutQuad`, `Easing::EaseInCubic`, `Easing::EaseOutCubic`, `Easing::EaseInOutCubic`, `Easing::EaseInQuart`, `Easing::EaseOutQuart`, `Easing::EaseInOutQuart`, `Easing::EaseInExpo`, `Easing::EaseOutExpo`, `Easing::EaseInOutExpo`, `Easing::EaseInBack`, `Easing::EaseOutBack`, `Easing::EaseInOutBack`, `Easing::EaseInElastic`, `Easing::EaseOutElastic`, `Easing::EaseInOutElastic`, `Easing::EaseInBounce`, `Easing::EaseOutBounce`, `Easing::EaseInOutBounce`, `Easing::Spring`, `Easing::Custom`.
 
 Validation: CI-safe checks are `cargo test --test docs_api_drift`, `cargo test example_smoke`, `cargo test dogfood`, `cargo check`, and `cargo test`. The native macOS GUI smoke is local-only: `scripts/native_dogfood_macos.sh`.
 
@@ -585,6 +585,63 @@ impl View for SyncView {
 
 ---
 
+### Value Controls
+
+`rui::advanced_ui` has five value controls. Each one is controlled: pass the
+value on every render and update it from `on_change`. Each takes `.theme(theme)`,
+`.disabled(bool)` and `.id(id)`, takes keyboard focus in Tab order, requests focus
+on press, and exposes an accessibility node. `examples/controls.rs` shows all
+five (`cargo run --example controls`).
+
+| Control | Builder | `on_change` gets | Pointer | Keyboard | Accessibility |
+|---------|---------|------------------|---------|----------|---------------|
+| Slider | `slider(label, value)` with `.range(min, max)`, `.step(step)`, `.width(px)`, `.size(ControlSize)`, `.read_only(bool)` | `f32` | Press on the track jumps there; drag the thumb | Left/Down and Right/Up step, Page Up/Down move a tenth of the range, Home/End go to min/max | `Slider` (AXSlider) with value, min and max; Increment/Decrement actions |
+| Switch | `switch(label)` with `.on(bool)`, `.size(ControlSize)`, `.read_only(bool)` | `bool` | Click toggles | Space (and Enter) toggles | `Switch` (AXCheckBox, AXSwitch subrole), checked, value `on`/`off`; Activate |
+| Radio group | `radio_group(label, options, selected)` with `(value, label)` options, `.size(ControlSize)`, `.read_only(bool)` | `&str` value | Click picks an option | Arrows move the selection and wrap; Space selects | `RadioGroup` (AXRadioGroup) with `RadioButton` children marked selected; Activate on each |
+| Select | `select(label, items, selected)` with `(value, label)` or `MenuItem` items (`.disabled(true)` items are skipped), `.size(ControlSize)` | `&str` value | Click opens the list, click an item to pick it, click elsewhere to close | Down/Up/Enter/Space open; in the list Down/Up move, Home/End jump, Enter/Space pick, Escape closes; typing a prefix highlights the first match | `ComboBox` (AXPopUpButton) whose value is the selected label; when open it holds the `Menu` of items; Activate |
+| Splitter | `splitter(label, first, second)` with `.position(px)`, `.limits(min, max)`, `.axis(SplitAxis)`, `.width(px)` / `.height(px)` | `f32` size of the first pane | Drag the divider; the first pane stays within the limits and the second keeps the rest | Arrows along the axis move 10pt, Home/End go to the limits | `Splitter` (AXSplitter) with value, min and max, between the panes' nodes; Increment/Decrement |
+
+`SplitAxis::Horizontal` (the default) puts the panes side by side, and
+`SplitAxis::Vertical` stacks them. Give pane content `w_full()` / `h_full()` to
+fill its pane. A drag or an open list survives the render its own `on_change`
+causes. The select list opens in an overlay below the button (above it when
+there is no room below), so content below a select stays where it is.
+
+```rust
+ui::slider("Volume", self.volume)
+    .step(5.0)
+    .on_change(cx.listener_with(|this, value, _| this.volume = value));
+ui::select("Fruit", [("apple", "Apple"), ("cherry", "Cherry")], self.fruit.clone())
+    .on_change(cx.text_listener(|this, value, _| this.fruit = value));
+```
+
+#### Overlays
+
+The select list, `popover` content, `tooltip` bubbles and `dialog`s float in
+an overlay layer over the page:
+
+- They take no part in their parent's layout. Their content is laid out
+  against the window, then placed next to its anchor (`Popover::side(Side)` and
+  `Popover::align(Align)`, below and at the start by default) or centred in the
+  window (`dialog`). Placed content flips to the other side when it does not
+  fit and the other side has more room, then shifts to stay inside the window
+  (`rui::elements::overlay::place_anchored`).
+- They draw after the rest of the frame, in the order they opened, and are
+  hit before it; ancestor clips such as a scroll view's do not cut them off.
+- A press outside an open select or popover closes it, and Escape closes the
+  topmost overlay that Escape closes.
+- A modal dialog's backdrop covers the whole window and takes the pointer
+  from the page. While it is open, Tab and Shift+Tab move only among the
+  dialog's controls, so Return cannot reach the page; opening it focuses its
+  first control, and closing it gives focus back to the element that had it.
+
+Custom elements open an overlay by laying its content out with
+`elements::overlay::OverlaySlot`, painting it with
+`PaintContext::paint_overlay(Overlay, bounds, ..)`, and dispatching events to
+it with `EventContext::for_overlay(bounds)`.
+
+---
+
 ### Image
 
 Image display element.
@@ -876,3 +933,40 @@ Border radius for each corner.
 let corners = Corners::all(8.0);
 let corners = Corners::new(tl: 8.0, tr: 8.0, br: 0.0, bl: 0.0);
 ```
+
+### Variable-height lists
+
+```rust
+use rui::prelude::*;
+let handle = VariableListHandle::new(); // retain in your view
+let rows = variable_list(&handle, (1..1000).map(ElementId::from), |id| {
+    div().flex_col().p(8.0).child(text(format!("Log {}: wrapped content", id.0)).wrap())
+}).w(420.0).h(300.0);
+handle.invalidate(ElementId::from(12u64));
+handle.scroll_to_item(ElementId::from(500u64));
+```
+
+IDs must be unique stable `ElementId`s and rows must measure to a finite positive
+height. Explicit finite positive width and height are required; there is no
+`w_full`/`h_full` contract. Keep one handle per list. Content changes require
+`invalidate(id)` and a subsequent layout/frame request. Width changes remeasure
+the visible neighborhood. Prepending, appending, and changing earlier row heights
+preserve the surviving anchor ID and intra-item pixel offset; deleting it picks
+the next surviving old successor, then predecessor. Appending does not follow the
+bottom. `scroll_to_item` aligns the ID to the top without building intermediate
+rows. Item jumps and resize/data edits preserve the item anchor even when the
+remaining tail becomes shorter than the viewport and leaves space below; ordinary
+pixel/wheel scrolling fills the measured tail. `anchor()` reports its ID and pixel offset; `offset()` and
+`estimated_total_height()` include estimates for unmeasured rows.
+
+Building/measuring is bounded by the visible neighborhood plus 80px overscan and
+one focused row; metadata work remains O(N). A focused editor remains mounted
+when scrolled offscreen; explicit invalidation cancels its composition, clears focus, and rebuilds it. Deleting it
+cancels active composition before removal. A new handle on the same reconciled list rebuilds rows and cancels old
+composition. During editing, keep the nested list and its ancestors present with
+stable container IDs: whole-list/ancestor unmount or keyed nested-list identity
+replacement is outside this row-virtualization cancellation contract. Custom editors must honor
+`CancelComposition`. Native IME candidate behavior is not verified by headless
+layout tests. See [the contract](specs/variable-height-list.md) and
+`cargo run --example variable_list`. Existing equal-height `VirtualList` remains
+available independently.

@@ -6,9 +6,9 @@
 # The Zed checkout defaults to target/gpui_compare/zed and is cloned at ZED_REV when
 # missing. GPUI uses runtime_shaders so the Xcode Metal toolchain is not required, and
 # font-kit so it shapes and rasterizes real text.
-# Each case runs in its own process on each side, RUI then GPUI, REPEATS times
+# Each case runs in its own process on each side, alternating order by round, REPEATS times
 # (default 3); the table shows the range over the repeats. CASES picks cases.
-# Raw lines are kept in target/gpui_compare/results.txt.
+# Raw output and metadata are kept in target/gpui_compare/run.XXXXXXXX/.
 set -euo pipefail
 
 ZED_REV="${ZED_REV:-784374c6794ace885137bc4806427a5f47cc3f06}"
@@ -26,6 +26,9 @@ if [ "$(git -C "$ZED_DIR" rev-parse HEAD)" != "$ZED_REV" ]; then
   git -C "$ZED_DIR" fetch --depth 1 origin "$ZED_REV"
   git -C "$ZED_DIR" checkout --quiet "$ZED_REV"
 fi
+ZED_DIR="$(cd "$ZED_DIR" && pwd)"
+RUN_DIR="$(mktemp -d "$OUT/run.XXXXXXXX")"
+echo "== artifacts: $RUN_DIR" >&2
 
 cp "$ROOT/benchmarks/gpui_compare/fixtures.rs" "$ZED_DIR/crates/gpui_platform/benches/rui_compare.rs"
 # Both sides read GPU time through the same hook; the bench declares `mod gpu_time;`.
@@ -41,19 +44,53 @@ if ! grep -q '^image.workspace = true' "$manifest"; then
 image.workspace = true/' "$manifest"
 fi
 
+# Record the source and configuration actually used, including local changes.
+{
+  printf 'rui_revision=%s\n' "$(git -C "$ROOT" rev-parse HEAD)"
+  printf 'zed_revision=%s\n' "$(git -C "$ZED_DIR" rev-parse HEAD)"
+  printf 'zed_requested_revision=%s\nzed_dir=%s\n' "$ZED_REV" "$ZED_DIR"
+  printf 'repeats=%s\ncases=%s\n' "$REPEATS" "$CASES"
+  printf 'gpui_features=bench-support,runtime_shaders,font-kit\nmeasurement=instructions\n'
+  printf 'gpu_sampling=RUI:10-warmup/60-sampled;GPUI:all-Criterion-scenes;not-equivalent\n'
+  printf 'CARGO_TARGET_DIR=%s\nRUSTFLAGS=%s\n' "${CARGO_TARGET_DIR:-}" "${RUSTFLAGS:-}"
+  date -u '+started_utc=%Y-%m-%dT%H:%M:%SZ'
+  uname -a
+  sw_vers
+  sysctl machdep.cpu.brand_string hw.ncpu hw.memsize
+  rustc --version
+  cargo --version
+  printf '\nrui_worktree:\n'
+  git -C "$ROOT" status --porcelain
+  printf '\nzed_worktree:\n'
+  git -C "$ZED_DIR" status --porcelain
+} > "$RUN_DIR/metadata.txt"
+git -C "$ROOT" diff --binary HEAD > "$RUN_DIR/rui-source.patch"
+git -C "$ZED_DIR" diff --binary HEAD > "$RUN_DIR/zed-source.patch"
+# Copied GPUI benches may be untracked, so retain their source explicitly.
+cp "$ROOT/benchmarks/gpui_compare/fixtures.rs" "$ROOT/benchmarks/gpui_compare/gpu_time.rs" "$RUN_DIR/"
+
 # Prints the bench executable cargo built, from its "Executable ... (path)" line.
 executable() {
   sed -n 's/.*Executable .*(\(.*\))$/\1/p' | tail -1
 }
 
+# Cargo can print an absolute path (for example with CARGO_TARGET_DIR).
+resolve_executable() {
+  case "$2" in
+    "") echo "cargo reported no bench executable; see build logs in $RUN_DIR" >&2; return 1 ;;
+    /*) printf '%s\n' "$2" ;;
+    *) printf '%s/%s\n' "$1" "$2" ;;
+  esac
+}
+
 echo "== building RUI ($(git -C "$ROOT" rev-parse --short HEAD))" >&2
-rui_bin="$(cd "$ROOT" && cargo bench --bench compare_frame --no-run 2>&1 | executable)"
-rui_bin="$ROOT/$rui_bin"
+rui_bin="$(cd "$ROOT" && cargo bench --bench compare_frame --no-run 2>&1 | tee "$RUN_DIR/build-rui.log" | executable)"
+rui_bin="$(resolve_executable "$ROOT" "$rui_bin")"
 echo "== building GPUI (${ZED_REV:0:7})" >&2
 # Without font-kit, gpui_macos uses NoopTextSystem: fixed advances and no glyphs.
 gpui_bin="$(cd "$ZED_DIR" && cargo bench -p gpui_platform --features bench-support,runtime_shaders,font-kit \
-  --bench rui_compare --no-run 2>&1 | executable)"
-gpui_bin="$ZED_DIR/$gpui_bin"
+  --bench rui_compare --no-run 2>&1 | tee "$RUN_DIR/build-gpui.log" | executable)"
+gpui_bin="$(resolve_executable "$ZED_DIR" "$gpui_bin")"
 
 # Turns one GPUI bench run's report into RUI's line format.
 gpui_line() {
@@ -105,23 +142,36 @@ gpui_line() {
 
 # The first launch of a new binary waits for macOS to check its signature; keep that
 # out of the startup case.
-"$rui_bin" --list > /dev/null
-(cd "$ZED_DIR" && "$gpui_bin" --list > /dev/null 2>&1)
+printf 'rui_executable=%s\ngpui_executable=%s\n' "$rui_bin" "$gpui_bin" >> "$RUN_DIR/metadata.txt"
+"$rui_bin" --list > "$RUN_DIR/prelaunch-rui.stdout" 2> "$RUN_DIR/prelaunch-rui.stderr"
+(cd "$ZED_DIR" && "$gpui_bin" --list) > "$RUN_DIR/prelaunch-gpui.stdout" 2> "$RUN_DIR/prelaunch-gpui.stderr"
 
-results="$OUT/results.txt"
+results="$RUN_DIR/results.txt"
 : > "$results"
 echo "== load before: $(uptime | sed 's/.*load averages*: //')" | tee -a "$results" >&2
 for round in $(seq "$REPEATS"); do
+  if (( round % 2 )); then sides="rui gpui"; else sides="gpui rui"; fi
   for case in $CASES; do
-    echo "-- round $round: $case" >&2
-    "$rui_bin" "$case" | tee -a "$results" >&2
-    (cd "$ZED_DIR" && BENCH_MEASUREMENT=instructions "$gpui_bin" --bench --exact "$case" 2>&1) \
-      | gpui_line "$case" | tee -a "$results" >&2
+    for side in $sides; do
+      prefix="$RUN_DIR/round-$round-$case-$side"
+      printf 'round=%s case=%s side=%s\n' "$round" "$case" "$side" >> "$RUN_DIR/order.txt"
+      echo "-- round $round: $case $side" >&2
+      if [ "$side" = rui ]; then
+        printf '%q %q\n' "$rui_bin" "$case" >> "$RUN_DIR/commands.txt"
+        "$rui_bin" "$case" > "$prefix.stdout" 2> "$prefix.stderr"
+        cat "$prefix.stdout" | tee -a "$results" >&2
+      else
+        printf 'cd %q && BENCH_MEASUREMENT=instructions %q --bench --exact %q\n' "$ZED_DIR" "$gpui_bin" "$case" >> "$RUN_DIR/commands.txt"
+        (cd "$ZED_DIR" && BENCH_MEASUREMENT=instructions "$gpui_bin" --bench --exact "$case") > "$prefix.stdout" 2> "$prefix.stderr"
+        cat "$prefix.stdout" "$prefix.stderr" | gpui_line "$case" | tee -a "$results" >&2
+      fi
+    done
   done
 done
 echo "== load after: $(uptime | sed 's/.*load averages*: //')" | tee -a "$results" >&2
 
 # One row per case and side; each cell is the range over the repeats.
+printf '%s\n\n' 'GPU columns are descriptive only: RUI samples 60 post-warmup frames; GPUI includes all Criterion scenes. Their sampling populations are not equivalent.'
 awk '
   /^(rui|gpui) / {
     key = $2 SUBSEP $1

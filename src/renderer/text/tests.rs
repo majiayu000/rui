@@ -528,6 +528,7 @@ fn retained_metrics_stay_bounded_for_ever_changing_text() {
                 line_height_bits: 1.2f32.to_bits(),
                 font_weight: 400,
                 font_family: "test".to_string(),
+                direction: BaseDirection::Auto,
             },
             TextMetrics::empty(),
         );
@@ -552,6 +553,7 @@ fn retained_metrics_stay_within_the_byte_budget() {
                 line_height_bits: 1.2f32.to_bits(),
                 font_weight: 400,
                 font_family: "test".to_string(),
+                direction: BaseDirection::Auto,
             },
             TextMetrics::empty(),
         );
@@ -566,6 +568,7 @@ fn retained_metrics_stay_within_the_byte_budget() {
             line_height_bits: 1.2f32.to_bits(),
             font_weight: 400,
             font_family: "test".to_string(),
+            direction: BaseDirection::Auto,
         },
         TextMetrics::empty(),
     );
@@ -703,6 +706,30 @@ fn fallback_follows_the_chain_for_each_script() {
     );
 }
 
+/// Devanagari and Thai fall back to the faces macOS uses for them, and the
+/// Devanagari face joins न्द into one conjunct, which Arial Unicode does not.
+#[cfg(target_os = "macos")]
+#[test]
+fn devanagari_and_thai_take_the_system_faces() {
+    let mut cache = TextMeasureCache::new();
+    const TEXT: &str = "hi हिन्दी ไทย";
+    let plan = shape(&mut cache, request(TEXT));
+    let family_of = |text: &str| {
+        let start = TEXT.find(text).expect("text in the plan");
+        let cluster = plan.clusters().iter().find(|c| c.byte_start == start);
+        cluster.map(|c| c.font_family.clone()).expect("a cluster")
+    };
+    assert_eq!(family_of("ह"), "Kohinoor Devanagari");
+    assert_eq!(family_of("ไ"), "Thonburi");
+    // ह ि न ् द ी: the vowel sign, ह, half न, द and ी.
+    let devanagari = plan
+        .glyphs()
+        .iter()
+        .filter(|glyph| cache.fonts[glyph.font_index].family == "Kohinoor Devanagari")
+        .count();
+    assert_eq!(devanagari, 5, "{:?}", plan.glyphs());
+}
+
 #[test]
 fn each_script_run_is_shaped_once_with_its_spaces() {
     let mut cache = TextMeasureCache::new();
@@ -720,16 +747,32 @@ fn each_script_run_is_shaped_once_with_its_spaces() {
     assert_eq!(arabic[0].direction, TextDirection::RightToLeft);
 }
 
-#[cfg(target_os = "macos")]
-#[test]
-fn a_weight_picks_the_closest_face_of_the_family() {
-    let mut cache = TextMeasureCache::new();
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn assert_primary_family_has_a_bold_face(cache: &mut TextMeasureCache) {
     let regular = cache.primary_font_index(None, 400).expect("regular face");
     let bold = cache.primary_font_index(None, 700).expect("bold face");
     assert_eq!(regular, 0);
     assert_ne!(bold, regular);
     assert_eq!(cache.fonts[bold].family, cache.fonts[regular].family);
     assert!(cache.fonts[bold].weight >= 600 && !cache.fonts[bold].italic);
+}
+
+/// Linux loads bold twins next to the regular faces (DejaVu Sans on Debian
+/// and Ubuntu); without them `bold()` text drew regular there.
+#[cfg(target_os = "linux")]
+#[test]
+fn linux_text_has_a_bold_face() {
+    if !std::path::Path::new("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf").exists() {
+        return;
+    }
+    assert_primary_family_has_a_bold_face(&mut TextMeasureCache::new());
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn a_weight_picks_the_closest_face_of_the_family() {
+    let mut cache = TextMeasureCache::new();
+    assert_primary_family_has_a_bold_face(&mut cache);
 
     // Fallback faces follow the weight too.
     let weight_of = |cache: &mut TextMeasureCache, weight: u16| {
