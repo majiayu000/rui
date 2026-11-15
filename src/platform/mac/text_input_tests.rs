@@ -668,3 +668,29 @@ fn native_dialog_ime_commits_chinese_and_cancels_next_composition() {
         Some("你好")
     );
 }
+
+#[test]
+fn ime_session_wakes_once_for_commands_sent_outside_a_key_event() {
+    let mut session = MacImeSession::default();
+    assert!(!session.wants_wake(), "nothing queued, nothing to drain");
+
+    // A candidate clicked in the input method's window: no key event follows.
+    session
+        .insert_text("你好", not_found_range())
+        .expect("commit should queue");
+    assert!(session.wants_wake());
+    session
+        .set_marked_text("shi", NSRange::new(3, 0), not_found_range())
+        .expect("composition should queue");
+    assert!(!session.wants_wake(), "one wake drains everything queued");
+
+    session.drain_events();
+    session.in_key_event = true;
+    session
+        .insert_text("a", not_found_range())
+        .expect("typed text should queue");
+    assert!(
+        !session.wants_wake(),
+        "the window drains a key event's commands right after it"
+    );
+}

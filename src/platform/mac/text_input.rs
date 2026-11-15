@@ -1,8 +1,8 @@
-use crate::core::drag::FileDragEvent;
 use crate::core::geometry::{Bounds, Point};
 use crate::core::text_editing::{
     TextEditError, TextInputCommand, TextInputSnapshot, Utf16TextRange,
 };
+use crate::platform::mac::events::{MAC_REDRAW_EVENT_DATA, MacWindowEvent, post_application_event};
 use crate::platform::mac::file_drop::{self, FileDropTarget};
 use crate::platform::window::{PlatformInputEvent, PlatformWindowEvent};
 use objc2::rc::Retained;
@@ -15,6 +15,9 @@ use objc2_foundation::{
 };
 use std::cell::RefCell;
 use std::collections::VecDeque;
+
+/// Log target for the NSTextInputClient calls AppKit makes, at trace level.
+const IME_LOG_TARGET: &str = "rui::ime";
 
 fn drag_operation(accepted: bool) -> NSUInteger {
     if accepted {
@@ -77,6 +80,11 @@ struct MacImeSession {
     caret_range: NSRange,
     caret_bounds: Option<Bounds>,
     snapshot: Option<TextInputSnapshot>,
+    /// Set while the view hands a key event to the input context. The window
+    /// drains the commands right after that event.
+    in_key_event: bool,
+    /// A wake is queued for commands that arrived outside a key event.
+    wake_posted: bool,
 }
 
 impl Default for MacImeSession {
@@ -89,11 +97,22 @@ impl Default for MacImeSession {
             caret_range: not_found_range(),
             caret_bounds: None,
             snapshot: None,
+            in_key_event: false,
+            wake_posted: false,
         }
     }
 }
 
 impl MacImeSession {
+    /// Whether the window must be woken to drain queued commands: an input
+    /// method committed outside a key event, as when a candidate is clicked in
+    /// its window. Nothing else would make the event loop look at them.
+    fn wants_wake(&mut self) -> bool {
+        let wants = !self.in_key_event && !self.wake_posted && !self.events.is_empty();
+        self.wake_posted |= wants;
+        wants
+    }
+
     fn insert_text(&mut self, text: &str, replacement_range: NSRange) -> Result<(), TextEditError> {
         let replacement_range = appkit_replacement_range(replacement_range)?;
         let had_marked_text = self.marked_text.is_some();
@@ -302,6 +321,7 @@ impl MacImeSession {
     }
 
     fn drain_events(&mut self) -> Vec<TextInputCommand> {
+        self.wake_posted = false;
         self.events.drain(..).collect()
     }
 }
@@ -346,7 +366,26 @@ define_class!(
                 return;
             }
             let events = NSArray::from_slice(&[event]);
+            self.ivars().ime.borrow_mut().in_key_event = true;
             self.interpretKeyEvents(&events);
+            self.ivars().ime.borrow_mut().in_key_event = false;
+        }
+
+        // Modifier-only keys reach the input method only through its context:
+        // Pinyin and other input methods switch modes on Shift alone.
+        #[unsafe(method(flagsChanged:))]
+        fn flags_changed(&self, event: &NSEvent) {
+            if self.ivars().ime.borrow().snapshot.is_some()
+                && let Some(context) = self.inputContext()
+            {
+                self.ivars().ime.borrow_mut().in_key_event = true;
+                let handled = context.handleEvent(event);
+                self.ivars().ime.borrow_mut().in_key_event = false;
+                if handled {
+                    return;
+                }
+            }
+            unsafe { msg_send![super(self), flagsChanged: event] }
         }
 
         // NSDraggingDestination, for files dragged in from other apps.
@@ -394,6 +433,7 @@ define_class!(
         ) {
             match text_from_native_object(string) {
                 Some(text) => {
+                    log::trace!(target: IME_LOG_TARGET, "insertText {text:?} replacement={replacement_range:?}");
                     if let Err(err) = self
                         .ivars()
                         .ime
@@ -405,12 +445,15 @@ define_class!(
                 }
                 None => log::error!("macOS text input supplied unsupported insertText payload"),
             }
+            self.wake_for_input_method();
         }
 
         #[unsafe(method(doCommandBySelector:))]
         unsafe fn doCommandBySelector(&self, selector: Sel) {
+            log::trace!(target: IME_LOG_TARGET, "doCommandBySelector {}", selector.name().to_string_lossy());
             if selector == sel!(cancelOperation:) {
                 self.ivars().ime.borrow_mut().cancel_composition();
+                self.wake_for_input_method();
             }
             // Non-text commands are already represented by the raw KeyDown
             // event collected before AppKit dispatches this callback.
@@ -425,6 +468,10 @@ define_class!(
         ) {
             match text_from_native_object(string) {
                 Some(text) => {
+                    log::trace!(
+                        target: IME_LOG_TARGET,
+                        "setMarkedText {text:?} selected={selected_range:?} replacement={replacement_range:?}"
+                    );
                     if let Err(err) = self.ivars().ime.borrow_mut().set_marked_text(
                         &text,
                         selected_range,
@@ -439,11 +486,14 @@ define_class!(
                     log::error!("macOS text input supplied unsupported setMarkedText payload")
                 }
             }
+            self.wake_for_input_method();
         }
 
         #[unsafe(method(unmarkText))]
         fn unmarkText(&self) {
+            log::trace!(target: IME_LOG_TARGET, "unmarkText");
             self.ivars().ime.borrow_mut().commit_marked_text();
+            self.wake_for_input_method();
         }
 
         #[unsafe(method(selectedRange))]
@@ -522,7 +572,9 @@ define_class!(
                 appkit_view_rect(bounds, self.bounds().size.height)
             };
             let window_bounds = self.convertRect_toView(bounds, None);
-            window.convertRectToScreen(window_bounds)
+            let screen = window.convertRectToScreen(window_bounds);
+            log::trace!(target: IME_LOG_TARGET, "firstRectForCharacterRange {range:?} -> {screen:?}");
+            screen
         }
 
         #[unsafe(method(characterIndexForPoint:))]
@@ -556,12 +608,34 @@ impl RuiContentView {
         this
     }
 
-    pub(crate) fn drain_file_drags(&self) -> Vec<FileDragEvent> {
-        self.ivars().file_drop.borrow_mut().drain()
+    /// File drags and input method text that arrived while AppKit ran the
+    /// poll rather than during a key event.
+    pub(crate) fn drain_pending_events(&self) -> Vec<MacWindowEvent> {
+        let drags = self.ivars().file_drop.borrow_mut().drain();
+        let text = self.drain_ime_events();
+        drags
+            .into_iter()
+            .map(MacWindowEvent::FileDrag)
+            .chain(text.into_iter().map(MacWindowEvent::Text))
+            .collect()
     }
 
     pub(crate) fn drain_ime_events(&self) -> Vec<TextInputCommand> {
         self.ivars().ime.borrow_mut().drain_events()
+    }
+
+    /// Wake the window for commands an input method sent outside a key event;
+    /// the window drains them with the wake.
+    fn wake_for_input_method(&self) {
+        if !self.ivars().ime.borrow_mut().wants_wake() {
+            return;
+        }
+        let Some(window) = self.window() else {
+            return;
+        };
+        if let Err(err) = post_application_event(window.windowNumber(), MAC_REDRAW_EVENT_DATA) {
+            log::error!("failed to wake the window for input method text: {err}");
+        }
     }
 
     pub(crate) fn restore_marked_text_from_snapshot(&self) {

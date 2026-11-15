@@ -194,3 +194,10 @@ fn appkit_backtab_maps_to_tab_for_reverse_focus_navigation() {
     assert_eq!(keycode_from_char('\u{19}'), KeyCode::Tab);
     assert_eq!(keycode_from_char('\t'), KeyCode::Tab);
 }
+
+#[test]
+fn poll_dequeues_modifier_only_key_events_for_input_methods() {
+    // Pinyin and other input methods switch modes on Shift alone; a
+    // flags-changed event the loop never dequeues never reaches them.
+    assert!(platform_event_mask().contains(NSEventMask::FlagsChanged));
+}

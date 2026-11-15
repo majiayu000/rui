@@ -8,7 +8,7 @@ use crate::core::geometry::Bounds;
 use crate::platform::mac::events::{MAC_ACCESSIBILITY_EVENT_DATA, post_application_event};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, Sel};
-use objc2::{DefinedClass, MainThreadOnly, define_class, msg_send, sel};
+use objc2::{DefinedClass, MainThreadOnly, Message, define_class, msg_send, sel};
 use objc2_app_kit::{
     NSAccessibility, NSAccessibilityActionName, NSAccessibilityAnnouncementKey,
     NSAccessibilityAnnouncementRequestedNotification, NSAccessibilityButtonRole,
@@ -25,7 +25,8 @@ use objc2_app_kit::{
     NSAccessibilityRowRole, NSAccessibilityScrollAreaRole,
     NSAccessibilitySelectedTextChangedNotification, NSAccessibilitySliderRole,
     NSAccessibilitySplitterRole, NSAccessibilityStaticTextRole, NSAccessibilitySubrole,
-    NSAccessibilitySwitchSubrole, NSAccessibilityTabGroupRole, NSAccessibilityTextFieldRole,
+    NSAccessibilitySwitchSubrole, NSAccessibilityTabButtonSubrole, NSAccessibilityTabGroupRole,
+    NSAccessibilityTextAreaRole, NSAccessibilityTextFieldRole,
     NSAccessibilityTitleChangedNotification, NSAccessibilityToolbarRole,
     NSAccessibilityValueChangedNotification, NSView,
 };
@@ -113,6 +114,23 @@ define_class!(
             self.enqueue_action(AccessibilityAction::SetValue, Some(value.to_string()));
         }
 
+        // NSAccessibilityElement answers a hit test with itself. Descend, so a
+        // pointer over a radio button or a tab reaches it and not its group.
+        #[unsafe(method_id(accessibilityHitTest:))]
+        fn accessibility_hit_test(&self, point: NSPoint) -> Option<Retained<AnyObject>> {
+            let children: Option<Retained<NSArray<AnyObject>>> =
+                unsafe { msg_send![self, accessibilityChildren] };
+            let children = children.map(|children| children.to_vec()).unwrap_or_default();
+            let frames: Vec<NSRect> = children
+                .iter()
+                .map(|child| unsafe { msg_send![&**child, accessibilityFrame] })
+                .collect();
+            match hit_child(&frames, point) {
+                Some(index) => unsafe { msg_send![&*children[index], accessibilityHitTest: point] },
+                None => Some(unsafe { Retained::cast_unchecked(self.retain()) }),
+            }
+        }
+
         #[unsafe(method(setAccessibilityFocused:))]
         fn set_accessibility_focused(&self, focused: bool) {
             self.enqueue_request(MacAccessibilityRequest::Focus(focused));
@@ -145,6 +163,9 @@ define_class!(
             }
             if let Some(action) = action_for_selector(selector) {
                 return self.supports(action).into();
+            }
+            if is_undeclared_perform_selector(selector) {
+                return false.into();
             }
             unsafe { msg_send![super(self), isAccessibilitySelectorAllowed: selector] }
         }
@@ -487,7 +508,7 @@ impl AppKitAccessibilityHost {
         let bounds = node.a11y_bounds().unwrap_or(parent_bounds);
         element.update_semantics(node.a11y_actions(), bounds);
         element.setAccessibilityElement(true);
-        element.setAccessibilityRole(Some(native_role(node.a11y_role())));
+        element.setAccessibilityRole(Some(native_node_role(node)));
         element.setAccessibilitySubrole(native_subrole(node.a11y_role()));
         element.setAccessibilityEnabled(node.a11y_enabled());
         element.set_native_focused(node.a11y_focused());

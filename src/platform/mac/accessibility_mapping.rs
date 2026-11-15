@@ -8,6 +8,15 @@ fn action_for_selector(selector: Sel) -> Option<AccessibilityAction> {
     }
 }
 
+/// An `accessibilityPerform…` action rui has no handler for, such as AXCancel
+/// or AXShowMenu. NSAccessibilityElement implements them as no-ops, so
+/// allowing them would offer VoiceOver actions that do nothing. Press,
+/// increment and decrement are answered before this is asked.
+fn is_undeclared_perform_selector(selector: Sel) -> bool {
+    selector.name().to_bytes().starts_with(b"accessibilityPerform")
+        && selector != sel!(accessibilityPerformAction:)
+}
+
 /// The action AXIncrement (`forward`) or AXDecrement requests on a node with
 /// `actions`: a range control steps its value, a scroll area scrolls.
 fn step_action(actions: &[AccessibilityAction], forward: bool) -> AccessibilityAction {
@@ -29,15 +38,28 @@ fn step_action(actions: &[AccessibilityAction], forward: bool) -> AccessibilityA
     }
 }
 
-/// The AXSwitch subrole for switches, AXDialog for dialogs.
+/// The AXSwitch subrole for switches, AXDialog for dialogs, and AXTabButton
+/// for tabs, which are radio buttons VoiceOver announces as tabs.
 fn native_subrole(role: AccessibilityRole) -> Option<&'static NSAccessibilitySubrole> {
     unsafe {
         match role {
             AccessibilityRole::Dialog => Some(NSAccessibilityDialogSubrole),
             AccessibilityRole::Switch => Some(NSAccessibilitySwitchSubrole),
+            AccessibilityRole::Tab => Some(NSAccessibilityTabButtonSubrole),
             _ => None,
         }
     }
+}
+
+/// The topmost child whose screen frame contains `point`: the last one, as
+/// later children paint over earlier ones.
+fn hit_child(frames: &[NSRect], point: NSPoint) -> Option<usize> {
+    frames.iter().rposition(|frame| {
+        point.x >= frame.origin.x
+            && point.x < frame.origin.x + frame.size.width
+            && point.y >= frame.origin.y
+            && point.y < frame.origin.y + frame.size.height
+    })
 }
 
 fn native_frame_in_parent(bounds: Bounds, parent: Bounds) -> NSRect {
@@ -337,6 +359,14 @@ fn role_requires_value(role: AccessibilityRole) -> bool {
     )
 }
 
+/// A text input's role: AXTextArea when it takes several lines.
+fn native_node_role(node: &AccessibilityNode) -> &'static NSAccessibilityRole {
+    if node.a11y_role() == AccessibilityRole::TextInput && node.a11y_multiline() {
+        return unsafe { NSAccessibilityTextAreaRole };
+    }
+    native_role(node.a11y_role())
+}
+
 fn native_role(role: AccessibilityRole) -> &'static NSAccessibilityRole {
     unsafe {
         match role {
@@ -377,7 +407,11 @@ fn native_role(role: AccessibilityRole) -> &'static NSAccessibilityRole {
 fn snapshot_node(node: &AccessibilityNode) -> MacAccessibilityNodeSnapshot {
     MacAccessibilityNodeSnapshot {
         id: node.a11y_id(),
-        native_role: native_role_name(node.a11y_role()),
+        native_role: if node.a11y_role() == AccessibilityRole::TextInput && node.a11y_multiline() {
+            "AXTextArea"
+        } else {
+            native_role_name(node.a11y_role())
+        },
         label: node.a11y_label().map(str::to_string),
         value: node.a11y_value().map(str::to_string),
         enabled: node.a11y_enabled(),
