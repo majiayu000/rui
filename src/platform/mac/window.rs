@@ -588,22 +588,12 @@ fn app_event(data: isize) -> Option<MacAppEvent> {
     }
 }
 
+/// Every event type: AppKit's own events (AppKitDefined, SystemDefined and
+/// the rest) carry input method activation, so a narrower mask leaves Pinyin
+/// and other input methods unconnected and typing falls back to plain
+/// letters. Types rui does not translate just go through `sendEvent:`.
 fn platform_event_mask() -> NSEventMask {
-    NSEventMask::MouseMoved
-        | NSEventMask::LeftMouseDown
-        | NSEventMask::LeftMouseUp
-        | NSEventMask::LeftMouseDragged
-        | NSEventMask::RightMouseDown
-        | NSEventMask::RightMouseUp
-        | NSEventMask::RightMouseDragged
-        | NSEventMask::OtherMouseDown
-        | NSEventMask::OtherMouseUp
-        | NSEventMask::OtherMouseDragged
-        | NSEventMask::ScrollWheel
-        | NSEventMask::KeyDown
-        | NSEventMask::KeyUp
-        | NSEventMask::FlagsChanged // Shift alone switches input method modes
-        | NSEventMask::ApplicationDefined
+    NSEventMask::Any
 }
 
 fn append_platform_events_from_native_event(

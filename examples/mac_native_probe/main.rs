@@ -29,6 +29,14 @@ fn main() {
 
 #[cfg(target_os = "macos")]
 fn main() {
+    // HID keystrokes need Accessibility permission: without it the window
+    // server drops them silently, so ask once and stop instead of running.
+    if native::hid_events() && !cg::request_trust() {
+        eprintln!(
+            "probe: RUI_PROBE_EVENTS=hid needs Accessibility permission; turn on RuiProbe in System Settings > Privacy & Security > Accessibility, then run again"
+        );
+        std::process::exit(2);
+    }
     probe::run();
 }
 
