@@ -22,6 +22,7 @@ use taffy::prelude::TaffyTree;
 
 mod drag;
 mod focus;
+mod live_regions;
 mod menus;
 mod overlay;
 
@@ -64,6 +65,8 @@ pub struct Presenter<E = ()> {
     focused_element: Option<ElementId>,
     accessibility_announcements_enabled: bool,
     pending_accessibility_announcements: Vec<AccessibilityAnnouncement>,
+    /// Live regions in the last tree published, so only new ones are announced.
+    live_regions: Vec<ElementId>,
     last_pointer_hit_target: Option<ElementId>,
     pointer_capture_target: Option<ElementId>,
     renderer_diagnostics: Option<RendererDiagnostics>,
@@ -94,6 +97,7 @@ impl<E> Presenter<E> {
             focused_element: None,
             accessibility_announcements_enabled: false,
             pending_accessibility_announcements: Vec::new(),
+            live_regions: Vec::new(),
             last_pointer_hit_target: None,
             pointer_capture_target: None,
             renderer_diagnostics: None,

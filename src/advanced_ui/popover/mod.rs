@@ -411,7 +411,7 @@ fn overlay_stack_style(theme: Theme) -> Style {
     style
 }
 
-fn paint_panel(cx: &mut PaintContext, bounds: Bounds, invalid: bool, theme: Theme) {
+pub(super) fn paint_panel(cx: &mut PaintContext, bounds: Bounds, invalid: bool, theme: Theme) {
     cx.paint(Primitive::Shadow {
         bounds,
         corner_radii: Corners::all(theme.control_radius()),

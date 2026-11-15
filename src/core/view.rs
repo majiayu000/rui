@@ -338,6 +338,12 @@ impl<'a, T: 'static> ViewContext<'a, T> {
         self.app.request_animation_frame_for(self.view.id());
     }
 
+    /// Render this view again once `at` has passed; see
+    /// [`AppContext::request_frame_at`].
+    pub fn request_frame_at(&mut self, at: std::time::Instant) {
+        self.app.request_frame_at(self.view.id(), at);
+    }
+
     /// See [`AppContext::toggle_profiler`].
     pub fn toggle_profiler(&mut self) {
         self.app.toggle_profiler();

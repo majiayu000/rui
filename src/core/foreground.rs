@@ -3,7 +3,7 @@
 use crate::core::app::{AppContext, RedrawSource};
 use crate::core::entity::EntityId;
 use std::collections::{HashSet, VecDeque};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Order in which deferred UI-thread work runs.
 ///
@@ -91,6 +91,38 @@ impl AppContext {
     /// Render `entity` again on the next display refresh.
     pub fn request_animation_frame_for(&mut self, entity: EntityId) {
         self.animation_frames.entities.insert(entity);
+    }
+
+    /// Render `entity` again once `at` has passed, and not before: one wake
+    /// for timed UI (a toast closing, a tooltip delay) instead of a frame
+    /// every refresh. Asking again keeps the earliest time.
+    pub fn request_frame_at(&mut self, entity: EntityId, at: Instant) {
+        self.timed_frames
+            .entry(entity)
+            .and_modify(|earliest| *earliest = (*earliest).min(at))
+            .or_insert(at);
+    }
+
+    /// When the earliest frame asked for with [`Self::request_frame_at`] is
+    /// due; runners sleep until then when nothing else is pending.
+    pub fn next_frame_deadline(&self) -> Option<Instant> {
+        self.timed_frames.values().min().copied()
+    }
+
+    /// Mark the entities whose time came by `now` for rendering. Returns
+    /// whether any did.
+    pub(crate) fn fire_due_frames(&mut self, now: Instant) -> bool {
+        let due: Vec<EntityId> = self
+            .timed_frames
+            .iter()
+            .filter(|(_, at)| **at <= now)
+            .map(|(entity, _)| *entity)
+            .collect();
+        for entity in &due {
+            self.timed_frames.remove(entity);
+            self.notify(*entity);
+        }
+        !due.is_empty()
     }
 
     /// Whether a frame asked to be redrawn on the next display refresh.
@@ -187,6 +219,24 @@ mod tests {
     ) -> impl FnOnce(&mut AppContext) + 'static {
         let log = Rc::clone(log);
         move |_| log.borrow_mut().push(label)
+    }
+
+    #[test]
+    fn timed_frames_keep_the_earliest_time_and_fire_once_due() {
+        let mut context = AppContext::new();
+        let entity = context.create(()).id();
+        let now = Instant::now();
+        context.request_frame_at(entity, now + Duration::from_secs(2));
+        context.request_frame_at(entity, now + Duration::from_secs(1));
+        context.request_frame_at(entity, now + Duration::from_secs(3));
+        assert_eq!(
+            context.next_frame_deadline(),
+            Some(now + Duration::from_secs(1))
+        );
+        assert!(!context.fire_due_frames(now));
+        assert!(context.fire_due_frames(now + Duration::from_secs(1)));
+        assert!(context.has_frame_work());
+        assert_eq!(context.next_frame_deadline(), None);
     }
 
     #[test]

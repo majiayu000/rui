@@ -154,6 +154,7 @@ where
             self.context.close_window(pending.id);
         }
         let now = Instant::now();
+        self.context.fire_due_frames(now);
         if self.context.animation_frame_requested() && self.next_tick.is_none_or(|tick| tick <= now)
         {
             self.context.begin_animation_frame();
@@ -174,6 +175,8 @@ where
             self.next_tick = None;
             if self.context.has_pending_work() {
                 ControlFlow::Poll
+            } else if let Some(deadline) = self.context.next_frame_deadline() {
+                ControlFlow::WaitUntil(deadline)
             } else {
                 ControlFlow::Wait
             }

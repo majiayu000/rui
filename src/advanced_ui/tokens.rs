@@ -162,6 +162,8 @@ pub struct ThemeColors {
     pub ghost: ControlVariantPalette,
     pub danger: ControlVariantPalette,
     pub success: ControlVariantPalette,
+    /// Accent for cautionary status, such as a warning toast.
+    pub warning: Color,
     pub progress_track: Color,
     pub progress_fill: Color,
     pub tooltip_background: Color,
@@ -258,6 +260,7 @@ impl Theme {
                     Color::hex(0x14532d),
                     Color::WHITE,
                 ),
+                warning: Color::hex(0xb45309),
                 progress_track: Color::hex(0xe5e7eb),
                 progress_fill: Color::hex(0x2563eb),
                 tooltip_background: Color::hex(0x111827),
@@ -306,6 +309,7 @@ impl Theme {
             Color::hex(0x374151),
             Color::hex(0xf9fafb),
         );
+        theme.colors.warning = Color::hex(0xf59e0b);
         theme.colors.progress_track = Color::hex(0x374151);
         theme.colors.tooltip_background = Color::hex(0xf9fafb);
         theme.colors.tooltip_text = Color::hex(0x111827);
@@ -359,6 +363,7 @@ impl Theme {
             Color::hex(0x009900),
             Color::BLACK,
         );
+        theme.colors.warning = Color::hex(0xffa500);
         theme.colors.progress_track = Color::BLACK;
         theme.colors.progress_fill = Color::hex(0xffff00);
         theme.colors.tooltip_background = Color::WHITE;
