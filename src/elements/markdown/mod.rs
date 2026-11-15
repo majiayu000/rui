@@ -68,6 +68,7 @@ impl Markdown {
         let look = render::Look::new(&self.theme, size, self.on_link);
         let document = parse::document(&self.source);
         look.blocks(document.blocks.iter().map(|(_, block)| &**block))
+            .w_full()
             .text_color(look.text)
             .text_size(size)
             .line_height(look.line_height)

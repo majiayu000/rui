@@ -229,6 +229,86 @@ fn draws_in_the_dark_theme() {
     );
 }
 
+fn text_bounds(primitives: &[Primitive], needle: &str) -> rui::core::geometry::Bounds {
+    primitives
+        .iter()
+        .find_map(|primitive| match primitive {
+            Primitive::Text {
+                content, bounds, ..
+            } if content.contains(needle) => Some(*bounds),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("{needle} is drawn"))
+}
+
+#[test]
+fn spaces_around_inline_code_and_links_stay_visible() {
+    let session = mount(Size::new(640.0, 200.0), |_| {
+        div()
+            .w(640.0)
+            .child(markdown("and `code` in, a [link](u) and **bold** end"))
+    })
+    .expect("mount");
+    let primitives = session.primitives();
+    let chip = primitives
+        .iter()
+        .find_map(|primitive| match primitive {
+            Primitive::Quad { bounds, .. } => Some(*bounds),
+            _ => None,
+        })
+        .expect("inline code has a background");
+    let before = text_bounds(primitives, "and ");
+    let code = text_bounds(primitives, "code");
+    let after = text_bounds(primitives, " in");
+    // A text primitive starts at its ink and is as wide as its advance, so
+    // `end` is within a pixel of where the next span's pen starts.
+    let end = |bounds: rui::core::geometry::Bounds| bounds.x() + bounds.width();
+    // "and " ends in a space: the chip starts after it.
+    assert!(chip.x() >= end(before) - 1.5, "{before:?} then {chip:?}");
+    // " in" starts with a space, about 4 px at 14 px: the chip stops before it.
+    assert!(
+        after.x() - (chip.x() + chip.width()) >= 3.0,
+        "{chip:?} then {after:?}"
+    );
+    assert!(chip.x() <= code.x() && chip.x() + chip.width() >= end(code) - 1.5);
+    // The spaces after a link and bold text stay as wide.
+    for (left, right) in [("link", " and "), ("bold", " end")] {
+        let (left, right) = (
+            text_bounds(primitives, left),
+            text_bounds(primitives, right),
+        );
+        assert!(right.x() - end(left) >= 2.5, "{left:?} then {right:?}");
+    }
+}
+
+#[test]
+fn a_local_image_is_drawn_at_its_own_size_scaled_down_to_fit() {
+    // 800 x 600.
+    let source = "![shot](tests/linux_window/hello_world.png)";
+    let image_bounds = |width: f32| {
+        let session = mount(Size::new(1000.0, 900.0), move |_| {
+            div().w(width).child(markdown(source))
+        })
+        .expect("mount");
+        session
+            .primitives()
+            .iter()
+            .find_map(|primitive| match primitive {
+                Primitive::Image { bounds, .. } => Some(*bounds),
+                _ => None,
+            })
+            .expect("the image is drawn")
+    };
+    let narrow = image_bounds(400.0);
+    assert_eq!((narrow.width(), narrow.height()), (400.0, 300.0));
+    let wide = image_bounds(1000.0);
+    assert_eq!(
+        (wide.width(), wide.height()),
+        (800.0, 600.0),
+        "never scaled up"
+    );
+}
+
 /// `RUI_MARKDOWN_PNG=<path>` writes the sample, drawn by Metal, to `<path>`.
 #[cfg(all(target_os = "macos", feature = "metal"))]
 #[test]
@@ -236,12 +316,12 @@ fn renders_through_metal() {
     use rui::renderer::RendererError;
     use rui::renderer::metal::MetalRenderer;
 
-    let size = Size::new(640.0, 860.0);
+    let size = Size::new(640.0, 1100.0);
     let theme = Theme::default();
     let session = mount(size, move |_| {
         div()
             .w(640.0)
-            .h(860.0)
+            .h(1100.0)
             .bg(theme.colors.surface)
             .p(20.0)
             .child(markdown(SAMPLE).theme(theme))
@@ -261,7 +341,7 @@ fn renders_through_metal() {
         "the document draws something"
     );
     if let Ok(path) = std::env::var("RUI_MARKDOWN_PNG") {
-        image::RgbaImage::from_raw(1280, 1720, pixels)
+        image::RgbaImage::from_raw(1280, 2200, pixels)
             .expect("rgba")
             .save(path)
             .expect("png");

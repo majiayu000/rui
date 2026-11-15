@@ -2,7 +2,7 @@
 
 use super::input::InputState;
 use crate::core::app::{AppContext, RedrawSource};
-use crate::core::event::{Event, FocusEvent};
+use crate::core::event::{Cursor, Event, FocusEvent};
 use crate::core::frame_pipeline::{
     FramePipeline, FramePipelineError, FramePresentation, FrameStage, IdlePolicy,
 };
@@ -10,7 +10,7 @@ use crate::core::geometry::Size;
 use crate::core::presenter::Presenter;
 use crate::core::text_editing::TextInputCommand;
 use crate::core::window::{WindowId, WindowOptions};
-use crate::elements::element::Element;
+use crate::elements::element::{Element, PointerEventKind};
 use crate::platform::frame_driver::{
     OrderedInputEvent, append_input_event, dispatch_key, mark_deferred_frame_for_retry,
     mark_platform_event_redraw, schedule_platform_redraw,
@@ -22,14 +22,43 @@ use crate::platform::window::{
 };
 use crate::renderer::RendererResourceLimits;
 use crate::renderer::wgpu::{RetainedTarget, WgpuRenderer, WindowSurface};
+use std::cell::Cell;
 use std::sync::Arc;
 use winit::event_loop::ActiveEventLoop;
+use winit::window::CursorIcon;
 
 const PLATFORM: &str = "winit";
 
 /// The winit window behind the shared [`PlatformWindow`] contract.
 pub(super) struct WinitWindow {
     window: Arc<winit::window::Window>,
+    /// The cursor last shown, so a pointer move over the same element sets none.
+    cursor: Cell<Cursor>,
+}
+
+impl WinitWindow {
+    /// Show the cursor the elements under the pointer asked for.
+    fn show_cursor(&self, cursor: Cursor) {
+        if self.cursor.replace(cursor) == cursor {
+            return;
+        }
+        self.window.set_cursor(match cursor {
+            Cursor::Default => CursorIcon::Default,
+            Cursor::Pointer => CursorIcon::Pointer,
+            Cursor::Text => CursorIcon::Text,
+            Cursor::Crosshair => CursorIcon::Crosshair,
+            Cursor::Move => CursorIcon::Move,
+            Cursor::NotAllowed => CursorIcon::NotAllowed,
+            Cursor::Grab => CursorIcon::Grab,
+            Cursor::Grabbing => CursorIcon::Grabbing,
+            Cursor::ResizeNS => CursorIcon::NsResize,
+            Cursor::ResizeEW => CursorIcon::EwResize,
+            Cursor::ResizeNESW => CursorIcon::NeswResize,
+            Cursor::ResizeNWSE => CursorIcon::NwseResize,
+            Cursor::Wait => CursorIcon::Wait,
+            Cursor::Progress => CursorIcon::Progress,
+        });
+    }
 }
 
 impl PlatformWindow for WinitWindow {
@@ -141,7 +170,10 @@ where
         window.request_redraw();
         Ok(Self {
             id,
-            window: WinitWindow { window },
+            window: WinitWindow {
+                window,
+                cursor: Cell::new(Cursor::Default),
+            },
             renderer,
             surface,
             retained: RetainedTarget::new(),
@@ -309,6 +341,9 @@ fn dispatch_events<E: Element>(
         let (handled, redraw_requested, source) = match event {
             OrderedInputEvent::Pointer(event) => {
                 let dispatch = presenter.dispatch_pointer_event(event);
+                if matches!(event.kind, PointerEventKind::Move) {
+                    window.show_cursor(presenter.cursor());
+                }
                 (
                     dispatch.stopped,
                     dispatch.redraw_requested,

@@ -487,21 +487,23 @@ impl Element for StyledText {
         let Some(wrapped) = lines.as_ref() else {
             panic!("styled text painted without LayoutContext::compute_layout measuring it");
         };
-        // Backgrounds first, so the glyphs of neighboring spans draw over them.
+        // Backgrounds first. They cover the span's advance, from its pen
+        // position, not its ink: reaching past it would cover the spaces of
+        // the spans beside it.
         self.for_each_piece(wrapped, bounds, |piece, x, y| {
             if let Some(color) = self.spans[piece.span].decoration.background {
-                let pad = piece.height * 0.15;
+                let radius = piece.height * 0.15;
                 cx.paint(Primitive::Quad {
                     bounds: Bounds::from_xywh(
-                        x + piece.x + piece.ink_x - pad,
+                        x + piece.x,
                         y + piece.top,
-                        piece.width + pad * 2.0,
+                        piece.width,
                         piece.height,
                     ),
                     background: color.to_rgba(),
                     border_color: Color::TRANSPARENT.to_rgba(),
                     border_widths: Edges::all(0.0),
-                    corner_radii: Corners::all(pad),
+                    corner_radii: Corners::all(radius),
                 });
             }
         });
@@ -545,7 +547,7 @@ impl Element for StyledText {
             let line = |offset: f32| {
                 fill(
                     Bounds::from_xywh(
-                        x + piece.x + piece.ink_x,
+                        x + piece.x,
                         middle + offset * font_size - thickness * 0.5,
                         piece.width,
                         thickness,

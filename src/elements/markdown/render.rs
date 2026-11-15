@@ -3,11 +3,14 @@
 use super::parse::{Block, Inline, Item};
 use crate::advanced_ui::Theme;
 use crate::core::color::Color;
+use crate::core::geometry::Size;
 use crate::elements::text::{FontWeight, LinkHandler, TextAlign};
 use crate::elements::{
     AnyElement, Div, StyledText, div, image, shared_styled_text, span_range, text,
 };
 use pulldown_cmark::Alignment;
+use std::cell::RefCell;
+use std::collections::HashMap;
 
 /// The monospace family code is drawn in, where the platform has a known one.
 #[cfg(target_os = "macos")]
@@ -19,8 +22,40 @@ const CODE_FONT: Option<&str> = None;
 
 /// Heading sizes, from `#` to `######`, relative to body text.
 const HEADING_SCALE: [f32; 6] = [1.75, 1.5, 1.25, 1.1, 1.0, 0.9];
-/// Image height, in body text sizes: the image source gives no size up front.
+/// Height of an image whose size is unknown, such as a remote one, in body
+/// text sizes.
 const IMAGE_HEIGHT: f32 = 12.0;
+/// Local image sizes kept read; past this many the record starts over.
+const IMAGE_SIZES_KEPT: usize = 256;
+
+thread_local! {
+    static IMAGE_SIZES: RefCell<HashMap<String, Option<Size>>> = RefCell::default();
+}
+
+/// The pixel size of the local image file `url`, read from its header the
+/// first time. `None` for a remote image or one that cannot be read.
+fn image_size(url: &str) -> Option<Size> {
+    let path = url.strip_prefix("file://").unwrap_or(url);
+    if path.contains("://") {
+        return None;
+    }
+    IMAGE_SIZES.with(|sizes| {
+        let mut sizes = sizes.borrow_mut();
+        if let Some(size) = sizes.get(path) {
+            return *size;
+        }
+        let size = ::image::ImageReader::open(path)
+            .and_then(|reader| reader.with_guessed_format())
+            .ok()
+            .and_then(|reader| reader.into_dimensions().ok())
+            .map(|(width, height)| Size::new(width as f32, height as f32));
+        if sizes.len() >= IMAGE_SIZES_KEPT {
+            sizes.clear();
+        }
+        sizes.insert(path.to_string(), size);
+        size
+    })
+}
 
 /// Colors and sizes the blocks are drawn with, from the theme.
 pub(super) struct Look {
@@ -196,10 +231,13 @@ impl Look {
                     .children(rows.iter().map(|cells| row(cells, self.surface, false)))
                     .into()
             }
-            Block::Image { url, .. } => image(url.to_string())
-                .h(self.size * IMAGE_HEIGHT)
-                .contain()
-                .into(),
+            Block::Image { url, .. } => {
+                let picture = image(url.to_string()).placeholder(self.code_background);
+                match image_size(url) {
+                    Some(size) => picture.natural_size(size).into(),
+                    None => picture.h(self.size * IMAGE_HEIGHT).contain().into(),
+                }
+            }
         }
     }
 

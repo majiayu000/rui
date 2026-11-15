@@ -108,6 +108,9 @@ pub struct Image {
     placeholder_color: Color,
     texture_id: Option<u32>,
     intrinsic_size: Option<Size>,
+    /// Set by [`Image::natural_size`]: as wide as the container allows, up to
+    /// `intrinsic_size`, at its aspect ratio.
+    shrink_to_width: bool,
     on_load: Option<Box<dyn Fn()>>,
     on_error: Option<Box<dyn Fn()>>,
     layout_node: Option<NodeId>,
@@ -167,6 +170,7 @@ impl Image {
             placeholder_color: Color::hex(0xf3f4f6),
             texture_id: None,
             intrinsic_size: None,
+            shrink_to_width: false,
             on_load: None,
             on_error: None,
             layout_node: None,
@@ -228,6 +232,14 @@ impl Image {
         let s = size.into();
         self.style.width = Some(s.width);
         self.style.height = Some(s.height);
+        self
+    }
+
+    /// Draw at `size`, the image's own: scaled down with its aspect ratio
+    /// kept where the container is narrower, never scaled up.
+    pub fn natural_size(mut self, size: impl Into<Size>) -> Self {
+        self.intrinsic_size = Some(size.into());
+        self.shrink_to_width = true;
         self
     }
 
@@ -338,6 +350,7 @@ impl Element for Image {
             && self.placeholder_color == previous.placeholder_color
             && self.texture_id == previous.texture_id
             && self.intrinsic_size == previous.intrinsic_size
+            && self.shrink_to_width == previous.shrink_to_width
     }
 
     fn layout(&mut self, cx: &mut LayoutContext) -> NodeId {
@@ -345,7 +358,21 @@ impl Element for Image {
 
         // Use intrinsic size if no explicit size set
         if self.style.width.is_none() && self.style.height.is_none() {
-            if let Some(intrinsic) = self.intrinsic_size {
+            if let Some(intrinsic) = self.intrinsic_size
+                && self.shrink_to_width
+                && intrinsic.width > 0.0
+                && intrinsic.height > 0.0
+            {
+                style.size = taffy::Size {
+                    width: Dimension::Length(intrinsic.width),
+                    height: Dimension::Auto,
+                };
+                style.max_size.width = Dimension::Percent(1.0);
+                // Its height follows its width: a column short of room must not
+                // squeeze it out of its aspect ratio.
+                style.flex_shrink = 0.0;
+                style.aspect_ratio = Some(intrinsic.width / intrinsic.height);
+            } else if let Some(intrinsic) = self.intrinsic_size {
                 style.size = taffy::Size {
                     width: Dimension::Length(intrinsic.width),
                     height: Dimension::Length(intrinsic.height),
