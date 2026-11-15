@@ -339,8 +339,8 @@ fn dispatch_events<E: Element>(
     }
     for event in ordered {
         let (handled, redraw_requested, source) = match event {
-            OrderedInputEvent::Pointer(event) => {
-                let dispatch = presenter.dispatch_pointer_event(event);
+            OrderedInputEvent::Pointer(event, modifiers) => {
+                let dispatch = presenter.dispatch_pointer_event_with(event, *modifiers);
                 if matches!(event.kind, PointerEventKind::Move) {
                     window.show_cursor(presenter.cursor());
                 }

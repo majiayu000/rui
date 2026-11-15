@@ -10,6 +10,7 @@ mod list;
 pub mod markdown;
 pub mod overlay;
 mod scroll_view;
+pub(crate) mod selection;
 mod spinner;
 mod svg;
 mod table;
@@ -27,6 +28,7 @@ pub use input::{Input, InputType, input};
 pub use list::{List, ListItem, ListStyle, list, ordered_list, unordered_list};
 #[cfg(feature = "markdown")]
 pub use markdown::{Markdown, markdown};
+pub use selection::{SelectionScope, selection_scope};
 pub use scroll_view::{ScrollDirection, ScrollView, ScrollbarVisibility, scroll_view};
 pub use spinner::{Spinner, SpinnerType, spinner};
 pub use svg::{Svg, SvgError, svg};

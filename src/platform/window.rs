@@ -1,6 +1,6 @@
 //! Shared platform window contract.
 
-use crate::core::event::{KeyEvent, MouseButton, ScrollEvent};
+use crate::core::event::{KeyEvent, Modifiers, MouseButton, ScrollEvent};
 use crate::core::geometry::{Point, Size};
 use crate::core::text_editing::TextInputEvent;
 use crate::core::window::WindowOptions;
@@ -200,6 +200,8 @@ pub struct PlatformMouseEvent {
     pub kind: PlatformMouseEventKind,
     pub position: Point,
     pub button: Option<MouseButton>,
+    /// Modifier keys held when the event happened, for shift-click.
+    pub modifiers: Modifiers,
 }
 
 #[derive(Debug, Clone)]

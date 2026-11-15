@@ -8,7 +8,7 @@ use crate::core::accessibility::{
 use crate::core::action::{ActionId, ActionOutcome};
 use crate::core::app::SharedClipboard;
 use crate::core::drag::{ActiveDrag, SharedDrag};
-use crate::core::event::{Cursor, KeyEvent, MouseButton, ScrollEvent};
+use crate::core::event::{Cursor, KeyEvent, Modifiers, MouseButton, ScrollEvent};
 use crate::core::geometry::{Bounds, Point, Size};
 use crate::core::style::{Dimension as StyleDimension, Style};
 use crate::core::text_editing::{Clipboard, TextInputCommand, TextInputEvent, TextInputSnapshot};

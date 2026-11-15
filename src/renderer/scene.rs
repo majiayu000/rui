@@ -287,6 +287,10 @@ pub struct Scene {
     hit_index: RefCell<HitIndex>,
 
     overlays: overlay::OverlayLayers,
+
+    /// The texts painted into a scene a selection scope collects them with,
+    /// in paint order. `None` in every other scene.
+    pub(crate) selection: Option<Vec<crate::elements::selection::SelectableLeaf>>,
 }
 
 impl Scene {
@@ -311,6 +315,7 @@ impl Scene {
             hit_queries: Cell::new(0),
             hit_index: RefCell::default(),
             overlays: overlay::OverlayLayers::default(),
+            selection: None,
         }
     }
 

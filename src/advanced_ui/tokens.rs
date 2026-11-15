@@ -202,6 +202,8 @@ pub struct ThemeStateTokens {
     pub read_only_opacity: f32,
     pub invalid_border: Color,
     pub focus_ring: Color,
+    /// Drawn over selected text.
+    pub selection: Color,
     pub hover_surface: Color,
     pub pressed_surface: Color,
     pub loading_surface: Color,
@@ -287,6 +289,7 @@ impl Theme {
                 read_only_opacity: 0.72,
                 invalid_border: Color::hex(0xdc2626),
                 focus_ring: Color::hex(0x2563eb),
+                selection: Color::hex(0x2563eb).with_alpha(0.28),
                 hover_surface: Color::hex(0xf3f4f6),
                 pressed_surface: Color::hex(0xe5e7eb),
                 loading_surface: Color::hex(0xe0f2fe),
@@ -315,6 +318,7 @@ impl Theme {
         theme.colors.tooltip_text = Color::hex(0x111827);
         theme.state.hover_surface = Color::hex(0x1f2937);
         theme.state.pressed_surface = Color::hex(0x374151);
+        theme.state.selection = Color::hex(0x3b82f6).with_alpha(0.4);
         theme.state.loading_surface = Color::hex(0x0f172a);
         theme
     }
@@ -371,6 +375,7 @@ impl Theme {
         theme.state.disabled_opacity = 0.65;
         theme.state.invalid_border = Color::hex(0xff0000);
         theme.state.focus_ring = Color::hex(0x00ffff);
+        theme.state.selection = Color::hex(0x00ffff).with_alpha(0.45);
         theme.state.hover_surface = Color::hex(0x333333);
         theme.state.pressed_surface = Color::hex(0x4d4d4d);
         theme.state.loading_surface = Color::hex(0x1a1a1a);

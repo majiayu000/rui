@@ -212,6 +212,17 @@ fn keymap_maps_standard_actions_from_key_events() {
             StandardAction::CommandPalette,
         ),
     ];
+    #[cfg(not(target_os = "macos"))]
+    let cases = {
+        let mut cases = cases.to_vec();
+        cases.extend([
+            (KeyCode::A, Modifiers::ctrl(), StandardAction::SelectAll),
+            (KeyCode::C, Modifiers::ctrl(), StandardAction::Copy),
+            (KeyCode::X, Modifiers::ctrl(), StandardAction::Cut),
+            (KeyCode::V, Modifiers::ctrl(), StandardAction::Paste),
+        ]);
+        cases
+    };
 
     assert_eq!(keymap.len(), cases.len());
     for (key, modifiers, action) in cases {

@@ -233,6 +233,7 @@ fn key_and_text_input_events_preserve_platform_order() {
             kind: PlatformMouseEventKind::Down,
             position: Point::new(12.0, 18.0),
             button: Some(MouseButton::Left),
+            modifiers: Modifiers::none(),
         }),
         &mut ordered_input_events,
     );
@@ -254,7 +255,7 @@ fn key_and_text_input_events_preserve_platform_order() {
         ordered_input_events.as_slice(),
         [
             OrderedInputEvent::Text(TextInputCommand::CommitComposition(text)),
-            OrderedInputEvent::Pointer(pointer),
+            OrderedInputEvent::Pointer(pointer, _),
             OrderedInputEvent::Scroll(scroll),
             OrderedInputEvent::Key {
                 is_down: true,

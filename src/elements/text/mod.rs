@@ -12,6 +12,8 @@ use crate::elements::element::{
     Capabilities, Element, LayoutContext, PaintContext, StableId, TextWrapRequest, WrappedLines,
     no_reach, style_to_taffy,
 };
+use crate::elements::selection::{LeafFont, LeafLayout, SelectableLeaf};
+use crate::elements::{SelectionScope, selection_scope};
 use crate::renderer::text::BaseDirection;
 use crate::renderer::text::{TextMeasureCache, TextMetrics, TextRequest};
 use crate::renderer::{Primitive, text_reach};
@@ -143,6 +145,8 @@ pub struct Text {
     max_lines: Option<usize>,
     /// Lines laid out for wrapped text; `None` keeps the text on one line.
     wrapped: Option<WrappedLines>,
+    /// Left out of the selection scope it is in, as a list marker is.
+    unselectable: bool,
     layout_node: Option<NodeId>,
 }
 
@@ -163,6 +167,7 @@ impl Text {
             align: TextAlign::Left,
             max_lines: None,
             wrapped: None,
+            unselectable: false,
             layout_node: None,
         }
     }
@@ -276,6 +281,19 @@ impl Text {
         self.max_lines(1)
     }
 
+    /// This text in a [`SelectionScope`] of its own, so it can be selected
+    /// and copied. Text inside a scope is selectable without this.
+    pub fn selectable(self) -> SelectionScope {
+        selection_scope(self)
+    }
+
+    /// Leave this text out of the [`SelectionScope`] it is in: a drag passes
+    /// over it and copying leaves it out, as a list marker is.
+    pub fn unselectable(mut self) -> Self {
+        self.unselectable = true;
+        self
+    }
+
     /// Take every property not set on this text from `inherited`.
     fn inherit(&mut self, inherited: &TextStyle) {
         if !self.own.color {
@@ -320,6 +338,49 @@ impl Text {
             Ok(metrics) => metrics,
             Err(err) => panic!("text layout failed: {:?}", err),
         }
+    }
+
+    /// What a selection scope needs to know of this text painted at
+    /// `bounds`, unless it is left out of selections or paints nothing.
+    pub(crate) fn selectable_leaf(
+        &mut self,
+        bounds: Bounds,
+        clip: Option<Bounds>,
+    ) -> Option<SelectableLeaf> {
+        if self.unselectable
+            || self.content.is_empty()
+            || self.font_size <= 0.0
+            || self.line_height <= 0.0
+        {
+            return None;
+        }
+        let font = LeafFont {
+            size: self.font_size,
+            weight: self.font_weight.to_value(),
+            family: self.font_family.clone(),
+            line_height: self.line_height,
+        };
+        let lines = self
+            .wrapped
+            .as_ref()
+            .and_then(|lines| lines.borrow().clone());
+        let layout = match lines {
+            Some(lines) => LeafLayout::Wrapped {
+                font,
+                align: self.align,
+                lines,
+            },
+            None => LeafLayout::Line {
+                font,
+                align: self.align,
+            },
+        };
+        Some(SelectableLeaf::new(
+            bounds,
+            clip,
+            self.content.share(),
+            layout,
+        ))
     }
 
     /// Measure text width using the configured font metrics.
@@ -376,6 +437,7 @@ impl Element for Text {
             && self.align == previous.align
             && self.max_lines == previous.max_lines
             && self.wrapped.is_some() == previous.wrapped.is_some()
+            && self.unselectable == previous.unselectable
     }
 
     fn layout(&mut self, cx: &mut LayoutContext) -> NodeId {

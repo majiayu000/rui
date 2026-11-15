@@ -122,6 +122,7 @@ impl InputState {
             kind,
             position: self.cursor,
             button,
+            modifiers: self.modifiers,
         })
     }
 }

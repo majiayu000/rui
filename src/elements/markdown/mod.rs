@@ -18,7 +18,7 @@ pub use parse::{ParseCounts, markdown_parse_counts};
 use crate::advanced_ui::Theme;
 use crate::core::SharedStr;
 use crate::elements::text::{LinkHandler, TextStyle};
-use crate::elements::{AnyElement, Div, IntoElement};
+use crate::elements::{AnyElement, Div, IntoElement, SelectionScope, selection_scope};
 use std::rc::Rc;
 
 /// A Markdown document, drawn as a column of blocks as wide as its container.
@@ -58,6 +58,15 @@ impl Markdown {
     pub fn on_link(mut self, handler: impl Fn(&str) + 'static) -> Self {
         self.on_link = Some(Rc::new(handler));
         self
+    }
+
+    /// The document in a [`SelectionScope`], so its text can be selected
+    /// across blocks and copied, highlighted with the theme's selection color.
+    /// Without it, Markdown is not selectable: a scope lays out and paints its
+    /// text as cheaply, but collects it again every frame a selection shows.
+    pub fn selectable(self) -> SelectionScope {
+        let theme = self.theme;
+        selection_scope(self.build()).theme(&theme)
     }
 
     /// The source's blocks as elements.
