@@ -7,6 +7,13 @@ pub(crate) fn apply_exact_cluster_positions(
     if clusters.is_empty() {
         return true;
     }
+    if glyphs.is_sorted_by_key(|glyph| glyph.byte_start) {
+        match place_in_order(clusters, glyphs) {
+            Some(true) => return true,
+            Some(false) => {}
+            None => return false,
+        }
+    }
 
     // Each glyph's byte start and horizontal extent, ordered by byte start so
     // the glyphs of a cluster are one binary-searched range.
@@ -60,6 +67,47 @@ pub(crate) fn apply_exact_cluster_positions(
     }
 
     true
+}
+
+/// [`apply_exact_cluster_positions`] for glyphs already in byte order, as
+/// left-to-right text shapes, without copying, sorting or searching them.
+/// `None` when a cluster has no glyph; `Some(false)`, leaving the clusters to
+/// be placed again, when their glyphs do not start left to right.
+fn place_in_order(clusters: &mut [ClusterDraft], glyphs: &[GlyphDraft]) -> Option<bool> {
+    let mut next = 0;
+    for cluster in clusters.iter_mut() {
+        while glyphs
+            .get(next)
+            .is_some_and(|glyph| glyph.byte_start < cluster.byte_start)
+        {
+            next += 1;
+        }
+        let first = next;
+        let (mut start, mut end) = (f32::INFINITY, f32::NEG_INFINITY);
+        while let Some(glyph) = glyphs
+            .get(next)
+            .filter(|glyph| glyph.byte_start < cluster.byte_end)
+        {
+            start = start.min(glyph.x_offset);
+            end = end.max(glyph.x_offset + glyph.advance_width);
+            next += 1;
+        }
+        if next == first {
+            return None;
+        }
+        // The end is kept in the advance until every start is known.
+        (cluster.x_offset, cluster.advance_width) = (start, end);
+    }
+    if !clusters.is_sorted_by(|left, right| left.x_offset.total_cmp(&right.x_offset).is_le()) {
+        return Some(false);
+    }
+    for index in 0..clusters.len() {
+        let end = clusters
+            .get(index + 1)
+            .map_or(clusters[index].advance_width, |next| next.x_offset);
+        clusters[index].advance_width = (end - clusters[index].x_offset).max(0.0);
+    }
+    Some(true)
 }
 
 struct ClusterPosition {

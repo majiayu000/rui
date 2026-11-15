@@ -8,6 +8,7 @@ use rui::core::geometry::{Bounds, Edges, Size};
 use rui::core::style::Corners;
 use rui::elements::text::TextAlign;
 use rui::renderer::metal::MetalRenderer;
+use rui::renderer::text::BaseDirection;
 use rui::renderer::{PathVertex, Primitive, RendererError, Scene};
 use rui::{ImageFit, ImageSource};
 
@@ -43,13 +44,14 @@ fn quad(x: f32, y: f32, width: f32, height: f32, background: Rgba) -> Primitive 
 fn label(x: f32, y: f32, content: &str) -> Primitive {
     Primitive::Text {
         bounds: Bounds::from_xywh(x, y, 100.0, 16.0),
-        content: content.to_string(),
+        content: content.into(),
         color: Rgba::new(1.0, 1.0, 1.0, 1.0),
         font_size: 12.0,
         font_weight: 400,
         font_family: None,
         line_height: 1.2,
         align: TextAlign::Left,
+        direction: BaseDirection::Auto,
     }
 }
 
@@ -173,7 +175,9 @@ fn clips_hold_inside_a_shared_draw() {
     ]);
     let pixels = capture(&mut renderer, &frame);
 
-    assert_eq!(renderer.last_frame_stats().draw_calls, 1);
+    // The background inside its clip draws with the simple pipeline; the two
+    // quads crossing theirs share the next draw.
+    assert_eq!(renderer.last_frame_stats().draw_calls, 2);
     for (x, y, inside) in [
         (10, 10, true),
         (29, 29, true),
@@ -202,6 +206,7 @@ fn icons_and_paths_draw_with_text_in_one_call() {
             .iter()
             .map(|&(x, y)| PathVertex::new(x, y))
             .collect(),
+        offset: Default::default(),
         color: Rgba::new(0.2, 0.3, 0.5, 1.0),
         stroke_width: None,
     }];
@@ -212,7 +217,9 @@ fn icons_and_paths_draw_with_text_in_one_call() {
                 PathVertex::new(2.0, y + 5.0),
                 PathVertex::new(4.0, y + 8.0),
                 PathVertex::new(8.0, y + 2.0),
-            ],
+            ]
+            .into(),
+            offset: Default::default(),
             color: Rgba::new(0.3, 0.8, 0.4, 1.0),
             stroke_width: Some(1.5),
         });

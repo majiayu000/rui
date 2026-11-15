@@ -6,7 +6,7 @@ use crate::core::accessibility::{
     AccessibilityRole,
 };
 use crate::core::action::{ActionId, ActionOutcome, StandardAction};
-use crate::core::event::Cursor;
+use crate::core::event::{Cursor, KeyCode, KeyEvent, Modifiers};
 use crate::core::geometry::Edges;
 use crate::core::style::{Corners, Style};
 use crate::elements::element::{
@@ -14,6 +14,7 @@ use crate::elements::element::{
     style_to_taffy,
 };
 use crate::renderer::Primitive;
+use crate::renderer::text::BaseDirection;
 use taffy::prelude::*;
 
 pub struct Button {
@@ -207,13 +208,14 @@ impl Element for Button {
 
         cx.paint(Primitive::Text {
             bounds,
-            content: self.label.clone(),
+            content: self.label.clone().into(),
             color: colors.foreground.to_rgba(),
             font_size: self.theme.text_size(self.size),
             font_weight: self.theme.typography.control_weight,
             font_family: None,
             line_height: self.theme.typography.line_height,
             align: crate::elements::text::TextAlign::Center,
+            direction: BaseDirection::Auto,
         });
     }
 
@@ -271,6 +273,17 @@ impl Element for Button {
                 }
             }
         }
+    }
+
+    fn handle_key_event(&mut self, cx: &mut EventContext, event: &KeyEvent) -> bool {
+        // Activate on the initial key-down; native key-up never reaches elements.
+        // Keep Space local to buttons so text inputs and app bindings retain it.
+        if event.key == KeyCode::Space && event.modifiers == Modifiers::none() && !event.is_repeat {
+            return self
+                .dispatch_action(cx, &StandardAction::Activate.into())
+                .is_handled();
+        }
+        false
     }
 
     fn handle_action(&mut self, cx: &mut EventContext, action: &ActionId) -> ActionOutcome {

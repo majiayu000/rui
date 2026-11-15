@@ -11,25 +11,26 @@
 const CELL: f32 = 64.0;
 
 /// `[x0, y0, x1, y1]`, half open: a pixel center on `x1` or `y1` is outside.
-pub(super) type Rect = [f32; 4];
+pub(crate) type Rect = [f32; 4];
 
 #[derive(Default)]
 struct Cell {
     max_order: u32,
-    entries: Vec<u32>,
+    /// The bounds touching the cell and their orders, kept here rather than
+    /// by index so a query reads them in sequence.
+    entries: Vec<(Rect, u32)>,
 }
 
 #[derive(Default)]
-pub(super) struct OverlapOrder {
+pub(crate) struct OverlapOrder {
     columns: usize,
     rows: usize,
     cells: Vec<Cell>,
-    entries: Vec<(Rect, u32)>,
 }
 
 impl OverlapOrder {
     /// Empties the index for a frame of `width` by `height` logical pixels.
-    pub(super) fn reset(&mut self, width: f32, height: f32) {
+    pub(crate) fn reset(&mut self, width: f32, height: f32) {
         let columns = ((width / CELL).ceil() as usize).max(1);
         let rows = ((height / CELL).ceil() as usize).max(1);
         if columns != self.columns || rows != self.rows {
@@ -43,12 +44,11 @@ impl OverlapOrder {
                 cell.entries.clear();
             }
         }
-        self.entries.clear();
     }
 
     /// The order of a primitive covering `rect`, which must lie within the frame
     /// passed to `reset`. Orders start at 1.
-    pub(super) fn insert(&mut self, rect: Rect) -> u32 {
+    pub(crate) fn insert(&mut self, rect: Rect) -> u32 {
         let (c0, r0, c1, r1) = self.cell_range(rect);
         let mut below = 0;
         for row in r0..=r1 {
@@ -57,8 +57,7 @@ impl OverlapOrder {
                 if cell.max_order <= below {
                     continue;
                 }
-                for &entry in &cell.entries {
-                    let (other, order) = self.entries[entry as usize];
+                for &(other, order) in &cell.entries {
                     if order > below && overlaps(rect, other) {
                         below = order;
                     }
@@ -66,13 +65,11 @@ impl OverlapOrder {
             }
         }
         let order = below + 1;
-        let entry = self.entries.len() as u32;
-        self.entries.push((rect, order));
         for row in r0..=r1 {
             for column in c0..=c1 {
                 let cell = &mut self.cells[row * self.columns + column];
                 cell.max_order = cell.max_order.max(order);
-                cell.entries.push(entry);
+                cell.entries.push((rect, order));
             }
         }
         order
@@ -87,7 +84,7 @@ impl OverlapOrder {
 
 /// Whether two half-open rectangles share any area. Rectangles that only touch
 /// share no pixel center, since the rasterizer gives an edge's pixels to one side.
-pub(super) fn overlaps(a: Rect, b: Rect) -> bool {
+pub(crate) fn overlaps(a: Rect, b: Rect) -> bool {
     a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3]
 }
 

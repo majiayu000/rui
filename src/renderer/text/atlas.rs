@@ -12,13 +12,16 @@
 //! evicted page is emptied and reused; its glyphs are rasterized again when next
 //! drawn, and the renderer clears its texture ([`TextGlyphCache::take_cleared_pages`]).
 
-use super::hash::{FastHasher, FastMap};
+use super::hash::FastMap;
 use super::{TextError, TextMeasureCache, TextMetrics, TextRequest, font_io_text_error};
 use crate::renderer::resources::{
     RendererResourceError, RendererResourceKind, RendererResourceStats,
 };
+use color::color_bitmap;
+pub use placed::GlyphSprite;
+use placed::PlacedText;
 use rusttype::{GlyphId, Scale, point};
-use std::hash::{Hash, Hasher};
+use shaped_entry::{ShapedEntry, shape_hash};
 use std::sync::Arc;
 
 /// Side of a new atlas page in pixels. A glyph larger than this gets a page of its own.
@@ -33,6 +36,10 @@ pub const SOFT_ATLAS_PAGES: usize = 8;
 /// recently drawn strings down to three quarters of it, never one the previous
 /// frame drew, so a frame never evicts what it is still drawing.
 const MAX_RETAINED_SHAPES: usize = 4_096;
+/// Glyphs of the kept shaped strings, trimmed the same way. Each costs about
+/// 70 bytes with its sprite, so this keeps them near 4.5 MB: long paragraphs
+/// that change every frame would otherwise keep 60 MB under the count alone.
+const MAX_RETAINED_SHAPE_GLYPHS: usize = 65_536;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AtlasRect {
@@ -279,6 +286,8 @@ pub struct PlacedGlyph {
     pub x: f32,
     /// Baseline, measured down from the top of the line box.
     pub baseline_y: f32,
+    /// Font size over the text's: 1, or what gives a fallback face the text's em.
+    pub font_scale: f32,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -318,113 +327,13 @@ struct GlyphKey {
     subpixel: u8,
 }
 
-struct ShapedEntry {
-    content: String,
-    font_size: f32,
-    font_weight: u16,
-    font_family: Option<String>,
-    line_height: f32,
-    text: Option<Arc<ShapedText>>,
-    last_used: u64,
-}
-
-impl ShapedEntry {
-    fn matches(&self, request: &TextRequest<'_>) -> bool {
-        self.content == request.content
-            && self.font_size.to_bits() == request.font_size.to_bits()
-            && self.font_weight == request.font_weight
-            && self.font_family.as_deref() == request.font_family
-            && self.line_height.to_bits() == request.line_height.to_bits()
-    }
-}
-
-/// Hashes a request without copying its text, so a hit allocates nothing.
-fn shape_hash(request: &TextRequest<'_>) -> u64 {
-    let mut hasher = FastHasher::default();
-    request.content.hash(&mut hasher);
-    request.font_size.to_bits().hash(&mut hasher);
-    request.font_weight.hash(&mut hasher);
-    request.font_family.hash(&mut hasher);
-    request.line_height.to_bits().hash(&mut hasher);
-    hasher.finish()
-}
-
-/// The bitmap of `glyph_id` at `device_font_size`, for fonts whose glyphs are
-/// images (`sbix`, `CBDT`): its offset from the pen position
-/// on the baseline, its size and its sRGB RGBA pixels with straight alpha.
-/// `None` when the font has no image for the glyph. The strike closest above
-/// the size is scaled down to it, in premultiplied alpha so transparent pixels
-/// do not darken the edges.
-#[allow(clippy::type_complexity)]
-fn color_bitmap(
-    font: &crate::renderer::text_shaping::TextShapingFont,
-    glyph_id: u16,
-    device_font_size: f32,
-) -> Result<Option<(i32, i32, u32, u32, Vec<u8>)>, TextError> {
-    use rustybuzz::ttf_parser::RasterImageFormat;
-    // Font sizes here are rusttype's: the height from descent to ascent, as
-    // outlines and shaping use them. Strikes are chosen by pixels per em.
-    let unscaled = font.font().v_metrics_unscaled();
-    let height_units = unscaled.ascent - unscaled.descent;
-    if height_units <= 0.0 {
-        return Ok(None);
-    }
-    let em = device_font_size * f32::from(font.font().units_per_em()) / height_units;
-    let pixels_per_em = em.ceil().clamp(1.0, f32::from(u16::MAX)) as u16;
-    let Some(image) = font.raster_image(glyph_id, pixels_per_em) else {
-        return Ok(None);
-    };
-    let invalid = |reason: String| {
-        TextError::Resource(RendererResourceError::invalid(
-            RendererResourceKind::Glyph,
-            reason,
-        ))
-    };
-    if image.format != RasterImageFormat::PNG {
-        return Err(invalid(format!(
-            "glyph {glyph_id} is a {:?} bitmap; only PNG bitmaps are drawn",
-            image.format
-        )));
-    }
-    let decoded = image::load_from_memory_with_format(image.data, image::ImageFormat::Png)
-        .map_err(|err| invalid(format!("glyph {glyph_id} bitmap does not decode: {err}")))?
-        .to_rgba8();
-    let scale = em / f32::from(image.pixels_per_em.max(1));
-    let width = ((decoded.width() as f32 * scale).round() as u32).max(1);
-    let height = ((decoded.height() as f32 * scale).round() as u32).max(1);
-    let mut premultiplied = decoded;
-    for pixel in premultiplied.pixels_mut() {
-        let alpha = u16::from(pixel[3]);
-        for channel in &mut pixel.0[..3] {
-            *channel = ((u16::from(*channel) * alpha + 127) / 255) as u8;
-        }
-    }
-    let mut scaled = image::imageops::resize(
-        &premultiplied,
-        width,
-        height,
-        image::imageops::FilterType::Triangle,
-    );
-    for pixel in scaled.pixels_mut() {
-        let alpha = u16::from(pixel[3]);
-        for channel in &mut pixel.0[..3] {
-            // Fully transparent pixels keep their (zero) color.
-            if let Some(straight) = (u16::from(*channel) * 255 + alpha / 2).checked_div(alpha) {
-                *channel = straight.min(255) as u8;
-            }
-        }
-    }
-    // The image's bottom left sits `x, y` strike pixels from the origin, y up.
-    let left = (f32::from(image.x) * scale).round() as i32;
-    let top = -((f32::from(image.y) * scale).round() as i32) - height as i32;
-    Ok(Some((left, top, width, height, scaled.into_raw())))
-}
-
 pub struct TextGlyphCache {
     measurer: TextMeasureCache,
     font_generation: usize,
     frame: u64,
     shapes: FastMap<u64, ShapedEntry>,
+    /// Glyphs of the shaped texts in `shapes`.
+    shape_glyphs: usize,
     glyphs: FastMap<GlyphKey, Option<AtlasGlyph>>,
     max_glyphs: usize,
     atlas: GlyphAtlas,
@@ -441,6 +350,10 @@ pub struct TextGlyphCache {
     evicted_shapes: usize,
     evicted_glyphs: usize,
     glyph_pressure_events: usize,
+    /// Sprites of each text last drawn, by the address of its shaped text.
+    placed: FastMap<usize, PlacedText>,
+    /// Bumped whenever glyphs leave the atlas, which outdates every placement.
+    glyph_generation: u64,
 }
 
 impl TextGlyphCache {
@@ -465,6 +378,7 @@ impl TextGlyphCache {
             font_generation,
             frame: 0,
             shapes: FastMap::default(),
+            shape_glyphs: 0,
             glyphs: FastMap::default(),
             max_glyphs,
             color_atlas: GlyphAtlas::with_bytes_per_pixel(atlas.page_size, atlas.max_bytes, 4),
@@ -479,26 +393,15 @@ impl TextGlyphCache {
             evicted_shapes: 0,
             evicted_glyphs: 0,
             glyph_pressure_events: 0,
+            placed: FastMap::default(),
+            glyph_generation: 0,
         }
     }
 
     pub fn begin_frame(&mut self) {
-        if self.shapes.len() > MAX_RETAINED_SHAPES {
-            let previous = self.frame;
-            let mut frames: Vec<u64> = self
-                .shapes
-                .values()
-                .map(|entry| entry.last_used)
-                .filter(|&frame| frame < previous)
-                .collect();
-            let evict = (self.shapes.len() - MAX_RETAINED_SHAPES * 3 / 4).min(frames.len());
-            if evict > 0 {
-                let (_, &mut newest_evicted, _) = frames.select_nth_unstable(evict - 1);
-                let before = self.shapes.len();
-                self.shapes
-                    .retain(|_, entry| entry.last_used > newest_evicted);
-                self.evicted_shapes += before - self.shapes.len();
-            }
+        if self.shapes.len() > MAX_RETAINED_SHAPES || self.shape_glyphs > MAX_RETAINED_SHAPE_GLYPHS
+        {
+            self.trim_shapes(MAX_RETAINED_SHAPES * 3 / 4, MAX_RETAINED_SHAPE_GLYPHS * 3 / 4);
         }
         self.frame += 1;
     }
@@ -622,21 +525,9 @@ impl TextGlyphCache {
         let text = (!metrics.ink_bounds.is_empty()).then(|| {
             let fonts = self.measurer.fonts.as_slice();
             let scale = Scale::uniform(request.font_size);
-            let glyphs = parts
-                .glyphs
-                .iter()
-                .filter_map(|glyph| {
-                    let font = fonts.get(glyph.font_index)?;
-                    let ascent = font.font().v_metrics(scale).ascent;
-                    Some(PlacedGlyph {
-                        font_index: glyph.font_index as u32,
-                        glyph_id: glyph.glyph_id,
-                        x: glyph.x_offset,
-                        baseline_y: ascent + glyph.y_offset,
-                    })
-                })
-                .collect();
             let v_metrics = fonts[primary_index].font().v_metrics(scale);
+            let glyphs =
+                placed::place_glyphs(fonts, primary_index, &parts.glyphs, v_metrics.ascent);
             Arc::new(ShapedText {
                 metrics,
                 glyphs,
@@ -645,7 +536,8 @@ impl TextGlyphCache {
             })
         });
 
-        self.shapes.insert(
+        self.shape_glyphs += text.as_ref().map_or(0, |text| text.glyphs.len());
+        let replaced = self.shapes.insert(
             hash,
             ShapedEntry {
                 content: request.content.to_string(),
@@ -653,10 +545,12 @@ impl TextGlyphCache {
                 font_weight: request.font_weight,
                 font_family: request.font_family.map(str::to_string),
                 line_height: request.line_height,
+                direction: request.direction,
                 text: text.clone(),
                 last_used: self.frame,
             },
         );
+        self.shape_glyphs -= replaced.map_or(0, |entry| entry.glyphs());
         Ok(text)
     }
 
@@ -669,6 +563,7 @@ impl TextGlyphCache {
         device_font_size: f32,
         subpixel: u8,
     ) -> Result<Option<AtlasGlyph>, TextError> {
+        let device_font_size = device_font_size * glyph.font_scale;
         let key = GlyphKey {
             font_index: glyph.font_index,
             glyph_id: glyph.glyph_id,
@@ -848,6 +743,7 @@ impl TextGlyphCache {
             entry.is_none_or(|glyph| glyph.color != color || glyph.slot.page != page)
         });
         self.evicted_glyphs += before - self.glyphs.len();
+        self.glyph_generation += 1;
         let uploads = if color {
             &mut self.color_uploads
         } else {
@@ -860,11 +756,14 @@ impl TextGlyphCache {
     fn invalidate_for_font_generation_change(&mut self) {
         if self.measurer.font_generation != self.font_generation {
             self.shapes.clear();
+            self.shape_glyphs = 0;
             self.glyphs.clear();
             self.atlas.clear();
             self.uploads.clear();
             self.color_atlas.clear();
             self.color_uploads.clear();
+            self.placed.clear();
+            self.glyph_generation += 1;
             self.epoch += 1;
             self.font_generation = self.measurer.font_generation;
         }
@@ -877,323 +776,8 @@ impl Default for TextGlyphCache {
     }
 }
 
+mod color;
+mod placed;
+mod shaped_entry;
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn atlas_packs_glyphs_into_one_page_without_overlap() {
-        let mut atlas = GlyphAtlas::new(64, usize::MAX);
-        let slots = (0..20)
-            .map(|_| atlas.allocate(10, 12).expect("allocate"))
-            .collect::<Vec<_>>();
-
-        assert_eq!(atlas.page_count(), 1);
-        for (index, a) in slots.iter().enumerate() {
-            assert!(a.rect.x + a.rect.width <= 64 && a.rect.y + a.rect.height <= 64);
-            for b in &slots[index + 1..] {
-                let apart = a.rect.x + a.rect.width + ATLAS_PADDING <= b.rect.x
-                    || b.rect.x + b.rect.width + ATLAS_PADDING <= a.rect.x
-                    || a.rect.y + a.rect.height + ATLAS_PADDING <= b.rect.y
-                    || b.rect.y + b.rect.height + ATLAS_PADDING <= a.rect.y;
-                assert!(apart, "{a:?} and {b:?} overlap");
-            }
-        }
-    }
-
-    #[test]
-    fn atlas_adds_a_page_when_full_and_sizes_oversized_glyphs_to_fit() {
-        let mut atlas = GlyphAtlas::new(32, usize::MAX);
-        for _ in 0..4 {
-            assert_eq!(atlas.allocate(15, 15).expect("allocate").page, 0);
-        }
-        assert_eq!(atlas.allocate(15, 15).expect("allocate").page, 1);
-
-        let big = atlas.allocate(100, 40).expect("allocate");
-        assert_eq!(big.page, 2);
-        assert_eq!(atlas.page_extent(2), Some((101, 41)));
-    }
-
-    #[test]
-    fn atlas_reports_pressure_instead_of_dropping_a_glyph() {
-        let mut atlas = GlyphAtlas::new(32, 32 * 32);
-        for _ in 0..4 {
-            atlas.allocate(15, 15).expect("allocate");
-        }
-        let err = atlas
-            .allocate(15, 15)
-            .expect_err("second page is over budget");
-        assert!(err.is_pressure());
-        assert_eq!(atlas.page_count(), 1);
-    }
-
-    fn request(content: &str) -> TextRequest<'_> {
-        TextRequest::new(content, 14.0, 400, None, 1.2)
-    }
-
-    #[test]
-    fn shaped_text_and_glyphs_are_reused_across_frames() {
-        let mut cache = TextGlyphCache::new();
-        let draw_frame = |cache: &mut TextGlyphCache| {
-            cache.begin_frame();
-            let shaped = cache
-                .shape(request("Hello atlas"))
-                .expect("shape")
-                .expect("ink");
-            for glyph in &shaped.glyphs {
-                cache.glyph(glyph, 28.0, 1).expect("glyph");
-            }
-            shaped
-        };
-
-        let first = draw_frame(&mut cache);
-        let uploads = cache.take_uploads();
-        assert!(!uploads.is_empty());
-        let rasterized = cache.resource_stats().cache_misses;
-        assert_eq!(cache.shape_misses(), 1);
-
-        let second = draw_frame(&mut cache);
-        assert!(Arc::ptr_eq(&first, &second), "shaping is kept");
-        assert_eq!(cache.shape_misses(), 1);
-        assert_eq!(cache.resource_stats().cache_misses, rasterized);
-        assert!(
-            cache.take_uploads().is_empty(),
-            "nothing is rasterized again"
-        );
-        assert!(
-            uploads
-                .iter()
-                .all(|upload| upload.pixels.iter().any(|&p| p > 0))
-        );
-    }
-
-    #[test]
-    fn glyph_variants_are_rasterized_separately() {
-        let mut cache = TextGlyphCache::new();
-        let shaped = cache.shape(request("l")).expect("shape").expect("ink");
-        let glyph = shaped.glyphs[0];
-        let a = cache.glyph(&glyph, 28.0, 0).expect("glyph").expect("ink");
-        let b = cache.glyph(&glyph, 28.0, 2).expect("glyph").expect("ink");
-        let c = cache.glyph(&glyph, 14.0, 0).expect("glyph").expect("ink");
-        assert_ne!(a.slot, b.slot);
-        assert_ne!(a.slot, c.slot);
-        assert!(
-            c.slot.rect.height < a.slot.rect.height,
-            "device size is honoured"
-        );
-        assert_eq!(cache.glyph(&glyph, 28.0, 0).expect("glyph"), Some(a));
-    }
-
-    #[test]
-    fn strings_drawn_last_frame_survive_shape_eviction() {
-        let mut cache = TextGlyphCache::new();
-        cache.begin_frame();
-        for index in 0..=MAX_RETAINED_SHAPES as u64 {
-            let entry = ShapedEntry {
-                content: format!("old {index}"),
-                font_size: 14.0,
-                font_weight: 400,
-                font_family: None,
-                line_height: 1.2,
-                text: None,
-                last_used: cache.frame,
-            };
-            cache.shapes.insert(index, entry);
-        }
-        cache.begin_frame();
-        let kept = cache.shape(request("kept")).expect("shape");
-        let misses = cache.shape_misses();
-
-        cache.begin_frame();
-        cache.begin_frame();
-        assert!(cache.shapes.len() <= MAX_RETAINED_SHAPES);
-        let again = cache.shape(request("kept")).expect("shape");
-        assert_eq!(
-            cache.shape_misses(),
-            misses,
-            "string from the last frame is kept"
-        );
-        assert_eq!(kept, again);
-    }
-
-    /// A cache over an atlas of `pages` pages of 32 x 32, each holding four
-    /// 15 x 15 sprites.
-    fn small_cache(pages: usize) -> TextGlyphCache {
-        TextGlyphCache::with_measurer(
-            TextMeasureCache::new(),
-            GlyphAtlas::new(32, pages * 32 * 32),
-            usize::MAX,
-        )
-    }
-
-    fn sprite(cache: &mut TextGlyphCache) -> Result<(AtlasSlot, u64), RendererResourceError> {
-        cache.place_sprite(15, 15, vec![255; 15 * 15])
-    }
-
-    #[test]
-    fn pages_unfinished_frames_drew_from_are_kept_until_they_finish() {
-        let mut cache = small_cache(1);
-        cache.begin_frame();
-        let first = sprite(&mut cache).expect("room");
-        for _ in 0..3 {
-            sprite(&mut cache).expect("room");
-        }
-        cache.take_cleared_pages();
-        assert!(cache.use_sprite(first.0, first.1));
-
-        // The next frame needs room while the GPU may still sample the page.
-        cache.begin_frame();
-        let err = sprite(&mut cache).expect_err("the only page is in flight");
-        assert!(err.is_pressure());
-
-        // Once that frame is done, its page is emptied and reused.
-        cache.begin_frame();
-        cache.set_completed_frame(cache.frame() - 1);
-        let reused = sprite(&mut cache).expect("an idle page");
-        assert_eq!(reused.0.page, 0);
-        assert_ne!(reused.1, first.1, "the page's generation moved");
-        assert_eq!(cache.take_cleared_pages(), [0]);
-        assert!(!cache.use_sprite(first.0, first.1), "the old slot is gone");
-        assert!(cache.use_sprite(reused.0, reused.1));
-    }
-
-    #[test]
-    fn the_frame_being_drawn_never_loses_a_page() {
-        let mut cache = small_cache(1);
-        cache.begin_frame();
-        cache.begin_frame();
-        cache.set_completed_frame(cache.frame() - 1);
-        for _ in 0..4 {
-            sprite(&mut cache).expect("room");
-        }
-        let err = sprite(&mut cache).expect_err("the page holds this frame's sprites");
-        assert!(err.is_pressure());
-        assert!(cache.take_cleared_pages().is_empty());
-    }
-
-    #[test]
-    fn glyphs_on_an_evicted_page_are_rasterized_again() {
-        let mut cache = TextGlyphCache::with_measurer(
-            TextMeasureCache::new(),
-            GlyphAtlas::new(64, 64 * 64),
-            usize::MAX,
-        );
-        let shaped = cache.shape(request("ab")).expect("shape").expect("ink");
-        // One frame draws the glyph and fills the rest of the only page.
-        cache.begin_frame();
-        let a = cache
-            .glyph(&shaped.glyphs[0], 28.0, 0)
-            .expect("glyph")
-            .expect("ink");
-        while cache.place(false, 15, 15).is_ok() {}
-        cache.take_uploads();
-        cache.take_cleared_pages();
-
-        // Once it is done, the next frame's sprite empties the page.
-        cache.begin_frame();
-        cache.set_completed_frame(cache.frame() - 1);
-        sprite(&mut cache).expect("an idle page");
-        assert_eq!(cache.take_cleared_pages(), [0]);
-        assert_eq!(
-            cache.resource_stats().evicted_entries,
-            1,
-            "the glyph was evicted"
-        );
-
-        cache.take_uploads();
-        let again = cache
-            .glyph(&shaped.glyphs[0], 28.0, 0)
-            .expect("glyph")
-            .expect("ink");
-        assert_eq!((again.left, again.top), (a.left, a.top));
-        assert_eq!(cache.take_uploads().len(), 1, "rasterized again");
-    }
-
-    #[test]
-    fn past_the_soft_page_count_idle_pages_are_reused_before_growing() {
-        let mut cache = small_cache(usize::MAX / (32 * 32));
-        cache.begin_frame();
-        for _ in 0..SOFT_ATLAS_PAGES * 4 {
-            sprite(&mut cache).expect("room");
-        }
-        assert_eq!(cache.atlas().page_count(), SOFT_ATLAS_PAGES);
-        cache.take_cleared_pages();
-
-        // The next frame reuses every idle page before adding one.
-        cache.begin_frame();
-        cache.set_completed_frame(cache.frame() - 1);
-        for _ in 0..SOFT_ATLAS_PAGES * 4 {
-            sprite(&mut cache).expect("an idle page");
-        }
-        assert_eq!(cache.atlas().page_count(), SOFT_ATLAS_PAGES, "no new page");
-        assert_eq!(cache.take_cleared_pages().len(), SOFT_ATLAS_PAGES);
-        // With none idle, the atlas grows.
-        sprite(&mut cache).expect("a new page");
-        assert_eq!(cache.atlas().page_count(), SOFT_ATLAS_PAGES + 1);
-    }
-
-    #[test]
-    fn bitmap_emoji_become_color_glyphs() {
-        let mut cache = TextGlyphCache::new();
-        let Some(shaped) = cache.shape(request("\u{1F600}")).expect("shape") else {
-            return;
-        };
-        let glyph = shaped.glyphs[0];
-        let family = &cache.measurer.fonts[glyph.font_index as usize].family;
-        if !family.contains("Emoji") {
-            // No color emoji font on this machine.
-            return;
-        }
-        let emoji = cache
-            .glyph(&glyph, 28.0, 0)
-            .expect("glyph")
-            .expect("an emoji has pixels");
-        assert!(emoji.color, "{emoji:?}");
-        let size = (emoji.slot.rect.width, emoji.slot.rect.height);
-        // A 28 px font, descent to ascent, is about 21 px per em in Apple Color
-        // Emoji, the size of its square images and of its advance.
-        let advance = cache.measurer.fonts[glyph.font_index as usize]
-            .font()
-            .glyph(GlyphId(glyph.glyph_id))
-            .scaled(Scale::uniform(28.0))
-            .h_metrics()
-            .advance_width;
-        assert!(
-            (size.0 as f32 - advance).abs() <= 1.0 && size.0 == size.1,
-            "{size:?} against an advance of {advance}"
-        );
-        assert!(emoji.top < 0, "drawn above the baseline: {emoji:?}");
-        let uploads = cache.take_color_uploads();
-        assert_eq!(uploads.len(), 1);
-        let pixels = &uploads[0].pixels;
-        assert_eq!(pixels.len() as u32, size.0 * size.1 * 4);
-        // Not gray: an emoji has color.
-        assert!(
-            pixels
-                .chunks_exact(4)
-                .any(|p| p[3] > 200 && p[0].abs_diff(p[2]) > 60)
-        );
-        assert!(
-            cache.take_uploads().is_empty(),
-            "nothing in the coverage atlas"
-        );
-        assert_eq!(cache.glyph(&glyph, 28.0, 0).expect("glyph"), Some(emoji));
-    }
-
-    #[test]
-    fn glyph_limit_is_a_pressure_error() {
-        let mut cache = TextGlyphCache::with_measurer(
-            TextMeasureCache::new(),
-            GlyphAtlas::new(64, usize::MAX),
-            1,
-        );
-        let shaped = cache.shape(request("ab")).expect("shape").expect("ink");
-        cache
-            .glyph(&shaped.glyphs[0], 14.0, 0)
-            .expect("first glyph fits");
-        let err = cache
-            .glyph(&shaped.glyphs[1], 14.0, 0)
-            .expect_err("second glyph is over the limit");
-        assert!(matches!(err, TextError::Resource(err) if err.is_pressure()));
-    }
-}
+mod tests;

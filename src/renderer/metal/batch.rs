@@ -87,6 +87,13 @@ impl BufferLayout {
         offset
     }
 
+    /// Reserves room for `count` values of `T` and returns its offset.
+    pub(super) fn reserve_count<T>(&mut self, count: usize) -> usize {
+        let offset = self.bytes.next_multiple_of(BUFFER_OFFSET_ALIGNMENT);
+        self.bytes = offset + (count * mem::size_of::<T>()).max(1);
+        offset
+    }
+
     pub(super) fn bytes(&self) -> usize {
         self.bytes
     }

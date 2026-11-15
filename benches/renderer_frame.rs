@@ -22,6 +22,7 @@ use rui::core::style::Corners;
 use rui::elements::element::LayoutNodes;
 use rui::elements::text::TextAlign;
 use rui::renderer::metal::MetalRenderer;
+use rui::renderer::text::BaseDirection;
 use rui::renderer::text::TextMeasureCache;
 use rui::renderer::{PathVertex, Primitive, Scene};
 use rui::{Color, ElementId, Size, div, text};
@@ -85,13 +86,14 @@ fn list_scene() -> Result<Scene, Box<dyn std::error::Error>> {
 fn label(bounds: Bounds, content: String, font_size: f32, color: Rgba) -> Primitive {
     Primitive::Text {
         bounds,
-        content,
+        content: content.into(),
         color,
         font_size,
         font_weight: 400,
         font_family: None,
         line_height: 1.2,
         align: TextAlign::Left,
+        direction: BaseDirection::Auto,
     }
 }
 
@@ -190,6 +192,7 @@ fn icons_paths_scene() -> Scene {
     ] {
         scene.insert(Primitive::Path {
             vertices: points.iter().map(|&(x, y)| PathVertex::new(x, y)).collect(),
+            offset: Default::default(),
             color,
             stroke_width: None,
         });
@@ -202,6 +205,7 @@ fn icons_paths_scene() -> Scene {
         .collect();
     scene.insert(Primitive::Path {
         vertices: chart,
+        offset: Default::default(),
         color: Rgba::new(0.9, 0.6, 0.2, 1.0),
         stroke_width: Some(2.0),
     });
@@ -219,6 +223,7 @@ fn icons_paths_scene() -> Scene {
                 .iter()
                 .map(|&(dx, dy)| PathVertex::new(x + dx, y + dy))
                 .collect(),
+            offset: Default::default(),
             color: Rgba::new(0.3, 0.8, 0.4, 1.0),
             stroke_width: Some(2.0),
         });
@@ -234,6 +239,7 @@ fn icons_paths_scene() -> Scene {
             .collect();
         scene.insert(Primitive::Path {
             vertices: star,
+            offset: Default::default(),
             color: Rgba::new(0.95, 0.8, 0.2, 1.0),
             stroke_width: None,
         });

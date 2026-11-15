@@ -6,11 +6,12 @@ use crate::core::color::Rgba;
 use crate::core::geometry::{Bounds, Edges, Size};
 use crate::core::style::Corners;
 use crate::elements::text::TextAlign;
+use crate::renderer::text::BaseDirection;
 use crate::renderer::{PathVertex, Primitive, RendererError, Scene};
 use crate::{ImageFit, ImageSource};
 
-const WIDTH: f32 = 160.0;
-const HEIGHT: f32 = 120.0;
+pub(crate) const WIDTH: f32 = 160.0;
+pub(crate) const HEIGHT: f32 = 120.0;
 
 /// xorshift64*, enough to vary scenes without a dependency.
 struct Rng(u64);
@@ -59,7 +60,7 @@ impl Rng {
     }
 }
 
-fn random_scene(seed: u64) -> Scene {
+pub(crate) fn random_scene(seed: u64) -> Scene {
     let mut rng = Rng(seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1);
     let mut scene = Scene::new();
     let mut clips = 0;
@@ -90,7 +91,7 @@ fn random_scene(seed: u64) -> Scene {
             10..=13 => Primitive::Text {
                 bounds: rng.bounds(90.0),
                 content: ["row 12", "Wg@", "fix the check", "5 min", "ÅÉ ñ"][rng.below(5) as usize]
-                    .to_string(),
+                    .into(),
                 color: rng.color(),
                 font_size: rng.range(8.0, 24.0),
                 font_weight: 400,
@@ -98,6 +99,7 @@ fn random_scene(seed: u64) -> Scene {
                 line_height: 1.2,
                 align: [TextAlign::Left, TextAlign::Center, TextAlign::Right]
                     [rng.below(3) as usize],
+                direction: BaseDirection::Auto,
             },
             14 => {
                 let (width, height) = (1 + rng.below(6) as u32, 1 + rng.below(6) as u32);
@@ -129,6 +131,7 @@ fn random_scene(seed: u64) -> Scene {
                     .collect();
                 Primitive::Path {
                     vertices,
+                    offset: Default::default(),
                     color: rng.color(),
                     stroke_width: (rng.below(2) == 0).then(|| rng.range(1.0, 5.0)),
                 }
@@ -231,14 +234,36 @@ fn reference_coverage(
                 }
                 winding != 0
             }
-            Some(stroke) => points.windows(2).any(|pair| {
-                let ((ax, ay), (bx, by)) = (pair[0], pair[1]);
-                let length = ((bx - ax).powi(2) + (by - ay).powi(2)).sqrt();
-                let (ux, uy) = ((bx - ax) / length, (by - ay) / length);
-                let along = (x - ax) * ux + (y - ay) * uy;
-                let across = (y - ay) * ux - (x - ax) * uy;
-                (0.0..=length).contains(&along) && across.abs() <= stroke * scale * 0.5
-            }),
+            Some(stroke) => {
+                let half = stroke * scale * 0.5;
+                let segment = points.windows(2).any(|pair| {
+                    let ((ax, ay), (bx, by)) = (pair[0], pair[1]);
+                    let length = ((bx - ax).powi(2) + (by - ay).powi(2)).sqrt();
+                    let (ux, uy) = ((bx - ax) / length, (by - ay) / length);
+                    let along = (x - ax) * ux + (y - ay) * uy;
+                    let across = (y - ay) * ux - (x - ax) * uy;
+                    (0.0..=length).contains(&along) && across.abs() <= half
+                });
+                // A miter join: within half the width of both segments' lines,
+                // past both segments' ends at the vertex, on the outer side,
+                // and within the miter limit of 4 widths from the vertex.
+                let join = points.windows(3).any(|three| {
+                    let unit = |(ax, ay): (f32, f32), (bx, by): (f32, f32)| {
+                        let length = ((bx - ax).powi(2) + (by - ay).powi(2)).sqrt();
+                        ((bx - ax) / length, (by - ay) / length)
+                    };
+                    let (corner, d0, d1) =
+                        (three[1], unit(three[0], three[1]), unit(three[1], three[2]));
+                    let (dx, dy) = (x - corner.0, y - corner.1);
+                    let cos_angle = -(d0.0 * d1.0 + d0.1 * d1.1);
+                    let miter = 1.0 / ((1.0 - cos_angle) * 0.5).sqrt();
+                    let past_both = dx * d0.0 + dy * d0.1 >= 0.0 && dx * d1.0 + dy * d1.1 <= 0.0;
+                    let near_both = (dy * d0.0 - dx * d0.1).abs() <= half
+                        && (dy * d1.0 - dx * d1.1).abs() <= half;
+                    miter <= 4.0 && past_both && near_both
+                });
+                segment || join
+            }
         }
     };
     let mut coverage = Vec::with_capacity(width * height);
@@ -324,6 +349,7 @@ fn paths_match_a_reference_raster_drawn_as_tiles_and_from_the_atlas() {
             });
             scene.insert(Primitive::Path {
                 vertices: points.iter().map(|&(x, y)| PathVertex::new(x, y)).collect(),
+                offset: Default::default(),
                 color: Rgba::new(1.0, 1.0, 1.0, 1.0),
                 stroke_width,
             });
@@ -419,4 +445,56 @@ fn a_retained_frame_copied_into_a_kept_larger_texture_matches_an_exact_capture()
         .capture_frame_pixels_at_scale(&scene, small, 2.0)
         .expect("exact capture");
     assert!(drawn == expected, "the retained copy drew different pixels");
+}
+
+#[test]
+fn kept_paths_drawn_from_the_arena_match_a_fresh_renderer() {
+    use std::sync::Arc;
+    let new_renderer = || match MetalRenderer::new() {
+        Ok(renderer) => Some(renderer),
+        Err(RendererError::BackendUnavailable(_)) => None,
+        Err(err) => panic!("metal renderer should initialize: {err}"),
+    };
+    let Some(mut renderer) = new_renderer() else {
+        return;
+    };
+    // Stars too large for the atlas, so they are drawn as tiles.
+    let star = |center: f32, radius: f32| -> Arc<[PathVertex]> {
+        (0..10)
+            .map(|point| {
+                let angle = point as f32 * std::f32::consts::PI / 5.0;
+                let radius = if point % 2 == 0 { radius } else { radius * 0.4 };
+                PathVertex::new(center + angle.sin() * radius, center - angle.cos() * radius)
+            })
+            .collect()
+    };
+    let (small, large) = (star(90.0, 80.0), star(150.0, 140.0));
+    let red = Rgba::new(1.0, 0.2, 0.1, 0.8);
+    let blue = Rgba::new(0.1, 0.3, 1.0, 0.7);
+    // Kept, then drawn from the arena, in another color, with the large one
+    // dropped so the arena is packed, and both again.
+    let mut frames = vec![vec![(&small, red), (&large, blue)]; 6];
+    frames.extend(vec![vec![(&small, blue), (&large, blue)]; 2]);
+    frames.extend(vec![vec![(&small, red)]; 5]);
+    frames.extend(vec![vec![(&small, red), (&large, blue)]; 5]);
+    let viewport = Size::new(300.0, 300.0);
+    for (index, paths) in frames.iter().enumerate() {
+        let mut scene = Scene::new();
+        for (vertices, color) in paths {
+            scene.insert(Primitive::Path {
+                vertices: Arc::clone(vertices),
+                offset: Default::default(),
+                color: *color,
+                stroke_width: None,
+            });
+        }
+        let pixels = renderer
+            .capture_frame_pixels_at_scale(&scene, viewport, 1.0)
+            .expect("capture");
+        let expected = new_renderer()
+            .expect("available")
+            .capture_frame_pixels_at_scale(&scene, viewport, 1.0)
+            .expect("capture");
+        assert!(pixels == expected, "frame {index} differs from a fresh one");
+    }
 }

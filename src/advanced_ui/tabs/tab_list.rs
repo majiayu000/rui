@@ -17,6 +17,7 @@ use crate::elements::element::{
     style_to_taffy,
 };
 use crate::renderer::Primitive;
+use crate::renderer::text::BaseDirection;
 use std::any::TypeId;
 use taffy::prelude::*;
 
@@ -448,7 +449,7 @@ impl TabList {
         };
         cx.paint(Primitive::Text {
             bounds,
-            content: tab.label.clone(),
+            content: tab.label.clone().into(),
             color: if tab.disabled {
                 text.with_alpha(0.5)
             } else {
@@ -464,6 +465,7 @@ impl TabList {
             font_family: None,
             line_height: self.theme.typography.line_height,
             align: crate::elements::text::TextAlign::Center,
+            direction: BaseDirection::Auto,
         });
     }
 }

@@ -5,6 +5,7 @@ use crate::core::action::{ActionId, ActionOutcome};
 use crate::core::app::AppContext;
 use crate::core::entity::{Entity, EntityId};
 use crate::core::event::{KeyEvent, ScrollEvent};
+use crate::core::geometry::Bounds;
 use crate::core::style::Style;
 use crate::core::text_editing::{TextInputCommand, TextInputEvent, TextInputSnapshot};
 use crate::core::view::{View, ViewPlacement};
@@ -15,7 +16,7 @@ use crate::renderer::text::TextMeasureCache;
 use std::any::Any;
 use std::collections::HashSet;
 use std::rc::Rc;
-use taffy::prelude::NodeId;
+use taffy::prelude::{NodeId, TaffyTree};
 
 /// Where a view made with [`AppContext::new_view`] shows. Placing it renders
 /// nothing: the view renders when it is first laid out somewhere, and again only
@@ -115,6 +116,15 @@ impl Element for ViewElement {
 
     fn paint(&mut self, cx: &mut PaintContext) {
         self.content().paint(cx);
+    }
+
+    fn unseen_reach(
+        &self,
+        taffy: &TaffyTree<ElementId>,
+        bounds: Bounds,
+        visible: &Bounds,
+    ) -> Option<Bounds> {
+        self.content.as_ref()?.unseen_reach(taffy, bounds, visible)
     }
 
     fn refresh_text_geometry(&mut self, text_measurer: &mut TextMeasureCache) {

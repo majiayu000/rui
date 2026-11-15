@@ -7,6 +7,7 @@ use crate::core::frame_pipeline::FrameStageDurations;
 use crate::core::geometry::{Bounds, Edges, Size};
 use crate::core::style::Corners;
 use crate::elements::text::TextAlign;
+use crate::renderer::text::BaseDirection;
 use crate::renderer::{Primitive, Reach, Scene};
 use std::fmt::Write as _;
 use std::time::{Duration, Instant};
@@ -164,13 +165,14 @@ impl Profiler {
                     PANEL_WIDTH - PADDING * 2.0,
                     LINE_HEIGHT,
                 ),
-                content: line,
+                content: line.into(),
                 color: Rgba::new(0.88, 0.94, 1.0, 1.0),
                 font_size: FONT_SIZE,
                 font_weight: 400,
-                font_family: Some(FONT_FAMILY.to_string()),
+                font_family: Some(std::sync::Arc::from(FONT_FAMILY)),
                 line_height: LINE_HEIGHT,
                 align: TextAlign::Left,
+                direction: BaseDirection::Auto,
             });
         }
     }

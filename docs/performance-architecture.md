@@ -175,13 +175,88 @@ input/effects -> build -> layout -> paint -> hit index -> render -> present
     ms of GPU time against 0.50 ms for a full redraw at 2880x1800 (M2 Max). The
     copy costs about 0.1 ms, so a nearly empty window gains nothing.
   - GPUI clears and redraws the whole window every frame.
-- **Startup (#177).** Shader libraries compile on a background thread in parallel
-  with font setup. Pipelines are cached in an `MTLBinaryArchive` keyed by the
-  shader source hash; a mismatched or corrupt cache is rebuilt, never trusted.
-  Build-time `metallib` is an option where the Xcode toolchain exists.
+- **Startup (#177).** The renderer is created on a background thread while the
+  first frame is built and laid out (#226), and its shaders are not compiled
+  from source at runtime:
+  - `build.rs` embeds them precompiled. With Xcode's `metal` tool (install full
+    Xcode, and on Xcode 26 its Metal Toolchain component) each library is a
+    `.metallib`. Without it, as with the Command Line Tools alone, the build
+    compiles the source on the build machine's Metal device and embeds the
+    serialized `MTLBinaryArchive`: on Apple GPUs that file holds the AIR next to
+    the GPU code, so it loads as a library on any Mac, in 0.1–0.2 ms. A
+    paravirtual GPU (GitHub's macOS runners) writes GPU code only; such an
+    archive does not load, and the shader compiles at runtime instead.
+  - A library that is not embedded, or does not load, comes from an archive in
+    `~/Library/Caches/rui/shaders` (`RUI_SHADER_CACHE_DIR` overrides it, empty
+    turns it off), keyed by the source, device name and OS build. A missing,
+    corrupt or mismatched archive is compiled again, rewritten and logged; it is
+    a cache, never trusted for correctness.
+  - `RUI_PROFILE=1` prints `rui renderer_init` with device, shader
+    (origin:load+pipeline) and resource times.
+  - Cold start (shader source the system cache has never seen), 2000-row list,
+    `compare_frame startup`, 5 rounds, p50 (range), M2 Max under other
+    sessions' load:
+
+    | | first frame | renderer wait after layout |
+    |---|---|---|
+    | before (`d76ae8d`), source compile | 207 ms (200–269) | 166 ms |
+    | runtime archive, first launch | 236 ms (205–273) | 199 ms |
+    | runtime archive, second launch | 42 ms (37–63) | 4.5 ms |
+    | embedded, first launch | 69 ms (43–91) | 21 ms |
+    | warm, before / embedded | 47 / 46 ms | 10.5 / 9.2 ms |
+
+    With shaders embedded, renderer creation is almost all
+    `Device::system_default` (38–84 ms; shaders 2–5 ms, samplers and empty pages
+    0.1 ms). It overlaps the ~35 ms first layout, and the wait left is what it
+    runs past it. The first render, glyph rasterization and atlas pages
+    included, is about 2 ms.
 - **Color (done).** sRGB targets with linear blending, oklab gradients and erf
   Gaussian shadows, with text coverage remapped so weight does not change with
   color.
+- **Sprite shader cost (done).** Measured by drawing a frame's sprite pass 100
+  times in one command buffer: a single frame's GPU time is mostly clock
+  ramp-up, which hides shader changes.
+  - Aligned plain quads skip antialiasing. A solid, square-cornered, borderless
+    quad whose device-pixel edges are whole numbers covers only pixels that lie
+    wholly inside it. The vertex shader tests its edges and sets an
+    `ALIGNED_QUAD` flag, and the fragment returns the color. GPUI does the same
+    for unrounded, borderless quads. Rounded, bordered, gradient and fractional
+    quads keep the antialiased paths. A flag fits the existing kind bits, where
+    a second pipeline would need CPU-side classification and a pipeline switch
+    per batch. The pixels that change are aligned edges, which drew at about 84%
+    alpha before and left a light seam between adjacent list rows.
+  - Vertex outputs carry 13 values instead of 45. The tiler writes every output
+    of each of an instance's six vertices to memory, which dominated small
+    sprites such as glyphs. Fragments read quad, shadow and clip fields by
+    instance index, as GPUI does, and convert border and gradient colors per
+    fragment. Pixels are unchanged.
+  - Branch order matters in the one fragment function. Aligned quads come first
+    and glyphs second; glyphs first would cost quads 14%.
+  - Per pass at 2880x1800 (M-series, load 15–20), main → now:
+    `list_virtual_1k` 0.064 → 0.037 ms, `quad_grid` 0.093 → 0.052 ms,
+    `text_paragraphs` 0.036 → 0.023 ms.
+  - Single-frame GPU p50 from `benchmarks/gpui_compare/run.sh`, median of 5
+    runs per side (load 12–24), main → now, GPUI: `list_virtual_1k` 0.227 →
+    0.128 (0.097), `list_virtual_100k` 0.232 → 0.153 (0.097),
+    `text_paragraphs` 0.266 → 0.229 (0.199), `quad_grid` 0.223 → 0.146
+    (0.375). The per-pass work of a list frame is now about 0.04 ms, so the rest
+    of its single-frame time is fixed per-frame cost and GPU clock state.
+  - What text still pays: glyph sampling and the coverage remap are about 2% of
+    its pass. A fragment function that holds only the glyph path draws the pass
+    in about 0.012 ms, so the remainder is the size of the shared fragment
+    function. Splitting it needs a second pipeline.
+  - The second pipeline: glyphs and pixel-aligned plain quads inside their
+    clips draw with `simple_fragment`, which reads no flat vertex output. On
+    this GPU each flat output the fragment function reads costs every sprite,
+    even in a branch that does not run: reading `kind` alone added about 16%
+    to a text frame. The planner marks such sprites; an open draw of other
+    sprites takes them too, so draws never split more often than before. The
+    offscreen pass also covers only the drawn extent of its kept texture.
+    Single-frame GPU p50, `compare_frame`, median of 6 interleaved runs (load
+    27–53), before → after: `text_paragraphs` 0.227 → 0.164, `list_full`
+    0.219 → 0.158, `list_virtual_1k` 0.103 → 0.077. Clip distances instead of
+    the per-fragment clip test, dropping the shadow and path branches, and a
+    Private offscreen texture did not help.
 
 ### 7. Present (lane 5, #191)
 
@@ -220,11 +295,12 @@ machine. The target for a one-row change is allocations proportional to that row
 | Wrap cache | keyed by exact width | keyed by width interval |
 | Font fallback | Core Text, per-platform code | script runs over rustybuzz, one implementation |
 | Foreground scheduling | FIFO | priority queue with frame budget |
-| Startup shaders | precompiled metallib | renderer created off the main thread, in parallel with the first layout (#226); build-time metallib still open (#177) |
+| Startup shaders | precompiled metallib (needs Xcode's `metal`) | renderer created off the main thread, in parallel with the first layout (#226); shaders embedded precompiled with or without Xcode, runtime archive cache as fallback |
 
-Every row is implemented on main as of `c2e3596`, except a build-time metallib (#177,
-needs the Xcode `metal` tool). `MTLBinaryArchive` was measured and dropped: the cold
-cost is the source compile, which runs before any archive lookup (#226).
+Every row is implemented on main as of `c2e3596`; embedded shaders followed (#177).
+#226 found an `MTLBinaryArchive` useless for pipeline lookup, because the cold cost
+is the source compile before it. A serialized archive, though, also loads as the
+library itself, which removes that compile.
 
 ## Verification
 

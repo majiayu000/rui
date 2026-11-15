@@ -8,6 +8,7 @@ use rui::core::geometry::{Bounds, Edges, Size};
 use rui::core::style::Corners;
 use rui::elements::text::TextAlign;
 use rui::renderer::metal::MetalRenderer;
+use rui::renderer::text::BaseDirection;
 use rui::renderer::{Primitive, RendererError, Scene};
 
 const WIDTH: usize = 100;
@@ -245,13 +246,14 @@ fn ink(text: Rgba, background: Rgba) -> Option<f32> {
         full(background),
         Primitive::Text {
             bounds: Bounds::from_xywh(5.0, 5.0, 90.0, 50.0),
-            content: String::from("Hamburgefonts"),
+            content: "Hamburgefonts".into(),
             color: text,
             font_size: 13.0,
             font_weight: 400,
             font_family: None,
             line_height: 1.2,
             align: TextAlign::Left,
+            direction: BaseDirection::Auto,
         },
     ])?;
     let back = (background.g * 255.0).round();

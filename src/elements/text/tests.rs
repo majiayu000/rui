@@ -255,13 +255,13 @@ fn test_text_light() {
 #[test]
 fn test_text_font() {
     let t = Text::new("Test").font("Arial");
-    assert_eq!(t.font_family, Some("Arial".to_string()));
+    assert_eq!(t.font_family, Some("Arial".into()));
 }
 
 #[test]
 fn test_text_font_with_string() {
     let t = Text::new("Test").font("Helvetica Neue".to_string());
-    assert_eq!(t.font_family, Some("Helvetica Neue".to_string()));
+    assert_eq!(t.font_family, Some("Helvetica Neue".into()));
 }
 
 #[test]
@@ -328,7 +328,7 @@ fn test_text_chained_builder_full() {
     assert_eq!(t.color, Color::BLUE);
     assert_eq!(t.font_size, 18.0);
     assert_eq!(t.font_weight, FontWeight::Bold);
-    assert_eq!(t.font_family, Some("Roboto".to_string()));
+    assert_eq!(t.font_family, Some("Roboto".into()));
     assert_eq!(t.line_height, 1.5);
     assert_eq!(t.align, TextAlign::Center);
 }
@@ -583,13 +583,13 @@ fn test_text_very_long_content() {
 #[test]
 fn test_text_font_family_empty() {
     let t = Text::new("Test").font("");
-    assert_eq!(t.font_family, Some("".to_string()));
+    assert_eq!(t.font_family, Some("".into()));
 }
 
 #[test]
 fn test_text_font_family_with_spaces() {
     let t = Text::new("Test").font("San Francisco Display");
-    assert_eq!(t.font_family, Some("San Francisco Display".to_string()));
+    assert_eq!(t.font_family, Some("San Francisco Display".into()));
 }
 
 // ==================== Table-Driven Tests ====================

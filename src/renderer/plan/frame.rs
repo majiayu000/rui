@@ -8,34 +8,40 @@
 //! earlier goes first, then what overlaps only those, and so on, and sprites of a
 //! level join the open sprite draw. Items of one level never overlap, so any
 //! sequence among them paints the same pixels.
+//!
+//! Simple sprites, glyphs and pixel-aligned plain quads that lie inside their
+//! clip, have a smaller fragment function of their own. A draw of them ends
+//! where another sprite comes; an open draw of other sprites takes simple ones
+//! too, as its fragment function draws every kind, so draws never split more
+//! often than they would without it.
 
 use super::order::{OverlapOrder, Rect};
 
-pub(super) const KIND_QUAD: u32 = 0;
-pub(super) const KIND_SHADOW: u32 = 1;
-pub(super) const KIND_GLYPH: u32 = 2;
-pub(super) const KIND_PATH: u32 = 3;
-pub(super) const KIND_PATH_SPRITE: u32 = 4;
-pub(super) const KIND_COLOR_GLYPH: u32 = 5;
+pub(crate) const KIND_QUAD: u32 = 0;
+pub(crate) const KIND_SHADOW: u32 = 1;
+pub(crate) const KIND_GLYPH: u32 = 2;
+pub(crate) const KIND_PATH: u32 = 3;
+pub(crate) const KIND_PATH_SPRITE: u32 = 4;
+pub(crate) const KIND_COLOR_GLYPH: u32 = 5;
 
 /// The atlas pages a run of sprites samples: a coverage page and a color page,
 /// each bound to its own texture slot, so sprites on one page of each share a
 /// draw.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(super) struct Pages {
+pub(crate) struct Pages {
     pub coverage: Option<u32>,
     pub color: Option<u32>,
 }
 
 impl Pages {
-    pub(super) fn coverage(page: u32) -> Self {
+    pub(crate) fn coverage(page: u32) -> Self {
         Self {
             coverage: Some(page),
             color: None,
         }
     }
 
-    pub(super) fn color(page: u32) -> Self {
+    pub(crate) fn color(page: u32) -> Self {
         Self {
             coverage: None,
             color: Some(page),
@@ -59,45 +65,49 @@ impl Pages {
 /// One sprite instance as the shader reads it: `kind << 29 | index` into that
 /// kind's buffer, and the clip rectangle to apply.
 #[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct SpriteRef {
+#[derive(Clone, Copy, Debug, PartialEq, Eq, bytemuck::Pod, bytemuck::Zeroable)]
+pub(crate) struct SpriteRef {
     pub index: u32,
     pub clip: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum ItemKind {
-    /// `count` instances of `kind` from `start`, all sampling atlas `pages`.
+pub(crate) enum ItemKind {
+    /// `count` instances of `kind` from `start`, all sampling atlas `pages`;
+    /// `simple` when all of them can draw with the simple pipeline.
     Sprites {
         kind: u32,
         start: u32,
         count: u32,
         pages: Pages,
+        simple: bool,
     },
     /// The renderer's image draw at this index.
     Image(u32),
 }
 
 #[derive(Clone, Copy, Debug)]
-struct Item {
-    kind: ItemKind,
-    clip: u32,
-    rect: Option<Rect>,
+pub(super) struct Item {
+    pub kind: ItemKind,
+    pub clip: u32,
+    pub rect: Option<Rect>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Draw {
-    /// Sprite references `start..start + count`, sampling atlas `pages`.
+pub(crate) enum Draw {
+    /// Sprite references `start..start + count`, sampling atlas `pages`, with
+    /// the simple pipeline when `simple`.
     Sprites {
         pages: Pages,
         start: u32,
         count: u32,
+        simple: bool,
     },
     Image(u32),
 }
 
 #[derive(Default)]
-pub(super) struct FramePlan {
+pub(crate) struct FramePlan {
     items: Vec<Item>,
     /// Whether scene order needs more than one draw.
     mixed: bool,
@@ -114,7 +124,7 @@ pub(super) struct FramePlan {
 }
 
 impl FramePlan {
-    pub(super) fn clear(&mut self) {
+    pub(crate) fn clear(&mut self) {
         self.items.clear();
         self.mixed = false;
         self.pages = Pages::default();
@@ -124,7 +134,7 @@ impl FramePlan {
 
     /// Adds an item that paints only within `rect`, logical pixels clipped to
     /// what can be seen. Without one, `plan` asks for it if it needs it.
-    pub(super) fn push(&mut self, kind: ItemKind, clip: u32, rect: Option<Rect>) {
+    pub(crate) fn push(&mut self, kind: ItemKind, clip: u32, rect: Option<Rect>) {
         match kind {
             ItemKind::Sprites { pages, .. } if self.pages.fits(pages) => {
                 self.pages = self.pages.with(pages);
@@ -134,9 +144,30 @@ impl FramePlan {
         self.items.push(Item { kind, clip, rect });
     }
 
+    /// Points items of kept quads at where they go in the buffer: after the
+    /// frame's own `quads`.
+    pub(super) fn place_kept_quads(&mut self, quads: u32) {
+        for item in &mut self.items {
+            if let ItemKind::Sprites {
+                kind: KIND_QUAD,
+                start,
+                ..
+            } = &mut item.kind
+                && *start & super::KEPT_QUAD != 0
+            {
+                *start = quads + (*start & !super::KEPT_QUAD);
+            }
+        }
+    }
+
+    /// The items pushed so far, in order.
+    pub(super) fn items(&self) -> &[Item] {
+        &self.items
+    }
+
     /// Fills `refs` and `draws`. `width` and `height` bound every item's rect;
     /// `rect_of` gives those pushed without one, `None` when nothing is visible.
-    pub(super) fn plan(
+    pub(crate) fn plan(
         &mut self,
         width: f32,
         height: f32,
@@ -202,11 +233,15 @@ impl FramePlan {
     /// Adds the item to the open draw if it can share it.
     fn join(&mut self, index: usize) -> bool {
         let item = self.items[index];
-        let ItemKind::Sprites { pages, .. } = item.kind else {
+        let ItemKind::Sprites { pages, simple, .. } = item.kind else {
             return false;
         };
         match self.draws.last() {
-            Some(&Draw::Sprites { pages: open, .. }) if open.fits(pages) => {
+            Some(&Draw::Sprites {
+                pages: open,
+                simple: open_simple,
+                ..
+            }) if open.fits(pages) && takes(open_simple, simple) => {
                 self.append(index);
                 true
             }
@@ -223,6 +258,7 @@ impl FramePlan {
                 start,
                 count,
                 pages,
+                simple,
             } => {
                 let refs = self.refs.len() as u32;
                 self.refs
@@ -234,8 +270,9 @@ impl FramePlan {
                     Some(Draw::Sprites {
                         pages: open,
                         count: open_count,
+                        simple: open_simple,
                         ..
-                    }) if open.fits(pages) => {
+                    }) if open.fits(pages) && takes(*open_simple, simple) => {
                         *open = open.with(pages);
                         *open_count += count;
                     }
@@ -243,12 +280,19 @@ impl FramePlan {
                         pages,
                         start: refs,
                         count,
+                        simple,
                     }),
                 }
             }
             ItemKind::Image(image) => self.draws.push(Draw::Image(image)),
         }
     }
+}
+
+/// Whether an open draw, simple or not, can take a sprite that is: one of
+/// the simple pipeline takes only simple sprites.
+fn takes(open_simple: bool, simple: bool) -> bool {
+    simple || !open_simple
 }
 
 #[cfg(test)]
@@ -266,6 +310,7 @@ mod tests {
                 start: index,
                 count: 1,
                 pages: Pages::default(),
+                simple: false,
             },
             0,
             Some(rect),
@@ -279,6 +324,7 @@ mod tests {
                 start,
                 count,
                 pages: Pages::coverage(page),
+                simple: false,
             },
             0,
             Some(rect),
@@ -299,7 +345,8 @@ mod tests {
             [Draw::Sprites {
                 pages: Pages::coverage(0),
                 start: 0,
-                count: 440
+                count: 440,
+                simple: false
             }]
         );
         assert_eq!(plan.refs[0].index, KIND_QUAD << 29);
@@ -328,13 +375,15 @@ mod tests {
                 Draw::Sprites {
                     pages: Pages::default(),
                     start: 0,
-                    count: 11
+                    count: 11,
+                    simple: false
                 },
                 Draw::Image(0),
                 Draw::Sprites {
                     pages: Pages::coverage(0),
                     start: 11,
-                    count: 40
+                    count: 40,
+                    simple: false
                 },
             ]
         );
@@ -355,22 +404,61 @@ mod tests {
                 Draw::Sprites {
                     pages: Pages::coverage(0),
                     start: 0,
-                    count: 1
+                    count: 1,
+                    simple: false
                 },
                 Draw::Sprites {
                     pages: Pages::coverage(1),
                     start: 1,
-                    count: 2
+                    count: 2,
+                    simple: false
                 },
                 Draw::Sprites {
                     pages: Pages::coverage(0),
                     start: 3,
-                    count: 1
+                    count: 1,
+                    simple: false
                 },
             ]
         );
         let order: Vec<u32> = plan.refs.iter().map(|r| r.index & 0x1fff_ffff).collect();
         assert_eq!(order, [0, 3, 1, 2]);
+    }
+
+    #[test]
+    fn simple_sprites_join_an_open_draw_of_others() {
+        let mut plan = FramePlan::default();
+        for (start, simple) in [(0, true), (1, true), (2, false), (3, true)] {
+            plan.push(
+                ItemKind::Sprites {
+                    kind: KIND_QUAD,
+                    start,
+                    count: 1,
+                    pages: Pages::default(),
+                    simple,
+                },
+                0,
+                Some(rect(0.0, 0.0, 10.0, 10.0)),
+            );
+        }
+        plan.plan(100.0, 100.0, |_, _| None);
+        assert_eq!(
+            plan.draws,
+            [
+                Draw::Sprites {
+                    pages: Pages::default(),
+                    start: 0,
+                    count: 2,
+                    simple: true
+                },
+                Draw::Sprites {
+                    pages: Pages::default(),
+                    start: 2,
+                    count: 2,
+                    simple: false
+                },
+            ]
+        );
     }
 
     #[test]

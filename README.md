@@ -21,8 +21,8 @@ RUI helps you build native macOS interfaces in Rust with declarative components,
 
 RUI is an early-stage, pre-1.0 framework. APIs, component behavior, and renderer internals may change before the first stable release.
 
-- macOS is the only supported runtime platform today, using the Metal renderer.
-- Windows, Linux, and Web support are roadmap items, not working backends.
+- macOS is the supported runtime platform today, using the Metal renderer.
+- Linux and Windows have an experimental runner (feature `winit`: a winit window drawn by the wgpu backend). It opens a single window with pointer, keyboard, scroll, resize and DPI input; IME composition, accessibility, the system clipboard, menus, file drops and extra windows are macOS-only so far. Web is a roadmap item.
 - Accessibility semantics and advanced component interactions are still active development areas.
 - Visual behavior should be verified on a local macOS desktop session; CI covers compile and automated tests, but not full end-to-end visual QA.
 - The recommended install path is the Git dependency shown below until crates.io package ownership or naming is resolved.
@@ -42,10 +42,10 @@ Add this repository as a Git dependency in `Cargo.toml`:
 
 ```toml
 [dependencies]
-rui = { git = "https://github.com/majiayu000/rui", rev = "99d08da9f092e8af098a3dd261262e40d7b611e6" }
+rui = { git = "https://github.com/majiayu000/rui", rev = "1311a1d6b98a601de603d215ebc1d21f408fd7a3" }
 ```
 
-This pins the source baseline containing the unreleased native IME and font-cache changes; it is not a new release. This is `majiayu000/rui`. The [separate `audulus/rui` project](https://github.com/audulus/rui) also uses the name `rui`; installing `rui` from crates.io does not select this repository. Use the Git URL above for the API shown here.
+This pins the source baseline checked by both installation guides, including the listener and native input changes; it is not a new release. This is `majiayu000/rui`. The [separate `audulus/rui` project](https://github.com/audulus/rui) also uses the name `rui`; installing `rui` from crates.io does not select this repository. Use the Git URL above for the API shown here.
 
 Replace `src/main.rs` with:
 
@@ -92,7 +92,7 @@ Continue with the [examples guide](docs/EXAMPLES.md) for component demos and the
 ### First-run questions
 
 - **`no example target named hello_world`?** Run the example command inside the cloned RUI repository. In your own project, use `cargo run` for `src/main.rs`.
-- **Can this run on Linux, Windows, or in a headless job?** The supported renderer uses macOS Metal and a native window. Use a local macOS desktop session for visual evaluation; other backends are still roadmap work.
+- **Can this run on Linux, Windows, or in a headless job?** Experimentally: `cargo run --example hello_world --no-default-features --features winit` uses the winit runner and the wgpu backend (Vulkan or DX12). The same command on macOS runs it on Metal through winit, for testing the runner. CI opens `hello_world` and `counter` this way on Linux under Xvfb and lavapipe, clicks, presses keys and resizes them with xdotool, and compares screenshots of the windows with `tests/linux_window/` (`scripts/linux_window_pixels.sh`; `RUI_PIXELS_UPDATE=1` rewrites the references). On X11, winit loads `libxkbcommon-x11` and the Xcursor, Xrandr and Xi libraries at runtime.
 - **Does a successful compile prove the UI works?** It checks types and dependencies. Inspect the actual window and interactions separately; [status and limitations](#status-and-limitations) explains the current scope.
 
 ## Examples
@@ -138,8 +138,9 @@ cargo run --example counter
 ```
 
 It displays the current count and attaches `on_click` handlers to both buttons.
-Each handler updates the shared count and calls `cx.notifier().notify()` to
-rebuild the view. Use that complete example when adding state to your app.
+Each handler uses `cx.listener` to update ordinary view state; the owning view
+then rebuilds automatically. See [Getting started with state and events](docs/getting-started.md)
+for a complete application and text/entity update examples.
 
 ### Feature Cards
 
@@ -297,8 +298,8 @@ Color::hsla(180.0, 0.5, 0.5, 0.8)
 | Platform | Status | Renderer |
 |----------|--------|----------|
 | macOS | Supported | Metal |
-| Windows | Planned | Vulkan/DX12 |
-| Linux | Planned | Vulkan |
+| Windows | Experimental (feature `winit`) | wgpu: DX12/Vulkan |
+| Linux | Experimental (feature `winit`) | wgpu: Vulkan |
 | Web | Planned | WebGPU |
 
 ## Release Status

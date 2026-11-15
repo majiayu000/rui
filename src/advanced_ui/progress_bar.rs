@@ -12,6 +12,7 @@ use crate::elements::element::{
     Element, LayoutContext, PaintContext, style_dimension_or, style_to_taffy,
 };
 use crate::renderer::Primitive;
+use crate::renderer::text::BaseDirection;
 use taffy::prelude::*;
 
 pub struct ProgressBar {
@@ -216,13 +217,14 @@ impl Element for ProgressBar {
             }
             cx.paint(Primitive::Text {
                 bounds,
-                content: format!("{}%", (self.value * 100.0).round() as u32),
+                content: format!("{}%", (self.value * 100.0).round() as u32).into(),
                 color: self.theme.colors.text.to_rgba(),
                 font_size: (bounds.height() * 0.62).max(10.0),
                 font_weight: self.theme.typography.control_weight,
                 font_family: None,
                 line_height: 1.0,
                 align: crate::elements::text::TextAlign::Center,
+                direction: BaseDirection::Auto,
             });
         }
     }

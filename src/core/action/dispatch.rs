@@ -19,7 +19,7 @@ pub(crate) fn route_key_event<E: Element>(
         return root.handle_key_event(cx, event);
     }
 
-    if key_event_has_text_editing_details(event) {
+    if event.key == KeyCode::Space || key_event_has_text_editing_details(event) {
         return root.handle_key_event(cx, event);
     }
 

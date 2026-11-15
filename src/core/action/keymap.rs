@@ -183,7 +183,22 @@ impl Keymap {
     }
 
     pub fn action_for_event(&self, event: &KeyEvent) -> Option<&ActionId> {
-        self.action_for_chord(KeyChord::from(event))
+        self.action_for_chord(KeyChord::from(event)).or_else(|| {
+            if event.key == KeyCode::Z && event.modifiers == Modifiers::meta() {
+                Some(&ActionId::Standard(StandardAction::Undo))
+            } else if event.key == KeyCode::Z
+                && event.modifiers
+                    == (Modifiers {
+                        meta: true,
+                        shift: true,
+                        ..Modifiers::none()
+                    })
+            {
+                Some(&ActionId::Standard(StandardAction::Redo))
+            } else {
+                None
+            }
+        })
     }
 
     pub fn len(&self) -> usize {

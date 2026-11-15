@@ -109,6 +109,13 @@ impl RendererPrimitiveSupport {
         }
     }
 
+    pub const fn wgpu() -> Self {
+        Self {
+            backend: "wgpu",
+            path_reason: None,
+        }
+    }
+
     pub fn backend(self) -> &'static str {
         self.backend
     }
@@ -214,6 +221,7 @@ mod tests {
     use crate::core::style::Corners;
     use crate::elements::text::TextAlign;
     use crate::renderer::PathVertex;
+    use crate::renderer::text::BaseDirection;
     use crate::{ImageFit, ImageSource};
 
     fn sample_quad() -> Primitive {
@@ -232,7 +240,9 @@ mod tests {
                 PathVertex::new(0.0, 0.0),
                 PathVertex::new(10.0, 0.0),
                 PathVertex::new(10.0, 10.0),
-            ],
+            ]
+            .into(),
+            offset: Default::default(),
             color: Rgba::new(0.1, 0.2, 0.3, 1.0),
             stroke_width: Some(1.0),
         }
@@ -266,13 +276,14 @@ mod tests {
             },
             Primitive::Text {
                 bounds: Bounds::from_xywh(4.0, 5.0, 80.0, 20.0),
-                content: String::from("renderer"),
+                content: String::from("renderer").into(),
                 color: Rgba::new(0.0, 0.0, 0.0, 1.0),
                 font_size: 14.0,
                 font_weight: 400,
                 font_family: None,
                 line_height: 1.2,
                 align: TextAlign::Left,
+                direction: BaseDirection::Auto,
             },
             Primitive::Image {
                 bounds: Bounds::from_xywh(5.0, 6.0, 10.0, 10.0),
@@ -286,6 +297,10 @@ mod tests {
                 opacity: 1.0,
             },
             sample_path(),
+            Primitive::Picture {
+                picture: crate::renderer::Picture::new(vec![sample_quad(), sample_path()]),
+                offset: crate::core::geometry::Point::new(4.0, 2.0),
+            },
             Primitive::PushClip {
                 bounds: Bounds::from_xywh(0.0, 0.0, 100.0, 100.0),
                 corner_radii: Corners::ZERO,
