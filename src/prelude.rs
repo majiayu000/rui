@@ -36,3 +36,6 @@ pub use crate::advanced_ui::{Button, ControlSize, ControlVariant, Theme, button}
 pub use std::time::Duration;
 
 pub use crate::elements::{VariableList, VariableListHandle, variable_list};
+
+#[cfg(feature = "markdown")]
+pub use crate::elements::{Markdown, markdown};

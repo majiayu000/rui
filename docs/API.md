@@ -432,6 +432,27 @@ pub enum TextAlign {
 }
 ```
 
+A `styled_text` span can also be `.italic()`, `.underline()`, `.strikethrough()`,
+`.background(color)` and `.link(target)`; `StyledText::on_link(|target| ..)` is
+called when a link span is clicked, and the pointer cursor shows over it.
+
+---
+
+### Markdown
+
+`markdown(source)` (feature `markdown`, on by default) draws CommonMark with
+GitHub tables, strikethrough and task lists, using the theme's colors.
+
+```rust
+markdown(reply)
+    .theme(Theme::dark())
+    .text_size(15.0)
+    .on_link(|url| println!("open {url}"))
+```
+
+Each source is parsed once and kept by source; a source that extends a kept
+one, as a streamed reply does, is parsed again only from its last block.
+
 ---
 
 ### Button

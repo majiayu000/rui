@@ -18,7 +18,7 @@ const MAX_FACES_PER_FILE: u32 = 16;
 /// first, then the paths Debian, Fedora and Arch install common families to,
 /// each Linux text family with its bold face so `bold()` text has one.
 #[cfg(not(windows))]
-const FONT_CANDIDATES: [(&str, &str); 42] = [
+const FONT_CANDIDATES: [(&str, &str); 44] = [
     ("Arial", "/System/Library/Fonts/Supplemental/Arial.ttf"),
     ("Arial", "/System/Library/Fonts/Supplemental/Arial Bold.ttf"),
     ("Arial", "/Library/Fonts/Arial.ttf"),
@@ -129,6 +129,16 @@ const FONT_CANDIDATES: [(&str, &str); 42] = [
     ("DejaVu Sans", "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf"),
     ("Noto Sans", "/usr/share/fonts/noto/NotoSans-Regular.ttf"),
     ("Noto Sans", "/usr/share/fonts/noto/NotoSans-Bold.ttf"),
+    // Last, so fallback tries them after every upright face: emphasis asks
+    // for them as `"Arial Italic"`.
+    (
+        "Arial",
+        "/System/Library/Fonts/Supplemental/Arial Italic.ttf",
+    ),
+    (
+        "Arial",
+        "/System/Library/Fonts/Supplemental/Arial Bold Italic.ttf",
+    ),
 ];
 
 /// Font files by family under the Windows fonts directory.

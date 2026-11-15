@@ -6,6 +6,8 @@ pub mod element;
 mod image;
 mod input;
 mod list;
+#[cfg(feature = "markdown")]
+pub mod markdown;
 pub mod overlay;
 mod scroll_view;
 mod spinner;
@@ -23,6 +25,8 @@ pub(crate) use image::fit_bounds;
 pub use image::{DecodedImage, Image, ImageFit, ImageSource, ImageState, image};
 pub use input::{Input, InputType, input};
 pub use list::{List, ListItem, ListStyle, list, ordered_list, unordered_list};
+#[cfg(feature = "markdown")]
+pub use markdown::{Markdown, markdown};
 pub use scroll_view::{ScrollDirection, ScrollView, ScrollbarVisibility, scroll_view};
 pub use spinner::{Spinner, SpinnerType, spinner};
 pub use svg::{Svg, SvgError, svg};

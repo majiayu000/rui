@@ -1,14 +1,20 @@
 //! Streaming reply example
 //!
 //! A background thread produces a reply word by word and sends each word to the UI
-//! through an `AppHandle`, which wakes the event loop without any user input.
+//! through an `AppHandle`, which wakes the event loop without any user input. The
+//! reply is Markdown: each frame parses only the part of it the new word changed.
 
 use rui::core::entity::Entity;
 use rui::prelude::*;
 use std::time::Duration;
 
-const REPLY: &str = "Each word of this reply comes from a background thread, \
-    which hands it to the UI thread through an AppHandle.";
+const REPLY: &str = "Each word of this reply comes from a **background thread**, \
+    which hands it to the UI thread through an `AppHandle`.\n\n\
+    Markdown keeps up as it streams:\n\n\
+    - *emphasis*, **strong** and ~~struck~~ text\n\
+    - [links](https://github.com/majiayu000/rui) that call a handler\n\
+    - code blocks:\n\n\
+    ```rust\nlet reply = cx.app().get(reply);\n```";
 
 #[derive(Default)]
 struct StreamingReply {
@@ -28,11 +34,12 @@ impl View for StreamingReply {
             .map(|text| text.clone())
             .unwrap_or_default();
         let handle = cx.app_handle();
+        let theme = Theme::dark();
 
         div()
             .w(640.0)
-            .h(320.0)
-            .bg(Color::hex(0x1a202c))
+            .h(420.0)
+            .bg(theme.colors.surface)
             .p(24.0)
             .flex_col()
             .gap(16.0)
@@ -63,7 +70,11 @@ impl View for StreamingReply {
                     }
                 });
             }))
-            .child(text(shown).size(18.0).color(Color::WHITE))
+            .child(
+                markdown(shown)
+                    .theme(theme)
+                    .on_link(|url| println!("link clicked: {url}")),
+            )
     }
 }
 
