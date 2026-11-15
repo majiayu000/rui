@@ -17,6 +17,7 @@ mod tabs;
 mod tokens;
 mod toolbar;
 mod tooltip;
+mod transient;
 
 use crate::core::ElementId;
 use crate::core::color::Color;
@@ -690,17 +691,19 @@ pub fn hoverable(child: impl Into<AnyElement>) -> Hoverable {
     Hoverable::new(child)
 }
 
-/// Carry a drag or an open list over to the control rebuilt in its place, so
-/// the render a control's own `on_change` causes does not end the gesture.
-pub(crate) fn reconcile_transient_state(next: &mut dyn Element, previous: &mut dyn Element) {
+/// Carry a press, a drag or an open list over to the control rebuilt in its
+/// place, so a rebuild between press and release, or the render a control's
+/// own `on_change` causes, does not end the gesture. `kind` is the type of
+/// both.
+pub(crate) fn reconcile_transient_state(
+    kind: std::any::TypeId,
+    next: &mut dyn Element,
+    previous: &mut dyn Element,
+) {
     use std::any::Any;
     let (next, previous) = (next as &mut dyn Any, previous as &mut dyn Any);
+    transient::carry_press(kind, next, previous);
     if let (Some(next), Some(previous)) = (
-        next.downcast_mut::<Button>(),
-        previous.downcast_ref::<Button>(),
-    ) {
-        next.reconcile_transient_state(previous);
-    } else if let (Some(next), Some(previous)) = (
         next.downcast_mut::<Slider>(),
         previous.downcast_ref::<Slider>(),
     ) {

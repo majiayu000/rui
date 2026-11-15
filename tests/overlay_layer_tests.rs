@@ -468,7 +468,10 @@ fn the_focus_ring_moves_in_the_frame_a_modal_opens_and_closes() {
     // This frame opens the dialog and moves focus into it.
     session.frame().expect("frame that opens the dialog");
     assert_eq!(session.focused_element(), Some(FIRST));
-    assert!(ring_on(&session, FIRST), "the dialog's control shows the ring");
+    assert!(
+        ring_on(&session, FIRST),
+        "the dialog's control shows the ring"
+    );
     assert!(!ring_on(&session, OPENER), "the opener no longer does");
 
     session.dispatch_key_event(&key(KeyCode::Escape));
@@ -574,9 +577,17 @@ fn a_button_keeps_its_press_across_a_rebuild() {
                 .any(|p| matches!(p, Primitive::Text { content, .. } if &**content == "build 2")),
             "explicit {explicit}: the tree was rebuilt between press and release"
         );
-        assert_eq!(bounds_of(&session, button), bounds, "explicit {explicit}: same id");
+        assert_eq!(
+            bounds_of(&session, button),
+            bounds,
+            "explicit {explicit}: same id"
+        );
         session.pointer_up(at);
         session.frame().expect("frame after release");
-        assert_eq!(clicks.get(), 1, "explicit {explicit}: the release still clicks the button");
+        assert_eq!(
+            clicks.get(),
+            1,
+            "explicit {explicit}: the release still clicks the button"
+        );
     }
 }
