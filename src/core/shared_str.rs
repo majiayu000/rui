@@ -59,6 +59,14 @@ impl SharedStr {
         })
     }
 
+    /// The bytes of the shared text this is, or `None` for text of its own.
+    pub(crate) fn shared_range(&self) -> Option<Range<usize>> {
+        match &self.0 {
+            Repr::Shared { range, .. } => Some(range.clone()),
+            Repr::Owned(_) => None,
+        }
+    }
+
     pub fn as_str(&self) -> &str {
         match &self.0 {
             Repr::Shared { text, range } => &text[range.clone()],

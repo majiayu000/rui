@@ -93,6 +93,12 @@ pub fn reconcile(next: &mut dyn Element, previous: &mut dyn Element) -> bool {
     // transient state to carry.
     if !pure {
         crate::advanced_ui::reconcile_transient_state(kind, next, previous);
+        if let (Some(next), Some(previous)) = (
+            (next as &mut dyn Any).downcast_mut::<crate::elements::SelectionScope>(),
+            (previous as &mut dyn Any).downcast_mut::<crate::elements::SelectionScope>(),
+        ) {
+            next.reconcile_selection(previous);
+        }
     }
     // Properties can only justify keeping two pure instances. An interactive
     // container still participates in child reconciliation below.
@@ -312,6 +318,10 @@ impl AnyElement {
 
     pub fn paint(&mut self, cx: &mut PaintContext) {
         if !cx.memo {
+            // A selection scope collects its text in a paint of its own.
+            if cx.scene.selection.is_some() {
+                crate::elements::selection::collect_leaf(&mut *self.inner, cx);
+            }
             if let Some(inspection) = cx.inspection {
                 inspection.enter(self, cx.bounds, cx.scene.visible_bounds_for(cx.bounds));
                 self.inner.paint(cx);
