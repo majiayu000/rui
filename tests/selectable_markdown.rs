@@ -164,6 +164,27 @@ fn a_click_on_a_link_still_opens_it_and_a_drag_over_it_selects() {
     );
 }
 
+#[test]
+fn copying_a_table_joins_cells_with_tabs_and_rows_with_line_breaks() {
+    let mut session = mount(Size::new(480.0, 300.0), |_| {
+        div().w(480.0).child(
+            markdown(
+                "Totals:\n\n| Name | Count |\n|------|------:|\n| Apples | 3 |\n| Pears | 12 |",
+            )
+            .selectable(),
+        )
+    })
+    .expect("mount");
+    let from = text_bounds(session.primitives(), "Totals");
+    session.pointer_down(Point::new(from.x() + 0.5, from.y() + 4.0));
+    session.pointer_move(Point::new(475.0, 295.0));
+    session.pointer_up(Point::new(475.0, 295.0));
+    assert_eq!(
+        copy(&mut session).as_deref(),
+        Some("Totals:\nName\tCount\nApples\t3\nPears\t12")
+    );
+}
+
 /// `RUI_SELECTION_PNG=<path>` writes a reply with a selection, drawn by
 /// Metal, to `<path>`.
 #[cfg(all(target_os = "macos", feature = "metal"))]

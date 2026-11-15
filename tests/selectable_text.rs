@@ -303,3 +303,51 @@ fn right_to_left_and_thai_text_select_whole_words() {
         Some("مرحبا بالعالم\nสวัสดีชาวโลก")
     );
 }
+
+#[test]
+fn an_overlay_opened_in_a_scope_is_not_part_of_its_selection() {
+    use rui::advanced_ui as ui;
+
+    let mut session = mount(Size::new(400.0, 300.0), |_| {
+        selection_scope(
+            div()
+                .w(400.0)
+                .flex_col()
+                .gap(8.0)
+                .child(text("Before"))
+                .child(
+                    ui::dialog("Details", text("Floating"))
+                        .modal(false)
+                        .open(true),
+                )
+                .child(text("After")),
+        )
+    })
+    .expect("mount");
+    assert_eq!(session.scene().overlays().len(), 1, "the dialog is open");
+    let before = left_of(&session, "Before");
+    let after = text_bounds(session.primitives(), "After");
+    drag(
+        &mut session,
+        before,
+        Point::new(after.x() + after.width() + 20.0, after.y() + 4.0),
+    );
+    assert_eq!(copy(&mut session).as_deref(), Some("Before\nAfter"));
+    session.dispatch_key_event(&KeyEvent::new(KeyCode::A, Modifiers::meta()));
+    assert_eq!(copy(&mut session).as_deref(), Some("Before\nAfter"));
+    let highlighted = selection_quads(session.primitives()).len();
+    assert_eq!(highlighted, 2, "nothing in the overlay is highlighted");
+
+    // A press in the overlay leaves the scope's selection alone.
+    let overlay = *session
+        .scene()
+        .overlays()
+        .first()
+        .expect("the dialog stays open");
+    let inside = Point::new(
+        overlay.bounds.x() + overlay.bounds.width() * 0.5,
+        overlay.bounds.y() + overlay.bounds.height() * 0.5,
+    );
+    click(&mut session, inside, 1);
+    assert_eq!(selection_quads(session.primitives()).len(), highlighted);
+}

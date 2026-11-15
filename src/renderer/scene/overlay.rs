@@ -100,6 +100,11 @@ impl OverlayLayers {
 }
 
 impl Scene {
+    /// Whether what is painted now goes into an overlay.
+    pub(crate) fn in_overlay(&self) -> bool {
+        !self.overlays.active.is_empty()
+    }
+
     /// Start painting `overlay`: until [`Self::end_overlay`], primitives draw
     /// over the rest of the frame and hit regions are hit before it, with no
     /// ancestor clip.

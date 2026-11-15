@@ -481,12 +481,14 @@ text("\u{2022}").unselectable()       // left out of the enclosing scope
 | Drag | Selects across wrapped lines and texts |
 | Double / triple click | Selects a word / the line between line breaks |
 | Shift-click | Extends the selection |
-| Cmd/Ctrl+C (`StandardAction::Copy`) | Copies, texts joined by line breaks |
+| Cmd/Ctrl+C (`StandardAction::Copy`) | Copies: texts side by side (table cells) joined by tabs, rows by line breaks |
 | Cmd/Ctrl+A (`StandardAction::SelectAll`) | Selects all text of the focused scope |
 | Escape (`StandardAction::Cancel`) | Clears the selection |
 
 A press on the scope focuses it, which the copy and select-all actions need.
-A click that does not drag still reaches links. The cursor is an I-beam over
+A click that does not drag still reaches links. Overlays opened from inside
+a scope (popovers, menus, dialogs) are documents of their own: their text is
+not selected with it, and a press in them leaves its selection alone. The cursor is an I-beam over
 the scope. The selection survives rebuilds while the texts it starts and ends
 in keep their text up to its ends, so a streamed reply keeps a selection in
 its earlier blocks. Text in a scope still lays out and paints from the

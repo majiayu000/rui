@@ -51,6 +51,11 @@ use unicode_segmentation::UnicodeSegmentation;
 /// Note where `element` is, when it is selectable text, in the scene a
 /// selection scope collects its text with.
 pub(crate) fn collect_leaf(element: &mut dyn Element, cx: &mut PaintContext) {
+    // An overlay opened from inside the scope, such as a popover, is a
+    // document of its own.
+    if cx.scene.in_overlay() {
+        return;
+    }
     let (bounds, clip) = (cx.bounds(), cx.scene.current_clip());
     let element = element as &mut dyn Any;
     let leaf = if let Some(text) = element.downcast_mut::<Text>() {
@@ -166,19 +171,36 @@ impl SelectionScope {
 
     /// The selected text, as copying would put it on the clipboard: `None`
     /// when nothing is selected.
+    ///
+    /// Texts side by side, as the cells of a table row are, are joined by a
+    /// tab; a text below the one before it starts a new line.
     pub fn selected_text(&self) -> Option<String> {
         let mut text: Option<String> = None;
+        let mut previous: Option<Bounds> = None;
         for (leaf, range) in self.selected_ranges() {
             let piece = leaf.content.get(range)?;
-            match &mut text {
-                Some(text) => {
-                    text.push('\n');
+            match (&mut text, previous) {
+                (Some(text), Some(previous)) => {
+                    text.push(if beside(previous, leaf.bounds) {
+                        '\t'
+                    } else {
+                        '\n'
+                    });
                     text.push_str(piece);
                 }
-                None => text = Some(piece.to_string()),
+                _ => text = Some(piece.to_string()),
             }
+            previous = Some(leaf.bounds);
         }
         text
+    }
+
+    /// Whether `point` is over an overlay opened from inside the scope, which
+    /// the scope's selection leaves alone.
+    fn over_own_overlay(&self, cx: &EventContext, point: Point) -> bool {
+        cx.overlays()
+            .iter()
+            .any(|overlay| overlay.bounds.contains(point) && self.child.contains_id(overlay.owner))
     }
 
     /// Each text the selection covers, with the bytes of it selected.
@@ -450,6 +472,9 @@ impl Element for SelectionScope {
         let inside = cx.contains_pointer(event.position);
         match event.kind {
             PointerEventKind::Move => {
+                if self.state.press.is_none() && self.over_own_overlay(cx, event.position) {
+                    return self.child.handle_pointer_event(cx, event);
+                }
                 if self.state.press.is_some() {
                     cx.set_cursor(Cursor::Text);
                     self.drag(cx, event);
@@ -463,6 +488,11 @@ impl Element for SelectionScope {
             }
             PointerEventKind::Down => {
                 let primary = matches!(event.button, None | Some(MouseButton::Left));
+                if self.over_own_overlay(cx, event.position) {
+                    // Its content is not the scope's: leave the selection be,
+                    // so a menu opened on it can still copy it.
+                    return self.child.handle_pointer_event(cx, event);
+                }
                 if !inside || !primary {
                     if !inside && self.state.selection.take().is_some() {
                         cx.request_redraw();
@@ -538,6 +568,16 @@ impl Element for SelectionScope {
     fn children_mut(&mut self) -> &mut [AnyElement] {
         std::slice::from_mut(&mut self.child)
     }
+}
+
+/// Whether a text at `next` sits to the right of one at `previous` on the
+/// same row, as the next cell of a table row does.
+fn beside(previous: Bounds, next: Bounds) -> bool {
+    let previous_bottom = previous.y() + previous.height();
+    let next_bottom = next.y() + next.height();
+    next.y() < previous_bottom
+        && previous.y() < next_bottom
+        && next.x() >= previous.x() + previous.width() - 0.5
 }
 
 /// The word, or run of spaces or punctuation, `offset` is in or ends.
