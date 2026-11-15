@@ -310,7 +310,13 @@ impl Element for TabList {
                 })?;
         let mut node =
             AccessibilityNode::label_required(self.id.get(), AccessibilityRole::TabList, label)?
-                .value_required(&self.selected)?
+                // Announced as the selected tab's visible label.
+                .value_required(
+                    self.tabs
+                        .iter()
+                        .find(|tab| tab.value == self.selected)
+                        .map_or(self.selected.as_str(), |tab| tab.label.as_str()),
+                )?
                 .with_enabled(!self.state.disabled())
                 .with_read_only(self.state.read_only())
                 .with_invalid(self.state.invalid())

@@ -76,6 +76,8 @@ fn publish_text_semantics(
     node: &AccessibilityNode,
 ) -> Result<(), AccessibilityError> {
     if node.a11y_role() != AccessibilityRole::TextInput {
+        *element.ivars().line_starts.borrow_mut() = vec![0];
+        element.setAccessibilityInsertionPointLineNumber(0);
         element.setAccessibilityNumberOfCharacters(0);
         element.setAccessibilitySelectedText(None);
         element.setAccessibilitySelectedTextRange(NSRange::new(0, 0));
@@ -95,12 +97,41 @@ fn publish_text_semantics(
         .unwrap_or((0, 0));
     let native_range = native_text_range(value, range.0, range.1)?;
     element.setAccessibilitySelectedTextRange(native_range);
+    let starts = utf16_line_starts(value);
+    let caret_line = line_for_index(&starts, native_range.location + native_range.length);
+    element.setAccessibilityInsertionPointLineNumber(caret_line as isize);
+    *element.ivars().line_starts.borrow_mut() = starts;
     let selected = value
         .get(range.0..range.1)
         .ok_or_else(|| invalid_text_range(range.0, range.1, value.len()))?;
     let selected = NSString::from_str(selected);
     element.setAccessibilitySelectedText(Some(&selected));
     Ok(())
+}
+
+/// UTF-16 offsets where each line starts: 0, then just after every newline.
+fn utf16_line_starts(value: &str) -> Vec<usize> {
+    let mut starts = vec![0];
+    let mut offset = 0;
+    for ch in value.chars() {
+        offset += ch.len_utf16();
+        if ch == '\n' {
+            starts.push(offset);
+        }
+    }
+    starts
+}
+
+/// The line holding UTF-16 `index`; an index past the end is on the last line.
+fn line_for_index(starts: &[usize], index: usize) -> usize {
+    starts.partition_point(|&start| start <= index).saturating_sub(1)
+}
+
+/// The UTF-16 range of `line`, its newline included, or None past the last line.
+fn range_for_line(starts: &[usize], length: usize, line: usize) -> Option<(usize, usize)> {
+    let start = *starts.get(line)?;
+    let end = starts.get(line + 1).copied().unwrap_or(length);
+    Some((start, end.max(start)))
 }
 
 fn parse_progress_accessibility_value(source: &str) -> Result<f64, AccessibilityError> {
