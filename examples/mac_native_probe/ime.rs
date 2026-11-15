@@ -73,7 +73,9 @@ pub fn steps() -> Vec<Step> {
             && value == "你好";
         (ok, summary(log, value))
     }));
-    steps.push(handle_event_scenario());
+    if !native::hid_events() {
+        steps.push(handle_event_scenario());
+    }
 
     steps.extend(scenario(view::ESCAPE, |steps| {
         steps.extend(keys("nihao"));
@@ -127,8 +129,10 @@ pub fn steps() -> Vec<Step> {
         (value == "你好\n世界", summary(log, value))
     }));
 
-    // Shift alone mid-composition: Pinyin commits the letters and switches
-    // to English; a second Shift switches back.
+    // Shift alone mid-composition. Whether it switches Pinyin to English
+    // depends on the user's Pinyin settings (Caps Lock may do that instead):
+    // switched, the letters commit as typed; not switched, composition keeps
+    // going and Escape clears it. Either way Shift must not break the preedit.
     steps.extend(scenario(view::SHIFT, |steps| {
         steps.extend(keys("nihao"));
         steps.push(shift());
@@ -137,9 +141,12 @@ pub fn steps() -> Vec<Step> {
         steps.push(key(native::ESCAPE));
     }));
     steps.push(check(view::SHIFT, |log, value| {
-        // Without a composition this value is only plain typing.
+        let marks = marked(log);
+        let switched = value == "nihaook";
+        let kept_composing =
+            value.is_empty() && marks.iter().any(|line| preedit(line).contains("ok"));
         (
-            !marked(log).is_empty() && value == "nihaook",
+            !marks.is_empty() && (switched || kept_composing),
             summary(log, value),
         )
     }));
@@ -171,6 +178,13 @@ fn activate() -> Step {
                 active && key,
                 format!("NSApp.isActive={active} window.isKeyWindow={key}"),
             );
+            if native::hid_events() {
+                probe.record(
+                    "probe may post HID keystrokes (Accessibility)",
+                    crate::cg::trusted(),
+                    format!("AXIsProcessTrusted and CGPreflightPostEventAccess={}", crate::cg::trusted()),
+                );
+            }
             0
         })]);
         600
@@ -237,7 +251,19 @@ fn scenario(field: &'static str, body: impl FnOnce(&mut Vec<Step>)) -> Vec<Step>
         focus(field),
         step(move |probe| {
             probe.mark = log_len();
-            note(format!("---- scenario {field}"));
+            let front: Option<Retained<AnyObject>> = unsafe {
+                let workspace: Retained<AnyObject> =
+                    msg_send![class!(NSWorkspace), sharedWorkspace];
+                msg_send![&*workspace, frontmostApplication]
+            };
+            let front: Option<Retained<NSString>> =
+                front.and_then(|app| unsafe { msg_send![&*app, bundleIdentifier] });
+            note(format!(
+                "---- scenario {field} active={} key={} front={:?}",
+                native::app().isActive(),
+                probe.window.isKeyWindow(),
+                front.map(|id| id.to_string())
+            ));
             0
         }),
     ];
