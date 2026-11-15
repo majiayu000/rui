@@ -225,6 +225,21 @@ where
         self.frame().map(Some)
     }
 
+    /// When the earliest frame a view asked for with
+    /// [`crate::core::ViewContext::request_frame_at`] is due.
+    pub fn next_frame_deadline(&self) -> Option<std::time::Instant> {
+        self.context.next_frame_deadline()
+    }
+
+    /// Draw the frame a native runner wakes for when a requested frame time
+    /// has passed. Returns `None` without drawing when none is due yet.
+    pub fn timed_frame(&mut self) -> Result<Option<&HeadlessFrame>, HeadlessError> {
+        if !self.context.fire_due_frames(std::time::Instant::now()) {
+            return Ok(None);
+        }
+        self.frame().map(Some)
+    }
+
     /// Run spawned tasks, background work and updates from other threads until
     /// none can make progress. Background tasks run here, on this thread, in the
     /// order they became ready; a following [`Self::frame`] draws the result.

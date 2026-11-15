@@ -3,6 +3,7 @@
 mod button;
 mod checkbox;
 mod data;
+mod date_picker;
 mod menu;
 mod popover;
 mod progress_bar;
@@ -14,9 +15,11 @@ mod splitter;
 mod state;
 mod switch;
 mod tabs;
+mod toast;
 mod tokens;
 mod toolbar;
 mod tooltip;
+mod transient;
 
 use crate::core::ElementId;
 use crate::core::color::Color;
@@ -38,6 +41,7 @@ pub use data::{
     DataList, DataListItem, DataTableCell, DataTableRow, DataTree, DataTreeItem, data_list,
     data_table_row, data_tree,
 };
+pub use date_picker::{CalendarDate, DatePicker, Weekday, date_picker};
 pub use menu::{Menu, MenuItem, menu};
 pub use popover::{Dialog, Popover, dialog, popover};
 pub use progress_bar::{ProgressBar, progress_bar};
@@ -52,6 +56,9 @@ pub use state::{
 };
 pub use switch::{Switch, switch};
 pub use tabs::{Tab, TabList, TabPanel, Tabs, tab, tab_list, tab_panel, tabs};
+pub use toast::{
+    DEFAULT_TOAST_DURATION, Toast, ToastCorner, ToastId, ToastStack, ToastVariant, Toaster,
+};
 pub use tokens::{
     ControlColors, ControlSize, ControlState, ControlVariant, ControlVariantPalette, Theme,
     ThemeColors, ThemeDensity, ThemeMode, ThemeRadius, ThemeSpacing, ThemeStateTokens,
@@ -690,11 +697,18 @@ pub fn hoverable(child: impl Into<AnyElement>) -> Hoverable {
     Hoverable::new(child)
 }
 
-/// Carry a drag or an open list over to the control rebuilt in its place, so
-/// the render a control's own `on_change` causes does not end the gesture.
-pub(crate) fn reconcile_transient_state(next: &mut dyn Element, previous: &mut dyn Element) {
+/// Carry a press, a drag or an open list over to the control rebuilt in its
+/// place, so a rebuild between press and release, or the render a control's
+/// own `on_change` causes, does not end the gesture. `kind` is the type of
+/// both.
+pub(crate) fn reconcile_transient_state(
+    kind: std::any::TypeId,
+    next: &mut dyn Element,
+    previous: &mut dyn Element,
+) {
     use std::any::Any;
     let (next, previous) = (next as &mut dyn Any, previous as &mut dyn Any);
+    transient::carry_press(kind, next, previous);
     if let (Some(next), Some(previous)) = (
         next.downcast_mut::<Slider>(),
         previous.downcast_ref::<Slider>(),
@@ -708,6 +722,11 @@ pub(crate) fn reconcile_transient_state(next: &mut dyn Element, previous: &mut d
     } else if let (Some(next), Some(previous)) = (
         next.downcast_mut::<Select>(),
         previous.downcast_mut::<Select>(),
+    ) {
+        next.reconcile_transient_state(previous);
+    } else if let (Some(next), Some(previous)) = (
+        next.downcast_mut::<DatePicker>(),
+        previous.downcast_ref::<DatePicker>(),
     ) {
         next.reconcile_transient_state(previous);
     }

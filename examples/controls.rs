@@ -1,4 +1,5 @@
-//! Slider, select, radio group, switch and splitter, each bound to view state.
+//! Slider, select, radio group, switch, splitter and date picker, each bound
+//! to view state, with toasts confirming changes.
 //!
 //! Run with `cargo run --example controls`. Drag the bar between the panes,
 //! or Tab to a control and use the keyboard.
@@ -12,6 +13,8 @@ pub struct ControlsView {
     pub density: String,
     pub volume: f32,
     pub fruit: String,
+    pub due: Option<ui::CalendarDate>,
+    pub toaster: ui::Toaster,
 }
 
 impl Default for ControlsView {
@@ -22,6 +25,8 @@ impl Default for ControlsView {
             density: "comfortable".to_string(),
             volume: 40.0,
             fruit: "banana".to_string(),
+            due: None,
+            toaster: ui::Toaster::new(),
         }
     }
 }
@@ -89,13 +94,41 @@ impl View for ControlsView {
                     self.fruit.clone(),
                 )
                 .on_change(cx.text_listener(|this, value, _| this.fruit = value)),
-            );
+            )
+            .child(heading("Due date (weekdays only)"))
+            .child(
+                ui::date_picker("Due date", self.due)
+                    .disabled_dates(|day| {
+                        matches!(day.weekday(), ui::Weekday::Saturday | ui::Weekday::Sunday)
+                    })
+                    .on_change(cx.listener_with(|this, day: ui::CalendarDate, _| {
+                        this.due = Some(day);
+                        this.toaster
+                            .show(ui::Toast::info("Due date set").description(day.long_label()));
+                    })),
+            )
+            .child(save_button(&self.toaster))
+            .child(self.toaster.render(cx));
 
         ui::splitter("Sidebar", sidebar, main)
             .position(self.sidebar)
             .limits(160.0, 420.0)
             .on_change(cx.listener_with(|this, at, _| this.sidebar = at))
     }
+}
+
+fn save_button(toaster: &ui::Toaster) -> ui::Button {
+    let toaster = toaster.clone();
+    ui::button("Save preferences").on_click(move || {
+        let undo = toaster.clone();
+        toaster.show(
+            ui::Toast::success("Preferences saved")
+                .description("They apply to every window.")
+                .action("Undo", move || {
+                    undo.show(ui::Toast::warning("Changes undone"));
+                }),
+        );
+    })
 }
 
 fn main() {

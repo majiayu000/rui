@@ -20,6 +20,7 @@ use taffy::prelude::*;
 pub struct Button {
     id: StableId,
     label: String,
+    accessibility_label: Option<String>,
     variant: ControlVariant,
     size: ControlSize,
     theme: Theme,
@@ -40,6 +41,7 @@ impl Button {
         Self {
             id: StableId::new(),
             label,
+            accessibility_label: None,
             variant: ControlVariant::default(),
             size: ControlSize::default(),
             theme,
@@ -132,6 +134,19 @@ impl Button {
         self
     }
 
+    /// What assistive technology reads instead of the visible label, for a
+    /// button whose label is a glyph such as "×".
+    pub fn accessibility_label(mut self, label: impl Into<String>) -> Self {
+        let label = label.into();
+        require_non_empty(&label, "advanced button accessibility label must not be empty");
+        self.accessibility_label = Some(label);
+        self
+    }
+
+    fn spoken_label(&self) -> &str {
+        self.accessibility_label.as_deref().unwrap_or(&self.label)
+    }
+
     pub fn label(&self) -> &str {
         &self.label
     }
@@ -156,6 +171,18 @@ impl Button {
             self.theme.typography.control_weight,
         );
         text_width + self.theme.horizontal_padding(self.size) * 2.0
+    }
+}
+
+impl crate::advanced_ui::transient::PressState for Button {
+    fn press_state(
+        &mut self,
+    ) -> (
+        StableId,
+        &mut crate::advanced_ui::state::InteractionState,
+        Option<&mut crate::advanced_ui::state::IndexedInteractionState>,
+    ) {
+        (self.id, &mut self.state, None)
     }
 }
 
@@ -226,7 +253,7 @@ impl Element for Button {
         let mut node = AccessibilityNode::label_required(
             self.id.get(),
             AccessibilityRole::Button,
-            &self.label,
+            self.spoken_label(),
         )?
         .with_enabled(!self.state.disabled())
         .with_read_only(self.state.read_only())
@@ -265,7 +292,7 @@ impl Element for Button {
                     }
                     cx.announce_accessibility_action(
                         self.id.get(),
-                        format!("{} activated", self.label),
+                        format!("{} activated", self.spoken_label()),
                     );
                     true
                 } else {
@@ -298,7 +325,7 @@ impl Element for Button {
                 }
                 cx.announce_accessibility_action(
                     self.id.get(),
-                    format!("{} activated", self.label),
+                    format!("{} activated", self.spoken_label()),
                 );
                 cx.request_redraw();
                 ActionOutcome::handled("advanced_ui.button")

@@ -224,6 +224,18 @@ impl SegmentedControl {
     }
 }
 
+impl crate::advanced_ui::transient::PressState for SegmentedControl {
+    fn press_state(
+        &mut self,
+    ) -> (
+        StableId,
+        &mut crate::advanced_ui::state::InteractionState,
+        Option<&mut crate::advanced_ui::state::IndexedInteractionState>,
+    ) {
+        (self.id, &mut self.state, Some(&mut self.indexed_state))
+    }
+}
+
 impl Element for SegmentedControl {
     fn id(&self) -> Option<ElementId> {
         Some(self.id.get())

@@ -315,6 +315,7 @@ where
         let accessibility_bridge = window.accessibility_bridge_mut();
         let tree_published = match presenter.accessibility_tree() {
             Ok(accessibility_tree) => {
+                presenter.queue_live_region_announcements(&accessibility_tree);
                 match accessibility_bridge.publish_tree(&accessibility_tree) {
                     Ok(()) => Some(accessibility_tree),
                     Err(err) => {
