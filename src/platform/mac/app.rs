@@ -41,10 +41,12 @@ use objc2::MainThreadMarker;
 use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
 use std::time::Instant;
 
+mod deadline_wake;
 mod dogfood_automation;
 mod event_loop;
 mod window_driver;
 
+use deadline_wake::DeadlineWake;
 use dogfood_automation::*;
 use event_loop::*;
 pub(crate) use crate::platform::frame_driver::{OrderedInputEvent, schedule_platform_redraw};
@@ -106,6 +108,7 @@ where
     let mut frame_ticker = FrameTicker::new(APP_EVENT_WINDOW_NUMBER);
     let mut held_events = HeldEvents::default();
     let mut menus = MacMenus::new(mtm);
+    let mut deadline_wake = DeadlineWake::default();
     loop {
         open_pending_windows(&mut context, &mut windows, mtm);
 
@@ -113,17 +116,13 @@ where
         // away and its frame does whatever work is pending.
         let display_paced = frame_ticker.source().is_some();
         let wait_for_event = display_paced || !context.has_pending_work();
+        deadline_wake.arm(context.next_frame_deadline());
         let polled = {
             let mut mac_windows: Vec<&mut MacWindow> = windows
                 .iter_mut()
                 .map(|window| window.mac_window_mut())
                 .collect();
-            match poll_windows(
-                &app,
-                &mut mac_windows,
-                wait_for_event,
-                context.next_frame_deadline(),
-            ) {
+            match poll_windows(&app, &mut mac_windows, wait_for_event) {
                 Ok(polled) => polled,
                 Err(err) => panic!("failed to poll platform window events: {}", err),
             }

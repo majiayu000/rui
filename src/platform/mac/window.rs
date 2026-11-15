@@ -197,7 +197,7 @@ impl MacWindow {
         app: &NSApplication,
         wait_for_event: bool,
     ) -> Result<Vec<MacWindowEvent>, PlatformWindowError> {
-        let polled = poll_windows(app, &mut [self], wait_for_event, None)?;
+        let polled = poll_windows(app, &mut [self], wait_for_event)?;
         let mut events: Vec<MacWindowEvent> = polled
             .app
             .into_iter()
@@ -500,13 +500,11 @@ pub(crate) struct PolledEvents {
 
 /// Wait for (or, without `wait_for_event`, check for) the next native event and
 /// route it to the window it is addressed to, alongside each window's lifecycle
-/// changes. Events for no window are dispatched to AppKit. A wait ends at
-/// `deadline` when no event comes first.
+/// changes. Events for no window are dispatched to AppKit.
 pub(crate) fn poll_windows(
     app: &NSApplication,
     windows: &mut [&mut MacWindow],
     wait_for_event: bool,
-    deadline: Option<std::time::Instant>,
 ) -> Result<PolledEvents, PlatformWindowError> {
     let mut polled = PolledEvents {
         app: Vec::new(),
@@ -519,14 +517,10 @@ pub(crate) fn poll_windows(
     }
 
     let mask = platform_event_mask();
-    let mut expiration = match (wait_for_event, deadline) {
-        (false, _) => NSDate::distantPast(),
-        (true, None) => NSDate::distantFuture(),
-        (true, Some(deadline)) => {
-            let wait = deadline.saturating_duration_since(std::time::Instant::now());
-            // SAFETY: a plain class constructor taking a finite interval.
-            unsafe { NSDate::dateWithTimeIntervalSinceNow(wait.as_secs_f64()) }
-        }
+    let mut expiration = if wait_for_event {
+        NSDate::distantFuture()
+    } else {
+        NSDate::distantPast()
     };
 
     while let Some(event) = app.nextEventMatchingMask_untilDate_inMode_dequeue(
