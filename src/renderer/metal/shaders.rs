@@ -43,6 +43,17 @@ float3 oklab_to_linear(float3 lab) {
         -1.2684380046 * lms.x + 2.6097574011 * lms.y - 0.3413193965 * lms.z,
         -0.0041960863 * lms.x - 0.7034186147 * lms.y + 1.7076147010 * lms.z);
 }
+
+// How much of a pixel at signed distance `dist` the shape covers, antialiased
+// over `aa = fwidth(dist)`. `aa` is zero where the distance is flat across a
+// 2x2 pixel quad, as on the diagonal inside a top-left corner, and
+// `smoothstep` with equal edges is undefined, so a flat quad takes a hard step.
+float coverage(float dist, float aa) {
+    if (aa > 0.0) {
+        return 1.0 - smoothstep(-aa, aa, dist);
+    }
+    return dist <= 0.0 ? 1.0 : 0.0;
+}
 "#;
 
 /// One instanced pipeline for quads, shadows, glyph sprites and paths. Each
@@ -312,7 +323,7 @@ float4 plain_quad_fragment(VertexOut in, float2 size) {
     float corner_radius = min(0.0, min(half_size.x, half_size.y));
     float dist = rounded_rect_sdf(rel_point, half_size, corner_radius);
     float aa = fwidth(dist);
-    float alpha = 1.0 - smoothstep(-aa, aa, dist);
+    float alpha = coverage(dist, aa);
     if (alpha < 0.001) {
         discard_fragment();
     }
@@ -335,7 +346,7 @@ float4 quad_fragment(VertexOut in, constant QuadInstance& quad) {
 
     // Antialiasing
     float aa = fwidth(dist);
-    float alpha = 1.0 - smoothstep(-aa, aa, dist);
+    float alpha = coverage(dist, aa);
 
     if (alpha < 0.001) {
         discard_fragment();
@@ -354,7 +365,7 @@ float4 quad_fragment(VertexOut in, constant QuadInstance& quad) {
         float inner_radius = max(0.0, corner_radius - border_width);
         float inner_dist = rounded_rect_sdf(rel_point, inner_half_size, inner_radius);
 
-        float border_alpha = 1.0 - smoothstep(-aa, aa, inner_dist);
+        float border_alpha = coverage(inner_dist, aa);
         float in_border = alpha - border_alpha;
 
         // Mix border and background
@@ -624,7 +635,7 @@ fragment float4 image_fragment(VertexOut in [[stage_in]],
 
     float dist = rounded_rect_sdf(rel_point, half_size, corner_radius);
     float aa = fwidth(dist);
-    float alpha = 1.0 - smoothstep(-aa, aa, dist);
+    float alpha = coverage(dist, aa);
 
     if (alpha < 0.001) {
         discard_fragment();

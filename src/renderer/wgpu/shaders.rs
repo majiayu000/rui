@@ -61,7 +61,7 @@ fn rounded_rect_sdf(point: vec2<f32>, half_size: vec2<f32>, radius: f32) -> f32 
 // over `aa = fwidth(dist)`. `aa` is zero where the distance is flat across a
 // 2x2 pixel quad, as on the diagonal inside a top-left corner, and
 // `smoothstep` with equal edges is undefined: WARP left those quads unpainted.
-// A flat quad takes a hard step, which is what Metal draws there.
+// A flat quad takes a hard step, as `coverage` in the Metal shaders does.
 fn coverage(dist: f32, aa: f32) -> f32 {
     if (aa > 0.0) {
         return 1.0 - smoothstep(-aa, aa, dist);
