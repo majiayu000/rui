@@ -12,7 +12,7 @@ with tempfile.TemporaryDirectory(prefix="rui-gpu-runner-") as temporary:
     bench = root / "benchmarks/gpui_compare"
     bench.mkdir(parents=True)
     shutil.copyfile(Path(__file__).with_name("run.sh"), bench / "run.sh")
-    for name in ("fixtures.rs", "gpu_time.rs"):
+    for name in ("fixtures.rs", "gpu_time.rs", "counting_renderer.rs"):
         (bench / name).write_text("// fixture source\n")
     zed = root / "zed checkout"
     (zed / ".git").mkdir(parents=True)

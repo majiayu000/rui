@@ -14,6 +14,10 @@
 //! A harness that commits several buffers a frame calls [`set_frame`] before each
 //! frame and reads [`take_frames`]: each buffer is counted to the frame it was
 //! committed in, rather than grouped by the order buffers end in.
+//!
+//! The comparison tags each frame with its window and its place in that window
+//! ([`tag`]) and keeps the same frames on both sides with [`steady_samples`]: frames
+//! 10 to 69 of every window that reached them, as RUI's one window always does.
 
 use std::ffi::{CStr, c_char, c_ulong, c_void};
 use std::ops::Range;
@@ -143,6 +147,66 @@ fn busy() -> Vec<(usize, f64)> {
         .zip(busy)
         .map(|(&(frame, _, _), busy)| (frame, busy))
         .collect()
+}
+
+/// A frame tag naming `frame` of `window`, for [`set_frame`]: windows count from 0,
+/// and so do the frames of each.
+#[allow(dead_code)]
+pub fn tag(window: usize, frame: usize) -> usize {
+    (window << 32) | (frame & 0xffff_ffff)
+}
+
+/// GPU time per frame, chosen the same way on both sides of the comparison: in each
+/// window, frames `warmup..warmup + samples` (by their [`tag`]), and only from windows
+/// that reached them all. A window whose sampled frame had no command buffer or more
+/// than one is an error, as is no window reaching the sample. Returns the milliseconds
+/// in window and frame order, with how many windows they came from.
+#[allow(dead_code)]
+pub fn steady_samples(
+    tagged: &[(usize, f64)],
+    warmup: usize,
+    samples: usize,
+) -> Result<(Vec<f64>, usize), String> {
+    let wanted = warmup..warmup + samples;
+    let mut frames: Vec<(usize, usize, f64)> = tagged
+        .iter()
+        .map(|&(tag, busy)| (tag >> 32, tag & 0xffff_ffff, busy))
+        .filter(|&(_, frame, _)| wanted.contains(&frame))
+        .collect();
+    frames.sort_by_key(|&(window, frame, _)| (window, frame));
+    let (mut chosen, mut windows) = (Vec::new(), 0);
+    for window in frames.chunk_by(|a, b| a.0 == b.0) {
+        for (expected, &(index, frame, _)) in (warmup..).zip(window) {
+            if frame < expected {
+                return Err(format!(
+                    "window {index} frame {frame} has more than one command buffer"
+                ));
+            }
+            if frame > expected {
+                return Err(format!("window {index} frame {expected} has no command buffer"));
+            }
+        }
+        // A window closed before the sample ended, as Criterion's first short calls
+        // are, has its own early frames only; it is left out.
+        if window.len() == samples {
+            chosen.extend(window.iter().map(|&(_, _, busy)| busy));
+            windows += 1;
+        }
+    }
+    if windows == 0 {
+        return Err(format!(
+            "no window reached frames {warmup}..{} with one command buffer each",
+            warmup + samples
+        ));
+    }
+    Ok((chosen, windows))
+}
+
+/// Each command buffer completed since the last call, with the tag [`set_frame`] gave
+/// its frame and the milliseconds of GPU busy time it added.
+#[allow(dead_code)]
+pub fn take_tagged() -> Vec<(usize, f64)> {
+    busy()
 }
 
 /// Milliseconds of GPU busy time each command buffer completed since the last call

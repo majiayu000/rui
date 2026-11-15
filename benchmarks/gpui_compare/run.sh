@@ -33,6 +33,8 @@ echo "== artifacts: $RUN_DIR" >&2
 cp "$ROOT/benchmarks/gpui_compare/fixtures.rs" "$ZED_DIR/crates/gpui_platform/benches/rui_compare.rs"
 # Both sides read GPU time through the same hook; the bench declares `mod gpu_time;`.
 cp "$ROOT/benchmarks/gpui_compare/gpu_time.rs" "$ZED_DIR/crates/gpui_platform/benches/gpu_time.rs"
+# The renderer wrapper that counts draws and tags frames; `mod counting_renderer;`.
+cp "$ROOT/benchmarks/gpui_compare/counting_renderer.rs" "$ZED_DIR/crates/gpui_platform/benches/counting_renderer.rs"
 manifest="$ZED_DIR/crates/gpui_platform/Cargo.toml"
 if ! grep -q 'name = "rui_compare"' "$manifest"; then
   printf '\n[[bench]]\nname = "rui_compare"\nharness = false\nrequired-features = ["bench-support"]\n' >> "$manifest"
@@ -67,7 +69,8 @@ fi
 git -C "$ROOT" diff --binary HEAD > "$RUN_DIR/rui-source.patch"
 git -C "$ZED_DIR" diff --binary HEAD > "$RUN_DIR/zed-source.patch"
 # Copied GPUI benches may be untracked, so retain their source explicitly.
-cp "$ROOT/benchmarks/gpui_compare/fixtures.rs" "$ROOT/benchmarks/gpui_compare/gpu_time.rs" "$RUN_DIR/"
+cp "$ROOT/benchmarks/gpui_compare/fixtures.rs" "$ROOT/benchmarks/gpui_compare/gpu_time.rs" \
+  "$ROOT/benchmarks/gpui_compare/counting_renderer.rs" "$RUN_DIR/"
 
 # Prints the bench executable cargo built, from its "Executable ... (path)" line.
 executable() {
