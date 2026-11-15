@@ -35,6 +35,15 @@ SWAYSOCK="$(compgen -G "$XDG_RUNTIME_DIR/sway-ipc.*.sock")"
 WAYLAND_DISPLAY="$(basename "$(compgen -G "$XDG_RUNTIME_DIR/wayland-[0-9]")")"
 export SWAYSOCK WAYLAND_DISPLAY
 swaymsg -t get_version
+# The headless seat has no pointer until one is plugged in.
+python3 "$(dirname "$0")/wayland_virtual_pointer.py" &
+pointer_pid=$!
+trap 'kill "$pointer_pid" "$sway_pid" 2>/dev/null || true' EXIT
+for _ in $(seq 50); do
+  swaymsg -t get_inputs | jq -e 'any(.type == "pointer")' >/dev/null && break
+  sleep 0.1
+done
+swaymsg -t get_inputs | jq -e 'any(.type == "pointer")' >/dev/null
 
 app=""
 
@@ -101,8 +110,9 @@ open_example counter
 for _ in 1 2 3; do
   click 231 236
 done
-# The click focused the window; Return presses the focused "+" button.
-wtype -k Return
+# The click focused the window; Return presses the focused "+" button. wtype
+# plugs in a keyboard for the call, so wait for the app to bind it first.
+wtype -s 1000 -k Return
 check counter_input
 swaymsg -q "[pid=$app] resize set width 500 px height 340 px"
 check counter_resized

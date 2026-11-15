@@ -694,7 +694,10 @@ mod tests {
     #[test]
     fn max_lines_ends_in_an_ellipsis_that_fits() {
         let mut cache = TextMeasureCache::new();
-        let content = "one two three four five six seven eight nine ten";
+        // Too long for two lines at these widths in any system font: Windows'
+        // fonts fit "one" to "ten" in two lines at one of them.
+        let content = "one two three four five six seven eight nine ten \
+                       eleven twelve thirteen fourteen fifteen sixteen";
         let spans = [style(8, 14.0, 700), style(content.len() - 8, 14.0, 400)];
         for width in [60.0, 80.0, 120.5] {
             let wrapped = cache
