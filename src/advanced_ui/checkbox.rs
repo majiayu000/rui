@@ -14,6 +14,7 @@ use crate::elements::element::{
     style_to_taffy,
 };
 use crate::renderer::Primitive;
+use crate::renderer::text::BaseDirection;
 use taffy::prelude::*;
 
 pub struct Checkbox {
@@ -171,13 +172,14 @@ impl Element for Checkbox {
         if self.checked {
             cx.paint(Primitive::Text {
                 bounds: box_bounds,
-                content: "x".to_string(),
+                content: "x".to_string().into(),
                 color: colors.foreground.to_rgba(),
                 font_size: self.theme.text_size(self.size),
                 font_weight: self.theme.typography.selected_weight,
                 font_family: None,
                 line_height: 1.0,
                 align: crate::elements::text::TextAlign::Center,
+                direction: BaseDirection::Auto,
             });
         }
 
@@ -196,13 +198,14 @@ impl Element for Checkbox {
         }
         cx.paint(Primitive::Text {
             bounds: label_bounds,
-            content: self.label.clone(),
+            content: self.label.clone().into(),
             color: label_color.to_rgba(),
             font_size: self.theme.text_size(self.size),
             font_weight: self.theme.typography.label_weight,
             font_family: None,
             line_height: self.theme.typography.line_height,
             align: crate::elements::text::TextAlign::Left,
+            direction: BaseDirection::Auto,
         });
     }
 

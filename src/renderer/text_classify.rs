@@ -5,6 +5,17 @@ use crate::renderer::text_shaping::ClusterDraft;
 use unicode_bidi::{BidiClass, bidi_class};
 
 pub(crate) fn classify_script(cluster: &str) -> TextScript {
+    // One ASCII character: the checks below, in order, for it alone.
+    if let &[byte] = cluster.as_bytes()
+        && byte.is_ascii()
+    {
+        return match char::from(byte) {
+            ch if ch.is_whitespace() => TextScript::Whitespace,
+            '0'..='9' => TextScript::Number,
+            'A'.. => TextScript::Latin,
+            _ => TextScript::Other,
+        };
+    }
     if cluster.chars().all(char::is_whitespace) {
         return TextScript::Whitespace;
     }
@@ -27,6 +38,15 @@ pub(crate) fn classify_script(cluster: &str) -> TextScript {
 }
 
 pub(crate) fn classify_direction(cluster: &str) -> TextDirection {
+    if let &[byte] = cluster.as_bytes()
+        && byte.is_ascii()
+    {
+        return if byte.is_ascii_alphabetic() {
+            TextDirection::LeftToRight
+        } else {
+            TextDirection::Neutral
+        };
+    }
     if cluster.chars().any(is_rtl) {
         TextDirection::RightToLeft
     } else if cluster.chars().any(is_ltr) {
@@ -73,12 +93,18 @@ fn is_emoji(ch: char) -> bool {
     )
 }
 
+// The bidi class is read before `is_alphabetic`: its table is searched in a few
+// steps, where `is_alphabetic` scans a long run for most letters past Latin.
 fn is_ltr(ch: char) -> bool {
-    ch.is_alphabetic() && bidi_class(ch) == BidiClass::L
+    if ch.is_ascii() {
+        return ch.is_ascii_alphabetic();
+    }
+    bidi_class(ch) == BidiClass::L && ch.is_alphabetic()
 }
 
 fn is_rtl(ch: char) -> bool {
-    ch.is_alphabetic() && matches!(bidi_class(ch), BidiClass::R | BidiClass::AL)
+    // Nothing below U+0590 is right to left.
+    ch >= '\u{590}' && matches!(bidi_class(ch), BidiClass::R | BidiClass::AL) && ch.is_alphabetic()
 }
 
 pub(crate) fn is_default_ignorable(ch: char) -> bool {

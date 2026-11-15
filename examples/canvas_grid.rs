@@ -7,6 +7,7 @@ use rui::elements::element::PointerEventKind;
 use rui::elements::text::TextAlign;
 use rui::prelude::*;
 use rui::renderer::Primitive;
+use rui::renderer::text::BaseDirection;
 
 const COLUMNS: usize = 200;
 const ROWS: usize = 60;
@@ -44,13 +45,14 @@ fn main() {
                     }
                     painter.paint(Primitive::Text {
                         bounds: Bounds::from_xywh(bounds.x(), y, bounds.width(), CELL_HEIGHT),
-                        content: content.clone(),
+                        content: content.clone().into(),
                         color: Color::WHITE.to_rgba(),
                         font_size: 13.0,
                         font_weight: 400,
-                        font_family: Some("SF Mono".to_string()),
+                        font_family: Some("SF Mono".into()),
                         line_height: 1.0,
                         align: TextAlign::Left,
+                        direction: BaseDirection::Auto,
                     });
                 }
             })

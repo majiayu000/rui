@@ -13,7 +13,15 @@ pub struct TextEditBuffer {
     selection: TextSelection,
     composition: Option<TextComposition>,
     multiline: bool,
+    undo: Vec<(EditSnapshot, EditSnapshot)>,
+    redo: Vec<(EditSnapshot, EditSnapshot)>,
+    composition_before: Option<EditSnapshot>,
+    edit_depth: usize,
 }
+
+mod composition;
+mod history;
+use history::EditSnapshot;
 
 impl TextEditBuffer {
     pub fn new() -> Self {
@@ -22,6 +30,10 @@ impl TextEditBuffer {
             selection: TextSelection::collapsed(0),
             composition: None,
             multiline: false,
+            undo: Vec::new(),
+            redo: Vec::new(),
+            composition_before: None,
+            edit_depth: 0,
         }
     }
 
@@ -33,6 +45,10 @@ impl TextEditBuffer {
             selection: TextSelection::collapsed(cursor),
             composition: None,
             multiline: false,
+            undo: Vec::new(),
+            redo: Vec::new(),
+            composition_before: None,
+            edit_depth: 0,
         }
     }
 
@@ -109,16 +125,18 @@ impl TextEditBuffer {
     }
 
     pub fn insert_text(&mut self, text: &str) -> Result<TextEditOutcome, TextEditError> {
-        self.ensure_text_allowed(text)?;
-        if self.composition.is_some() {
-            self.commit_current_composition()?;
-        }
-        let range = self.selected_range();
-        self.replace_range_internal(range, text)?;
-        self.selection = TextSelection::collapsed(range.start() + text.len());
-        Ok(TextEditOutcome {
-            changed: !text.is_empty() || !range.is_empty(),
-            submitted: false,
+        self.edit(|this| {
+            this.ensure_text_allowed(text)?;
+            if this.composition.is_some() {
+                this.commit_current_composition()?;
+            }
+            let range = this.selected_range();
+            this.replace_range_internal(range, text)?;
+            this.selection = TextSelection::collapsed(range.start() + text.len());
+            Ok(TextEditOutcome {
+                changed: !text.is_empty() || !range.is_empty(),
+                submitted: false,
+            })
         })
     }
 
@@ -127,94 +145,104 @@ impl TextEditBuffer {
         text: &str,
         replacement_range: Utf16TextRange,
     ) -> Result<TextEditOutcome, TextEditError> {
-        self.ensure_text_allowed(text)?;
-        let range = replacement_range.to_text_range(&self.text)?;
-        self.replace_range_internal(range, text)?;
-        self.composition = None;
-        self.selection = TextSelection::collapsed(range.start() + text.len());
-        Ok(TextEditOutcome {
-            changed: !text.is_empty() || !range.is_empty(),
-            submitted: false,
+        self.edit(|this| {
+            this.ensure_text_allowed(text)?;
+            let range = replacement_range.to_text_range(&this.text)?;
+            this.replace_range_internal(range, text)?;
+            this.composition = None;
+            this.selection = TextSelection::collapsed(range.start() + text.len());
+            Ok(TextEditOutcome {
+                changed: !text.is_empty() || !range.is_empty(),
+                submitted: false,
+            })
         })
     }
 
     pub fn delete_backward(&mut self) -> Result<TextEditOutcome, TextEditError> {
-        if self.composition.is_some() {
-            return Err(TextEditError::CompositionActive);
-        }
-        if !self.selection.is_collapsed() {
-            return self.insert_text("");
-        }
-        let cursor = self.cursor();
-        if cursor == 0 {
-            return Ok(TextEditOutcome::default());
-        }
-        let start = self.previous_boundary(cursor);
-        self.replace_range_internal(TextRange::ordered(start, cursor), "")?;
-        self.selection = TextSelection::collapsed(start);
-        Ok(TextEditOutcome {
-            changed: true,
-            submitted: false,
+        self.edit(|this| {
+            if this.composition.is_some() {
+                return Err(TextEditError::CompositionActive);
+            }
+            if !this.selection.is_collapsed() {
+                return this.insert_text("");
+            }
+            let cursor = this.cursor();
+            if cursor == 0 {
+                return Ok(TextEditOutcome::default());
+            }
+            let start = this.previous_boundary(cursor);
+            this.replace_range_internal(TextRange::ordered(start, cursor), "")?;
+            this.selection = TextSelection::collapsed(start);
+            Ok(TextEditOutcome {
+                changed: true,
+                submitted: false,
+            })
         })
     }
 
     pub fn delete_forward(&mut self) -> Result<TextEditOutcome, TextEditError> {
-        if self.composition.is_some() {
-            return Err(TextEditError::CompositionActive);
-        }
-        if !self.selection.is_collapsed() {
-            return self.insert_text("");
-        }
-        let cursor = self.cursor();
-        if cursor == self.text.len() {
-            return Ok(TextEditOutcome::default());
-        }
-        let end = self.next_boundary(cursor);
-        self.replace_range_internal(TextRange::ordered(cursor, end), "")?;
-        self.selection = TextSelection::collapsed(cursor);
-        Ok(TextEditOutcome {
-            changed: true,
-            submitted: false,
+        self.edit(|this| {
+            if this.composition.is_some() {
+                return Err(TextEditError::CompositionActive);
+            }
+            if !this.selection.is_collapsed() {
+                return this.insert_text("");
+            }
+            let cursor = this.cursor();
+            if cursor == this.text.len() {
+                return Ok(TextEditOutcome::default());
+            }
+            let end = this.next_boundary(cursor);
+            this.replace_range_internal(TextRange::ordered(cursor, end), "")?;
+            this.selection = TextSelection::collapsed(cursor);
+            Ok(TextEditOutcome {
+                changed: true,
+                submitted: false,
+            })
         })
     }
 
     pub fn delete_word_backward(&mut self) -> Result<TextEditOutcome, TextEditError> {
-        if self.composition.is_some() {
-            return Err(TextEditError::CompositionActive);
-        }
-        if !self.selection.is_collapsed() {
-            return self.insert_text("");
-        }
-        let cursor = self.cursor();
-        if cursor == 0 {
-            return Ok(TextEditOutcome::default());
-        }
-        let start = self.word_left_boundary(cursor);
-        self.replace_range_internal(TextRange::ordered(start, cursor), "")?;
-        self.selection = TextSelection::collapsed(start);
-        Ok(TextEditOutcome {
-            changed: start != cursor,
-            submitted: false,
+        self.edit(|this| {
+            if this.composition.is_some() {
+                return Err(TextEditError::CompositionActive);
+            }
+            if !this.selection.is_collapsed() {
+                return this.insert_text("");
+            }
+            let cursor = this.cursor();
+            if cursor == 0 {
+                return Ok(TextEditOutcome::default());
+            }
+            let start = this.word_left_boundary(cursor);
+            this.replace_range_internal(TextRange::ordered(start, cursor), "")?;
+            this.selection = TextSelection::collapsed(start);
+            Ok(TextEditOutcome {
+                changed: start != cursor,
+                submitted: false,
+            })
         })
     }
 
     pub fn delete_word_forward(&mut self) -> Result<TextEditOutcome, TextEditError> {
-        if self.composition.is_some() {
-            return Err(TextEditError::CompositionActive);
-        }
-        if !self.selection.is_collapsed() {
-            return self.insert_text("");
-        }
-        let cursor = self.cursor();
-        if cursor == self.text.len() {
-            return Ok(TextEditOutcome::default());
-        }
-        let end = self.word_right_boundary(cursor);
-        self.replace_range_internal(TextRange::ordered(cursor, end), "")?;
-        self.selection = TextSelection::collapsed(cursor);
-        Ok(TextEditOutcome {
-            changed: end != cursor,
-            submitted: false,
+        self.edit(|this| {
+            if this.composition.is_some() {
+                return Err(TextEditError::CompositionActive);
+            }
+            if !this.selection.is_collapsed() {
+                return this.insert_text("");
+            }
+            let cursor = this.cursor();
+            if cursor == this.text.len() {
+                return Ok(TextEditOutcome::default());
+            }
+            let end = this.word_right_boundary(cursor);
+            this.replace_range_internal(TextRange::ordered(cursor, end), "")?;
+            this.selection = TextSelection::collapsed(cursor);
+            Ok(TextEditOutcome {
+                changed: end != cursor,
+                submitted: false,
+            })
         })
     }
 
@@ -279,140 +307,6 @@ impl TextEditBuffer {
         self.move_to(target, extend)
     }
 
-    pub fn begin_composition(&mut self, text: &str) -> Result<(), TextEditError> {
-        if self.composition.is_some() {
-            return Err(TextEditError::CompositionActive);
-        }
-        self.ensure_text_allowed(text)?;
-        self.begin_composition_in_range(text, self.selected_range())
-    }
-
-    pub fn begin_composition_replacing_utf16(
-        &mut self,
-        text: &str,
-        replacement_range: Utf16TextRange,
-    ) -> Result<(), TextEditError> {
-        if self.composition.is_some() {
-            return Err(TextEditError::CompositionActive);
-        }
-        self.ensure_text_allowed(text)?;
-        let replacement_range = replacement_range.to_text_range(&self.text)?;
-        self.begin_composition_in_range(text, replacement_range)
-    }
-
-    fn begin_composition_in_range(
-        &mut self,
-        text: &str,
-        original_range: TextRange,
-    ) -> Result<(), TextEditError> {
-        let original_text = self.text[original_range.start()..original_range.end()].to_string();
-        self.replace_range_internal(original_range, text)?;
-        let range = TextRange::ordered(original_range.start(), original_range.start() + text.len());
-        self.selection = TextSelection::collapsed(range.end());
-        self.composition = Some(TextComposition::new(
-            range,
-            text.to_string(),
-            original_range,
-            original_text,
-        ));
-        Ok(())
-    }
-
-    pub fn update_composition(&mut self, text: &str) -> Result<(), TextEditError> {
-        self.ensure_text_allowed(text)?;
-        let composition = self
-            .composition
-            .clone()
-            .ok_or(TextEditError::CompositionMissing)?;
-        self.replace_range_internal(composition.replacement_range(), text)?;
-        let range = TextRange::ordered(
-            composition.replacement_range().start(),
-            composition.replacement_range().start() + text.len(),
-        );
-        self.selection = TextSelection::collapsed(range.end());
-        self.composition = Some(TextComposition::new(
-            range,
-            text.to_string(),
-            composition.original_replacement_range(),
-            composition.original_text().to_string(),
-        ));
-        Ok(())
-    }
-
-    pub fn update_composition_replacing_utf16(
-        &mut self,
-        text: &str,
-        replacement_range: Utf16TextRange,
-    ) -> Result<(), TextEditError> {
-        self.ensure_text_allowed(text)?;
-        let replacement_range = replacement_range.to_text_range(&self.text)?;
-        let composition = self
-            .composition
-            .clone()
-            .ok_or(TextEditError::CompositionMissing)?;
-        let (original_range, original_text) =
-            if replacement_range == composition.replacement_range() {
-                (
-                    composition.original_replacement_range(),
-                    composition.original_text().to_string(),
-                )
-            } else {
-                (
-                    replacement_range,
-                    self.text[replacement_range.start()..replacement_range.end()].to_string(),
-                )
-            };
-        self.replace_range_internal(replacement_range, text)?;
-        let range = TextRange::ordered(
-            replacement_range.start(),
-            replacement_range.start() + text.len(),
-        );
-        self.selection = TextSelection::collapsed(range.end());
-        self.composition = Some(TextComposition::new(
-            range,
-            text.to_string(),
-            original_range,
-            original_text,
-        ));
-        Ok(())
-    }
-
-    pub fn commit_composition(&mut self, text: &str) -> Result<(), TextEditError> {
-        self.ensure_text_allowed(text)?;
-        if let Some(composition) = self.composition.take() {
-            self.replace_range_internal(composition.replacement_range(), text)?;
-            self.selection =
-                TextSelection::collapsed(composition.replacement_range().start() + text.len());
-        } else {
-            let range = self.selected_range();
-            self.replace_range_internal(range, text)?;
-            self.selection = TextSelection::collapsed(range.start() + text.len());
-        }
-        Ok(())
-    }
-
-    pub fn commit_composition_replacing_utf16(
-        &mut self,
-        text: &str,
-        replacement_range: Utf16TextRange,
-    ) -> Result<(), TextEditError> {
-        self.ensure_text_allowed(text)?;
-        let replacement_range = replacement_range.to_text_range(&self.text)?;
-        self.replace_range_internal(replacement_range, text)?;
-        self.composition = None;
-        self.selection = TextSelection::collapsed(replacement_range.start() + text.len());
-        Ok(())
-    }
-
-    pub fn commit_current_composition(&mut self) -> Result<(), TextEditError> {
-        let composition = self
-            .composition
-            .take()
-            .ok_or(TextEditError::CompositionMissing)?;
-        self.selection = TextSelection::collapsed(composition.replacement_range().end());
-        Ok(())
-    }
-
     pub fn set_composition_selection_utf16(
         &mut self,
         selection: Utf16TextRange,
@@ -431,15 +325,14 @@ impl TextEditBuffer {
     }
 
     pub fn cancel_composition(&mut self) -> Result<(), TextEditError> {
-        let composition = self
-            .composition
-            .clone()
-            .ok_or(TextEditError::CompositionMissing)?;
-        self.replace_range_internal(composition.replacement_range(), composition.original_text())?;
-        self.composition = None;
-        let cursor =
-            composition.original_replacement_range().start() + composition.original_text().len();
-        self.selection = TextSelection::collapsed(cursor);
+        if self.composition.is_none() {
+            return Err(TextEditError::CompositionMissing);
+        }
+        let before = self
+            .composition_before
+            .take()
+            .expect("composition has an original snapshot");
+        self.restore(before);
         Ok(())
     }
 
@@ -456,6 +349,8 @@ impl TextEditBuffer {
         command: TextInputCommand,
     ) -> Result<TextEditOutcome, TextEditError> {
         match command {
+            TextInputCommand::Undo => self.undo(),
+            TextInputCommand::Redo => self.redo(),
             TextInputCommand::InsertText(text) => self.insert_text(&text),
             TextInputCommand::InsertTextReplacing {
                 text,

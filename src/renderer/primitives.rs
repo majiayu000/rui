@@ -1,12 +1,17 @@
 //! Rendering primitives - the basic shapes the GPU can draw
 
+use crate::core::SharedStr;
 use crate::core::color::Rgba;
-use crate::core::geometry::{Bounds, Edges, Size};
+use crate::core::geometry::{Bounds, Edges, Point, Size};
 use crate::core::style::Corners;
 use crate::elements::fit_bounds;
 use crate::elements::text::TextAlign;
+use crate::renderer::Picture;
+use crate::renderer::picture::moved;
+use crate::renderer::text::BaseDirection;
 use crate::{ImageFit, ImageSource};
 use bytemuck::{Pod, Zeroable};
+use std::sync::Arc;
 
 /// GPU-renderable primitives
 #[derive(Debug, Clone)]
@@ -52,13 +57,15 @@ pub enum Primitive {
     /// Text rendering
     Text {
         bounds: Bounds,
-        content: String,
+        content: SharedStr,
         color: Rgba,
         font_size: f32,
         font_weight: u16,
-        font_family: Option<String>,
+        font_family: Option<Arc<str>>,
         line_height: f32,
         align: TextAlign,
+        /// The base direction of the paragraph the text is a line of.
+        direction: BaseDirection,
     },
 
     /// Image rendering
@@ -70,12 +77,24 @@ pub enum Primitive {
         opacity: f32,
     },
 
-    /// Path (for custom vector graphics)
+    /// Path (for custom vector graphics): a polygon filled by the nonzero
+    /// rule, or with `stroke_width` a polyline stroked with butt ends and miter
+    /// joins, beveled past a miter limit of 4. Curves are flattened by the caller.
+    ///
+    /// Each vertex is drawn at its position plus `offset`. The vertices are
+    /// shared: keep the `Arc` and paint clones of it while the shape stays the
+    /// same, and the renderer keeps what it worked out for the path (its edges,
+    /// tiles or atlas sprite) instead of doing it again each frame. Moving the
+    /// path changes only `offset`.
     Path {
-        vertices: Vec<PathVertex>,
+        vertices: Arc<[PathVertex]>,
+        offset: Point,
         color: Rgba,
         stroke_width: Option<f32>,
     },
+
+    /// Primitives recorded once, drawn moved by `offset`; see [`Picture`].
+    Picture { picture: Picture, offset: Point },
 
     /// Clipping mask push
     PushClip {
@@ -96,12 +115,13 @@ pub enum PrimitiveKind {
     Text,
     Image,
     Path,
+    Picture,
     PushClip,
     PopClip,
 }
 
 impl PrimitiveKind {
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::Quad,
         Self::Shadow,
         Self::LinearGradient,
@@ -109,6 +129,7 @@ impl PrimitiveKind {
         Self::Text,
         Self::Image,
         Self::Path,
+        Self::Picture,
         Self::PushClip,
         Self::PopClip,
     ];
@@ -122,6 +143,7 @@ impl PrimitiveKind {
             Self::Text => "text",
             Self::Image => "image",
             Self::Path => "path",
+            Self::Picture => "picture",
             Self::PushClip => "push_clip",
             Self::PopClip => "pop_clip",
         }
@@ -156,9 +178,20 @@ impl Primitive {
             | Self::Text { bounds: b, .. }
             | Self::Image { bounds: b, .. }
             | Self::PushClip { bounds: b, .. } => bounds(b),
-            Self::Path { vertices, .. } => vertices
-                .iter()
-                .all(|vertex| exact(vertex.position[0], dx) && exact(vertex.position[1], dy)),
+            // Painting may move the offset or the vertices, so both must move
+            // exactly.
+            Self::Path {
+                vertices, offset, ..
+            } => {
+                exact(offset.x, dx)
+                    && exact(offset.y, dy)
+                    && vertices.iter().all(|vertex| {
+                        exact(vertex.position[0] + offset.x, dx)
+                            && exact(vertex.position[1] + offset.y, dy)
+                    })
+            }
+            // Its primitives are drawn at the offset either way.
+            Self::Picture { offset, .. } => exact(offset.x, dx) && exact(offset.y, dy),
             Self::PopClip => true,
         }
     }
@@ -177,11 +210,9 @@ impl Primitive {
             | Self::Text { bounds, .. }
             | Self::Image { bounds, .. }
             | Self::PushClip { bounds, .. } => shift(bounds),
-            Self::Path { vertices, .. } => {
-                for vertex in vertices {
-                    vertex.position[0] += dx;
-                    vertex.position[1] += dy;
-                }
+            Self::Path { offset, .. } | Self::Picture { offset, .. } => {
+                offset.x += dx;
+                offset.y += dy;
             }
             Self::PopClip => {}
         }
@@ -196,6 +227,7 @@ impl Primitive {
             Self::Text { .. } => PrimitiveKind::Text,
             Self::Image { .. } => PrimitiveKind::Image,
             Self::Path { .. } => PrimitiveKind::Path,
+            Self::Picture { .. } => PrimitiveKind::Picture,
             Self::PushClip { .. } => PrimitiveKind::PushClip,
             Self::PopClip => PrimitiveKind::PopClip,
         }
@@ -216,12 +248,10 @@ impl Primitive {
 
     /// Everything the primitive can draw on.
     pub fn reach(&self) -> Reach {
-        // Antialiasing reaches about one pixel past an edge.
-        const EDGE: f32 = 1.0;
         Reach::Within(match self {
             Self::Quad { bounds, .. }
             | Self::LinearGradient { bounds, .. }
-            | Self::RadialGradient { bounds, .. } => outset(*bounds, EDGE, EDGE),
+            | Self::RadialGradient { bounds, .. } => quad_reach(*bounds),
             Self::Shadow {
                 bounds,
                 blur_radius,
@@ -232,25 +262,15 @@ impl Primitive {
             }
             Self::Text {
                 bounds, font_size, ..
-            } => outset(*bounds, f32::INFINITY, font_size.max(0.0) * 2.0 + EDGE),
+            } => text_reach(*bounds, *font_size),
             Self::Path {
                 vertices,
+                offset,
                 stroke_width,
                 ..
-            } => {
-                let Some(first) = vertices.first() else {
-                    return Reach::Nothing;
-                };
-                let (mut x0, mut y0) = (first.position[0], first.position[1]);
-                let (mut x1, mut y1) = (x0, y0);
-                for vertex in vertices {
-                    x0 = x0.min(vertex.position[0]);
-                    y0 = y0.min(vertex.position[1]);
-                    x1 = x1.max(vertex.position[0]);
-                    y1 = y1.max(vertex.position[1]);
-                }
-                let pad = stroke_width.unwrap_or(0.0).max(0.0) * 0.5 + EDGE;
-                outset(Bounds::from_xywh(x0, y0, x1 - x0, y1 - y0), pad, pad)
+            } => return path_reach(vertices, *offset, *stroke_width),
+            Self::Picture { picture, offset } => {
+                return moved(picture.reach(), offset.x, offset.y);
             }
             // The renderer clips an image to its bounds, so a fit that lands
             // past them (cover, none) draws no further. With its size known, a
@@ -294,6 +314,52 @@ pub enum Reach {
     Unbounded,
 }
 
+/// What a [`Primitive::Path`] can draw on.
+// Kept out of `Primitive::reach`, which runs for every quad drawn.
+#[inline(never)]
+pub(crate) fn path_reach(
+    vertices: &[PathVertex],
+    offset: Point,
+    stroke_width: Option<f32>,
+) -> Reach {
+    let Some(first) = vertices.first() else {
+        return Reach::Nothing;
+    };
+    let (mut x0, mut y0) = (first.position[0], first.position[1]);
+    let (mut x1, mut y1) = (x0, y0);
+    for vertex in vertices {
+        x0 = x0.min(vertex.position[0]);
+        y0 = y0.min(vertex.position[1]);
+        x1 = x1.max(vertex.position[0]);
+        y1 = y1.max(vertex.position[1]);
+    }
+    // A miter reaches up to half the miter limit in widths past its vertex.
+    let pad = stroke_width.unwrap_or(0.0).max(0.0) * MITER_REACH + EDGE;
+    Reach::Within(outset(
+        Bounds::from_xywh(x0 + offset.x, y0 + offset.y, x1 - x0, y1 - y0),
+        pad,
+        pad,
+    ))
+}
+
+/// What a [`Primitive::Quad`] or gradient at `bounds` can draw on.
+pub(crate) fn quad_reach(bounds: Bounds) -> Bounds {
+    outset(bounds, EDGE, EDGE)
+}
+
+/// What a [`Primitive::Text`] at `bounds` can draw on. Text is centred on its
+/// ink, which can be wider than its bounds, so it is unbounded horizontally.
+pub(crate) fn text_reach(bounds: Bounds, font_size: f32) -> Bounds {
+    outset(bounds, f32::INFINITY, font_size.max(0.0) * 2.0 + EDGE)
+}
+
+/// Antialiasing reaches about one pixel past an edge.
+const EDGE: f32 = 1.0;
+
+/// How many stroke widths a stroke reaches past its vertices: half the miter
+/// limit of 4, where a miter is cut to a bevel.
+const MITER_REACH: f32 = 2.0;
+
 fn outset(bounds: Bounds, dx: f32, dy: f32) -> Bounds {
     let (x, width) = if dx.is_infinite() {
         (f32::MIN / 4.0, f32::MAX / 2.0)
@@ -334,11 +400,21 @@ pub struct GpuQuad {
     pub gradient_start: [f32; 4],
     // Gradient end color (for gradients)
     pub gradient_end: [f32; 4],
-    // Gradient params: x = fill_type (0 solid, 1 linear, 2 radial), y = angle (radians)
+    // Gradient params: x = fill_type (0 solid, 1 linear, 2 radial), y = angle (radians),
+    // z = 1 for a plain quad whose edges lie on device pixels
     pub gradient_params: [f32; 4],
 }
 
 impl GpuQuad {
+    /// A solid fill with square corners and no border.
+    pub(crate) fn is_plain(&self) -> bool {
+        // Zero or negative zero in every radius and width: no bit but the signs.
+        const SIGNS: u128 = 0x8000_0000_8000_0000_8000_0000_8000_0000;
+        let bits = bytemuck::cast::<_, u128>(self.corner_radii)
+            | bytemuck::cast::<_, u128>(self.border_widths);
+        (bits & !SIGNS == 0) & (self.gradient_params[0] < 0.5)
+    }
+
     pub fn solid(
         bounds: Bounds,
         background: Rgba,
@@ -484,13 +560,14 @@ mod tests {
     fn text(bounds: Bounds) -> Primitive {
         Primitive::Text {
             bounds,
-            content: "label".to_string(),
+            content: "label".to_string().into(),
             color: Rgba::new(1.0, 1.0, 1.0, 1.0),
             font_size: 14.0,
             font_weight: 400,
             font_family: None,
             line_height: 1.2,
             align: TextAlign::Left,
+            direction: BaseDirection::Auto,
         }
     }
 
@@ -523,15 +600,18 @@ mod tests {
 
     #[test]
     fn paths_use_their_vertex_extent_and_stroke() {
-        let path = |stroke_width| Primitive::Path {
-            vertices: vec![PathVertex::new(110.0, 10.0), PathVertex::new(150.0, 10.0)],
+        let path = |stroke_width, offset| Primitive::Path {
+            vertices: vec![PathVertex::new(110.0, 10.0), PathVertex::new(150.0, 10.0)].into(),
+            offset,
             color: Rgba::new(1.0, 1.0, 1.0, 1.0),
             stroke_width,
         };
-        assert!(!path(None).may_touch(&view()));
-        assert!(path(Some(24.0)).may_touch(&view()));
+        assert!(!path(None, Point::ZERO).may_touch(&view()));
+        assert!(path(Some(12.0), Point::ZERO).may_touch(&view()));
+        assert!(path(None, Point::new(-100.0, 0.0)).may_touch(&view()));
         let empty = Primitive::Path {
-            vertices: Vec::new(),
+            vertices: Arc::new([]),
+            offset: Point::ZERO,
             color: Rgba::new(1.0, 1.0, 1.0, 1.0),
             stroke_width: None,
         };

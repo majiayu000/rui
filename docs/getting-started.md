@@ -25,10 +25,10 @@ Git dependency below (the crates.io package named `rui` is a different project):
 
 ```toml
 [dependencies]
-rui = { git = "https://github.com/majiayu000/rui", rev = "dbffe70f832892bd4daee5265f2f282a39e4a4cb" }
+rui = { git = "https://github.com/majiayu000/rui", rev = "1311a1d6b98a601de603d215ebc1d21f408fd7a3" }
 ```
 
-This source revision includes the listener APIs below; it is not a release tag.
+This is the same source baseline as the README and includes the listener APIs below; it is not a release tag.
 Replace `src/main.rs` with this complete program and run `cargo run`:
 
 ```rust
@@ -89,19 +89,50 @@ rui::advanced_ui::Checkbox::new("Sync")
     .on_change(cx.listener_with(|this, checked, _| this.checked = checked))
 ```
 
-The callback context can access other entities through `cx.app_mut()`. For
-example, with an existing `Entity<String>` in `this.saved`:
+The callback context reaches other entities. `Entity::update` changes one and
+notifies it, so every view that read it renders again. For example, with an
+existing `Entity<String>` in `this.saved`:
 
 ```rust,ignore
 cx.text_listener(|this, value, cx| {
-    *cx.app_mut().get_mut(this.saved).expect("saved entity exists") = value;
+    this.saved.update(cx, |saved, _| *saved = value);
 })
 ```
 
-The automatic rebuild belongs to the listener's owning view. If other views
-observe the saved entity, notify it with `cx.app_mut().notify(this.saved.id())`
-after releasing the mutable borrow. Handle a missing entity according to your
-application's lifetime rules rather than assuming every handle is still live.
+`update` returns `None` once the entity was released. Handle that according to
+your application's lifetime rules rather than assuming every handle is live.
+
+## Async work
+
+`cx.spawn` runs a task on the UI thread with a handle on the view. Slow work
+goes to a background thread with `background_spawn`; the result goes back into
+the view with `this.update`, and the view renders again without a `notify`:
+
+```rust,ignore
+cx.spawn(|this, cx| async move {
+    let body = cx.background_spawn(async move { fetch(url) }).await;
+    this.update(&cx, |this, _| this.body = body).ok();
+})
+.detach();
+```
+
+The handle does not keep the view alive: `update` returns `Err(ViewReleased)`
+once it is gone. The [spawn example](../examples/spawn_reply.rs) streams a reply
+this way.
+
+## Key bindings
+
+A key bound to an action in the app's keymap reaches the focused element, then
+the divs around it, then the rest of the tree. `Div::on_action` handles one in
+the view that renders it:
+
+```rust,ignore
+// Once, at startup:
+cx.keymap_mut().bind(KeyCode::N, Modifiers::meta(), ActionId::custom("todo.add"))?;
+
+// In render:
+div().on_action(ActionId::custom("todo.add"), cx.listener(|this, _| this.add()))
+```
 
 The [interaction example](../examples/interaction_acceptance.rs) combines text
 editing, save/revert, and a confirmation dialog. These adapters use the existing
@@ -112,7 +143,7 @@ element callbacks; there is no separate handler-context API to migrate to.
 From the RUI repository root:
 
 ```sh
-cargo test --no-default-features --test view_listener --test listener_workflow
+cargo test --no-default-features --test view_listener --test listener_workflow --test view_updates
 ```
 
 These tests drive pointer and keyboard events, check changed state in the next

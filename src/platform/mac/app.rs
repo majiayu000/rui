@@ -6,17 +6,16 @@ use crate::core::accessibility::{
     AccessibilityTree,
 };
 use crate::core::app::{AppContext, RedrawSource};
-use crate::core::event::{KeyCode, KeyEvent, Modifiers, MouseButton, ScrollEvent};
+use crate::core::event::{KeyCode, KeyEvent, Modifiers, MouseButton};
 use crate::core::frame_pipeline::{
     FramePipeline, FramePipelineError, FramePresentation, IdlePolicy,
 };
 use crate::core::geometry::{Point, Size};
 use crate::core::presenter::Presenter;
-use crate::core::text_editing::TextInputEvent;
 use crate::core::window::{WindowId, WindowOptions};
 use crate::devtools::RenderSample;
-use crate::elements::element::{Element, PointerEvent, PointerEventKind};
-use crate::platform::mac::accessibility::MacAccessibilityActionRequest;
+use crate::elements::element::Element;
+use crate::platform::frame_driver::*;
 use crate::platform::mac::clipboard::MacPasteboard;
 use crate::platform::mac::menus::MacMenus;
 use crate::platform::mac::prompts::run_path_prompts;
@@ -30,8 +29,8 @@ use crate::platform::mac::window::{
     MacAppEvent, MacWindow, create_window, has_pending_event, poll_windows,
 };
 use crate::platform::window::{
-    PlatformImeEvent, PlatformInputEvent, PlatformMouseEvent, PlatformMouseEventKind,
-    PlatformRendererTarget, PlatformWindow, PlatformWindowError, PlatformWindowEvent,
+    PlatformInputEvent, PlatformMouseEvent, PlatformMouseEventKind, PlatformRendererTarget,
+    PlatformWindow, PlatformWindowError, PlatformWindowEvent,
 };
 use crate::renderer::metal::{MetalRenderer, PendingMetalRenderer, RetainedTarget};
 use crate::renderer::{
@@ -48,7 +47,7 @@ mod window_driver;
 
 use dogfood_automation::*;
 use event_loop::*;
-pub(crate) use event_loop::{OrderedInputEvent, schedule_platform_redraw};
+pub(crate) use crate::platform::frame_driver::{OrderedInputEvent, schedule_platform_redraw};
 pub(crate) use window_driver::{NativeWindowDriver, native_window};
 
 /// Run the application with default window options

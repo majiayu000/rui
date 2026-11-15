@@ -3,13 +3,15 @@ use super::{
     PASSWORD_MASK,
 };
 use crate::core::ElementId;
+use crate::core::action::{ActionId, ActionOutcome, StandardAction};
 use crate::core::color::{Color, Rgba};
+use crate::core::event::Modifiers;
 use crate::core::event::{Cursor, KeyCode, KeyEvent};
 use crate::core::geometry::{Bounds, Edges, Point};
 use crate::core::style::Corners;
 use crate::core::text_editing::{
-    TextEditError, TextEditLayout, TextEditOutcome, TextEditPaintStyle, TextInputCommand,
-    TextInputGeometry, TextInputSnapshot, TextRange, TextSelection,
+    TextEditBuffer, TextEditError, TextEditLayout, TextEditOutcome, TextEditPaintStyle,
+    TextInputCommand, TextInputGeometry, TextInputSnapshot, TextRange, TextSelection,
 };
 use crate::elements::element::{EventContext, PaintContext};
 use crate::renderer::Primitive;
@@ -21,7 +23,11 @@ impl Input {
         &mut self,
         command: TextInputCommand,
     ) -> Result<TextEditOutcome, TextEditError> {
-        if !self.can_edit() {
+        // Cancellation is owner cleanup, including after becoming read-only or
+        // disabled. It must restore provisional text before detach/focus loss.
+        let cancel_existing = matches!(command, TextInputCommand::CancelComposition)
+            && self.editor.composition().is_some();
+        if !self.can_edit() && !cancel_existing {
             return Ok(TextEditOutcome::default());
         }
         self.sync_editor_from_public_state_if_needed()?;
@@ -473,5 +479,152 @@ impl Input {
                 None
             }
         }
+    }
+}
+
+impl Input {
+    pub(super) fn handle_action_impl(
+        &mut self,
+        cx: &mut EventContext,
+        action: &ActionId,
+    ) -> ActionOutcome {
+        if matches!(action, ActionId::Custom(name) if name == crate::core::action::SYNC_ACCESSIBILITY_FOCUS_ACTION)
+        {
+            self.sync_focus_from_context(cx);
+            return ActionOutcome::Ignored;
+        }
+        if !cx.is_focused(Some(self.id.get())) && !self.state.focused {
+            return ActionOutcome::Ignored;
+        }
+
+        let ActionId::Standard(action) = action else {
+            return ActionOutcome::Ignored;
+        };
+
+        if *action == StandardAction::Cancel {
+            self.emit_cancel();
+            return ActionOutcome::handled("input");
+        }
+
+        if matches!(
+            action,
+            StandardAction::Copy | StandardAction::Cut | StandardAction::Paste
+        ) {
+            return self.run_clipboard_action(cx, *action);
+        }
+
+        if matches!(action, StandardAction::Undo | StandardAction::Redo) {
+            let command = if *action == StandardAction::Undo {
+                TextInputCommand::Undo
+            } else {
+                TextInputCommand::Redo
+            };
+            if !self.can_edit() {
+                return ActionOutcome::Ignored;
+            }
+            return match self.apply_text_input_command(command) {
+                Ok(_) => {
+                    cx.request_redraw();
+                    ActionOutcome::handled("input")
+                }
+                Err(err) => {
+                    log::error!("text history action failed: {err}");
+                    ActionOutcome::Ignored
+                }
+            };
+        }
+
+        if *action == StandardAction::SelectAll {
+            self.visual_caret = None;
+            let result = self
+                .sync_editor_from_public_state_if_needed()
+                .and_then(|_| {
+                    let end = self.editor.text().len();
+                    self.editor.set_selection(TextSelection::new(0, end))
+                });
+            return match result {
+                Ok(()) => {
+                    self.sync_state_from_editor();
+                    cx.request_redraw();
+                    ActionOutcome::handled("input")
+                }
+                Err(err) => {
+                    log::error!("input select all action failed: {err}");
+                    ActionOutcome::Ignored
+                }
+            };
+        }
+
+        let event = match action {
+            StandardAction::MoveLeft => KeyEvent::new(KeyCode::ArrowLeft, Modifiers::none()),
+            StandardAction::MoveRight => KeyEvent::new(KeyCode::ArrowRight, Modifiers::none()),
+            StandardAction::MoveUp => KeyEvent::new(KeyCode::ArrowUp, Modifiers::none()),
+            StandardAction::MoveDown => KeyEvent::new(KeyCode::ArrowDown, Modifiers::none()),
+            StandardAction::MoveWordLeft => KeyEvent::new(KeyCode::ArrowLeft, Modifiers::alt()),
+            StandardAction::MoveWordRight => KeyEvent::new(KeyCode::ArrowRight, Modifiers::alt()),
+            StandardAction::SelectLeft => KeyEvent::new(KeyCode::ArrowLeft, Modifiers::shift()),
+            StandardAction::SelectRight => KeyEvent::new(KeyCode::ArrowRight, Modifiers::shift()),
+            StandardAction::DeleteBackward => KeyEvent::new(KeyCode::Backspace, Modifiers::none()),
+            StandardAction::DeleteForward => KeyEvent::new(KeyCode::Delete, Modifiers::none()),
+            StandardAction::DeleteWordBackward => {
+                KeyEvent::new(KeyCode::Backspace, Modifiers::alt())
+            }
+            StandardAction::DeleteWordForward => KeyEvent::new(KeyCode::Delete, Modifiers::alt()),
+            StandardAction::Activate | StandardAction::Submit | StandardAction::InsertNewline => {
+                KeyEvent::new(KeyCode::Enter, Modifiers::none())
+            }
+            _ => return ActionOutcome::Ignored,
+        };
+
+        match self
+            .apply_shaped_navigation(&event)
+            .unwrap_or_else(|| self.apply_key_event(&event))
+        {
+            Ok(_) => {
+                cx.request_redraw();
+                ActionOutcome::handled("input")
+            }
+            Err(err) => {
+                log::error!("input action failed: {err}");
+                ActionOutcome::Ignored
+            }
+        }
+    }
+}
+
+impl Input {
+    pub(crate) fn reconcile_editing_state(&mut self, previous: &mut Self) {
+        // Uncontrolled rebuilds keep the editor. Controlled values keep it only
+        // when echoing the current text; a different value is a programmatic reset.
+        let same_identity = match (self.id.is_explicit(), previous.id.is_explicit()) {
+            (false, false) => true,
+            (true, true) => self.id.get() == previous.id.get(),
+            _ => false,
+        };
+        if same_identity && (!self.value_supplied || self.editor.text() == previous.editor.text()) {
+            std::mem::swap(&mut self.editor, &mut previous.editor);
+            self.sync_state_from_editor();
+        }
+    }
+}
+
+impl Input {
+    pub(super) fn sync_editor_from_public_state_if_needed(&mut self) -> Result<(), TextEditError> {
+        if self.public_state_matches_editor() {
+            return Ok(());
+        }
+
+        if self.state.value == self.editor.text() {
+            self.editor.set_selection(self.state_selection())?;
+            self.visual_caret = None;
+            self.sync_state_from_editor();
+            return Ok(());
+        }
+        let mut editor = TextEditBuffer::with_text(self.state.value.clone());
+        editor.set_selection(self.state_selection())?;
+        self.editor = editor;
+        self.visual_caret = None;
+        self.sync_state_from_editor();
+        Ok(())
     }
 }

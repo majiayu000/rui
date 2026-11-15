@@ -14,6 +14,11 @@ categories = ["gui"]
 [features]
 default = ["metal"]
 metal = ["dep:metal", "dep:objc2", "dep:objc2-foundation", "dep:objc2-app-kit", "dep:objc2-quartz-core"]
+# Cross-platform rendering through wgpu (ADR 0002): Vulkan, DX12 and Metal.
+wgpu = ["dep:wgpu", "dep:pollster"]
+# Window and input through winit, drawn by the wgpu backend: the runner for
+# Linux and Windows. On macOS it runs when `metal` is off.
+winit = ["wgpu", "dep:winit"]
 
 [dependencies]
 # Math and geometry
@@ -41,6 +46,13 @@ objc2-app-kit = { version = "0.3", features = [
 ], optional = true }
 objc2-quartz-core = { version = "0.3", features = ["CAMetalLayer", "CALayer"], optional = true }
 
+# wgpu rendering (feature `wgpu`). GLES and WebGPU are left out: the sprite
+# pipeline reads storage buffers in the vertex stage. pollster blocks on adapter,
+# device and readback futures.
+wgpu = { version = "29", default-features = false, features = ["std", "parking_lot", "wgsl", "metal", "vulkan", "dx12"], optional = true }
+pollster = { version = "0.4", optional = true }
+winit = { version = "0.30", optional = true }
+
 # Utilities
 smallvec = "1.13"
 slotmap = "1.0"
@@ -51,7 +63,13 @@ image = "0.25"
 rusttype = "0.9"
 unicode-segmentation = "1.12"
 unicode-bidi = "0.3.18"
+# Dictionary line breaks for Thai, Lao, Khmer and Myanmar, which put no spaces between words.
+icu_segmenter = { version = "2.4", default-features = false, features = ["compiled_data"] }
 rustybuzz = "0.20.1"
+
+# build.rs compiles the shaders on the build machine's Metal device.
+[target.'cfg(target_os = "macos")'.build-dependencies]
+metal = "0.31"
 
 [dev-dependencies]
 pollster = "0.4"

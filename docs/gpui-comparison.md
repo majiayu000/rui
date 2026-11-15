@@ -2,6 +2,13 @@
 
 Both frameworks draw the same fixtures through Metal on one machine. Tracks #197.
 
+> **GPU comparison limit:** the current GPU sampling populations are not equivalent.
+> RUI discards 10 warm-up frames and measures the next 60; GPUI collects all scenes
+> across Criterion warm-up and repeated window lifecycles. GPU columns are
+> descriptive observations, not a controlled cross-framework verdict. The historical
+> measurements below do not establish the current revision's performance or a shader cause.
+> Matching the sampling windows remains separate work tracked in #277.
+
 Run it with:
 
 ```sh
@@ -10,11 +17,23 @@ benchmarks/gpui_compare/run.sh [zed-checkout-dir]
 
 The script builds both sides once, launches each binary once so macOS's first-launch
 signature check stays out of the startup case, then runs every case in its own
-process: RUI, then GPUI, `REPEATS` times (default 3). It prints one table with the
-range over the repeats and keeps the raw lines in `target/gpui_compare/results.txt`.
+process, alternating RUI/GPUI and GPUI/RUI order by round, `REPEATS` times (default 3).
+It prints one table with the range over the repeats. After checkout preparation, each run creates a fresh
+`target/gpui_compare/run.XXXXXXXX/` directory (printed on stderr), preserving
+`results.txt`, full per-round stdout/stderr, build logs, execution order and commands.
+`metadata.txt` records actual revisions, dirty status, parameters, toolchain and host;
+source patches and the copied GPUI fixture/hook retain local benchmark changes.
+Untracked files other than those copied fixtures are listed, not archived. Use a
+clean dedicated checkout when reproducing a run. The runner modifies the supplied
+Zed checkout's manifest and bench files.
 `CASES="quad_grid text_paragraphs"` picks cases. A last table gives a verdict per
 case: RUI ahead, behind, or a tie when the two ranges overlap or the midpoints are
 within 5% (instructions) or 10% (wall p50).
+
+The runner's artifact handling can be checked without building Zed or using the GPU:
+`python3 benchmarks/gpui_compare/test_runner.py`. This uses disposable fake tools;
+it verifies paths, retained outputs, alternating order and failure propagation, not
+benchmark validity.
 
 - RUI: `benches/compare_frame.rs`, through `MetalRenderer::render_offscreen`.
 - GPUI: `benchmarks/gpui_compare/fixtures.rs`, copied into a Zed checkout as
@@ -44,7 +63,7 @@ to Metal without waiting for the GPU.
 | Case | Content | Change per frame | RUI | GPUI |
 |---|---|---|---|---|
 | `list_full` | 2000 rows of 28 px, each a background, a title and a time | the selected row moves | `div` column | `div` column, root notified |
-| `list_full_one_row` | same | one row toggles its selection | same frame as `list_full`: RUI has no per-view cache | each row a view drawn with `.cached(..)`, only that row notified |
+| `list_full_one_row` | same | one row toggles its selection | each row a view of its own entity (`cx.rows`), only that row notified | each row a view drawn with `.cached(..)`, only that row notified |
 | `list_virtual_1k`, `list_virtual_100k` | same rows, 1000 or 100 000, scrolled to the middle | the selection moves within the visible rows | `virtual_list` | `uniform_list` |
 | `text_paragraphs` | 200 wrapped paragraphs of 8 to 127 words, padding 16, gap 8 | paragraph 3 (on screen) gets a new revision suffix | `text(..).wrap()` | string children, which wrap by default |
 | `quad_grid` | 200x60 cells of 7x15 px, one color each | one cell turns white | one `canvas`, `Painter::fill` | one `canvas`, `window.paint_quad(fill(..))` |
@@ -108,6 +127,61 @@ examples and GPUI's `primitives` bench paint this way.
   - Neither side opens an on-screen window or waits for a presented frame. Startup of
     a real app window is not measured here.
 
+## One changed row with rows as views
+
+`list_full_one_row` used to run the same rebuilt-from-the-root frame as
+`list_full` on RUI's side. It now matches GPUI's: each of the 2000 rows is a view
+of its own entity, written with `cx.rows`, and each frame toggles one row's
+selection and notifies only that row. Three runs, load average 7–47:
+
+| Side | Instructions (M) / frame | ms p50 | Allocations / frame | Draw calls |
+|---|---|---|---|---|
+| RUI | 2.38 | 0.15–0.22 | 20 | 1 |
+| GPUI `.cached()` (final results below) | 252.9–253.1 | 24.3–24.5 | 6 092 | 3 983 |
+
+RUI is 106x ahead by instructions and allocates 300x less. It was the last
+fixture where RUI allocated more than GPUI.
+
+## Shared text and identity-kept layout (RUI `8099b1f`)
+
+RUI side only, from `benches/compare_frame.rs`, against the GPUI numbers of the
+runs below (same GPUI build). The machine was under load average 100–185 from
+other builds, so only instructions and allocations are quoted; between rounds
+they moved by under 1%. Two changes since `27a9be7`:
+
+- `Primitive::Text` holds a `SharedStr`, a range of an `Arc<str>`, and an
+  `Arc<str>` family. Text, styled-text pieces and wrapped lines paint slices of
+  the text they own instead of a new `String` per piece. Text made from a
+  `String` keeps it until it is first laid out as wrapped text or painted, so
+  rows that are never painted cost no copy.
+- A retained layout pass hands each element the nodes of the element with the
+  same identity in the previous pass, not the nodes at the same position. It
+  looks at the next node in order first and builds an identity map only when
+  that is someone else's, so an unchanged tree hashes nothing. A scrolled list's
+  rows keep their nodes and taffy's cached layout; before, each row slot took a
+  new line's text and every row was laid out again.
+
+| Case | RUI instructions (M), before → now | GPUI | RUI allocations, before → now | GPUI |
+|---|---|---|---|---|
+| editor_scroll | 5.72 → 2.83 | 8.48–8.76 | 2 819 → 902 | 1 636 |
+| editor_edit | 2.64 → 2.12 | 8.49–8.68 | 1 667 → 506 | 1 636 |
+| text_paragraphs | 10.37 → 10.18 | 19.31 | 1 553 → 1 143 | 1 842 |
+| list_full | 24.04 → 24.17 | 159.5 | 16 015 → 14 015 | 50 046 |
+| list_full_one_row | 24.05 → 24.17 | 252.9 | 16 015 → 14 015 | 6 092 |
+| list_virtual_1k | 0.94 → 0.93 | 3.92 | 299 → 262 | 787 |
+| resize_full | 47.36 → 46.92 | 164.3 | 28 026 → 26 026 | 50 045 |
+| resize_virtual | 1.37 → 1.37 | 9.03 | 532 → 495 | 788 |
+| quad_grid | 5.30 → 5.35 | 79.97 | 16 → 16 | 14 |
+
+- **Editor allocations are now below GPUI's**: 902 against 1 636 when scrolling,
+  506 against 1 636 when editing. Scrolling costs a third of GPUI's instructions.
+- **Cost:** `perf_gate`'s `list.one_row_changed_rows` and `_views`, which keep
+  2000 row subtrees a frame, rise from 2.0 M to 2.5 M instructions: each kept
+  subtree's nodes are now copied into the new pass's list. Both stay in budget.
+- **Still behind on allocations:** `quad_grid`, by 2. `list_full_one_row` drew the
+  rebuilt list here; with rows as views (above) it allocates 20 against GPUI's
+  6 092.
+
 ## Final results (RUI `c2e3596`)
 
 Apple M2 Max (12 cores, 96 GB), macOS 26.5.2. RUI `c2e3596`: every lane of #179
@@ -147,8 +221,9 @@ unrelated Python process was using about one core). Earlier runs were at 80–22
 | GPUI | 68.7–77.5 ms | 113.9–115.7 ms | 182.8–191.4 ms | 76–102 MB |
 
 Both startups are warm: the system Metal shader cache already held each side's
-shaders. A cold RUI start still compiles its sprite shader (about 195 ms, #226),
-which a build-time `metallib` would remove; GPUI ships one by default but is built
+shaders. RUI now embeds its shaders precompiled, so a cold start no longer compiles
+them either: first frame p50 69 ms against 207 ms before (#177,
+`docs/performance-architecture.md`). GPUI ships a metallib by default but is built
 here with `runtime_shaders`.
 
 | Case | By instructions | By wall p50 |
@@ -174,50 +249,52 @@ and its footprint is lower in every case. That is the claim, and its limits:
   23 allocations and 2.0 M instructions (perf_gate `list.one_row_changed_views`), but
   that path is not in this fixture. On `quad_grid` the two are equal (16 vs 14).
 - **GPU time** was reported for RUI only in this run. Both sides are now measured; see
-  [GPU time on both sides](#gpu-time-on-both-sides-rui-a5cae0b). There RUI is behind on
-  the virtual lists and the resized long list.
+  [historical GPU measurements](#historical-gpu-time-on-both-sides-rui-a5cae0b).
+  Their unequal sampling populations do not support a cross-framework GPU verdict.
 - **One fixture set, one machine, one GPUI revision.** It says nothing about
   Linux, Windows or the web, where GPUI runs and RUI does not.
 - **Fonts differ:** RUI's default is Arial, GPUI's SF Pro.
 
 
-## GPU time on both sides (RUI `a5cae0b`)
+## Historical GPU time on both sides (RUI `a5cae0b`)
+
+These measurements used the unequal sampling populations described above. They remain
+historical observations; do not use them as a current regression gate or a causal
+explanation. The runner emits no automatic GPU winner/loser verdict.
 
 All eleven cases, three rounds, with the hook above. Load average 26 at the start and
 43 at the end. The CPU columns of this run agree with the final results and the editor
 run: RUI is ahead on every case by instructions (1.1x to 15.5x). Its startup is ahead
 3.8x. Only GPU time is new here.
 
-| Case | RUI GPU ms p50 | GPUI GPU ms p50 | RUI p95 | GPUI p95 | RUI vs GPUI |
-|---|---|---|---|---|---|
-| list_full | 0.28–0.51 | 0.31 | 0.37–0.64 | 0.32–0.42 | tie (ranges overlap) |
-| list_full_one_row | 0.51 | 6.43–6.90 | 0.51–0.64 | 11.3–12.5 | RUI ahead 13x |
-| list_virtual_1k | 0.22–0.34 | 0.097 | 0.35–0.47 | 0.10–0.13 | RUI behind 2.9x |
-| list_virtual_100k | 0.22 | 0.097 | 0.26–0.51 | 0.10–0.13 | RUI behind 2.2x |
-| text_paragraphs | 0.13–0.27 | 0.20 | 0.16–0.44 | 0.20–0.91 | tie (ranges overlap) |
-| quad_grid | 0.31 | 0.38 | 0.67–0.75 | 0.44–0.76 | RUI ahead 1.2x |
-| resize_full | 0.51 | 0.28 | 0.51–0.89 | 0.32–0.52 | RUI behind 1.8x |
-| resize_virtual | 0.24–0.47 | 0.22–0.28 | 0.34–1.11 | 0.30–0.51 | tie (ranges overlap) |
-| editor_scroll | 0.24–0.25 | 0.30 | 0.29–0.52 | 0.31–0.60 | RUI ahead 1.2x |
-| editor_edit | 0.24–0.26 | 0.30 | 0.48–0.55 | 0.31–0.64 | RUI ahead 1.2x |
+| Case | RUI GPU ms p50 | GPUI GPU ms p50 | RUI p95 | GPUI p95 |
+|---|---|---|---|---|
+| list_full | 0.28–0.51 | 0.31 | 0.37–0.64 | 0.32–0.42 |
+| list_full_one_row | 0.51 | 6.43–6.90 | 0.51–0.64 | 11.3–12.5 |
+| list_virtual_1k | 0.22–0.34 | 0.097 | 0.35–0.47 | 0.10–0.13 |
+| list_virtual_100k | 0.22 | 0.097 | 0.26–0.51 | 0.10–0.13 |
+| text_paragraphs | 0.13–0.27 | 0.20 | 0.16–0.44 | 0.20–0.91 |
+| quad_grid | 0.31 | 0.38 | 0.67–0.75 | 0.44–0.76 |
+| resize_full | 0.51 | 0.28 | 0.51–0.89 | 0.32–0.52 |
+| resize_virtual | 0.24–0.47 | 0.22–0.28 | 0.34–1.11 | 0.30–0.51 |
+| editor_scroll | 0.24–0.25 | 0.30 | 0.29–0.52 | 0.31–0.60 |
+| editor_edit | 0.24–0.26 | 0.30 | 0.48–0.55 | 0.31–0.64 |
 
-What this shows:
+Recorded observations and limits:
 
-- **The GPU is not where RUI wins.** Its CPU lead is 1.1x to 15x. On the GPU it is
-  ahead only where GPUI's `.cached()` replay splits a frame into 3 983 draws (13x),
-  and slightly on the grid and the editor (1.2x).
-- **RUI is behind** on the virtual lists (2.2–2.9x) and on the resized long list
-  (1.8x). Their instance counts are close: 1 056 vs 1 217 and 1 033 vs 1 683.
-- **The cause is unknown**, and nothing here measures it. One shader draws every
-  primitive on RUI's side, with per-fragment clip edges, where GPUI has a shader per
-  primitive kind.
-- **RUI's virtual list is GPU-bound** in this bench. Its buffers overlap and each ends
-  about 0.22 ms after the previous one. The CPU frame (0.21–0.33 ms wall) waits
-  whenever three frames are in flight. Its isolated frame, from the old waiting pass,
-  was 0.16 ms, still 1.7x GPUI's.
-- **RUI's ranges are wider** between rounds, for example `list_full` at 0.28 or 0.51
-  ms. GPU clock state between processes is the likely cause; this run does not
-  isolate it.
+- GPUI's `.cached()` fixture recorded 3 983 draws per frame. The virtual-list and
+  resized-list instance counts were 1 056 vs 1 217 and 1 033 vs 1 683, respectively.
+  These counts do not establish what caused the recorded GPU durations.
+- The historical RUI virtual-list trace recorded overlapping buffers ending about
+  0.22 ms apart, with CPU frames of 0.21–0.33 ms wall time and waits at the three-frame
+  in-flight limit. Its earlier isolated-frame pass recorded 0.16 ms. These are
+  observations of different submission conditions, not a controlled comparison with
+  GPUI's durations.
+- RUI's `list_full` p50 varied between rounds from 0.28 to 0.51 ms. This run did not
+  isolate GPU clock state, system contention or other causes of the variation.
+- Sampling populations and submission conditions must be matched before assigning
+  GPU winners or investigating a cross-framework cause. The CPU instruction and
+  startup observations above are separate metrics; they do not resolve this GPU gap.
 
 ## Editor-scale fixture (RUI `a31e116`)
 
@@ -409,8 +486,8 @@ Where RUI is still behind:
   the resize cases.
 - `virtual_list` builds 2 rows beyond each edge; `uniform_list` builds only the visible
   rows. In the editor cases that is 49 rows against 45.
-- `list_full_one_row` on RUI is the same frame as `list_full`: RUI has no per-view
-  cache, so there is no closer equivalent of GPUI's `.cached()` path.
+- Runs before "One changed row with rows as views" drew `list_full_one_row` on RUI
+  as the same frame as `list_full`, rebuilt from the root.
 - Resize on GPUI calls what its resize callback calls (`window.resize`,
   `window.bounds_changed`) from inside a frame update, since `simulate_resize` cannot be
   called there. Neither side resizes a real `CAMetalLayer`.

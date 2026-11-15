@@ -7,7 +7,6 @@
 //! `RUI_SPAWN_CHECK=1` asks once at startup, reports where each word was made
 //! and how long it took to reach the screen, and quits when the reply is done.
 
-use rui::core::entity::Entity;
 use rui::prelude::*;
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -24,15 +23,15 @@ struct Word {
 
 #[derive(Default)]
 struct SpawnReply {
-    reply: Option<Entity<String>>,
+    reply: String,
     asked: bool,
     /// When each word's work finished, and when the frame showing it rendered.
     timings: SharedTimings,
 }
 
 impl SpawnReply {
-    fn ask(cx: &mut AppContext, reply: Entity<String>, check: Option<SharedTimings>) {
-        cx.spawn(move |cx| async move {
+    fn ask(cx: &mut ViewContext<Self>, check: Option<SharedTimings>) {
+        cx.spawn(move |this, cx| async move {
             for word in REPLY.split(' ') {
                 let word = word.to_string();
                 let made = cx
@@ -49,20 +48,21 @@ impl SpawnReply {
                         }
                     })
                     .await;
-                cx.update(|cx| {
-                    if let Some(timings) = &check {
-                        timings
-                            .borrow_mut()
-                            .push((made.thread.clone(), made.finished_at, None));
+                if let Some(timings) = &check {
+                    timings
+                        .borrow_mut()
+                        .push((made.thread.clone(), made.finished_at, None));
+                }
+                // The view renders again after this; nothing needs notifying.
+                let shown = this.update(&cx, move |this, _| {
+                    if !this.reply.is_empty() {
+                        this.reply.push(' ');
                     }
-                    if let Some(mut text) = cx.get_mut(reply) {
-                        if !text.is_empty() {
-                            text.push(' ');
-                        }
-                        text.push_str(&made.text);
-                    }
-                    cx.notify(reply.id());
+                    this.reply.push_str(&made.text);
                 });
+                if shown.is_err() {
+                    return;
+                }
             }
             if let Some(timings) = check {
                 cx.update(|cx| report_and_quit(cx, &timings));
@@ -78,9 +78,6 @@ impl View for SpawnReply {
     type Element = Div;
 
     fn render(&mut self, cx: &mut ViewContext<Self>) -> Self::Element {
-        let reply = *self
-            .reply
-            .get_or_insert_with(|| cx.app_mut().create(String::new()));
         if let Some(last) = self.timings.borrow_mut().last_mut()
             && last.2.is_none()
         {
@@ -88,13 +85,8 @@ impl View for SpawnReply {
         }
         if !self.asked && std::env::var_os("RUI_SPAWN_CHECK").is_some() {
             self.asked = true;
-            Self::ask(cx.app_mut(), reply, Some(Rc::clone(&self.timings)));
+            Self::ask(cx, Some(Rc::clone(&self.timings)));
         }
-        let shown = cx
-            .app()
-            .get(reply)
-            .map(|text| text.clone())
-            .unwrap_or_default();
 
         div()
             .w(640.0)
@@ -103,13 +95,11 @@ impl View for SpawnReply {
             .p(24.0)
             .flex_col()
             .gap(16.0)
-            .child(button("Ask").primary().on_click(cx.listener(move |_, cx| {
-                if let Some(mut text) = cx.app_mut().get_mut(reply) {
-                    text.clear();
-                }
-                Self::ask(cx.app_mut(), reply, None);
+            .child(button("Ask").primary().on_click(cx.listener(|this, cx| {
+                this.reply.clear();
+                Self::ask(cx, None);
             })))
-            .child(text(shown).size(18.0).color(Color::WHITE))
+            .child(text(self.reply.clone()).size(18.0).color(Color::WHITE))
     }
 }
 

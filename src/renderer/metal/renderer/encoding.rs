@@ -6,7 +6,7 @@ impl MetalRenderer {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn encode_frame(
         &mut self,
-        frame: &mut FrameData,
+        frame: &mut FrameData<Texture>,
         texture: &TextureRef,
         drawable_size: Size,
         viewport_size: Size,
@@ -19,28 +19,28 @@ impl MetalRenderer {
 
         let command_queue = self.command_queue.to_owned();
         let command_buffer = command_queue.new_command_buffer();
-        let epoch = self.text_cache.epoch();
+        let epoch = self.planner.text_cache.epoch();
         let (cleared, uploads) = (
-            self.text_cache.take_cleared_pages(),
-            self.text_cache.take_uploads(),
+            self.planner.text_cache.take_cleared_pages(),
+            self.planner.text_cache.take_uploads(),
         );
         let staging = self.glyph_pages.sync(
             &self.device,
             epoch,
-            self.text_cache.atlas(),
+            self.planner.text_cache.atlas(),
             cleared,
             uploads,
             command_buffer,
             &mut self.instances,
         );
         let (cleared, uploads) = (
-            self.text_cache.take_cleared_color_pages(),
-            self.text_cache.take_color_uploads(),
+            self.planner.text_cache.take_cleared_color_pages(),
+            self.planner.text_cache.take_color_uploads(),
         );
         let color_staging = self.color_pages.sync(
             &self.device,
             epoch,
-            self.text_cache.color_atlas(),
+            self.planner.text_cache.color_atlas(),
             cleared,
             uploads,
             command_buffer,
@@ -48,11 +48,15 @@ impl MetalRenderer {
         );
 
         let render_pass_desc = RenderPassDescriptor::new();
+        // Only the drawn extent: a kept offscreen texture may be larger, and
+        // every tile of the pass is cleared and stored.
+        render_pass_desc.set_render_target_width(drawable_size.width as u64);
+        render_pass_desc.set_render_target_height(drawable_size.height as u64);
         let color_attachment = render_pass_desc.color_attachments().object_at(0).unwrap();
         color_attachment.set_texture(Some(texture));
         color_attachment.set_store_action(MTLStoreAction::Store);
         // The clear color is linear; this is 0.1 in sRGB, as before.
-        let clear = srgb_to_linear(0.1);
+        let clear = clear_linear();
         // A retained frame keeps what the target shows outside the damage.
         let damage = frame.damage;
         if damage.is_some() {
@@ -77,7 +81,7 @@ impl MetalRenderer {
             viewport_size: [viewport_size.width, viewport_size.height],
             drawable_size: [drawable_size.width, drawable_size.height],
         };
-        let full = frame.scissors[0];
+        let full = MTLScissorRect::from(frame.scissors[0]);
         encoder.set_scissor_rect(full);
         self.frame_stats.redrawn_pixels = full.width * full.height;
         if damage.is_some() && full.width > 0 && full.height > 0 {
@@ -93,14 +97,18 @@ impl MetalRenderer {
             self.count_draw(1);
         }
         let mut scissor = 0;
-        // Sprite references live at buffer 0, which image and path draws rebind.
-        let mut sprites_bound = false;
+        // Sprite references live at buffer 0, which image draws rebind. The
+        // pipeline bound for sprites: `Some(simple)`, or `None` after an image.
+        let mut sprites_bound: Option<bool> = None;
 
         // All instance data of the frame goes in one buffer from the pool.
         let mut layout = BufferLayout::default();
         let refs_at = layout.reserve(&frame.plan.refs);
         let sprite_data = [
-            (2, layout.reserve(&frame.quads)),
+            (
+                2,
+                layout.reserve_count::<crate::renderer::primitives::GpuQuad>(frame.quad_count()),
+            ),
             (3, layout.reserve(&frame.shadows)),
             (4, layout.reserve(&frame.glyphs)),
             (5, layout.reserve(&frame.clip_edges)),
@@ -109,14 +117,20 @@ impl MetalRenderer {
         let edges_at = layout.reserve(&frame.path_edges);
         let instances = self.instances.acquire(&self.device, layout.bytes());
         write_slice(&instances, refs_at, &frame.plan.refs);
-        write_slice(&instances, sprite_data[0].1, &frame.quads);
+        let mut at = sprite_data[0].1;
+        for quads in frame.quad_parts() {
+            write_slice(&instances, at, quads);
+            at += std::mem::size_of_val(quads);
+        }
         write_slice(&instances, sprite_data[1].1, &frame.shadows);
         write_slice(&instances, sprite_data[2].1, &frame.glyphs);
         write_slice(&instances, sprite_data[3].1, &frame.clip_edges);
         write_slice(&instances, paths_at, &frame.path_tiles);
         write_slice(&instances, edges_at, &frame.path_edges);
+        // Fragments read quads, shadows and clips by the index their vertices pass.
         for (index, offset) in sprite_data {
             encoder.set_vertex_buffer(index, Some(&instances), offset as u64);
+            encoder.set_fragment_buffer(index, Some(&instances), offset as u64);
         }
         encoder.set_vertex_buffer(6, Some(&instances), paths_at as u64);
         encoder.set_fragment_buffer(0, Some(&instances), edges_at as u64);
@@ -128,13 +142,20 @@ impl MetalRenderer {
                     pages,
                     start,
                     count,
+                    simple,
                 } => {
-                    if !sprites_bound {
-                        encoder.set_render_pipeline_state(&self.sprite_pipeline);
+                    if sprites_bound.is_none() {
                         encoder.set_vertex_buffer(0, Some(&instances), refs_at as u64);
                         bind_vertex_value(encoder, 1, &uniforms);
                         encoder.set_fragment_sampler_state(0, Some(&self.sampler));
-                        sprites_bound = true;
+                    }
+                    if sprites_bound != Some(simple) {
+                        encoder.set_render_pipeline_state(if simple {
+                            &self.simple_pipeline
+                        } else {
+                            &self.sprite_pipeline
+                        });
+                        sprites_bound = Some(simple);
                     }
                     if scissor != 0 {
                         encoder.set_scissor_rect(full);
@@ -155,9 +176,9 @@ impl MetalRenderer {
                     encoder.set_fragment_texture(0, Some(page_texture));
                     encoder.set_fragment_texture(1, Some(color_texture));
                     encoder.draw_primitives_instanced_base_instance(
-                        MTLPrimitiveType::Triangle,
+                        MTLPrimitiveType::TriangleStrip,
                         0,
-                        6,
+                        4,
                         u64::from(count),
                         u64::from(start),
                     );
@@ -166,7 +187,7 @@ impl MetalRenderer {
                 Draw::Image(index) => {
                     let image = &frame.images[index as usize];
                     if scissor != image.clip {
-                        encoder.set_scissor_rect(frame.scissors[image.clip as usize]);
+                        encoder.set_scissor_rect(frame.scissors[image.clip as usize].into());
                         scissor = image.clip;
                     }
                     encoder.set_render_pipeline_state(&self.image_pipeline);
@@ -176,7 +197,7 @@ impl MetalRenderer {
                     encoder.set_fragment_sampler_state(0, Some(&self.sampler));
                     encoder.draw_primitives_instanced(MTLPrimitiveType::Triangle, 0, 6, 1);
                     self.count_draw(1);
-                    sprites_bound = false;
+                    sprites_bound = None;
                 }
             }
         }
@@ -227,7 +248,7 @@ impl MetalRenderer {
             self.instances.retire(command_buffer, staging);
         }
         self.frames_in_flight
-            .push((self.text_cache.frame(), command_buffer.to_owned()));
+            .push((self.planner.text_cache.frame(), command_buffer.to_owned()));
         if wait_until_completed {
             command_buffer.wait_until_completed();
             if command_buffer.status() == MTLCommandBufferStatus::Error {

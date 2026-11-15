@@ -1,8 +1,8 @@
 //! SVG icons drawn as path primitives.
 //!
 //! [`svg`] parses a practical subset of SVG (see [`parse`]) once per markup and
-//! turns it into filled paths once per size and tint, kept for every element
-//! that shows the same icon at the same size. What it cannot draw is an error
+//! turns it into a [`Picture`] of filled paths once per size and tint, kept for
+//! every element that shows the same icon at the same size. What it cannot draw is an error
 //! naming the element, shown in place of the icon.
 
 mod geometry;
@@ -12,13 +12,14 @@ pub use parse::SvgError;
 
 use crate::core::ElementId;
 use crate::core::color::{Color, Rgba};
-use crate::core::geometry::{Bounds, Edges, Size};
+use crate::core::geometry::{Bounds, Edges, Point, Size};
 use crate::core::style::Style;
 use crate::elements::element::{
     Capabilities, Element, LayoutContext, PaintContext, style_to_taffy,
 };
 use crate::elements::text::TextAlign;
-use crate::renderer::Primitive;
+use crate::renderer::text::BaseDirection;
+use crate::renderer::{Picture, Primitive};
 use geometry::{Transform, fill_polygon, stroke_outline};
 use parse::{ColorValue, Document};
 use std::any::Any;
@@ -34,6 +35,9 @@ const TOLERANCE: f32 = 0.05;
 
 /// Icons at a size and tint kept; past this the cache starts over.
 const SHAPED_ICONS: usize = 1024;
+
+/// Markup kept by address; past this that cache starts over.
+const ADDRESSED_MARKUP: usize = 1024;
 
 /// A parsed document, with an id the shaped icons are kept by.
 struct Parsed {
@@ -51,9 +55,13 @@ type ShapeKey = (u64, [u32; 2], Option<[u32; 4]>);
 struct Caches {
     /// By markup hash, with the markup to tell collisions apart.
     documents: HashMap<u64, Vec<ParsedMarkup>>,
+    /// By the address and length of markup passed before, with the markup to
+    /// check it is unchanged: markup kept in one place, as `include_str!` keeps
+    /// it, is found every frame by comparing it rather than hashing it.
+    addressed: HashMap<(usize, usize), ParsedMarkup>,
     next_id: u64,
     /// At the origin.
-    shaped: HashMap<ShapeKey, Rc<[Primitive]>>,
+    shaped: HashMap<ShapeKey, Picture>,
 }
 
 thread_local! {
@@ -61,6 +69,29 @@ thread_local! {
 }
 
 fn parsed(markup: &str) -> Result<Rc<Parsed>, SvgError> {
+    let address = (markup.as_ptr() as usize, markup.len());
+    let found = CACHES.with(|caches| {
+        let caches = caches.borrow();
+        let (kept, parsed) = caches.addressed.get(&address)?;
+        (**kept == *markup).then(|| parsed.clone())
+    });
+    if let Some(parsed) = found {
+        return parsed;
+    }
+    let parsed = parsed_by_hash(markup);
+    CACHES.with(|caches| {
+        let mut caches = caches.borrow_mut();
+        if caches.addressed.len() >= ADDRESSED_MARKUP {
+            caches.addressed.clear();
+        }
+        caches
+            .addressed
+            .insert(address, (markup.into(), parsed.clone()));
+    });
+    parsed
+}
+
+fn parsed_by_hash(markup: &str) -> Result<Rc<Parsed>, SvgError> {
     let mut hasher = DefaultHasher::new();
     markup.hash(&mut hasher);
     let hash = hasher.finish();
@@ -86,23 +117,23 @@ fn parsed(markup: &str) -> Result<Rc<Parsed>, SvgError> {
 }
 
 /// The icon's paths at the origin, `size` large, painted `tint` if given.
-fn shaped(parsed: &Parsed, size: Size, tint: Option<Rgba>) -> Rc<[Primitive]> {
+fn shaped(parsed: &Parsed, size: Size, tint: Option<Rgba>) -> Picture {
     let key = (
         parsed.id,
         [size.width.to_bits(), size.height.to_bits()],
         tint.map(|tint| tint.to_array().map(f32::to_bits)),
     );
     CACHES.with(|caches| {
-        if let Some(primitives) = caches.borrow().shaped.get(&key) {
-            return Rc::clone(primitives);
+        if let Some(picture) = caches.borrow().shaped.get(&key) {
+            return picture.clone();
         }
-        let primitives: Rc<[Primitive]> = shape(&parsed.document, size, tint).into();
+        let picture = Picture::new(shape(&parsed.document, size, tint));
         let mut caches = caches.borrow_mut();
         if caches.shaped.len() >= SHAPED_ICONS {
             caches.shaped.clear();
         }
-        caches.shaped.insert(key, Rc::clone(&primitives));
-        primitives
+        caches.shaped.insert(key, picture.clone());
+        picture
     })
 }
 
@@ -137,7 +168,8 @@ fn shape(document: &Document, size: Size, tint: Option<Rgba>) -> Vec<Primitive> 
             let vertices = fill_polygon(&contours);
             if vertices.len() >= 3 {
                 primitives.push(Primitive::Path {
-                    vertices,
+                    vertices: vertices.into(),
+                    offset: Point::ZERO,
                     color,
                     stroke_width: None,
                 });
@@ -154,7 +186,8 @@ fn shape(document: &Document, size: Size, tint: Option<Rgba>) -> Vec<Primitive> 
             let vertices = fill_polygon(&contours);
             if vertices.len() >= 3 {
                 primitives.push(Primitive::Path {
-                    vertices,
+                    vertices: vertices.into(),
+                    offset: Point::ZERO,
                     color,
                     stroke_width: None,
                 });
@@ -286,11 +319,12 @@ impl Element for Svg {
             return;
         }
         let tint = self.tint.map(|tint| tint.to_rgba());
-        for primitive in shaped(parsed, bounds.size, tint).iter() {
-            let mut primitive = primitive.clone();
-            primitive.translate(bounds.x(), bounds.y());
-            cx.paint(primitive);
-        }
+        // One primitive however many paths: the renderer keeps what it planned
+        // for the icon where it is drawn.
+        cx.paint(Primitive::Picture {
+            picture: shaped(parsed, bounds.size, tint),
+            offset: bounds.origin,
+        });
     }
 }
 
@@ -304,13 +338,14 @@ fn paint_error(cx: &mut PaintContext, bounds: Bounds, message: &str) {
     });
     cx.paint(Primitive::Text {
         bounds,
-        content: message.to_string(),
+        content: message.to_string().into(),
         color: Color::hex(0xb91c1c).to_rgba(),
         font_size: 11.0,
         font_weight: 400,
         font_family: None,
         line_height: 1.2,
         align: TextAlign::Left,
+        direction: BaseDirection::Auto,
     });
 }
 

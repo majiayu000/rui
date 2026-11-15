@@ -1,6 +1,7 @@
 //! Events: pointer events and the context elements handle events in.
 
 use super::*;
+use crate::renderer::Overlay;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PointerEventKind {
@@ -73,6 +74,12 @@ pub struct EventContext<'a> {
     clipboard: Option<SharedClipboard>,
     /// The window's drag, shared with its presenter.
     drag: Option<SharedDrag>,
+    /// The window, which overlays are placed against.
+    window: Bounds,
+    /// Overlays of the frame the event lands on, topmost last.
+    overlays: Option<Rc<[Overlay]>>,
+    /// The press goes only to owners of light-dismiss overlays it is outside.
+    dismiss_pass: bool,
 }
 
 impl<'a> EventContext<'a> {
@@ -96,6 +103,9 @@ impl<'a> EventContext<'a> {
             accessibility_announcements: Rc::new(RefCell::new(Vec::new())),
             clipboard: None,
             drag: None,
+            window: bounds,
+            overlays: None,
+            dismiss_pass: false,
         }
     }
 
@@ -319,6 +329,9 @@ impl<'a> EventContext<'a> {
             accessibility_announcements: Rc::clone(&self.accessibility_announcements),
             clipboard: self.clipboard.clone(),
             drag: self.drag.clone(),
+            window: self.window,
+            overlays: self.overlays.clone(),
+            dismiss_pass: self.dismiss_pass,
         }
     }
 
@@ -351,7 +364,65 @@ impl<'a> EventContext<'a> {
             accessibility_announcements: Rc::clone(&self.accessibility_announcements),
             clipboard: self.clipboard.clone(),
             drag: self.drag.clone(),
+            window: self.window,
+            overlays: self.overlays.clone(),
+            dismiss_pass: self.dismiss_pass,
         }
+    }
+
+    /// A context for overlay content at `bounds`: outside every ancestor
+    /// clip, as [`PaintContext::paint_overlay`] paints it.
+    pub fn for_overlay(&mut self, bounds: Bounds) -> EventContext<'_> {
+        let mut cx =
+            self.pointer_dispatch_context(false, self.force_hit_suppressed, self.hit_test_point);
+        cx.bounds = bounds;
+        cx.hit_clip = None;
+        cx
+    }
+
+    /// The window the tree is laid out in.
+    pub fn window(&self) -> Bounds {
+        self.window
+    }
+
+    pub(crate) fn set_window(&mut self, window: Bounds) {
+        self.window = window;
+    }
+
+    pub(crate) fn set_dismiss_pass(&mut self, dismiss_pass: bool) {
+        self.dismiss_pass = dismiss_pass;
+    }
+
+    pub(crate) fn is_dismiss_pass(&self) -> bool {
+        self.dismiss_pass
+    }
+
+    pub(crate) fn set_overlays(&mut self, overlays: Option<Rc<[Overlay]>>) {
+        self.overlays = overlays;
+    }
+
+    /// Overlays of the frame the event lands on, topmost last.
+    pub fn overlays(&self) -> &[Overlay] {
+        self.overlays.as_deref().unwrap_or(&[])
+    }
+
+    /// Whether Escape closes the overlay `owner` opened now: it is the topmost
+    /// one Escape closes, or no overlays are known, as outside a window.
+    pub fn is_escape_target(&self, owner: ElementId) -> bool {
+        self.overlays()
+            .iter()
+            .rev()
+            .find(|overlay| overlay.escape)
+            .is_none_or(|overlay| overlay.owner == owner)
+    }
+
+    /// The topmost modal overlay's owner, which keeps focus inside it.
+    pub fn modal_scope(&self) -> Option<ElementId> {
+        self.overlays()
+            .iter()
+            .rev()
+            .find(|overlay| overlay.modal)
+            .map(|overlay| overlay.owner)
     }
 
     /// Build a dispatch context that suppresses legacy `bounds().contains` hits
@@ -393,6 +464,9 @@ impl<'a> EventContext<'a> {
             accessibility_announcements: Rc::clone(&self.accessibility_announcements),
             clipboard: self.clipboard.clone(),
             drag: self.drag.clone(),
+            window: self.window,
+            overlays: self.overlays.clone(),
+            dismiss_pass: self.dismiss_pass,
         }
     }
 }

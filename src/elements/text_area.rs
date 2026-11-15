@@ -21,6 +21,7 @@ use crate::elements::element::{
     style_to_taffy,
 };
 use crate::renderer::Primitive;
+use crate::renderer::text::BaseDirection;
 use crate::renderer::text::TextMeasureCache;
 use taffy::prelude::*;
 
@@ -52,6 +53,7 @@ pub struct TextArea {
     style: Style,
     state: TextAreaState,
     editor: TextEditBuffer,
+    value_supplied: bool,
     width: Option<f32>,
     height: f32,
     on_change: Option<Box<dyn Fn(&str)>>,
@@ -75,6 +77,7 @@ impl TextArea {
             accessibility_label: None,
             style,
             state: TextAreaState::default(),
+            value_supplied: false,
             editor: TextEditBuffer::multiline(),
             width: None,
             height: 96.0,
@@ -103,6 +106,7 @@ impl TextArea {
     }
 
     pub fn value(mut self, value: impl Into<String>) -> Self {
+        self.value_supplied = true;
         self.editor = TextEditBuffer::multiline_with_text(value.into());
         self.sync_state_from_editor();
         self
@@ -352,6 +356,12 @@ impl TextArea {
         if self.public_state_matches_editor() {
             return Ok(());
         }
+        if self.state.value == self.editor.text() {
+            self.editor.set_selection(self.state_selection())?;
+            self.visual_caret = None;
+            self.sync_state_from_editor();
+            return Ok(());
+        }
         let mut editor = TextEditBuffer::multiline_with_text(self.state.value.clone());
         editor.set_selection(self.state_selection())?;
         self.editor = editor;
@@ -526,13 +536,14 @@ impl Element for TextArea {
                     text_width,
                     14.0,
                 ),
-                content: line.to_string(),
+                content: line.to_string().into(),
                 color: text_color.to_rgba(),
                 font_size: 14.0,
                 font_weight: 400,
                 font_family: None,
                 line_height: 1.0,
                 align: crate::elements::text::TextAlign::Left,
+                direction: BaseDirection::Auto,
             });
         }
 
@@ -646,6 +657,27 @@ impl Element for TextArea {
             StandardAction::Copy | StandardAction::Cut | StandardAction::Paste
         ) {
             return self.run_clipboard_action(cx, *action);
+        }
+
+        if matches!(action, StandardAction::Undo | StandardAction::Redo) {
+            let command = if *action == StandardAction::Undo {
+                TextInputCommand::Undo
+            } else {
+                TextInputCommand::Redo
+            };
+            if !self.can_edit() {
+                return ActionOutcome::Ignored;
+            }
+            return match self.apply_text_input_command(command) {
+                Ok(_) => {
+                    cx.request_redraw();
+                    ActionOutcome::handled("text_area")
+                }
+                Err(err) => {
+                    log::error!("text history action failed: {err}");
+                    ActionOutcome::Ignored
+                }
+            };
         }
 
         if *action == StandardAction::SelectAll {

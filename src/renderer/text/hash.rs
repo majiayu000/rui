@@ -12,7 +12,7 @@ use std::hash::{BuildHasherDefault, Hasher};
 /// resistant to chosen collisions, which only cost time here: entries are
 /// compared in full.
 #[derive(Default, Clone, Copy)]
-pub(super) struct FastHasher(u64);
+pub(crate) struct FastHasher(u64);
 
 impl FastHasher {
     fn add(&mut self, word: u64) {
@@ -59,7 +59,7 @@ impl Hasher for FastHasher {
     }
 }
 
-pub(super) type FastMap<K, V> = HashMap<K, V, BuildHasherDefault<FastHasher>>;
+pub(crate) type FastMap<K, V> = HashMap<K, V, BuildHasherDefault<FastHasher>>;
 
 #[cfg(test)]
 mod tests {

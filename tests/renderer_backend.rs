@@ -4,6 +4,7 @@ use rui::core::color::Rgba;
 use rui::core::geometry::{Bounds, Edges, Size};
 use rui::core::style::Corners;
 use rui::elements::text::TextAlign;
+use rui::renderer::text::BaseDirection;
 use rui::renderer::{PathVertex, Primitive, PrimitiveKind, RendererError, Scene};
 use rui::testing::{FrameCaptureBackend, MetalFrameCaptureBackend};
 use rui::{ImageFit, ImageSource};
@@ -55,13 +56,14 @@ fn representative_scene() -> Scene {
     });
     scene.insert(Primitive::Text {
         bounds: Bounds::from_xywh(36.0, 34.0, 44.0, 16.0),
-        content: String::from("RUI"),
+        content: "RUI".into(),
         color: Rgba::WHITE,
         font_size: 12.0,
         font_weight: 700,
         font_family: None,
         line_height: 1.1,
         align: TextAlign::Center,
+        direction: BaseDirection::Auto,
     });
     scene.insert(Primitive::PushClip {
         bounds: Bounds::from_xywh(82.0, 34.0, 12.0, 16.0),
@@ -80,7 +82,9 @@ fn representative_scene() -> Scene {
             PathVertex::new(12.0, 58.0),
             PathVertex::new(28.0, 58.0),
             PathVertex::new(20.0, 48.0),
-        ],
+        ]
+        .into(),
+        offset: Default::default(),
         color: Rgba::new(1.0, 0.80, 0.10, 1.0),
         stroke_width: None,
     });
@@ -89,7 +93,9 @@ fn representative_scene() -> Scene {
             PathVertex::new(42.0, 58.0),
             PathVertex::new(58.0, 48.0),
             PathVertex::new(72.0, 58.0),
-        ],
+        ]
+        .into(),
+        offset: Default::default(),
         color: Rgba::new(0.10, 0.95, 1.0, 1.0),
         stroke_width: Some(3.0),
     });

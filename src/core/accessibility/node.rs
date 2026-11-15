@@ -7,6 +7,7 @@ use super::error::AccessibilityError;
 pub enum AccessibilityRole {
     Button,
     Checkbox,
+    ComboBox,
     DataList,
     DataListItem,
     DataTableCell,
@@ -18,7 +19,12 @@ pub enum AccessibilityRole {
     MenuItem,
     Popover,
     ProgressIndicator,
+    RadioButton,
+    RadioGroup,
     SegmentedControl,
+    Slider,
+    Splitter,
+    Switch,
     SegmentedOption,
     Tab,
     TabList,
@@ -35,6 +41,8 @@ pub enum AccessibilityAction {
     SetValue,
     ScrollForward,
     ScrollBackward,
+    Increment,
+    Decrement,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -111,6 +119,32 @@ impl AccessibilityScrollPosition {
     }
 }
 
+/// The number a range control (slider, splitter) holds and its bounds.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AccessibilityNumericValue {
+    now: f64,
+    min: f64,
+    max: f64,
+}
+
+impl AccessibilityNumericValue {
+    pub fn new(now: f64, min: f64, max: f64) -> Self {
+        Self { now, min, max }
+    }
+
+    pub fn now(&self) -> f64 {
+        self.now
+    }
+
+    pub fn min(&self) -> f64 {
+        self.min
+    }
+
+    pub fn max(&self) -> f64 {
+        self.max
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct AccessibilityNode {
     id: ElementId,
@@ -127,6 +161,7 @@ pub struct AccessibilityNode {
     text_selection: Option<AccessibilityTextRange>,
     text_composition: Option<AccessibilityTextRange>,
     scroll_position: Option<AccessibilityScrollPosition>,
+    numeric_value: Option<AccessibilityNumericValue>,
     bounds: Option<Bounds>,
     actions: Vec<AccessibilityAction>,
     children: Vec<AccessibilityNode>,
@@ -149,6 +184,7 @@ impl AccessibilityNode {
             text_selection: None,
             text_composition: None,
             scroll_position: None,
+            numeric_value: None,
             bounds: None,
             actions: Vec::new(),
             children: Vec::new(),
@@ -209,6 +245,10 @@ impl AccessibilityNode {
 
     pub fn a11y_scroll_position(&self) -> Option<AccessibilityScrollPosition> {
         self.scroll_position
+    }
+
+    pub fn a11y_numeric_value(&self) -> Option<AccessibilityNumericValue> {
+        self.numeric_value
     }
 
     pub fn a11y_bounds(&self) -> Option<Bounds> {
@@ -301,6 +341,11 @@ impl AccessibilityNode {
 
     pub fn with_scroll_position(mut self, position: AccessibilityScrollPosition) -> Self {
         self.scroll_position = Some(position);
+        self
+    }
+
+    pub fn with_numeric_value(mut self, value: AccessibilityNumericValue) -> Self {
+        self.numeric_value = Some(value);
         self
     }
 

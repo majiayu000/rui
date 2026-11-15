@@ -7,10 +7,9 @@
 
 use crate::core::ElementId;
 use crate::core::accessibility::{AccessibilityAction, AccessibilityNode, AccessibilityTree};
-use crate::core::action::route_key_event;
 use crate::core::action::{ActionId, StandardAction};
 use crate::core::app::{AppContext, RedrawSource};
-use crate::core::event::{Event, FocusEvent, KeyEvent};
+use crate::core::event::{Event, FocusEvent};
 use crate::core::geometry::Size;
 use crate::core::presenter::Presenter;
 use crate::core::text_editing::TextInputEvent;
@@ -21,6 +20,9 @@ use crate::platform::mac::app::{OrderedInputEvent, schedule_platform_redraw};
 use crate::platform::mac::ime_state::{
     NativeImeState, cancel_composition_if_owner_lost, dispatch_text_input_event,
 };
+use crate::platform::frame_driver::dispatch_key;
+#[cfg(test)]
+use crate::platform::frame_driver::should_forward_key_event_to_tree;
 use crate::platform::mac::window::MacWindow;
 
 /// Backend-neutral events collected from one poll of the platform window.
@@ -207,11 +209,21 @@ where
             });
             (handled, focus_redraw || redraw_requested)
         }
-        AccessibilityAction::ScrollForward | AccessibilityAction::ScrollBackward => {
-            let action = if *action == AccessibilityAction::ScrollForward {
-                crate::core::action::ACCESSIBILITY_SCROLL_FORWARD_ACTION
-            } else {
-                crate::core::action::ACCESSIBILITY_SCROLL_BACKWARD_ACTION
+        AccessibilityAction::ScrollForward
+        | AccessibilityAction::ScrollBackward
+        | AccessibilityAction::Increment
+        | AccessibilityAction::Decrement => {
+            let action = match action {
+                AccessibilityAction::ScrollForward => {
+                    crate::core::action::ACCESSIBILITY_SCROLL_FORWARD_ACTION
+                }
+                AccessibilityAction::ScrollBackward => {
+                    crate::core::action::ACCESSIBILITY_SCROLL_BACKWARD_ACTION
+                }
+                AccessibilityAction::Increment => {
+                    crate::core::action::ACCESSIBILITY_INCREMENT_ACTION
+                }
+                _ => crate::core::action::ACCESSIBILITY_DECREMENT_ACTION,
             };
             let (outcome, redraw_requested) = presenter.with_event_context(|root, event_cx| {
                 root.dispatch_action(event_cx, &ActionId::custom(action))
@@ -259,26 +271,6 @@ where
         )
     });
     redraw_requested
-}
-
-fn dispatch_key<E>(
-    presenter: &mut Presenter<E>,
-    context: &mut AppContext,
-    is_down: bool,
-    event: &KeyEvent,
-) -> (bool, bool)
-where
-    E: Element,
-{
-    if !should_forward_key_event_to_tree(is_down) {
-        return (false, false);
-    }
-    presenter.with_event_context(|root, event_cx| route_key_event(root, context, event_cx, event))
-}
-
-/// Only key-down events reach elements; key-up is consumed by the platform layer.
-pub(crate) fn should_forward_key_event_to_tree(is_down: bool) -> bool {
-    is_down
 }
 
 #[cfg(test)]

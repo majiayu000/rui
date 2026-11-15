@@ -5,6 +5,7 @@ use crate::core::color::Color;
 use crate::core::style::Style;
 use crate::elements::element::{Element, LayoutContext, PaintContext, style_to_taffy};
 use crate::renderer::Primitive;
+use crate::renderer::text::BaseDirection;
 use taffy::prelude::*;
 
 /// Types of spinner animations
@@ -236,13 +237,14 @@ impl Element for Spinner {
 
         cx.paint(Primitive::Text {
             bounds,
-            content,
+            content: content.into(),
             color: self.color.to_rgba(),
             font_size: self.font_size,
             font_weight: 400,
             font_family: None,
             line_height: 1.4,
             align: crate::elements::text::TextAlign::Left,
+            direction: BaseDirection::Auto,
         });
     }
 }

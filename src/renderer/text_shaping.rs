@@ -1,11 +1,15 @@
-use crate::core::geometry::{Bounds, Size};
+use crate::core::geometry::Size;
 use crate::renderer::text::{TextMetrics, TextRequest};
+use crate::renderer::text_ascii::AsciiCoverage;
 use crate::renderer::text_bidi::{ink_of, line_levels, place_visually};
 use crate::renderer::text_classify::{
     classify_direction, classify_script, is_default_ignorable, resolve_text_direction,
 };
 use crate::renderer::text_cluster_position::apply_exact_cluster_positions;
+use crate::renderer::text_default_instance::default_instance_face;
+use crate::renderer::text_face_size::face_size;
 use crate::renderer::text_fallback::{RunScript, assign_fonts, script_runs};
+use crate::renderer::text_glyph_box::{GlyphBoxes, InkBounds};
 pub use crate::renderer::text_plan::{
     ShapedGlyph, TextCluster, TextDirection, TextRun, TextScript, TextShapeDiagnostic,
     TextShapePlan,
@@ -64,6 +68,8 @@ pub(crate) struct TextShapingFont {
     /// OS/2 weight class: 400 regular, 700 bold.
     pub(crate) weight: u16,
     pub(crate) italic: bool,
+    /// Descent to ascent, in ems: what rusttype's font size measures.
+    height_em: f32,
     // Both borrow from `data`. Declared first so they are dropped first, and private
     // so no `Font<'static>`, `Face<'static>` or glyph outlives the bytes it reads.
     font: Font<'static>,
@@ -72,6 +78,8 @@ pub(crate) struct TextShapingFont {
     face: Face<'static>,
     /// Plans built so far, one per direction, script and language shaped.
     plans: Arc<Mutex<Vec<CachedPlan>>>,
+    boxes: Arc<GlyphBoxes>,
+    ascii: AsciiCoverage,
     /// Owns the bytes `font` and `face` read; never read directly.
     #[allow(dead_code)]
     data: Arc<FontBytes>,
@@ -96,21 +104,42 @@ impl TextShapingFont {
         // `&self`.
         let bytes: &'static [u8] = unsafe { std::mem::transmute(data.as_slice()) };
         let font = Font::try_from_bytes_and_index(bytes, index)?;
-        let face = Face::from_slice(bytes, index)?;
+        let face = default_instance_face(bytes, index)?;
+        let unscaled = font.v_metrics_unscaled();
+        let height_em = (unscaled.ascent - unscaled.descent) / f32::from(font.units_per_em());
         Some(Self {
             family: family.into(),
             index,
             weight: face.weight().to_number(),
             italic: face.is_italic() || face.is_oblique(),
+            height_em,
             font,
             face,
             plans: Arc::new(Mutex::new(Vec::new())),
+            boxes: Arc::default(),
+            ascii: AsciiCoverage::default(),
             data,
         })
     }
 
     pub(crate) fn font(&self) -> &Font<'_> {
         &self.font
+    }
+
+    pub(crate) fn height_em(&self) -> f32 {
+        self.height_em
+    }
+
+    /// The pixel box of glyph `id` at `font_size` drawn at `position`, as
+    /// rusttype's `pixel_bounding_box` gives it, without decoding the outline.
+    pub(crate) fn pixel_bounds(
+        &self,
+        id: u16,
+        font_size: f32,
+        position: rusttype::Point<f32>,
+    ) -> Option<rusttype::Rect<i32>> {
+        self.boxes
+            .pixel_bounds(&self.font, &self.face, id, font_size, position)
     }
 
     /// The glyph's bitmap from the strike closest above `pixels_per_em`, for
@@ -152,6 +181,11 @@ impl TextShapingFont {
 
     pub(crate) fn supports_cluster(&self, cluster: &str) -> bool {
         let face = self.face();
+        if let &[byte] = cluster.as_bytes()
+            && byte.is_ascii()
+        {
+            return char::from(byte).is_control() || self.ascii.covers(face, byte);
+        }
         cluster
             .chars()
             .all(|ch| ch.is_control() || is_default_ignorable(ch) || face.glyph_index(ch).is_some())
@@ -277,45 +311,6 @@ impl ShapedParts<'_> {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct InkBounds {
-    min_x: i32,
-    min_y: i32,
-    max_x: i32,
-    max_y: i32,
-}
-
-impl InkBounds {
-    pub(crate) fn empty() -> Self {
-        Self {
-            min_x: i32::MAX,
-            min_y: i32::MAX,
-            max_x: i32::MIN,
-            max_y: i32::MIN,
-        }
-    }
-
-    pub(crate) fn include(&mut self, bounds: rusttype::Rect<i32>) {
-        self.min_x = self.min_x.min(bounds.min.x);
-        self.min_y = self.min_y.min(bounds.min.y);
-        self.max_x = self.max_x.max(bounds.max.x);
-        self.max_y = self.max_y.max(bounds.max.y);
-    }
-
-    fn to_bounds(self) -> Bounds {
-        if self.min_x < self.max_x && self.min_y < self.max_y {
-            Bounds::from_xywh(
-                self.min_x as f32,
-                self.min_y as f32,
-                (self.max_x - self.min_x) as f32,
-                (self.max_y - self.min_y) as f32,
-            )
-        } else {
-            Bounds::from_xywh(0.0, 0.0, 0.0, 0.0)
-        }
-    }
-}
-
 pub(crate) fn shape_with_fonts(
     fonts: &[TextShapingFont],
     primary_index: usize,
@@ -330,7 +325,7 @@ pub(crate) fn shape_parts<'a>(
     request: TextRequest<'a>,
 ) -> ShapedParts<'a> {
     let mut clusters = build_cluster_drafts(primary_index, request);
-    let levels = line_levels(request.content);
+    let levels = line_levels(request.content, request.direction);
     if let Some(levels) = &levels {
         for cluster in &mut clusters {
             cluster.bidi_level = levels[cluster.byte_start].number();
@@ -346,7 +341,7 @@ pub(crate) fn shape_parts<'a>(
             &mut clusters[run.clusters.clone()],
         );
     }
-    let mut glyphs = Vec::new();
+    let mut glyphs = Vec::with_capacity(clusters.len());
     let mut ligatures = Vec::new();
     let mut ink_bounds = InkBounds::empty();
     let mut cursor_x = 0.0;
@@ -370,6 +365,7 @@ pub(crate) fn shape_parts<'a>(
             };
             let run_result = shape_run(
                 fonts,
+                primary_index,
                 request,
                 &mut clusters[start..end],
                 run.script,
@@ -395,7 +391,7 @@ pub(crate) fn shape_parts<'a>(
     }
     if levels.is_some() {
         place_visually(&mut runs, &mut clusters, &mut glyphs);
-        ink_bounds = ink_of(fonts, request, &glyphs);
+        ink_bounds = ink_of(fonts, primary_index, request, &glyphs);
     }
 
     let ink_bounds = ink_bounds.to_bounds();
@@ -418,6 +414,7 @@ pub(crate) fn shape_parts<'a>(
 
 pub(crate) fn rasterize_with_plan(
     fonts: &[TextShapingFont],
+    primary_index: usize,
     request: TextRequest<'_>,
     metrics: TextMetrics,
     plan: &TextShapePlan,
@@ -425,18 +422,21 @@ pub(crate) fn rasterize_with_plan(
     let width = metrics.ink_bounds.width().ceil().max(1.0) as u32;
     let height = metrics.ink_bounds.height().ceil().max(1.0) as u32;
     let mut pixels = vec![0u8; (width * height * 4) as usize];
+    let baseline = fonts[primary_index]
+        .font()
+        .v_metrics(Scale::uniform(request.font_size))
+        .ascent;
 
     for shaped in plan.glyphs() {
         let Some(font) = fonts.get(shaped.font_index) else {
             continue;
         };
-        let scale = Scale::uniform(request.font_size);
-        let v_metrics = font.font().v_metrics(scale);
+        let size = face_size(fonts, primary_index, shaped.font_index, request.font_size);
         let glyph = font
             .font()
             .glyph(GlyphId(shaped.glyph_id))
-            .scaled(scale)
-            .positioned(point(shaped.x_offset, v_metrics.ascent + shaped.y_offset));
+            .scaled(Scale::uniform(size))
+            .positioned(point(shaped.x_offset, baseline + shaped.y_offset));
 
         if let Some(bb) = glyph.pixel_bounding_box() {
             glyph.draw(|x, y, v| {
@@ -474,31 +474,32 @@ pub(crate) fn build_cluster_drafts<'a>(
     primary_index: usize,
     request: TextRequest<'a>,
 ) -> Vec<ClusterDraft<'a>> {
-    request
-        .content
-        .grapheme_indices(true)
-        .filter_map(|(byte_start, cluster_text)| {
-            if cluster_text.chars().all(char::is_control) {
-                return None;
-            }
-
-            let byte_end = byte_start + cluster_text.len();
-            let script = classify_script(cluster_text);
-            let direction = classify_direction(cluster_text);
-
-            Some(ClusterDraft {
-                byte_start,
-                byte_end,
-                text: cluster_text,
-                script,
-                direction,
-                bidi_level: 0,
-                font_index: primary_index,
-                x_offset: 0.0,
-                advance_width: 0.0,
-            })
+    let draft = |(byte_start, cluster_text): (usize, &'a str)| {
+        if cluster_text.chars().all(char::is_control) {
+            return None;
+        }
+        Some(ClusterDraft {
+            byte_start,
+            byte_end: byte_start + cluster_text.len(),
+            text: cluster_text,
+            script: classify_script(cluster_text),
+            direction: classify_direction(cluster_text),
+            bidi_level: 0,
+            font_index: primary_index,
+            x_offset: 0.0,
+            advance_width: 0.0,
         })
-        .collect()
+    };
+    let content = request.content;
+    if content.is_ascii() {
+        // Every ASCII character is a grapheme of its own, but for CR LF, which
+        // is control and dropped either way.
+        (0..content.len())
+            .filter_map(|index| draft((index, &content[index..index + 1])))
+            .collect()
+    } else {
+        content.grapheme_indices(true).filter_map(draft).collect()
+    }
 }
 
 fn diagnostics_for_clusters(
@@ -558,8 +559,10 @@ fn diagnostics_for_clusters(
     diagnostics
 }
 
+#[allow(clippy::too_many_arguments)]
 fn shape_run(
     fonts: &[TextShapingFont],
+    primary_index: usize,
     request: TextRequest<'_>,
     clusters: &mut [ClusterDraft],
     script: RunScript,
@@ -568,17 +571,28 @@ fn shape_run(
     ink_bounds: &mut InkBounds,
 ) -> RunShapeResult {
     let font = &fonts[clusters[0].font_index];
-    let glyphs = shape_run_glyphs(font, request, clusters, script, rtl, start_x, ink_bounds);
-    let advance_width = glyphs.iter().map(|glyph| glyph.advance_width).sum::<f32>();
-    distribute_cluster_advances(
+    // Every face sits on the requested face's baseline.
+    let size = face_size(
+        fonts,
+        primary_index,
+        clusters[0].font_index,
+        request.font_size,
+    );
+    let baseline = fonts[primary_index]
+        .font()
+        .v_metrics(Scale::uniform(request.font_size))
+        .ascent;
+    let glyphs = shape_run_glyphs(
         font,
-        request,
+        (size, baseline),
         clusters,
+        script,
         rtl,
         start_x,
-        &glyphs,
-        advance_width,
+        ink_bounds,
     );
+    let advance_width = glyphs.iter().map(|glyph| glyph.advance_width).sum::<f32>();
+    distribute_cluster_advances(font, size, clusters, rtl, start_x, &glyphs, advance_width);
 
     let grapheme_count = clusters
         .iter()
@@ -602,9 +616,11 @@ fn shape_run(
     }
 }
 
+/// `(size, baseline)`: the height `font` is drawn at and the baseline's distance
+/// from the top of the line.
 fn shape_run_glyphs(
     font: &TextShapingFont,
-    request: TextRequest<'_>,
+    (size, baseline): (f32, f32),
     clusters: &[ClusterDraft],
     script: RunScript,
     rtl: bool,
@@ -630,11 +646,9 @@ fn shape_run_glyphs(
     buffer.guess_segment_properties();
     let plan = font.plan_for(&buffer);
     let shaped = rustybuzz::shape_with_plan(font.face(), &plan, buffer);
-    let position_scale = font.font().scale_for_pixel_height(request.font_size);
-    let rust_scale = Scale::uniform(request.font_size);
-    let v_metrics = font.font().v_metrics(rust_scale);
+    let position_scale = font.font().scale_for_pixel_height(size);
     let mut cursor_x = start_x;
-    let mut glyphs = Vec::new();
+    let mut glyphs = Vec::with_capacity(shaped.len());
     let run_end = clusters.last().map(|cluster| cluster.byte_end).unwrap_or(0);
     let mut shaped_cluster_starts = shaped
         .glyph_infos()
@@ -649,12 +663,8 @@ fn shape_run_glyphs(
         let y_offset = -(position.y_offset as f32 * position_scale);
         let advance_width = position.x_advance as f32 * position_scale;
         let glyph_id = info.glyph_id as u16;
-        let glyph = font
-            .font()
-            .glyph(GlyphId(glyph_id))
-            .scaled(rust_scale)
-            .positioned(point(x_offset, v_metrics.ascent + y_offset));
-        if let Some(bounds) = glyph.pixel_bounding_box() {
+        let position = point(x_offset, baseline + y_offset);
+        if let Some(bounds) = font.pixel_bounds(glyph_id, size, position) {
             ink_bounds.include(bounds);
         }
 
@@ -676,7 +686,7 @@ fn shape_run_glyphs(
 
 fn distribute_cluster_advances(
     font: &TextShapingFont,
-    request: TextRequest<'_>,
+    size: f32,
     clusters: &mut [ClusterDraft],
     rtl: bool,
     start_x: f32,
@@ -687,7 +697,7 @@ fn distribute_cluster_advances(
         return;
     }
 
-    let scale = Scale::uniform(request.font_size);
+    let scale = Scale::uniform(size);
     let simple_advances = clusters
         .iter()
         .map(|cluster| simple_cluster_advance(font, scale, cluster.text))

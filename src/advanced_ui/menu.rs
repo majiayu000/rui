@@ -16,6 +16,7 @@ use crate::elements::element::{
     style_to_taffy,
 };
 use crate::renderer::Primitive;
+use crate::renderer::text::BaseDirection;
 use std::any::TypeId;
 use taffy::prelude::*;
 
@@ -225,7 +226,7 @@ impl Menu {
             .filter(|index| self.can_activate_index(*index))
     }
 
-    fn activate_index(&mut self, index: usize, cx: &EventContext) -> bool {
+    pub(crate) fn activate_index(&mut self, index: usize, cx: &EventContext) -> bool {
         if !self.can_activate_index(index) {
             return false;
         }
@@ -241,7 +242,16 @@ impl Menu {
         true
     }
 
-    fn next_enabled_index(&self, from: Option<usize>, direction: MenuDirection) -> Option<usize> {
+    /// Highlight `index` as the pointer or the keyboard would.
+    pub(crate) fn highlight(&mut self, index: Option<usize>, cx: &EventContext) {
+        self.indexed_state.update_hover(index, cx, self.state);
+    }
+
+    pub(crate) fn next_enabled_index(
+        &self,
+        from: Option<usize>,
+        direction: MenuDirection,
+    ) -> Option<usize> {
         if self.items.iter().all(|item| item.disabled) {
             return None;
         }
@@ -342,7 +352,7 @@ impl Element for Menu {
 
             cx.paint(Primitive::Text {
                 bounds: item_bounds,
-                content: self.items[index].label.clone(),
+                content: self.items[index].label.clone().into(),
                 color: self
                     .theme
                     .colors
@@ -358,6 +368,7 @@ impl Element for Menu {
                 font_family: None,
                 line_height: self.theme.typography.line_height,
                 align: crate::elements::text::TextAlign::Left,
+                direction: BaseDirection::Auto,
             });
         }
     }
@@ -489,7 +500,7 @@ impl Element for Menu {
 }
 
 #[derive(Debug, Clone, Copy)]
-enum MenuDirection {
+pub(crate) enum MenuDirection {
     Forward,
     Backward,
 }

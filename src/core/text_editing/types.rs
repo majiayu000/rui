@@ -273,6 +273,8 @@ pub enum TextInputEvent {
 #[doc(hidden)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TextInputCommand {
+    Undo,
+    Redo,
     InsertText(String),
     InsertTextReplacing {
         text: String,
@@ -312,7 +314,7 @@ impl TextInputCommand {
             Self::CommitComposition(text) | Self::CommitCompositionReplacing { text, .. } => {
                 Some(TextInputEvent::CommitComposition(text))
             }
-            Self::SetCompositionSelection(_) => None,
+            Self::SetCompositionSelection(_) | Self::Undo | Self::Redo => None,
             Self::CancelComposition => Some(TextInputEvent::CancelComposition),
         }
     }

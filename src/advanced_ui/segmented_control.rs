@@ -14,6 +14,7 @@ use crate::elements::element::{
     style_to_taffy,
 };
 use crate::renderer::Primitive;
+use crate::renderer::text::BaseDirection;
 use std::any::TypeId;
 use taffy::prelude::*;
 
@@ -325,7 +326,7 @@ impl Element for SegmentedControl {
             }
             cx.paint(Primitive::Text {
                 bounds: segment_bounds,
-                content: option.label.clone(),
+                content: option.label.clone().into(),
                 color: label_color.to_rgba(),
                 font_size: self.theme.text_size(self.size),
                 font_weight: if selected {
@@ -336,6 +337,7 @@ impl Element for SegmentedControl {
                 font_family: None,
                 line_height: self.theme.typography.line_height,
                 align: crate::elements::text::TextAlign::Center,
+                direction: BaseDirection::Auto,
             });
         }
     }
