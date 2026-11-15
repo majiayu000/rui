@@ -135,32 +135,45 @@ examples and GPUI's `primitives` bench paint this way.
 
 ## GPU time with matched samples (2026-11-16)
 
-RUI `eccaabd` plus the `startup` fix in this change, GPUI `784374c`, Apple M2 Max,
-macOS 27.2.1, `REPEATS=3`, all cases. **Provisional:** the machine was not quiet; the
-load average was 19.2 / 16.2 / 12.7 before the run and 14.0 / 16.3 / 13.5 after
-(a browser, Spotlight indexing and a VM were running). #277 asks for the virtual-list
-and resize cases to be repeated on a quiet machine before a GPU claim.
+RUI `d016531`, GPUI `784374c`, Apple M2 Max, macOS 27.2.1, `REPEATS=3`, all cases.
+The load average was 2.6 / 3.2 / 3.8 before the run and 8.5 / 6.5 / 5.1 after, on
+12 cores (`mediaanalysisd` and a VM were running; the bench itself adds to the
+end figure). A machine below 3 for five minutes did not come in three hours of
+waiting, so this is the quietest run available, not an idle one.
 
 GPU ms / frame p50, the range over the three runs, and the samples behind it:
 
 | case | RUI | GPUI | GPUI frames (windows) | verdict by GPU p50 (10% noise) |
 |---|---|---|---|---|
-| list_full | 0.089-0.11 | 0.175-0.314 | 126 (16) | RUI ahead 2.5x |
-| list_full_one_row | 0.073-0.148 | 5.229-7.529 | 10 (2) | RUI ahead 57.7x |
-| list_virtual_1k | 0.053-0.085 | 0.097-0.101 | 1491 (28) | RUI ahead 1.4x |
-| list_virtual_100k | 0.082-0.1 | 0.097-0.101 | 1491 (28) | tie (ranges overlap) |
-| text_paragraphs | 0.095-0.129 | 0.111-0.199 | 1124 (25) | tie (ranges overlap) |
-| quad_grid | 0.072-0.147 | 0.254-0.375 | 381 (21) | RUI ahead 2.9x |
-| resize_full | 0.102-0.15 | 0.175-0.283 | 126 (16) | RUI ahead 1.8x |
-| resize_virtual | 0.106-0.116 | 0.11-0.169 | 1373 (27) | tie (ranges overlap) |
-| editor_scroll | 0.056-0.154 | 0.15-0.303 | 1344 (27) | tie (ranges overlap) |
-| editor_edit | 0.072-0.111 | 0.14-0.303 | 1354 (27) | RUI ahead 2.4x |
+| list_full | 0.084-0.148 | 0.104-0.179 | 126 (16) | tie (ranges overlap) |
+| list_full_one_row | 0.049-0.148 | 4.452-4.461 | 10 (2) | RUI ahead 45.2x |
+| list_virtual_1k | 0.072-0.101 | 0.097 | 1497 (28) | tie (ranges overlap) |
+| list_virtual_100k | 0.083-0.103 | 0.097 | 1494 (28) | tie (ranges overlap) |
+| text_paragraphs | 0.129 | 0.07-0.072 | 1164 (26) | RUI behind 1.8x |
+| quad_grid | 0.05-0.146 | 0.125-0.126 | 381 (21) | tie (ranges overlap) |
+| resize_full | 0.049-0.147 | 0.103-0.174 | 126 (16) | tie (ranges overlap) |
+| resize_virtual | 0.098-0.103 | 0.097-0.098 | 1391 (27) | tie (ranges overlap) |
+| editor_scroll | 0.051-0.152 | 0.099 | 1364 (27) | tie (ranges overlap) |
+| editor_edit | 0.072-0.153 | 0.099 | 1364 (27) | tie (ranges overlap) |
 
-RUI samples 60 frames from one window in every case. GPUI's `list_full_one_row`
-takes about 22 ms a frame, so its short Criterion windows give only 10 sampled
-frames; the gap there (3983 draw calls a frame against RUI's 1) is far outside that
-sample's spread. No case has RUI behind. The same run's CPU verdicts match the
-earlier ones: RUI ahead in every case, 3.2x to 136x by wall p50.
+RUI samples 60 frames from one window in every case. Verdict for #277: with the same
+frames sampled, **GPU time per frame is a tie in the virtual-list and resize cases**
+and in most others. Both sides spend about 0.1 ms; RUI's p50 moves between about
+0.05 and 0.15 ms from run to run, which looks like the GPU's clock state rather than
+the scene. Two cases are outside that noise:
+
+- `list_full_one_row`: RUI ahead 45x. GPUI's cached rows give 3983 draw calls a frame
+  against RUI's 1. Its ~22 ms frames leave only 10 sampled frames, but the gap is far
+  outside their spread.
+- `text_paragraphs`: RUI behind 1.8x, 0.129 ms against 0.07 ms in all three runs, with
+  a similar instance count (6271 against 6375). RUI's glyph pass costs more GPU time
+  per instance here.
+
+A first run the same day at load 14 to 19 had GPUI at 0.1 to 0.3 ms in most cases
+and RUI ahead in six of them; at the lower load those leads closed. GPU claims from
+this suite should therefore be ties, apart from the two cases above. The same run's
+CPU verdicts match the earlier ones: RUI ahead in every case, 2.6x to 133x by wall
+p50, and 8.1x from process start to first frame.
 
 ## One changed row with rows as views
 
