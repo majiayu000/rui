@@ -72,7 +72,7 @@ impl DatePicker {
             label,
             placeholder: String::from("Select date"),
             value,
-            today: CalendarDate::today_utc(),
+            today: CalendarDate::today(),
             min: None,
             max: None,
             disabled_dates: None,
@@ -106,7 +106,7 @@ impl DatePicker {
     }
 
     /// The day marked as today, and opened on while no date is picked; today
-    /// in UTC by default.
+    /// in the local time zone by default.
     pub fn today(mut self, today: CalendarDate) -> Self {
         self.today = today;
         self

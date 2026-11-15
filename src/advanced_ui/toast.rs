@@ -219,6 +219,17 @@ impl ToasterState {
         self.entries.len() != before
     }
 
+    /// When the next running timer runs out; none while paused.
+    fn next_expiry(&self) -> Option<Instant> {
+        if self.paused {
+            return None;
+        }
+        self.entries
+            .iter()
+            .filter_map(|entry| Some(entry.since + entry.remaining?))
+            .min()
+    }
+
     fn set_paused(&mut self, paused: bool, now: Instant) {
         if self.paused == paused {
             return;
@@ -339,17 +350,17 @@ impl Toaster {
     }
 
     /// The stack to place in `cx`'s view: closes toasts whose time ran out
-    /// and, while a timer runs, asks the view to render again next frame so
-    /// the next one closes on time.
+    /// and asks for one frame when the next timer runs out, so the window
+    /// sleeps until then.
     pub fn render<V: 'static>(&self, cx: &mut ViewContext<'_, V>) -> ToastStack {
-        let running = {
+        let next_expiry = {
             let mut state = self.state.borrow_mut();
             state.notifier = Some(cx.notifier());
             state.expire(Instant::now());
-            !state.paused && state.entries.iter().any(|entry| entry.remaining.is_some())
+            state.next_expiry()
         };
-        if running {
-            cx.request_animation_frame();
+        if let Some(at) = next_expiry {
+            cx.request_frame_at(at);
         }
         ToastStack::new(self.clone())
     }
@@ -358,7 +369,7 @@ impl Toaster {
         let mut state = self.state.borrow_mut();
         let was = state.paused;
         state.set_paused(paused, Instant::now());
-        // Timers that start again need the view to keep rendering.
+        // Timers that start again need the view to ask for their wake.
         if was && !paused {
             state.notify();
         }
@@ -456,8 +467,11 @@ impl ToastStack {
 
 fn card_element(toaster: &Toaster, entry: &Entry, id: ElementId, theme: Theme) -> Container {
     let toast = &entry.toast;
+    // No width of its own, so long text wraps instead of pushing the buttons,
+    // which then line up at the card's edge in every toast.
     let mut body = column()
         .spacing(theme.control_gap() * 0.5)
+        .w(0.0)
         .flex_grow(1.0)
         .child(
             text(toast.title.clone())

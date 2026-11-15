@@ -9,7 +9,7 @@ use rui::elements::Element;
 use rui::testing::{HeadlessSession, mount_view};
 use std::cell::Cell;
 use std::rc::Rc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const SAVE_ID: ElementId = ElementId(32_001);
 const PICKER_ID: ElementId = ElementId(32_002);
@@ -57,12 +57,14 @@ fn date(year: i32, month: u8, day: u8) -> CalendarDate {
 struct ToastView {
     toaster: Toaster,
     toast: Rc<dyn Fn() -> Toast>,
+    renders: Rc<Cell<u32>>,
 }
 
 impl View for ToastView {
     type Element = ui::Container;
 
     fn render(&mut self, cx: &mut ViewContext<Self>) -> Self::Element {
+        self.renders.set(self.renders.get() + 1);
         let (toaster, toast) = (self.toaster.clone(), Rc::clone(&self.toast));
         ui::container()
             .w_full()
@@ -79,15 +81,19 @@ fn toast_session(
 ) -> (
     HeadlessSession<impl FnMut(&mut AppContext) -> ui::Container, ui::Container>,
     Toaster,
+    Rc<Cell<u32>>,
 ) {
     let toaster = Toaster::new();
+    let renders = Rc::new(Cell::new(0));
     let view = ToastView {
         toaster: toaster.clone(),
         toast: Rc::new(toast),
+        renders: Rc::clone(&renders),
     };
     (
         mount_view(Size::new(480.0, 320.0), view).expect("mount"),
         toaster,
+        renders,
     )
 }
 
@@ -95,7 +101,7 @@ fn toast_session(
 fn toast_shows_in_the_corner_as_a_status_with_its_buttons() {
     let undone = Rc::new(Cell::new(false));
     let undone_ref = Rc::clone(&undone);
-    let (mut session, toaster) = toast_session(move || {
+    let (mut session, toaster, _) = toast_session(move || {
         let undone = Rc::clone(&undone_ref);
         Toast::success("Saved")
             .description("All changes stored")
@@ -135,7 +141,7 @@ fn tree_has_no_status<F: FnMut(&mut AppContext) -> E, E: Element>(
 
 #[test]
 fn toast_close_button_dismisses_it() {
-    let (mut session, toaster) = toast_session(|| Toast::error("Upload failed").persistent());
+    let (mut session, toaster, _) = toast_session(|| Toast::error("Upload failed").persistent());
     click(&mut session, 10.0, 10.0);
     click(&mut session, 10.0, 10.0);
     assert_eq!(toaster.toasts().len(), 2);
@@ -153,7 +159,7 @@ fn toast_close_button_dismisses_it() {
 
 #[test]
 fn toast_closes_after_its_duration_but_not_while_hovered() {
-    let (mut session, toaster) =
+    let (mut session, toaster, _) =
         toast_session(|| Toast::info("Synced").duration(Duration::from_millis(60)));
     click(&mut session, 10.0, 10.0);
     let card = session.scene().overlays()[0].bounds;
@@ -162,26 +168,54 @@ fn toast_closes_after_its_duration_but_not_while_hovered() {
     session.frame().expect("frame after hover");
     assert!(toaster.is_paused());
     std::thread::sleep(Duration::from_millis(120));
-    session.frame().expect("frame while hovered");
+    // The wake armed before the hover may still come; it closes nothing and
+    // arms no other while paused.
+    session.timed_frame().expect("timed frame while hovered");
     assert_eq!(toaster.toasts().len(), 1, "hovering pauses the timer");
+    assert!(session.next_frame_deadline().is_none());
 
     session.pointer_move(Point::new(10.0, 300.0));
     session.frame().expect("frame after leaving");
     assert!(!toaster.is_paused());
+    assert!(
+        session.next_frame_deadline().is_some(),
+        "leaving re-arms the wake"
+    );
     std::thread::sleep(Duration::from_millis(120));
+    assert!(session.timed_frame().expect("timed frame").is_some());
+    assert!(toaster.toasts().is_empty());
+    assert!(tree_has_no_status(&session));
+}
+
+#[test]
+fn toast_countdown_wakes_once_at_its_deadline() {
+    let duration = Duration::from_millis(80);
+    let (mut session, toaster, renders) =
+        toast_session(move || Toast::info("Synced").duration(duration));
+    let shown_at = Instant::now();
+    click(&mut session, 10.0, 10.0);
+    let rendered = renders.get();
+    let deadline = session.next_frame_deadline().expect("a wake at the expiry");
+    assert!(deadline > shown_at && deadline <= Instant::now() + duration);
+
+    // Nothing draws between showing and the deadline.
     assert!(
         session
             .animation_frame()
             .expect("animation frame")
-            .is_some(),
-        "a running timer keeps frames coming"
+            .is_none()
     );
-    assert!(toaster.toasts().is_empty());
-    assert!(tree_has_no_status(&session));
-    assert!(
-        session.animation_frame().expect("idle").is_none(),
-        "no frames once every toast closed"
-    );
+    assert!(session.timed_frame().expect("early").is_none());
+    assert_eq!(renders.get(), rendered);
+    assert_eq!(toaster.toasts().len(), 1);
+
+    std::thread::sleep(deadline.saturating_duration_since(Instant::now()));
+    assert!(session.timed_frame().expect("timed frame").is_some());
+    assert_eq!(renders.get(), rendered + 1, "one render, at the deadline");
+    assert!(toaster.toasts().is_empty(), "closed on time");
+    assert!(session.next_frame_deadline().is_none());
+    assert!(session.timed_frame().expect("idle").is_none());
+    assert!(session.animation_frame().expect("idle").is_none());
 }
 
 struct DateView {

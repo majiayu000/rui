@@ -85,12 +85,13 @@ impl CalendarDate {
             .then_some(Self { year, month, day })
     }
 
-    /// Today in UTC, from the system clock.
-    pub fn today_utc() -> Self {
+    /// Today in the local time zone, from the system clock. Without the
+    /// platform's local time (outside unix), today in UTC.
+    pub fn today() -> Self {
         let seconds = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_or(0, |elapsed| elapsed.as_secs() as i64);
-        Self::from_days(seconds.div_euclid(86_400))
+        local_date(seconds).unwrap_or_else(|| Self::from_days(seconds.div_euclid(86_400)))
     }
 
     pub fn year(self) -> i32 {
@@ -197,6 +198,28 @@ impl fmt::Display for CalendarDate {
     }
 }
 
+/// The local date at `seconds` after the epoch.
+#[cfg(unix)]
+fn local_date(seconds: i64) -> Option<CalendarDate> {
+    let time = libc::time_t::try_from(seconds).ok()?;
+    // SAFETY: `tm` is plain data that `localtime_r` fills in; the
+    // reentrant variant writes only to it.
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    if unsafe { libc::localtime_r(&time, &mut tm) }.is_null() {
+        return None;
+    }
+    CalendarDate::new(
+        tm.tm_year + 1900,
+        u8::try_from(tm.tm_mon + 1).ok()?,
+        u8::try_from(tm.tm_mday).ok()?,
+    )
+}
+
+#[cfg(not(unix))]
+fn local_date(_seconds: i64) -> Option<CalendarDate> {
+    None
+}
+
 fn days_in_month(year: i32, month: u8) -> u8 {
     match month {
         2 if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) => 29,
@@ -243,6 +266,17 @@ mod tests {
         assert_eq!(date(2026, 1, 31).add_months(1), date(2026, 2, 28));
         assert_eq!(date(2026, 1, 15).add_months(-1), date(2025, 12, 15));
         assert_eq!(date(2026, 11, 15).add_months(14), date(2028, 1, 15));
+    }
+
+    #[test]
+    fn today_is_within_a_day_of_utc() {
+        let seconds = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock after the epoch")
+            .as_secs() as i64;
+        let utc = CalendarDate::from_days(seconds.div_euclid(86_400));
+        let today = CalendarDate::today();
+        assert!(today >= utc.add_days(-1) && today <= utc.add_days(1));
     }
 
     #[test]

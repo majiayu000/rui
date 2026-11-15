@@ -118,12 +118,18 @@ where
                 .iter_mut()
                 .map(|window| window.mac_window_mut())
                 .collect();
-            match poll_windows(&app, &mut mac_windows, wait_for_event) {
+            match poll_windows(
+                &app,
+                &mut mac_windows,
+                wait_for_event,
+                context.next_frame_deadline(),
+            ) {
                 Ok(polled) => polled,
                 Err(err) => panic!("failed to poll platform window events: {}", err),
             }
         };
         let iteration_started_at = Instant::now();
+        context.fire_due_frames(iteration_started_at);
         let mut ticked = false;
         for event in polled.app {
             match event {

@@ -61,7 +61,10 @@ All notable project changes should be recorded here.
 - `date_picker` is a date field opening a month calendar in an overlay with
   keyboard navigation, min/max and disabled dates; the calendar is exposed as
   an `AccessibilityRole::Grid` of `GridCell`s. `CalendarDate` does the date
-  math without a new dependency.
+  math; "today" is the local date (`localtime_r` on unix).
+- `AppContext::request_frame_at` / `ViewContext::request_frame_at` render a
+  view once a time has passed; the macOS loop and the winit runner sleep until
+  the earliest one instead of drawing every refresh. Toasts use it to close.
 - **Breaking:** `ThemeColors` gains a `warning` colour, and
   `AccessibilityRole` gains `Grid`, `GridCell` and `Status`.
 

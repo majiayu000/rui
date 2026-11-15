@@ -59,6 +59,8 @@ pub struct AppContext {
     pub(crate) background: BackgroundExecutor,
     pub(crate) foreground: ForegroundQueue,
     pub(crate) animation_frames: AnimationFrameRequests,
+    /// Frames asked for at a time, the earliest for each entity.
+    pub(crate) timed_frames: HashMap<EntityId, std::time::Instant>,
     pub(crate) frame_timing: FrameTiming,
     /// Views placed in trees with [`crate::elements::view`], by entity.
     child_views: HashMap<EntityId, Box<dyn ChildView>>,
@@ -228,6 +230,7 @@ impl AppContext {
             background: BackgroundExecutor::default(),
             foreground: ForegroundQueue::default(),
             animation_frames: AnimationFrameRequests::default(),
+            timed_frames: HashMap::new(),
             frame_timing: FrameTiming::default(),
             child_views: HashMap::new(),
             notified_views: NotifiedViews::default(),
