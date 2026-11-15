@@ -18,6 +18,8 @@
 //!   gutter of line numbers, per-token colors as `StyledText` highlights in SF Mono (loaded from RUI's file),
 //!   the cursor's line highlighted. It scrolls one line per frame, or one character
 //!   of the cursor's line changes per frame.
+//! - `terminal_rows`: one `canvas` paints 45 rows of SF Mono, one shaped line per row;
+//!   20 rows get new text each frame. In `terminal.rs`.
 //!
 //! The benches are registered as `#[gpui::bench(fps = 120)]` registers them, but with
 //! the headless renderer wrapped by [`CountingRenderer`], which counts draw calls.
@@ -307,20 +309,7 @@ struct Editor {
 
 impl Editor {
     fn new(cx: &mut Context<Self>) -> Self {
-        // Fail rather than measure a fallback font.
-        let text_system = cx.text_system();
-        // CoreText hides SF Mono from apps; load the file RUI reads it from.
-        let sf_mono = match std::fs::read(EDITOR_FONT_PATH) {
-            Ok(bytes) => bytes,
-            Err(err) => panic!("failed to read {EDITOR_FONT_PATH}: {err}"),
-        };
-        if let Err(err) = text_system.add_fonts(vec![sf_mono.into()]) {
-            panic!("GPUI failed to load {EDITOR_FONT_PATH}: {err}");
-        }
-        let resolved = text_system.get_font_for_id(text_system.resolve_font(&gpui::font(EDITOR_FONT)));
-        if resolved.as_ref().map(|font| font.family.as_ref()) != Some(EDITOR_FONT) {
-            panic!("GPUI resolved {EDITOR_FONT} to {resolved:?}");
-        }
+        load_sf_mono(cx.text_system());
         let tokens: Vec<_> = (0..EDITOR_LINES).map(code_line).collect();
         let lines = tokens.iter().map(|line| CodeLine::new(line)).collect();
         let editor = Self {
@@ -639,7 +628,11 @@ fn editor_edit(cx: &mut BenchAppContext) {
     });
 }
 
+mod fonts;
 mod gpu_time;
+mod terminal;
+use fonts::load_sf_mono;
+use terminal::terminal_rows;
 
 /// Batches and instances of each scene rendered since the last [`take_draws`].
 static SCENES: std::sync::Mutex<Vec<(u64, u64)>> = std::sync::Mutex::new(Vec::new());
@@ -795,6 +788,7 @@ counted_benches!(
     bench_resize_virtual => resize_virtual,
     bench_editor_scroll => editor_scroll,
     bench_editor_edit => editor_edit,
+    bench_terminal_rows => terminal_rows,
 );
 
 gpui::bench_group!(
@@ -805,6 +799,6 @@ gpui::bench_group!(
         .sample_size(20);
     targets = bench_startup, bench_list_full, bench_list_full_one_row, bench_list_virtual_1k,
         bench_list_virtual_100k, bench_text_paragraphs, bench_quad_grid, bench_resize_full,
-        bench_resize_virtual, bench_editor_scroll, bench_editor_edit
+        bench_resize_virtual, bench_editor_scroll, bench_editor_edit, bench_terminal_rows
 );
 gpui::bench_main!(benches);

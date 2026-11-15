@@ -72,8 +72,9 @@ to Metal without waiting for the GPU.
 | `startup` | the 2000-row list | none | see below | see below |
 | `editor_scroll` | a 10 000-line code view: 20 px lines of 13 px SF Mono, a 64 px gutter of line numbers, 11 colored tokens per line (a comment every ninth line), the cursor's line highlighted; starts at line 5001 | scrolls down one line; the cursor moves with it | `virtual_list` of rows: gutter `text` + `shared_styled_text` of `span_range(..).color(..)` over the line's `Arc<str>` (the editor run below used `styled_text` of `span(..)`, a `String` per token) | `uniform_list` of rows: gutter string + `StyledText::with_highlights` |
 | `editor_edit` | same, not scrolling | the cursor line's first identifier ends in a new letter | the line's tokens change and its `Arc<str>` and ranges are rebuilt | the line's tokens change and its `SharedString` and highlights are rebuilt |
+| `terminal_rows` | a terminal screen: 45 rows of 20 px in 13 px SF Mono, each a frame counter or `static`, the row number and 60 hex characters | rows 0–19 get the new frame counter; rows 20–44 keep their text | one `canvas`, a `Primitive::Text` per row (`benches/compare_terminal`) | one `canvas`, `shape_line` + `ShapedLine::paint` per row (`benchmarks/gpui_compare/terminal.rs`) |
 
-The editor cases use the same font file on both sides,
+The editor and terminal cases use the same font file on both sides,
 `/System/Library/Fonts/SFNSMono.ttf`. RUI calls it "SF Mono"; Core Text hides it from
 apps, so the GPUI fixture loads that file with `TextSystem::add_fonts` and uses the
 family name inside it, ".SF NS Mono". It panics if GPUI resolves the family to
@@ -295,6 +296,38 @@ Recorded observations and limits:
 - Sampling populations and submission conditions must be matched before assigning
   GPU winners or investigating a cross-framework cause. The CPU instruction and
   startup observations above are separate metrics; they do not resolve this GPU gap.
+
+## Terminal rows (RUI `516b8c0`)
+
+`terminal_rows` is the load of a terminal pane that a program keeps printing over:
+Fibo's terminal draws its screen as one canvas, a row at a time. Same machine and
+GPUI revision as above, three rounds, each case in a fresh process, load average 9
+to 13. `editor_edit` ran alongside as a control. Its first RUI round shared the
+machine with a build, which is why that round's wall time is high (0.66 ms against
+0.17).
+
+| Case | Side | Instructions (M) / frame | ms p50 | ms p95 | Allocations / frame | Draw calls | Instances | Footprint (MB) |
+|---|---|---|---|---|---|---|---|---|
+| terminal_rows | RUI | 4.18 | 0.27–0.28 | 0.37–0.38 | 865 | 1 | 3 236 | 57 |
+| terminal_rows | GPUI | 6.60–6.61 | 0.50–0.56 | 0.52–0.94 | 357 | 2 | 3 421 | 93–94 |
+| editor_edit | RUI | 2.14–2.22 | 0.17–0.66 | 0.31–2.46 | 354 | 2 | 1 466 | 61 |
+| editor_edit | GPUI | 8.49–8.57 | 0.67–1.13 | 0.74–2.80 | 1 636 | 2 | 1 908 | 84–114 |
+
+| Case | By instructions | By wall p50 |
+|---|---|---|
+| terminal_rows | RUI ahead 1.6x | RUI ahead 2.0x |
+| editor_edit | RUI ahead 3.9x | RUI ahead 2.2x |
+
+- **RUI allocates 2.4x more** per terminal frame (865 against 357). Both sides format
+  the same 45 strings each frame; where RUI's extra ones go was not measured.
+- **Not the best a terminal can do on either side.** Both fixtures shape each row as
+  a string, so every changed row is shaped again. Fibo's GPUI painter keeps each
+  ASCII glyph once and paints it per cell with `window.paint_glyph`, which skips
+  shaping. RUI's `Painter` has no per-glyph call yet (#176), so that path has no RUI
+  equivalent to compare.
+- **Glyphs are smaller on RUI at the same number.** RUI takes `font_size` as the
+  ascent-to-descent height (#327), so 13 px SF Mono is about an 11 px em in RUI and a
+  13 px em in GPUI. That changes glyph sizes, not glyph counts.
 
 ## Editor-scale fixture (RUI `a31e116`)
 

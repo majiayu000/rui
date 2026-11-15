@@ -32,7 +32,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 use taffy::prelude::TaffyTree;
 
-const CASES: [&str; 16] = [
+const CASES: [&str; 17] = [
     "startup",
     "list_full",
     "list_full_rows",
@@ -49,9 +49,11 @@ const CASES: [&str; 16] = [
     "editor_edit",
     "paths",
     "paths_icons",
+    "terminal_rows",
 ];
 mod compare_grid;
 mod compare_paths;
+mod compare_terminal;
 use compare_grid::{CELL, ChangedCell, GRID, changed_cell, quad_grid, static_grid};
 #[path = "../benchmarks/complex_text.rs"]
 mod complex_text;
@@ -762,6 +764,13 @@ fn run(case: &str) -> Result<(), Box<dyn std::error::Error>> {
             measure(case, &mut harness, |harness, turn| {
                 harness.frame(root(turn), viewport)
             })?;
+        }
+        "terminal_rows" => {
+            let mut harness = Harness::new()?;
+            measure(case, &mut harness, |harness, turn| {
+                harness.frame(compare_terminal::terminal_rows(turn), viewport)
+            })?;
+            harness.save_png_if_asked(case, viewport)?;
         }
         _ => return Err(format!("unknown case {case}; cases: {}", CASES.join(" ")).into()),
     }

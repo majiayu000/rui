@@ -13,7 +13,7 @@ set -euo pipefail
 
 ZED_REV="${ZED_REV:-784374c6794ace885137bc4806427a5f47cc3f06}"
 REPEATS="${REPEATS:-3}"
-CASES="${CASES:-startup list_full list_full_one_row list_virtual_1k list_virtual_100k text_paragraphs quad_grid resize_full resize_virtual editor_scroll editor_edit}"
+CASES="${CASES:-startup list_full list_full_one_row list_virtual_1k list_virtual_100k text_paragraphs quad_grid resize_full resize_virtual editor_scroll editor_edit terminal_rows}"
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 ZED_DIR="${1:-$ROOT/target/gpui_compare/zed}"
 OUT="$ROOT/target/gpui_compare"
@@ -31,8 +31,11 @@ RUN_DIR="$(mktemp -d "$OUT/run.XXXXXXXX")"
 echo "== artifacts: $RUN_DIR" >&2
 
 cp "$ROOT/benchmarks/gpui_compare/fixtures.rs" "$ZED_DIR/crates/gpui_platform/benches/rui_compare.rs"
-# Both sides read GPU time through the same hook; the bench declares `mod gpu_time;`.
-cp "$ROOT/benchmarks/gpui_compare/gpu_time.rs" "$ZED_DIR/crates/gpui_platform/benches/gpu_time.rs"
+# The bench's own modules: `gpu_time` (both sides read GPU time through the same hook),
+# `fonts` and the `terminal_rows` fixture.
+for module in gpu_time fonts terminal; do
+  cp "$ROOT/benchmarks/gpui_compare/$module.rs" "$ZED_DIR/crates/gpui_platform/benches/$module.rs"
+done
 manifest="$ZED_DIR/crates/gpui_platform/Cargo.toml"
 if ! grep -q 'name = "rui_compare"' "$manifest"; then
   printf '\n[[bench]]\nname = "rui_compare"\nharness = false\nrequired-features = ["bench-support"]\n' >> "$manifest"
