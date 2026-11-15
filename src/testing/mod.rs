@@ -158,6 +158,11 @@ where
         self.presenter.focused_element()
     }
 
+    /// The cursor the window shows, as of the last pointer move.
+    pub fn cursor(&self) -> crate::core::event::Cursor {
+        self.presenter.cursor()
+    }
+
     pub fn last_frame(&self) -> Option<&HeadlessFrame> {
         self.presenter.last_frame()
     }

@@ -3,6 +3,7 @@
 mod accessibility;
 mod app;
 mod clipboard;
+mod cursor;
 mod display_link;
 mod events;
 mod file_drop;

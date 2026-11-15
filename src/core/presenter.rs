@@ -4,7 +4,7 @@ use crate::core::accessibility::{
 };
 use crate::core::app::AppContext;
 use crate::core::drag::SharedDrag;
-use crate::core::event::Event;
+use crate::core::event::{Cursor, Event};
 use crate::core::frame_pipeline::FrameStageDurations;
 use crate::core::frame_pipeline::{FramePipeline, FramePipelineError};
 use crate::core::geometry::{Bounds, Point, Size};
@@ -66,6 +66,8 @@ pub struct Presenter<E = ()> {
     pending_accessibility_announcements: Vec<AccessibilityAnnouncement>,
     last_pointer_hit_target: Option<ElementId>,
     pointer_capture_target: Option<ElementId>,
+    /// The cursor the elements under the pointer asked for at its last move.
+    cursor: Cursor,
     renderer_diagnostics: Option<RendererDiagnostics>,
     laid_out_viewport: Size,
     prepared_frame: PresenterFrame,
@@ -96,6 +98,7 @@ impl<E> Presenter<E> {
             pending_accessibility_announcements: Vec::new(),
             last_pointer_hit_target: None,
             pointer_capture_target: None,
+            cursor: Cursor::Default,
             renderer_diagnostics: None,
             laid_out_viewport: viewport_size,
             prepared_frame: PresenterFrame {
@@ -130,6 +133,12 @@ impl<E> Presenter<E> {
 
     pub fn focused_element(&self) -> Option<ElementId> {
         self.focused_element
+    }
+
+    /// The cursor to show: what the elements under the pointer set with
+    /// [`EventContext::set_cursor`] at its last move, else the default.
+    pub fn cursor(&self) -> Cursor {
+        self.cursor
     }
 
     pub fn set_focused_element(&mut self, focused_element: Option<ElementId>) {
@@ -502,12 +511,16 @@ where
         let overlays = overlays.unwrap_or_else(|| self.scene.overlay_stack());
         let dismissed = self.dismiss_light_overlays(event, &overlays, dispatch_target);
 
-        let (stopped, redraw_requested) = self.with_event_context(|root, event_cx| {
+        let ((stopped, cursor), redraw_requested) = self.with_event_context(|root, event_cx| {
             event_cx.set_hit_target(dispatch_target);
             event_cx.set_previous_hit_target(previous_target);
             event_cx.set_overlays(overlays);
-            root.dispatch_pointer_event(event_cx, event).is_stopped()
+            let stopped = root.dispatch_pointer_event(event_cx, event).is_stopped();
+            (stopped, event_cx.cursor())
         });
+        if matches!(event.kind, PointerEventKind::Move) {
+            self.cursor = cursor.unwrap_or_default();
+        }
         let preview_ended = self.drag_end_on_release(event);
 
         self.update_pointer_tracking(event.kind, stopped, dispatch_target, hit_target);

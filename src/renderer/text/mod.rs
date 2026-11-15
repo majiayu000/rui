@@ -10,7 +10,7 @@ use crate::renderer::system_fonts::{
     system_font_generation,
 };
 use crate::renderer::text_shaping::{
-    ShapedParts, TextShapingFont, best_face, rasterize_with_plan, shape_parts, shape_with_fonts,
+    ShapedParts, TextShapingFont, rasterize_with_plan, shape_parts, shape_with_fonts,
 };
 use hash::FastHasher;
 use std::collections::{HashMap, HashSet};
@@ -406,7 +406,7 @@ impl TextMeasureCache {
 
     fn prepare_fonts(&mut self, font_family: Option<&str>) -> Result<(), TextError> {
         let family = font_family
-            .map(str::trim)
+            .map(|family| split_italic(family.trim()).0)
             .filter(|family| !family.is_empty());
 
         self.sync_font_snapshot();
@@ -449,14 +449,15 @@ impl TextMeasureCache {
     }
 
     /// The face of the requested family closest to `font_weight`; no family,
-    /// `system` or `default` mean the first loaded font's family.
+    /// `system` or `default` mean the first loaded font's family. A family
+    /// ending in `Italic` asks for its italic face.
     fn primary_font_index_prepared(
         &self,
         font_family: Option<&str>,
         font_weight: u16,
     ) -> Result<usize, TextError> {
-        let family = font_family
-            .map(str::trim)
+        let (family, italic) = split_italic(font_family.map_or("", str::trim));
+        let family = Some(family)
             .filter(|family| !family.is_empty() && !matches!(*family, "system" | "default"));
         let family = match family {
             Some(family) => family,
@@ -467,7 +468,7 @@ impl TextMeasureCache {
                 .family
                 .as_str(),
         };
-        best_face(&self.fonts, family, font_weight)
+        best_face(&self.fonts, family, italic, font_weight)
             .ok_or_else(|| TextError::UnsupportedFontFamily(family.to_string()))
     }
 
@@ -644,6 +645,29 @@ impl TextRasterCache {
             self.font_generation = self.measurer.font_generation;
         }
     }
+}
+
+/// A requested family and whether it asks for italics: `"Arial Italic"` is
+/// Arial's italic face and a bare `"Italic"` the default family's. A family
+/// without italic faces draws upright.
+fn split_italic(family: &str) -> (&str, bool) {
+    const SUFFIX: &str = "italic";
+    let split = family.len().wrapping_sub(SUFFIX.len());
+    match family.get(split..) {
+        Some(suffix) if suffix.eq_ignore_ascii_case(SUFFIX) => (family[..split].trim_end(), true),
+        _ => (family, false),
+    }
+}
+
+/// The face of `family` best for `weight`: the requested slant first, then
+/// the closest weight.
+fn best_face(fonts: &[TextShapingFont], family: &str, italic: bool, weight: u16) -> Option<usize> {
+    (0..fonts.len())
+        .filter(|&index| fonts[index].family.eq_ignore_ascii_case(family))
+        .min_by_key(|&index| {
+            let font = &fonts[index];
+            (font.italic != italic, font.weight.abs_diff(weight))
+        })
 }
 
 fn font_io_text_error(error: &FontLoadError) -> TextError {

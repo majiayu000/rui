@@ -41,13 +41,6 @@ impl FontBytes {
     }
 }
 
-/// The face of `family` best for `weight`, as [`faces_for_weight`] orders them.
-pub(crate) fn best_face(fonts: &[TextShapingFont], family: &str, weight: u16) -> Option<usize> {
-    (0..fonts.len())
-        .filter(|&index| fonts[index].family.eq_ignore_ascii_case(family))
-        .min_by_key(|&index| (fonts[index].italic, fonts[index].weight.abs_diff(weight)))
-}
-
 /// Faces of `family`, best first for `weight`: upright before italic, then the
 /// closest weight, then load order.
 pub(crate) fn faces_for_weight(fonts: &[TextShapingFont], family: &str, weight: u16) -> Vec<usize> {

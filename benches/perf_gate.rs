@@ -15,10 +15,12 @@
 mod perf_budgets;
 mod perf_icons;
 mod perf_images;
+mod perf_text;
 
 use perf_budgets::{CaseBudget, load_budgets};
 use perf_icons::IconGrid;
 use perf_images::ImageGrid;
+use perf_text::paragraphs;
 use rui::core::entity::Entity;
 use rui::core::event::MouseButton;
 use rui::core::frame_pipeline::FramePipeline;
@@ -263,44 +265,6 @@ fn list_with_edit(rows: usize, edited: usize, round: usize) -> Div {
         }))
 }
 
-/// Paragraph `index` of the wrapped text case: 8 to 127 words.
-fn paragraph(index: usize) -> String {
-    const WORDS: [&str; 12] = [
-        "layout",
-        "glyph",
-        "shaping",
-        "frame",
-        "wrapped",
-        "paragraph",
-        "text",
-        "cache",
-        "the",
-        "of",
-        "a",
-        "width",
-    ];
-    (0..8 + (index * 37) % 120)
-        .map(|word| WORDS[(index * 7 + word * 3) % WORDS.len()])
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-/// 200 wrapped paragraphs; paragraph 3 gets a new suffix each round.
-fn paragraphs(round: usize) -> Div {
-    div()
-        .w_full()
-        .flex_col()
-        .p(16.0)
-        .gap(8.0)
-        .children((0..200).map(move |index| {
-            let mut content = paragraph(index);
-            if index == 3 {
-                content.push_str(&format!(" revision {round}"));
-            }
-            text(content).size(14.0).line_height(1.4).wrap()
-        }))
-}
-
 /// Layout and paint state a runner keeps across frames.
 struct Surfaces {
     taffy: TaffyTree<ElementId>,
@@ -450,6 +414,13 @@ fn main() -> ExitCode {
         "text.paragraphs",
         measure(|round| rebuilt_text.frame(paragraphs(round), &mut measurer)),
     );
+    // A chat of Markdown replies, the first growing by a token per frame.
+    #[cfg(feature = "markdown")]
+    {
+        let mut chat = Rebuilt::new();
+        let cost = measure(|round| chat.frame(perf_text::chat(round), &mut measurer));
+        costs.insert("markdown.stream", cost);
+    }
 
     for (name, count) in [
         ("virtual_list.1k", 1_000usize),

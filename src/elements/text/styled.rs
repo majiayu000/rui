@@ -2,21 +2,36 @@
 
 use super::{FontWeight, TextAlign, TextStyle, TextStyleRefinement};
 use crate::core::color::Color;
-use crate::core::geometry::Bounds;
-use crate::core::style::Style;
+use crate::core::event::Cursor;
+use crate::core::geometry::{Bounds, Edges, Point};
+use crate::core::style::{Corners, Style};
 use crate::core::{ElementId, SharedStr};
 use crate::elements::element::{
-    Capabilities, Element, LayoutContext, PaintContext, RichLines, RichWrapRequest, style_to_taffy,
+    Capabilities, Element, EventContext, LayoutContext, PaintContext, PointerEvent,
+    PointerEventKind, RichLines, RichWrapRequest, style_to_taffy,
 };
 use crate::renderer::Primitive;
 use crate::renderer::text::BaseDirection;
-use crate::renderer::text::{RichPieceText, RichSpan};
+use crate::renderer::text::{RichPiece, RichPieceText, RichSpan, RichWrapped};
 use std::any::Any;
 use std::ops::Range;
+use std::rc::Rc;
 use std::sync::{Arc, LazyLock};
 use taffy::prelude::*;
 
 static ELLIPSIS: LazyLock<Arc<str>> = LazyLock::new(|| Arc::from("\u{2026}"));
+
+/// Called with the target of a clicked link span, shared by the paragraphs
+/// of a document.
+pub type LinkHandler = Rc<dyn Fn(&str)>;
+
+/// What a span draws around its glyphs.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+struct SpanDecoration {
+    background: Option<Color>,
+    underline: bool,
+    strikethrough: bool,
+}
 
 /// A run of a [`StyledText`]: its text and the style properties it sets over
 /// what the paragraph inherits.
@@ -24,6 +39,9 @@ static ELLIPSIS: LazyLock<Arc<str>> = LazyLock::new(|| Arc::from("\u{2026}"));
 pub struct TextSpan {
     content: SpanText,
     refinement: TextStyleRefinement,
+    italic: bool,
+    decoration: SpanDecoration,
+    link: Option<Arc<str>>,
 }
 
 /// A span's text: its own, or bytes of the text [`shared_styled_text`] shares.
@@ -43,7 +61,7 @@ impl Default for SpanText {
 pub fn span(content: impl Into<String>) -> TextSpan {
     TextSpan {
         content: SpanText::Own(content.into()),
-        refinement: TextStyleRefinement::default(),
+        ..TextSpan::default()
     }
 }
 
@@ -51,7 +69,7 @@ pub fn span(content: impl Into<String>) -> TextSpan {
 pub fn span_range(bytes: Range<usize>) -> TextSpan {
     TextSpan {
         content: SpanText::Bytes(bytes),
-        refinement: TextStyleRefinement::default(),
+        ..TextSpan::default()
     }
 }
 
@@ -61,6 +79,14 @@ impl TextSpan {
         match &self.content {
             SpanText::Own(text) => text.len(),
             SpanText::Bytes(bytes) => bytes.len(),
+        }
+    }
+
+    /// This span placed at `bytes` of the paragraph's text.
+    fn placed(self, bytes: Range<usize>) -> Self {
+        Self {
+            content: SpanText::Bytes(bytes),
+            ..self
         }
     }
 
@@ -104,6 +130,37 @@ impl TextSpan {
         self.refinement.line_height = Some(height);
         self
     }
+
+    /// Draw with the italic face of the span's family, where it has one.
+    pub fn italic(mut self) -> Self {
+        self.italic = true;
+        self
+    }
+
+    /// Fill the span's line box behind its glyphs, as inline code is.
+    pub fn background(mut self, color: impl Into<Color>) -> Self {
+        self.decoration.background = Some(color.into());
+        self
+    }
+
+    /// A line under the glyphs, in the span's color.
+    pub fn underline(mut self) -> Self {
+        self.decoration.underline = true;
+        self
+    }
+
+    /// A line through the glyphs, in the span's color.
+    pub fn strikethrough(mut self) -> Self {
+        self.decoration.strikethrough = true;
+        self
+    }
+
+    /// Make the span a link to `target`: [`StyledText::on_link`] is called
+    /// with it when the span is clicked, and the pointer shows over it.
+    pub fn link(mut self, target: impl Into<Arc<str>>) -> Self {
+        self.link = Some(target.into());
+        self
+    }
 }
 
 /// One paragraph made of [`TextSpan`]s of different colors, sizes, weights or
@@ -119,8 +176,11 @@ pub struct StyledText {
     content: Arc<str>,
     align: TextAlign,
     max_lines: Option<usize>,
+    on_link: Option<LinkHandler>,
     /// The style the spans refine, set in layout.
     inherited: TextStyle,
+    /// Each span's font family, resolved in layout.
+    families: Vec<Option<Arc<str>>>,
     lines: RichLines,
     layout_node: Option<NodeId>,
 }
@@ -143,10 +203,7 @@ pub fn styled_text(spans: impl IntoIterator<Item = TextSpan>) -> StyledText {
                     "span_range({bytes:?}) has no text of its own; place it with shared_styled_text"
                 ),
             }
-            TextSpan {
-                content: SpanText::Bytes(start..content.len()),
-                refinement: span.refinement,
-            }
+            span.placed(start..content.len())
         })
         .collect();
     StyledText::new(content.into(), spans)
@@ -204,7 +261,9 @@ impl StyledText {
             content,
             align: TextAlign::Left,
             max_lines: None,
+            on_link: None,
             inherited: TextStyle::default(),
+            families: Vec::new(),
             lines: RichLines::default(),
             layout_node: None,
         }
@@ -226,10 +285,8 @@ impl StyledText {
         };
         let start = self.content.len();
         self.content = format!("{}{text}", self.content).into();
-        self.spans.push(TextSpan {
-            content: SpanText::Bytes(start..self.content.len()),
-            refinement: span.refinement,
-        });
+        let end = self.content.len();
+        self.spans.push(span.placed(start..end));
         self
     }
 
@@ -263,9 +320,76 @@ impl StyledText {
         self.max_lines(1)
     }
 
+    /// Called with the target of a span made with [`TextSpan::link`] when a
+    /// click presses and releases on it.
+    pub fn on_link(self, handler: impl Fn(&str) + 'static) -> Self {
+        self.on_link_rc(Rc::new(handler))
+    }
+
+    /// [`StyledText::on_link`] with a handler several paragraphs share.
+    pub fn on_link_rc(mut self, handler: LinkHandler) -> Self {
+        self.on_link = Some(handler);
+        self
+    }
+
     /// The whole text, every span's content in order.
     pub fn content(&self) -> &str {
         &self.content
+    }
+
+    fn span_color(&self, span: &TextSpan) -> Color {
+        span.refinement.color.unwrap_or(self.inherited.color)
+    }
+
+    /// The link under `point`, in window coordinates, in a paragraph laid out
+    /// at `bounds`.
+    fn link_at(&self, bounds: Bounds, point: Point) -> Option<Arc<str>> {
+        let lines = self.lines.borrow();
+        let wrapped = lines.as_ref()?;
+        let mut hit = None;
+        self.for_each_piece(wrapped, bounds, |piece, x, y| {
+            let link = self.spans[piece.span].link.as_ref();
+            if let Some(link) = link
+                && point.x >= x + piece.x
+                && point.x < x + piece.x + piece.width
+                && point.y >= y + piece.top
+                && point.y < y + piece.top + piece.height
+            {
+                hit = Some(Arc::clone(link));
+            }
+        });
+        hit
+    }
+
+    /// Calls `visit` with each piece and the left edge and top of its line.
+    fn for_each_piece(
+        &self,
+        wrapped: &RichWrapped,
+        bounds: Bounds,
+        mut visit: impl FnMut(&RichPiece, f32, f32),
+    ) {
+        let mut y = bounds.y();
+        for line in &wrapped.lines {
+            let offset = match self.align {
+                TextAlign::Left => 0.0,
+                TextAlign::Center => (bounds.width() - line.width) * 0.5,
+                TextAlign::Right => bounds.width() - line.width,
+            };
+            for piece in &line.pieces {
+                visit(piece, bounds.x() + offset, y);
+            }
+            y += line.height;
+        }
+    }
+}
+
+fn fill(bounds: Bounds, color: Color) -> Primitive {
+    Primitive::Quad {
+        bounds,
+        background: color.to_rgba(),
+        border_color: Color::TRANSPARENT.to_rgba(),
+        border_widths: Edges::all(0.0),
+        corner_radii: Corners::all(0.0),
     }
 }
 
@@ -279,17 +403,23 @@ impl Element for StyledText {
     }
 
     fn capabilities(&self) -> Capabilities {
-        Capabilities::PURE_INERT
+        Capabilities {
+            pure: true,
+            pointer_inert: self.on_link.is_none(),
+        }
     }
 
     /// Kept when every span sets the same text and style properties. What
     /// the spans inherit is compared in layout, against the style the kept
-    /// text resolved them from.
+    /// text resolved them from. A link handler cannot be compared, so text
+    /// with one keeps the new instance.
     fn same_props(&self, previous: &dyn Element) -> bool {
         let Some(previous) = (previous as &dyn Any).downcast_ref::<StyledText>() else {
             return false;
         };
-        self.id == previous.id
+        self.on_link.is_none()
+            && previous.on_link.is_none()
+            && self.id == previous.id
             && self.spans == previous.spans
             && self.content == previous.content
             && self.style == previous.style
@@ -300,13 +430,30 @@ impl Element for StyledText {
     fn layout(&mut self, cx: &mut LayoutContext) -> NodeId {
         self.inherited = cx.text_style().clone();
         let inherited = &self.inherited;
-        // Copied once for every span that does not set its own.
+        // Shared once for every span that does not set its own.
+        self.families = self
+            .spans
+            .iter()
+            .map(|span| {
+                let family = span
+                    .refinement
+                    .font_family
+                    .as_ref()
+                    .or(inherited.font_family.as_ref());
+                match (span.italic, family) {
+                    (false, family) => family.cloned(),
+                    (true, Some(family)) => Some(Arc::from(format!("{family} Italic"))),
+                    (true, None) => Some(Arc::from("Italic")),
+                }
+            })
+            .collect();
         let request = RichWrapRequest {
             content: Arc::clone(&self.content),
             spans: self
                 .spans
                 .iter()
-                .map(|span| {
+                .zip(&self.families)
+                .map(|(span, family)| {
                     let refinement = &span.refinement;
                     RichSpan {
                         len: span.len(),
@@ -315,10 +462,7 @@ impl Element for StyledText {
                             .font_weight
                             .unwrap_or(inherited.font_weight)
                             .to_value(),
-                        font_family: refinement
-                            .font_family
-                            .clone()
-                            .or_else(|| inherited.font_family.clone()),
+                        font_family: family.clone(),
                         line_height: refinement.line_height.unwrap_or(inherited.line_height),
                     }
                 })
@@ -343,45 +487,101 @@ impl Element for StyledText {
         let Some(wrapped) = lines.as_ref() else {
             panic!("styled text painted without LayoutContext::compute_layout measuring it");
         };
-        let mut y = bounds.y();
-        for line in &wrapped.lines {
-            let offset = match self.align {
-                TextAlign::Left => 0.0,
-                TextAlign::Center => (bounds.width() - line.width) * 0.5,
-                TextAlign::Right => bounds.width() - line.width,
-            };
-            for piece in &line.pieces {
-                let refinement = &self.spans[piece.span].refinement;
-                let inherited = &self.inherited;
-                let content = match &piece.text {
-                    RichPieceText::Content(bytes) => SharedStr::slice(&self.content, bytes.clone()),
-                    RichPieceText::Ellipsis => SharedStr::from(ELLIPSIS.clone()),
-                };
-                cx.paint(Primitive::Text {
+        // Backgrounds first, so the glyphs of neighboring spans draw over them.
+        self.for_each_piece(wrapped, bounds, |piece, x, y| {
+            if let Some(color) = self.spans[piece.span].decoration.background {
+                let pad = piece.height * 0.15;
+                cx.paint(Primitive::Quad {
                     bounds: Bounds::from_xywh(
-                        bounds.x() + offset + piece.x + piece.ink_x,
+                        x + piece.x + piece.ink_x - pad,
                         y + piece.top,
-                        piece.width,
+                        piece.width + pad * 2.0,
                         piece.height,
                     ),
-                    content,
-                    color: refinement.color.unwrap_or(inherited.color).to_rgba(),
-                    font_size: refinement.font_size.unwrap_or(inherited.font_size),
-                    font_weight: refinement
-                        .font_weight
-                        .unwrap_or(inherited.font_weight)
-                        .to_value(),
-                    font_family: refinement
-                        .font_family
-                        .as_ref()
-                        .or(inherited.font_family.as_ref())
-                        .cloned(),
-                    line_height: refinement.line_height.unwrap_or(inherited.line_height),
-                    align: TextAlign::Left,
-                    direction: BaseDirection::Auto,
+                    background: color.to_rgba(),
+                    border_color: Color::TRANSPARENT.to_rgba(),
+                    border_widths: Edges::all(0.0),
+                    corner_radii: Corners::all(pad),
                 });
             }
-            y += line.height;
+        });
+        self.for_each_piece(wrapped, bounds, |piece, x, y| {
+            let span = &self.spans[piece.span];
+            let refinement = &span.refinement;
+            let inherited = &self.inherited;
+            let content = match &piece.text {
+                RichPieceText::Content(bytes) => SharedStr::slice(&self.content, bytes.clone()),
+                RichPieceText::Ellipsis => SharedStr::from(ELLIPSIS.clone()),
+            };
+            let font_size = refinement.font_size.unwrap_or(inherited.font_size);
+            let color = self.span_color(span);
+            cx.paint(Primitive::Text {
+                bounds: Bounds::from_xywh(
+                    x + piece.x + piece.ink_x,
+                    y + piece.top,
+                    piece.width,
+                    piece.height,
+                ),
+                content,
+                color: color.to_rgba(),
+                font_size,
+                font_weight: refinement
+                    .font_weight
+                    .unwrap_or(inherited.font_weight)
+                    .to_value(),
+                font_family: self.families.get(piece.span).cloned().flatten(),
+                line_height: refinement.line_height.unwrap_or(inherited.line_height),
+                align: TextAlign::Left,
+                direction: BaseDirection::Auto,
+            });
+            let decoration = span.decoration;
+            if !decoration.underline && !decoration.strikethrough {
+                return;
+            }
+            // The line box centers the font's em: the baseline sits about
+            // 0.3 em below its middle, the x-height's middle 0.25 em above it.
+            let middle = y + piece.top + piece.height * 0.5;
+            let thickness = (font_size / 14.0).max(1.0);
+            let line = |offset: f32| {
+                fill(
+                    Bounds::from_xywh(
+                        x + piece.x + piece.ink_x,
+                        middle + offset * font_size - thickness * 0.5,
+                        piece.width,
+                        thickness,
+                    ),
+                    color,
+                )
+            };
+            if decoration.underline {
+                cx.paint(line(0.42));
+            }
+            if decoration.strikethrough {
+                cx.paint(line(0.05));
+            }
+        });
+    }
+
+    fn handle_pointer_event(&mut self, cx: &mut EventContext, event: &PointerEvent) -> bool {
+        let Some(handler) = self.on_link.clone() else {
+            return false;
+        };
+        if !cx.contains_pointer(event.position) {
+            return false;
+        }
+        let Some(link) = self.link_at(cx.bounds(), event.position) else {
+            return false;
+        };
+        match event.kind {
+            PointerEventKind::Move => {
+                cx.set_cursor(Cursor::Pointer);
+                false
+            }
+            PointerEventKind::Down => true,
+            PointerEventKind::Up => {
+                handler(&link);
+                true
+            }
         }
     }
 }
