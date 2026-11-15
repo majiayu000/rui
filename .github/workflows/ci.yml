@@ -143,7 +143,7 @@ jobs:
       - name: Compare window pixels on lavapipe under Wayland
         run: |
           cargo build --locked --no-default-features --features winit --example hello_world --example counter
-          RUI_PIXELS_UPDATE=1 scripts/wayland_window_pixels.sh
+          scripts/wayland_window_pixels.sh
 
       - name: Upload window captures
         if: always()
@@ -174,7 +174,7 @@ jobs:
         run: cargo test --locked --no-default-features --features winit --lib
 
       - name: Compare window pixels
-        shell: pwsh
+        shell: powershell
         run: |
           cargo build --locked --no-default-features --features winit --example hello_world --example counter
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

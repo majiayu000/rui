@@ -2,9 +2,10 @@
 # compares screenshots of the windows' client areas with the references in
 # tests/windows_window/.
 #
-# Run in an interactive desktop session, after building the examples:
+# Run with Windows PowerShell (its .NET has System.Drawing) in an interactive
+# desktop session, after building the examples:
 #   cargo build --no-default-features --features winit --example hello_world --example counter
-#   pwsh scripts/windows_window_pixels.ps1
+#   powershell -File scripts/windows_window_pixels.ps1
 # $env:RUI_PIXELS_UPDATE = "1" rewrites the references from this run.
 $ErrorActionPreference = "Stop"
 
