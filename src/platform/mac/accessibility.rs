@@ -63,6 +63,8 @@ struct MacAccessibilityElementIvars {
     bounds: Cell<Bounds>,
     requests: Rc<RefCell<VecDeque<MacAccessibilityActionRequest>>>,
     window_number: isize,
+    /// UTF-16 offsets where each line of a text input's value starts.
+    line_starts: RefCell<Vec<usize>>,
 }
 
 define_class!(
@@ -131,6 +133,22 @@ define_class!(
             }
         }
 
+        // VoiceOver moves through multi-line text by line with these.
+        #[unsafe(method(accessibilityLineForIndex:))]
+        fn accessibility_line_for_index(&self, index: isize) -> isize {
+            line_for_index(&self.ivars().line_starts.borrow(), index.max(0) as usize) as isize
+        }
+
+        #[unsafe(method(accessibilityRangeForLine:))]
+        fn accessibility_range_for_line(&self, line: isize) -> NSRange {
+            let length = self.accessibilityNumberOfCharacters().max(0) as usize;
+            let starts = self.ivars().line_starts.borrow();
+            match range_for_line(&starts, length, line.max(0) as usize) {
+                Some((start, end)) => NSRange::new(start, end - start),
+                None => NSRange::new(objc2_foundation::NSNotFound as usize, 0),
+            }
+        }
+
         #[unsafe(method(setAccessibilityFocused:))]
         fn set_accessibility_focused(&self, focused: bool) {
             self.enqueue_request(MacAccessibilityRequest::Focus(focused));
@@ -190,6 +208,7 @@ impl RuiAccessibilityElement {
             bounds: Cell::new(bounds),
             requests,
             window_number,
+            line_starts: RefCell::new(vec![0]),
         });
         unsafe { msg_send![super(this), init] }
     }

@@ -463,3 +463,31 @@ fn tabs_and_text_areas_publish_their_native_roles() {
     assert_eq!(subrole.as_deref(), Some("AXTabButton"));
     assert_eq!(native_node_role(&tree.roots()[2]).to_string(), "AXTextArea");
 }
+
+#[test]
+fn text_area_lines_are_counted_in_utf16_units() {
+    // "你好\n" is three UTF-16 units and "😀 ok\n" six (the emoji is a
+    // surrogate pair): line 1 starts at 3, line 2 at 9.
+    let value = "你好\n😀 ok\nend";
+    let starts = utf16_line_starts(value);
+    assert_eq!(starts, [0, 3, 9]);
+    let length = value.encode_utf16().count();
+
+    assert_eq!(line_for_index(&starts, 0), 0);
+    assert_eq!(line_for_index(&starts, 2), 0, "the newline belongs to its line");
+    assert_eq!(line_for_index(&starts, 3), 1);
+    assert_eq!(line_for_index(&starts, length), 2, "the end is on the last line");
+
+    assert_eq!(range_for_line(&starts, length, 0), Some((0, 3)));
+    assert_eq!(range_for_line(&starts, length, 1), Some((3, 9)));
+    assert_eq!(range_for_line(&starts, length, 2), Some((9, 12)));
+    assert_eq!(range_for_line(&starts, length, 3), None);
+}
+
+#[test]
+fn single_line_text_is_line_zero() {
+    let starts = utf16_line_starts("Ada");
+    assert_eq!(starts, [0]);
+    assert_eq!(line_for_index(&starts, 3), 0);
+    assert_eq!(range_for_line(&starts, 3, 0), Some((0, 3)));
+}

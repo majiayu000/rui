@@ -142,6 +142,13 @@ impl RadioGroup {
         self
     }
 
+    fn selected_label(&self) -> &str {
+        self.options
+            .iter()
+            .find(|option| option.value == self.selected)
+            .map_or(self.selected.as_str(), |option| option.label.as_str())
+    }
+
     pub fn selected_value(&self) -> &str {
         &self.selected
     }
@@ -344,7 +351,9 @@ impl Element for RadioGroup {
             AccessibilityRole::RadioGroup,
             &self.label,
         )?
-        .value_required(&self.selected)?
+        // Screen readers announce the group's value: the visible label of
+        // the selected option, not its programmatic value.
+        .value_required(self.selected_label())?
         .with_enabled(!self.state.disabled())
         .with_read_only(self.state.read_only())
         .with_focused(cx.a11y_has_focus(self.id.get()));
@@ -539,7 +548,8 @@ mod tests {
             .expect("radio group exposes a node");
 
         assert_eq!(node.a11y_role(), AccessibilityRole::RadioGroup);
-        assert_eq!(node.a11y_value(), Some("m"));
+        // VoiceOver reads the selected option's visible label.
+        assert_eq!(node.a11y_value(), Some("Medium"));
         let selected: Vec<_> = node
             .a11y_children()
             .iter()

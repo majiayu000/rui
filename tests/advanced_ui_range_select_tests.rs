@@ -149,12 +149,12 @@ fn radio_group_click_picks_and_arrows_wrap() {
 
     // Rows are 36pt tall.
     click(&mut session, 10.0, 90.0);
-    assert_eq!(node(&session, ID).a11y_value(), Some("l"));
+    assert_eq!(node(&session, ID).a11y_value(), Some("Large"));
     session.dispatch_key_event(&key(KeyCode::ArrowDown));
     session.frame().expect("frame after ArrowDown");
     let group = node(&session, ID);
     assert_eq!(group.a11y_role(), AccessibilityRole::RadioGroup);
-    assert_eq!(group.a11y_value(), Some("s"));
+    assert_eq!(group.a11y_value(), Some("Small"));
     let radios: Vec<_> = group
         .a11y_children()
         .iter()
