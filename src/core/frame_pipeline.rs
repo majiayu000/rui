@@ -382,7 +382,6 @@ impl FramePipeline {
         let mut present_frame = Some(present_frame);
         let mut presentation = None;
         let mut presented = false;
-        let mut modal_focus_moved = false;
 
         for stage in FrameStage::ORDER {
             match stage {
@@ -418,9 +417,13 @@ impl FramePipeline {
                 FrameStage::Paint => {
                     let started_at = Instant::now();
                     presenter.paint();
-                    modal_focus_moved = presenter.sync_modal_focus();
-                    if modal_focus_moved {
+                    // Which modals are open is known only once they paint, so
+                    // when that moves focus, paint again for this frame to
+                    // show the new ring. The scene then no longer follows the
+                    // presented one, so the renderer redraws it whole.
+                    if presenter.sync_modal_focus() {
                         context.record_focus(presenter.focused_element());
+                        presenter.paint();
                     }
                     durations.paint_ns = started_at.elapsed().as_nanos();
                     presenter.paint_devtools_overlay();
@@ -434,10 +437,6 @@ impl FramePipeline {
                 }
                 FrameStage::Finish => {
                     Self::finish_frame(context);
-                    if modal_focus_moved {
-                        // The focus a modal moved shows in the next frame.
-                        context.preserve_frame_work();
-                    }
                     match presentation.take() {
                         Some(FramePresentation::Presented(diagnostics)) => {
                             presenter.complete_presented_frame(diagnostics);

@@ -10,7 +10,7 @@ use rui::core::geometry::Bounds;
 use rui::core::{AppContext, ElementId, Point, Size, View, ViewContext};
 use rui::elements::{Div, Element, div};
 use rui::renderer::{Primitive, Reach};
-use rui::testing::{HeadlessSession, HeadlessViewSession, mount_view};
+use rui::testing::{HeadlessSession, HeadlessViewSession, mount, mount_view};
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -446,4 +446,137 @@ fn a_press_on_another_control_closes_an_unfocused_popover() {
         1,
         "the press still reaches the control it hit"
     );
+}
+
+/// Whether the frame just drawn paints `id`'s focus ring.
+fn ring_on<F: FnMut(&mut AppContext) -> E, E: Element>(
+    session: &HeadlessSession<F, E>,
+    id: ElementId,
+) -> bool {
+    let bounds = bounds_of(session, id);
+    session.primitives().iter().any(|primitive| {
+        matches!(primitive, Primitive::Quad { bounds: at, border_widths, .. } if *at == bounds && border_widths.top == 2.0)
+    })
+}
+
+#[test]
+fn the_focus_ring_moves_in_the_frame_a_modal_opens_and_closes() {
+    let (mut session, _) = dialog_page(false);
+    let opener = bounds_of(&session, OPENER);
+    session.pointer_down(Point::new(opener.x() + 6.0, opener.y() + 6.0));
+    session.pointer_up(Point::new(opener.x() + 6.0, opener.y() + 6.0));
+    // This frame opens the dialog and moves focus into it.
+    session.frame().expect("frame that opens the dialog");
+    assert_eq!(session.focused_element(), Some(FIRST));
+    assert!(ring_on(&session, FIRST), "the dialog's control shows the ring");
+    assert!(!ring_on(&session, OPENER), "the opener no longer does");
+
+    session.dispatch_key_event(&key(KeyCode::Escape));
+    // This frame closes the dialog and gives focus back.
+    session.frame().expect("frame that closes the dialog");
+    assert!(session.scene().overlays().is_empty());
+    assert_eq!(session.focused_element(), Some(OPENER));
+    assert!(ring_on(&session, OPENER), "the opener shows the ring again");
+}
+
+/// A popover whose `on_dismiss` changes view state, so the press that
+/// closes it re-renders the view before the release.
+struct RerenderingPopover {
+    open: bool,
+    elsewhere_clicks: Rc<Cell<u32>>,
+}
+
+impl View for RerenderingPopover {
+    type Element = Div;
+
+    fn render(&mut self, cx: &mut ViewContext<Self>) -> Self::Element {
+        let elsewhere = Rc::clone(&self.elsewhere_clicks);
+        div()
+            .flex()
+            .p(8.0)
+            .gap(120.0)
+            .child(
+                ui::popover("Details", ui::button("Anchor"), ui::text("Floating"))
+                    .open(self.open)
+                    .on_dismiss(cx.listener(|this, _| this.open = false)),
+            )
+            .child(
+                ui::button("Elsewhere")
+                    .id(ELSEWHERE)
+                    .on_click(move || elsewhere.set(elsewhere.get() + 1)),
+            )
+    }
+}
+
+#[test]
+fn a_press_that_dismisses_and_re_renders_still_clicks_the_control_it_hit() {
+    let clicks = Rc::new(Cell::new(0));
+    let view = RerenderingPopover {
+        open: true,
+        elsewhere_clicks: Rc::clone(&clicks),
+    };
+    let mut session = mount_view(WINDOW, view).expect("mount");
+    session.frame().expect("first frame");
+    assert_eq!(session.scene().overlays().len(), 1);
+
+    let elsewhere = bounds_of(&session, ELSEWHERE);
+    let at = Point::new(elsewhere.x() + 4.0, elsewhere.y() + 4.0);
+    session.pointer_down(at);
+    // The view re-renders with the popover closed before the release.
+    session.frame().expect("frame between press and release");
+    assert!(session.scene().overlays().is_empty(), "the popover closed");
+    session.pointer_up(at);
+    session.frame().expect("frame after release");
+    assert_eq!(
+        clicks.get(),
+        1,
+        "the press that closed the popover still clicks the control it hit"
+    );
+}
+
+#[test]
+fn a_button_keeps_its_press_across_a_rebuild() {
+    const PRESS: ElementId = ElementId(41_010);
+    for explicit in [true, false] {
+        let clicks = Rc::new(Cell::new(0));
+        let on_click = Rc::clone(&clicks);
+        let mut builds = 0;
+        let mut session = mount(WINDOW, move |_| {
+            builds += 1;
+            let on_click = Rc::clone(&on_click);
+            let button = ui::button("Press").on_click(move || on_click.set(on_click.get() + 1));
+            div()
+                .p(8.0)
+                .child(ui::text(format!("build {builds}")))
+                .child(if explicit { button.id(PRESS) } else { button })
+        })
+        .expect("mount");
+        session.frame().expect("first frame");
+        let button = session
+            .scene()
+            .layers()
+            .iter()
+            .flat_map(|layer| layer.hit_regions())
+            .map(|region| region.id)
+            .last()
+            .expect("button hit region");
+        let bounds = bounds_of(&session, button);
+        let at = Point::new(bounds.x() + 4.0, bounds.y() + 4.0);
+
+        session.pointer_down(at);
+        // The tree is built again between the press and the release.
+        session.app_context_mut().request_rebuild();
+        session.frame().expect("frame that rebuilds the tree");
+        assert!(
+            session
+                .primitives()
+                .iter()
+                .any(|p| matches!(p, Primitive::Text { content, .. } if &**content == "build 2")),
+            "explicit {explicit}: the tree was rebuilt between press and release"
+        );
+        assert_eq!(bounds_of(&session, button), bounds, "explicit {explicit}: same id");
+        session.pointer_up(at);
+        session.frame().expect("frame after release");
+        assert_eq!(clicks.get(), 1, "explicit {explicit}: the release still clicks the button");
+    }
 }

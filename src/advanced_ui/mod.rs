@@ -696,6 +696,11 @@ pub(crate) fn reconcile_transient_state(next: &mut dyn Element, previous: &mut d
     use std::any::Any;
     let (next, previous) = (next as &mut dyn Any, previous as &mut dyn Any);
     if let (Some(next), Some(previous)) = (
+        next.downcast_mut::<Button>(),
+        previous.downcast_ref::<Button>(),
+    ) {
+        next.reconcile_transient_state(previous);
+    } else if let (Some(next), Some(previous)) = (
         next.downcast_mut::<Slider>(),
         previous.downcast_ref::<Slider>(),
     ) {

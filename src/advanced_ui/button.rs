@@ -148,6 +148,19 @@ impl Button {
         self.state.cursor()
     }
 
+    /// Keep the hover and press of the button this one replaces in a rebuild,
+    /// so a press survives until its release. The frame pairs buttons by
+    /// explicit id, or by place among unkeyed siblings, which is where the
+    /// stable identity comes from; an explicit id must also match.
+    pub(crate) fn reconcile_transient_state(&mut self, previous: &Self) {
+        let same = self.id.is_explicit() == previous.id.is_explicit()
+            && (!self.id.is_explicit() || self.id == previous.id);
+        if same && self.state.can_activate() {
+            self.state.set_hovered(previous.state.hovered());
+            self.state.set_pressed(previous.state.pressed());
+        }
+    }
+
     fn preferred_width(&self, cx: &mut LayoutContext) -> f32 {
         let text_width = self.theme.measure_label(
             cx,
