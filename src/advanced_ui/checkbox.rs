@@ -111,6 +111,18 @@ impl Checkbox {
     }
 }
 
+impl crate::advanced_ui::transient::PressState for Checkbox {
+    fn press_state(
+        &mut self,
+    ) -> (
+        StableId,
+        &mut crate::advanced_ui::state::InteractionState,
+        Option<&mut crate::advanced_ui::state::IndexedInteractionState>,
+    ) {
+        (self.id, &mut self.state, None)
+    }
+}
+
 impl Element for Checkbox {
     fn id(&self) -> Option<ElementId> {
         Some(self.id.get())

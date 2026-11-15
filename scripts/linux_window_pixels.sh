@@ -12,16 +12,12 @@ set -euo pipefail
 EXAMPLES="${CARGO_TARGET_DIR:-target}/debug/examples"
 REFERENCES=tests/linux_window
 OUT="${RUI_PIXELS_OUT:-target/linux-window-pixels}"
-# Channels off by more than FUZZ make a pixel differ; a window may have at most
-# MAX_DIFFERENT such pixels, room for antialiasing that varies by CPU but not
-# for a changed glyph, color or layout.
-FUZZ="${RUI_PIXELS_FUZZ:-10%}"
-MAX_DIFFERENT="${RUI_PIXELS_MAX_DIFFERENT:-150}"
 mkdir -p "$OUT"
+# shellcheck source=scripts/window_pixels_compare.sh
+source "$(dirname "$0")/window_pixels_compare.sh"
 
 app=""
 window=""
-failed=0
 
 # Start example $1 and wait until its window presented the first frame.
 open_example() {
@@ -54,25 +50,11 @@ click() {
 
 # Compare the window with reference $1.png.
 check() {
-  local actual="$OUT/$1.png" reference="$REFERENCES/$1.png"
   # Park the pointer outside the window so no hover state shows.
   xdotool mousemove 1023 767
   settle
-  import -window "$window" "PNG24:$actual"
-  if [[ "${RUI_PIXELS_UPDATE:-}" == 1 ]]; then
-    cp "$actual" "$reference"
-    echo "updated $reference"
-    return
-  fi
-  local result
-  result="$(compare -metric AE -fuzz "$FUZZ" "$reference" "$actual" "$OUT/$1-diff.png" 2>&1)" || true
-  local different="${result%% *}"
-  if [[ "$different" =~ ^[0-9.e+]+$ ]] && awk -v n="$different" -v max="$MAX_DIFFERENT" 'BEGIN { exit !(n <= max) }'; then
-    echo "ok $1: $different pixels differ"
-  else
-    echo "FAIL $1: $result (at most $MAX_DIFFERENT pixels may differ; see $OUT)" >&2
-    failed=1
-  fi
+  import -window "$window" "PNG24:$OUT/$1.png"
+  compare_capture "$1"
 }
 
 open_example hello_world

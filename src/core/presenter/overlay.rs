@@ -55,7 +55,7 @@ where
     }
 
     /// Move focus for the modals the frame just painted opened or closed.
-    /// Returns whether focus moved, which the next frame shows.
+    /// Returns whether focus moved, so the frame must be painted again.
     pub(crate) fn sync_modal_focus(&mut self) -> bool {
         let modals: Vec<ElementId> = self
             .scene

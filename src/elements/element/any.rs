@@ -88,11 +88,15 @@ pub fn reconcile(next: &mut dyn Element, previous: &mut dyn Element) -> bool {
     ) {
         next.reconcile_editing_state(previous);
     }
-    crate::advanced_ui::reconcile_transient_state(next, previous);
+    let pure = next.capabilities().pure;
+    // What a pure element shows never depends on events, so it has no
+    // transient state to carry.
+    if !pure {
+        crate::advanced_ui::reconcile_transient_state(kind, next, previous);
+    }
     // Properties can only justify keeping two pure instances. An interactive
     // container still participates in child reconciliation below.
-    let props =
-        next.capabilities().pure && previous.capabilities().pure && next.same_props(previous);
+    let props = pure && previous.capabilities().pure && next.same_props(previous);
     // A view's child is what it rendered, not what was built: the same view
     // keeps it, and a refresh renders it again when it changed.
     if kind == TypeId::of::<crate::elements::ViewElement>() {

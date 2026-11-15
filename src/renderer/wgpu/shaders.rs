@@ -57,6 +57,18 @@ fn rounded_rect_sdf(point: vec2<f32>, half_size: vec2<f32>, radius: f32) -> f32 
     return length(max(d, vec2<f32>(0.0))) + min(max(d.x, d.y), 0.0) - radius;
 }
 
+// How much of a pixel at signed distance `dist` the shape covers, antialiased
+// over `aa = fwidth(dist)`. `aa` is zero where the distance is flat across a
+// 2x2 pixel quad, as on the diagonal inside a top-left corner, and
+// `smoothstep` with equal edges is undefined: WARP left those quads unpainted.
+// A flat quad takes a hard step, as `coverage` in the Metal shaders does.
+fn coverage(dist: f32, aa: f32) -> f32 {
+    if (aa > 0.0) {
+        return 1.0 - smoothstep(-aa, aa, dist);
+    }
+    return select(0.0, 1.0, dist <= 0.0);
+}
+
 // Pick corner radius based on position
 fn pick_corner_radius(uv: vec2<f32>, radii: vec4<f32>) -> f32 {
     let left = select(radii.w, radii.x, uv.y < 0.5);   // top_left or bottom_left
@@ -310,7 +322,7 @@ fn quad_distance(in: VertexOut) -> f32 {
 
 // `plain_quad_fragment` for a PLAIN_QUAD.
 fn plain_quad_fragment(in: VertexOut, dist: f32, aa: f32) -> vec4<f32> {
-    let alpha = 1.0 - smoothstep(-aa, aa, dist);
+    let alpha = coverage(dist, aa);
     if (alpha < 0.001) {
         discard;
     }
@@ -321,7 +333,7 @@ fn quad_fragment(in: VertexOut, dist: f32, aa: f32) -> vec4<f32> {
     let half_size = in.size / 2.0;
     let rel_point = in.uv * in.size - half_size;
     let corner_radius = min(pick_corner_radius(in.uv, in.corner_radii), min(half_size.x, half_size.y));
-    let alpha = 1.0 - smoothstep(-aa, aa, dist);
+    let alpha = coverage(dist, aa);
 
     if (alpha < 0.001) {
         discard;
@@ -339,7 +351,7 @@ fn quad_fragment(in: VertexOut, dist: f32, aa: f32) -> vec4<f32> {
         let inner_radius = max(0.0, corner_radius - border_width);
         let inner_dist = rounded_rect_sdf(rel_point, inner_half_size, inner_radius);
 
-        let border_alpha = 1.0 - smoothstep(-aa, aa, inner_dist);
+        let border_alpha = coverage(inner_dist, aa);
         let in_border = alpha - border_alpha;
 
         // Mix border and background
@@ -553,7 +565,7 @@ fn image_fragment(in: VertexOut) -> @location(0) vec4<f32> {
     let corner_radius = min(pick_corner_radius(in.uv, in.corner_radii), min(half_size.x, half_size.y));
     let dist = rounded_rect_sdf(rel_point, half_size, corner_radius);
     let aa = fwidth(dist);
-    let alpha = 1.0 - smoothstep(-aa, aa, dist);
+    let alpha = coverage(dist, aa);
 
     if (alpha < 0.001) {
         discard;
