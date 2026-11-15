@@ -146,7 +146,7 @@ jobs:
           scripts/wayland_window_pixels.sh
 
       - name: Upload window captures
-        if: always()
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: wayland-window-pixels
@@ -154,7 +154,7 @@ jobs:
 
   winit-windows:
     # The window references in tests/windows_window/ were drawn by this image's
-    # wgpu adapter and Windows fonts at 100% scaling.
+    # DX12 WARP adapter and Segoe UI at 100% scaling.
     runs-on: windows-latest
 
     steps:
@@ -178,10 +178,10 @@ jobs:
         run: |
           cargo build --locked --no-default-features --features winit --example hello_world --example counter
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $env:RUI_PIXELS_UPDATE = "1"; ./scripts/windows_window_pixels.ps1
+          ./scripts/windows_window_pixels.ps1
 
       - name: Upload window captures
-        if: always()
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: windows-window-pixels
