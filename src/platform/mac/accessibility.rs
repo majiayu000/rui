@@ -513,7 +513,12 @@ impl AppKitAccessibilityHost {
         element.setAccessibilityEnabled(node.a11y_enabled());
         element.set_native_focused(node.a11y_focused());
         element.setAccessibilityFrameInParentSpace(native_frame_in_parent(bounds, parent_bounds));
-        let label = node.a11y_label().map(NSString::from_str);
+        // Static text carries its words as its value, as AppKit's own does;
+        // a label as well would be read a second time.
+        let label = (node.a11y_role() != AccessibilityRole::Text)
+            .then(|| node.a11y_label())
+            .flatten()
+            .map(NSString::from_str);
         element.setAccessibilityLabel(label.as_deref());
         publish_native_value(&element, node)?;
         publish_text_semantics(&element, node)?;

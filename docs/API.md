@@ -40,7 +40,7 @@ the prelude; the other controls live in `rui::advanced_ui`.
 | Single-line text | `input()` (`elements::Input`) | `advanced_ui::TextField` / `text_field(label)` |
 | Scroll area | `scroll_view()` (`elements::ScrollView`) | `advanced_ui::Scrollable` / `scrollable(child)` |
 | Progress | `advanced_ui::progress_bar(value)` | the terminal-style `elements::Progress` / `progress()` |
-| Text | `text(content)` (`elements::Text`); `.accessible()` adds an accessibility node labelled with the content, which `advanced_ui::text(content)` sets | the `advanced_ui::Text` wrapper |
+| Text | `text(content)` (`elements::Text`); read by screen readers as static text by default (styled text and Markdown too); `.accessibility_hidden()` leaves decoration out | the `advanced_ui::Text` wrapper |
 
 Migration: `text_field("Name")` is `input().accessibility_label("Name").theme(Theme::default())`;
 `scrollable(child)` is `scroll_view().child(child)` and `.background(color)`

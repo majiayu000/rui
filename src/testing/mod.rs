@@ -3,7 +3,7 @@ mod snapshot;
 mod windows;
 
 use crate::core::ElementId;
-use crate::core::accessibility::{AccessibilityContext, AccessibilityError, AccessibilityTree};
+use crate::core::accessibility::{AccessibilityError, AccessibilityTree};
 use crate::core::action::route_key_event;
 use crate::core::app::{AppContext, RuntimeView};
 use crate::core::drag::FileDragEvent;
@@ -418,12 +418,9 @@ where
         }
     }
 
+    /// The tree a platform bridge would publish, with each node's bounds.
     pub fn accessibility_tree(&self) -> Result<AccessibilityTree, HeadlessError> {
-        let nodes = self
-            .presenter
-            .root()
-            .accessibility_nodes(&AccessibilityContext::new(self.presenter.focused_element()))?;
-        Ok(AccessibilityTree::new(nodes))
+        Ok(self.presenter.accessibility_tree()?)
     }
 
     pub fn primitive_snapshot(&self) -> Result<PrimitiveSnapshot, PrimitiveSnapshotError> {

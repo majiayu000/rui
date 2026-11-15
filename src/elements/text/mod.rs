@@ -127,11 +127,12 @@ struct OwnTextStyle {
 ///
 /// Text is one line by default and sized to its content. [`Text::wrap`] makes
 /// it wrap to the width its container offers, and [`Text::max_lines`] cuts it
-/// off with an ellipsis. [`Text::accessible`] exposes it to assistive
-/// technology.
+/// off with an ellipsis. Screen readers read it as static text unless
+/// [`Text::accessibility_hidden`] leaves it out.
 pub struct Text {
     id: Option<ElementId>,
-    /// Set by [`Text::accessible`]: the id of its accessibility node.
+    /// The id of its accessibility node; `None` once
+    /// [`Text::accessibility_hidden`] leaves it out.
     accessible: Option<StableId>,
     content: SharedStr,
     style: Style,
@@ -155,7 +156,7 @@ impl Text {
         let defaults = TextStyle::default();
         Self {
             id: None,
-            accessible: None,
+            accessible: Some(StableId::new()),
             content: content.into(),
             style: Style::new(),
             color: defaults.color,
@@ -180,11 +181,17 @@ impl Text {
         self
     }
 
-    /// Expose the text as an accessibility node labelled with its content,
-    /// for text that is the only description of what it sits in. Such text is
-    /// laid out and painted every frame: it registers an accessibility region.
+    /// Expose the text to screen readers as static text labelled with its
+    /// content. This is the default; it undoes [`Text::accessibility_hidden`].
     pub fn accessible(mut self) -> Self {
         self.accessible = Some(self.id.map_or_else(StableId::new, StableId::explicit));
+        self
+    }
+
+    /// Leave the text out of the accessibility tree, for decoration such as
+    /// an icon glyph whose meaning a labelled control already carries.
+    pub fn accessibility_hidden(mut self) -> Self {
+        self.accessible = None;
         self
     }
 
@@ -397,8 +404,10 @@ impl Text {
 }
 
 impl Element for Text {
+    // Only an id the application set: the accessibility node's adopted id is
+    // derived from the text's place, and layout derives that again each pass.
     fn id(&self) -> Option<ElementId> {
-        self.accessible.map(|id| id.get()).or(self.id)
+        self.id
     }
 
     fn stable_id_mut(&mut self) -> Option<&mut StableId> {
@@ -410,11 +419,8 @@ impl Element for Text {
     }
 
     fn capabilities(&self) -> Capabilities {
-        if self.accessible.is_some() {
-            // Its accessibility region is registered in paint, which a
-            // replay would skip.
-            return Capabilities::default();
-        }
+        // Its accessibility region is registered in paint and replayed with
+        // its primitives.
         Capabilities::PURE_INERT
     }
 
@@ -438,6 +444,7 @@ impl Element for Text {
             && self.max_lines == previous.max_lines
             && self.wrapped.is_some() == previous.wrapped.is_some()
             && self.unselectable == previous.unselectable
+            && self.accessible.is_some() == previous.accessible.is_some()
     }
 
     fn layout(&mut self, cx: &mut LayoutContext) -> NodeId {
@@ -515,9 +522,6 @@ impl Element for Text {
         bounds: Bounds,
         visible: &Bounds,
     ) -> Option<Bounds> {
-        if self.accessible.is_some() {
-            return None;
-        }
         if self.content.is_empty() || self.font_size <= 0.0 || self.line_height <= 0.0 {
             return Some(no_reach());
         }

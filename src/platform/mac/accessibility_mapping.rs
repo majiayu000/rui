@@ -141,6 +141,10 @@ fn publish_native_value(
             let value = NSNumber::new_f64(value);
             element.set_native_value(Some(&value));
         }
+        AccessibilityRole::Text => {
+            let value = node.a11y_value().or(node.a11y_label()).map(NSString::from_str);
+            element.set_native_value(value.as_deref().map(|value| value as &AnyObject));
+        }
         _ => {
             let value = node.a11y_value().map(NSString::from_str);
             element.set_native_value(value.as_deref().map(|value| value as &AnyObject));
@@ -225,7 +229,10 @@ fn post_node_property_notifications(
     ) {
         let element: &AnyObject = element;
         unsafe {
+            let static_text_changed = current.a11y_role() == AccessibilityRole::Text
+                && previous.a11y_label() != current.a11y_label();
             if previous.a11y_value() != current.a11y_value()
+                || static_text_changed
                 || previous.a11y_checked() != current.a11y_checked()
                 || previous.a11y_selected() != current.a11y_selected()
             {
