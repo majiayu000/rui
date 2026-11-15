@@ -184,7 +184,8 @@ fn accessibility_tabs_expose_tab_list_tabs_and_selected_panel() {
         .find(|node| node.a11y_role() == AccessibilityRole::TabList)
         .expect("tab list should be an accessibility root");
     assert_eq!(tab_list.a11y_label(), Some("Project sections"));
-    assert_eq!(tab_list.a11y_value(), Some("logs"));
+    // The selected tab's visible label, which is what screen readers announce.
+    assert_eq!(tab_list.a11y_value(), Some("Logs"));
     assert_eq!(tab_list.a11y_children().len(), 3);
     assert_eq!(
         tab_list.a11y_children()[0].a11y_role(),

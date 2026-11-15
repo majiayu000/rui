@@ -70,7 +70,8 @@ fn advanced_ui_tabs_render_selected_panel_and_switch_by_pointer() {
         .iter()
         .find(|node| node.a11y_role() == AccessibilityRole::TabList)
         .expect("tab list should be exposed");
-    assert_eq!(tab_list.a11y_value(), Some("logs"));
+    // Screen readers announce the selected tab's visible label.
+    assert_eq!(tab_list.a11y_value(), Some("Logs"));
 }
 
 #[test]
