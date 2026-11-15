@@ -4,6 +4,7 @@ use super::tab_panel::TabPanel;
 use crate::advanced_ui::tokens::{ControlSize, Theme};
 use crate::core::ElementId;
 use crate::core::accessibility::{AccessibilityContext, AccessibilityError, AccessibilityNode};
+use crate::core::action::{ActionId, ActionOutcome};
 use crate::core::event::ScrollEvent;
 use crate::core::geometry::Size;
 use crate::core::style::{AlignItems, FlexDirection, Style};
@@ -311,6 +312,19 @@ impl Element for Tabs {
         }
 
         false
+    }
+
+    fn dispatch_action(&mut self, cx: &mut EventContext, action: &ActionId) -> ActionOutcome {
+        // The tab strip is not among the children, so a tab's Activate (AXPress
+        // from VoiceOver) and the selected panel's actions are routed here.
+        let outcome = self.tab_list.dispatch_action(cx, action);
+        if outcome.is_handled() {
+            return outcome;
+        }
+        match self.selected_panel().map(|(index, _)| index) {
+            Some(index) => self.panels[index].dispatch_action(cx, action),
+            None => ActionOutcome::Ignored,
+        }
     }
 
     fn handle_text_input_event(&mut self, cx: &mut EventContext, event: &TextInputEvent) -> bool {

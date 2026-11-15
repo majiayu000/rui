@@ -316,6 +316,20 @@ fn native_selector_mapping_is_limited_to_declared_action_selectors() {
 }
 
 #[test]
+fn native_elements_do_not_offer_actions_rui_cannot_perform() {
+    assert!(is_undeclared_perform_selector(sel!(
+        accessibilityPerformShowMenu
+    )));
+    assert!(is_undeclared_perform_selector(sel!(
+        accessibilityPerformCancel
+    )));
+    assert!(!is_undeclared_perform_selector(
+        sel!(accessibilityPerformAction:)
+    ));
+    assert!(!is_undeclared_perform_selector(sel!(accessibilityLabel)));
+}
+
+#[test]
 fn native_increment_steps_range_controls_and_scrolls_scroll_areas() {
     let scroll = [
         AccessibilityAction::ScrollForward,
@@ -401,4 +415,51 @@ fn snapshot_action_names_remain_compatible_with_the_public_api() {
         snapshot.nodes()[0].native_actions(),
         ["AXScrollDown", "AXScrollUp"]
     );
+}
+
+#[test]
+fn hit_test_descends_to_the_topmost_child_under_the_point() {
+    let rect = |x: f64, y: f64| NSRect::new(NSPoint::new(x, y), NSSize::new(90.0, 36.0));
+    // A radio group's options stacked vertically, then an overlapping one.
+    let frames = [
+        rect(0.0, 72.0),
+        rect(0.0, 36.0),
+        rect(0.0, 0.0),
+        rect(40.0, 20.0),
+    ];
+
+    assert_eq!(hit_child(&frames, NSPoint::new(10.0, 80.0)), Some(0));
+    assert_eq!(hit_child(&frames, NSPoint::new(10.0, 40.0)), Some(1));
+    assert_eq!(hit_child(&frames, NSPoint::new(50.0, 30.0)), Some(3));
+    assert_eq!(hit_child(&frames, NSPoint::new(10.0, 108.0)), None);
+    assert_eq!(hit_child(&[], NSPoint::new(0.0, 0.0)), None);
+}
+
+#[test]
+fn tabs_and_text_areas_publish_their_native_roles() {
+    let tab =
+        AccessibilityNode::label_required(ElementId::new(), AccessibilityRole::Tab, "General")
+            .and_then(|node| node.value_required("general"))
+            .expect("tab node");
+    let field =
+        AccessibilityNode::label_required(ElementId::new(), AccessibilityRole::TextInput, "Name")
+            .and_then(|node| node.value_required("Ada"))
+            .expect("text field node");
+    let area =
+        AccessibilityNode::label_required(ElementId::new(), AccessibilityRole::TextInput, "Notes")
+            .and_then(|node| node.value_required("a\nb"))
+            .expect("text area node")
+            .with_multiline(true);
+    let tree = AccessibilityTree::new(vec![tab, field, area]);
+    let snapshot = MacAccessibilityBridge::new().snapshot_tree(&tree);
+
+    let roles: Vec<_> = snapshot
+        .nodes()
+        .iter()
+        .map(|node| node.native_role())
+        .collect();
+    assert_eq!(roles, ["AXRadioButton", "AXTextField", "AXTextArea"]);
+    let subrole = native_subrole(AccessibilityRole::Tab).map(|subrole| subrole.to_string());
+    assert_eq!(subrole.as_deref(), Some("AXTabButton"));
+    assert_eq!(native_node_role(&tree.roots()[2]).to_string(), "AXTextArea");
 }

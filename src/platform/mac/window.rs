@@ -218,14 +218,9 @@ impl MacWindow {
         event: &NSEvent,
         events: &mut Vec<MacWindowEvent>,
     ) -> Result<bool, PlatformWindowError> {
-        // File drags are recorded while AppKit runs the poll; each one posts
-        // a wake to this window, which lands here.
-        events.extend(
-            self.content_view
-                .drain_file_drags()
-                .into_iter()
-                .map(MacWindowEvent::FileDrag),
-        );
+        // File drags, and input method text sent outside a key event, arrive
+        // while AppKit runs the poll; each posts a wake that lands here.
+        events.extend(self.content_view.drain_pending_events());
         let event_type = event.r#type();
         if event_type == NSEventType::ApplicationDefined {
             match application_event(event.data1()) {
@@ -607,6 +602,7 @@ fn platform_event_mask() -> NSEventMask {
         | NSEventMask::ScrollWheel
         | NSEventMask::KeyDown
         | NSEventMask::KeyUp
+        | NSEventMask::FlagsChanged // Shift alone switches input method modes
         | NSEventMask::ApplicationDefined
 }
 

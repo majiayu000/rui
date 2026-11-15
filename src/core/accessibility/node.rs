@@ -159,6 +159,7 @@ pub struct AccessibilityNode {
     enabled: bool,
     read_only: bool,
     invalid: bool,
+    multiline: bool,
     focused: bool,
     selected: Option<bool>,
     checked: Option<bool>,
@@ -182,6 +183,7 @@ impl AccessibilityNode {
             enabled: true,
             read_only: false,
             invalid: false,
+            multiline: false,
             focused: false,
             selected: None,
             checked: None,
@@ -222,6 +224,11 @@ impl AccessibilityNode {
 
     pub fn a11y_invalid(&self) -> bool {
         self.invalid
+    }
+
+    /// Whether a text input takes several lines, like a text area.
+    pub fn a11y_multiline(&self) -> bool {
+        self.multiline
     }
 
     pub fn a11y_focused(&self) -> bool {
@@ -306,6 +313,11 @@ impl AccessibilityNode {
 
     pub fn with_read_only(mut self, read_only: bool) -> Self {
         self.read_only = read_only;
+        self
+    }
+
+    pub fn with_multiline(mut self, multiline: bool) -> Self {
+        self.multiline = multiline;
         self
     }
 

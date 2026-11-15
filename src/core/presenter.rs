@@ -469,7 +469,13 @@ where
         event_cx.set_drag(Rc::clone(&self.drag));
         event_cx.set_overlays(self.scene.overlay_stack());
         event_cx.set_window(window);
+        let focused_before = event_cx.focused_id();
         let value = dispatch(&mut self.root, &mut event_cx);
+        // Editors keep their own focused flag (caret, focus ring) and see only
+        // the events routed to them: tell every element when focus moved.
+        if event_cx.focused_id() != focused_before {
+            crate::core::action::sync_focus(&mut self.root, &mut event_cx);
+        }
         let redraw_requested = event_cx.redraw_requested();
         let announcements = event_cx.take_accessibility_announcements();
         drop(event_cx);

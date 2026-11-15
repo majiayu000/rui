@@ -17,7 +17,7 @@ use crate::core::text_editing::{
     TextInputSnapshot, TextRange, TextSelection, VisualCaret,
 };
 use crate::elements::element::{
-    Element, EventContext, LayoutContext, PaintContext, PointerEvent, PointerEventKind,
+    Element, EventContext, LayoutContext, PaintContext, PointerEvent, PointerEventKind, StableId,
     style_to_taffy,
 };
 use crate::renderer::Primitive;
@@ -47,7 +47,7 @@ pub struct TextAreaState {
 }
 
 pub struct TextArea {
-    id: Option<ElementId>,
+    id: StableId,
     placeholder: String,
     accessibility_label: Option<String>,
     style: Style,
@@ -72,7 +72,7 @@ impl TextArea {
         style.border.width = Edges::all(1.0);
 
         Self {
-            id: None,
+            id: StableId::new(),
             placeholder: String::new(),
             accessibility_label: None,
             style,
@@ -91,7 +91,7 @@ impl TextArea {
     }
 
     pub fn id(mut self, id: ElementId) -> Self {
-        self.id = Some(id);
+        self.id = StableId::explicit(id);
         self
     }
 
@@ -190,7 +190,7 @@ impl TextArea {
     }
 
     fn sync_focus_from_context(&mut self, cx: &mut EventContext<'_>) -> bool {
-        let focused = cx.is_focused(self.id);
+        let focused = cx.is_focused(Some(self.id.get()));
         if self.state.focused == focused {
             return false;
         }
@@ -456,7 +456,11 @@ impl Default for TextArea {
 
 impl Element for TextArea {
     fn id(&self) -> Option<ElementId> {
-        self.id
+        Some(self.id.get())
+    }
+
+    fn stable_id_mut(&mut self) -> Option<&mut StableId> {
+        Some(&mut self.id)
     }
 
     fn style(&self) -> &Style {
@@ -464,7 +468,7 @@ impl Element for TextArea {
     }
 
     fn text_input_snapshot(&self, focused: ElementId) -> Option<TextInputSnapshot> {
-        (self.id == Some(focused)).then(|| {
+        (self.id.get() == focused).then(|| {
             TextInputSnapshot::new(
                 self.state.value.clone(),
                 self.state_selection(),
@@ -503,9 +507,7 @@ impl Element for TextArea {
 
     fn paint(&mut self, cx: &mut PaintContext) {
         let bounds = cx.bounds();
-        if let Some(id) = self.id {
-            cx.register_accessibility_region(id, bounds);
-        }
+        cx.register_accessibility_region(self.id.get(), bounds);
         let (bg, text_color, border_color) = self.colors();
         cx.paint(Primitive::Quad {
             bounds,
@@ -584,7 +586,7 @@ impl Element for TextArea {
                             handler();
                         }
                     }
-                    cx.request_focus(self.id);
+                    cx.request_focus(Some(self.id.get()));
                     true
                 } else if self.state.focused {
                     self.state.focused = false;
@@ -602,7 +604,7 @@ impl Element for TextArea {
     }
 
     fn handle_key_event(&mut self, cx: &mut EventContext, event: &KeyEvent) -> bool {
-        if !cx.is_focused(self.id) && !self.state.focused {
+        if !cx.is_focused(Some(self.id.get())) && !self.state.focused {
             return false;
         }
         if !Self::key_event_is_text_editing(event) {
@@ -641,7 +643,7 @@ impl Element for TextArea {
             self.sync_focus_from_context(cx);
             return ActionOutcome::Ignored;
         }
-        if !cx.is_focused(self.id) && !self.state.focused {
+        if !cx.is_focused(Some(self.id.get())) && !self.state.focused {
             return ActionOutcome::Ignored;
         }
         if self.state.disabled {
@@ -728,9 +730,7 @@ impl Element for TextArea {
         &self,
         cx: &AccessibilityContext,
     ) -> Result<Option<AccessibilityNode>, AccessibilityError> {
-        let Some(id) = self.id else {
-            return Ok(None);
-        };
+        let id = self.id.get();
         let label = self
             .accessibility_label
             .as_deref()
@@ -743,6 +743,7 @@ impl Element for TextArea {
             .with_enabled(!self.state.disabled)
             .with_read_only(self.state.read_only)
             .with_invalid(self.state.invalid)
+            .with_multiline(true)
             .with_text_caret(self.normalize_cursor_position())
             .with_focused(cx.a11y_has_focus(id));
         if !self.state.disabled && !self.state.read_only {

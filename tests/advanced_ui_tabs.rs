@@ -1,6 +1,7 @@
 use rui::ElementId;
 use rui::advanced_ui::{Tab, TabList, TabPanel, Tabs, Theme, ThemeDensity, container, text};
 use rui::core::accessibility::AccessibilityRole;
+use rui::core::action::{ActionId, StandardAction};
 use rui::core::event::{KeyCode, KeyEvent, Modifiers, MouseButton, ScrollEvent};
 use rui::core::geometry::{Bounds, Point, Size};
 use rui::elements::Element;
@@ -344,4 +345,32 @@ fn advanced_ui_tabs_overlay_blur_does_not_press_tab_list() {
         1,
         "focused panel Input must invoke on_blur under overlay hit filter"
     );
+}
+
+#[test]
+fn advanced_ui_tabs_route_activate_to_the_focused_tab() {
+    // VoiceOver's AXPress focuses a tab and dispatches Activate from the
+    // root; the tab strip is not among Tabs' children.
+    let logs = ElementId::new();
+    let changes = Rc::new(RefCell::new(Vec::<String>::new()));
+    let changes_ref = Rc::clone(&changes);
+    let mut tabs = Tabs::new(
+        [
+            Tab::new("overview", "Overview"),
+            Tab::new("logs", "Logs").id(logs),
+        ],
+        "overview",
+    )
+    .accessibility_label("Project sections")
+    .panel(TabPanel::new("overview", text("Summary")))
+    .panel(TabPanel::new("logs", text("Build logs")))
+    .on_change(move |value| changes_ref.borrow_mut().push(value.to_string()));
+    let taffy = TaffyTree::<ElementId>::new();
+    let mut focused = Some(logs);
+    let mut cx = event_context(&taffy, &mut focused);
+
+    let outcome = tabs.dispatch_action(&mut cx, &ActionId::Standard(StandardAction::Activate));
+
+    assert!(outcome.is_handled());
+    assert_eq!(&*changes.borrow(), &["logs".to_string()]);
 }
