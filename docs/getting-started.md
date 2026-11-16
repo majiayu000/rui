@@ -122,9 +122,12 @@ this way.
 
 ## Key bindings
 
-A key bound to an action in the app's keymap reaches the focused element, then
-the divs around it, then the rest of the tree. `Div::on_action` handles one in
-the view that renders it:
+A key bound to an action in the app's keymap is offered to the tree from its
+root. Each div passes it to the child the focused element is in, then to its
+other children from the last to the first, and handles it itself when none of
+them did: the focused element comes first, and a handler on the div around a
+view runs when nothing in the view handled the action. `Div::on_action` handles
+one in the view that renders it:
 
 ```rust,ignore
 // Once, at startup:
