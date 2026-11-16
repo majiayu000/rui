@@ -501,24 +501,30 @@ impl AnyElement {
         if !matches!(event.kind, PointerEventKind::Down) && self.pointer_inert() {
             return false;
         }
-        let matches_current = cx
-            .hit_target()
-            .map(|target| self.contains_id(target))
-            .unwrap_or(false);
         // A press outside a light-dismiss overlay reaches its owner first, as
-        // a press outside, so it closes whatever the press lands on.
-        if cx.is_dismiss_pass() {
-            let owns_overlay = !matches_current
-                && cx
-                    .overlays()
-                    .iter()
-                    .any(|overlay| overlay.light_dismiss && self.contains_id(overlay.owner));
+        // a press outside, so it closes whatever the press lands on. Every
+        // element around an owner passes it on, the ones the press is in too;
+        // only an owner the press is inside of does not see it.
+        if let Some(target) = cx.dismiss_target() {
+            let id = self.id();
+            let mut owners = cx
+                .overlays()
+                .iter()
+                .filter(|overlay| overlay.light_dismiss)
+                .map(|overlay| overlay.owner);
+            let pressed_inside =
+                self.contains_id(target) && owners.clone().any(|owner| id == Some(owner));
+            let owns_overlay = !pressed_inside && owners.any(|owner| self.contains_id(owner));
             return owns_overlay
                 && self
                     .inner
                     .dispatch_pointer_event(&mut cx.for_blur_dispatch(), event)
                     .is_stopped();
         }
+        let matches_current = cx
+            .hit_target()
+            .map(|target| self.contains_id(target))
+            .unwrap_or(false);
         let matches_previous = cx
             .previous_hit_target()
             .map(|target| self.contains_id(target))

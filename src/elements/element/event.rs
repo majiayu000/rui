@@ -78,8 +78,10 @@ pub struct EventContext<'a> {
     window: Bounds,
     /// Overlays of the frame the event lands on, topmost last.
     overlays: Option<Rc<[Overlay]>>,
-    /// The press goes only to owners of light-dismiss overlays it is outside.
-    dismiss_pass: bool,
+    /// What a press lands on, while it goes only to the owners of light-dismiss
+    /// overlays it is outside. Unlike `hit_target`, no element hides it from
+    /// the elements inside it.
+    dismiss_target: Option<ElementId>,
     /// Modifier keys held with the pointer event being dispatched.
     modifiers: Modifiers,
 }
@@ -107,7 +109,7 @@ impl<'a> EventContext<'a> {
             drag: None,
             window: bounds,
             overlays: None,
-            dismiss_pass: false,
+            dismiss_target: None,
             modifiers: Modifiers::none(),
         }
     }
@@ -334,7 +336,7 @@ impl<'a> EventContext<'a> {
             drag: self.drag.clone(),
             window: self.window,
             overlays: self.overlays.clone(),
-            dismiss_pass: self.dismiss_pass,
+            dismiss_target: self.dismiss_target,
             modifiers: self.modifiers,
         }
     }
@@ -370,7 +372,7 @@ impl<'a> EventContext<'a> {
             drag: self.drag.clone(),
             window: self.window,
             overlays: self.overlays.clone(),
-            dismiss_pass: self.dismiss_pass,
+            dismiss_target: self.dismiss_target,
             modifiers: self.modifiers,
         }
     }
@@ -404,12 +406,17 @@ impl<'a> EventContext<'a> {
         self.modifiers = modifiers;
     }
 
-    pub(crate) fn set_dismiss_pass(&mut self, dismiss_pass: bool) {
-        self.dismiss_pass = dismiss_pass;
+    pub(crate) fn set_dismiss_target(&mut self, target: Option<ElementId>) {
+        self.dismiss_target = target;
     }
 
     pub(crate) fn is_dismiss_pass(&self) -> bool {
-        self.dismiss_pass
+        self.dismiss_target.is_some()
+    }
+
+    /// What the press of a dismiss pass lands on.
+    pub(crate) fn dismiss_target(&self) -> Option<ElementId> {
+        self.dismiss_target
     }
 
     pub(crate) fn set_overlays(&mut self, overlays: Option<Rc<[Overlay]>>) {
@@ -481,7 +488,7 @@ impl<'a> EventContext<'a> {
             drag: self.drag.clone(),
             window: self.window,
             overlays: self.overlays.clone(),
-            dismiss_pass: self.dismiss_pass,
+            dismiss_target: self.dismiss_target,
             modifiers: self.modifiers,
         }
     }

@@ -493,6 +493,15 @@ impl Element for SelectionScope {
                     // so a menu opened on it can still copy it.
                     return self.child.handle_pointer_event(cx, event);
                 }
+                // The owners of light-dismiss overlays see a press before it is
+                // dispatched, as one outside them: the scope it lands in only
+                // passes it on.
+                if cx
+                    .dismiss_target()
+                    .is_some_and(|target| self.contains_id(target))
+                {
+                    return self.child.handle_pointer_event(cx, event);
+                }
                 if !inside || !primary {
                     if !inside && self.state.selection.take().is_some() {
                         cx.request_redraw();

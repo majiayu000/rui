@@ -400,6 +400,9 @@ fn escape_closes_only_the_topmost_overlay() {
 struct PopoverPage {
     dismissed: Rc<Cell<u32>>,
     elsewhere_clicks: Rc<Cell<u32>>,
+    /// Whether the controls are in a row of their own inside the page, as a
+    /// toolbar or a form row holds them.
+    in_a_row: bool,
 }
 
 impl View for PopoverPage {
@@ -408,7 +411,7 @@ impl View for PopoverPage {
     fn render(&mut self, _cx: &mut ViewContext<Self>) -> Self::Element {
         let elsewhere = Rc::clone(&self.elsewhere_clicks);
         let dismissed = Rc::clone(&self.dismissed);
-        div()
+        let row = div()
             .flex()
             .p(8.0)
             .gap(120.0)
@@ -421,7 +424,8 @@ impl View for PopoverPage {
                 ui::button("Elsewhere")
                     .id(ELSEWHERE)
                     .on_click(move || elsewhere.set(elsewhere.get() + 1)),
-            )
+            );
+        if self.in_a_row { div().child(row) } else { row }
     }
 }
 
@@ -431,6 +435,7 @@ fn a_press_on_another_control_closes_an_unfocused_popover() {
     let view = PopoverPage {
         dismissed: Rc::clone(&dismissed),
         elsewhere_clicks: Rc::clone(&clicks),
+        in_a_row: false,
     };
     let mut session = mount_view(WINDOW, view).expect("mount");
     session.frame().expect("first frame");
@@ -446,6 +451,59 @@ fn a_press_on_another_control_closes_an_unfocused_popover() {
         1,
         "the press still reaches the control it hit"
     );
+}
+
+#[test]
+fn a_press_on_a_control_in_the_same_row_closes_the_popover() {
+    let (clicks, dismissed) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(0)));
+    let view = PopoverPage {
+        dismissed: Rc::clone(&dismissed),
+        elsewhere_clicks: Rc::clone(&clicks),
+        in_a_row: true,
+    };
+    let mut session = mount_view(WINDOW, view).expect("mount");
+    session.frame().expect("first frame");
+    assert_eq!(session.scene().overlays().len(), 1);
+
+    // The row holds both the popover and the control the press lands on.
+    let elsewhere = bounds_of(&session, ELSEWHERE);
+    click(&mut session, elsewhere.x() + 4.0, elsewhere.y() + 4.0);
+    assert_eq!(dismissed.get(), 1, "the popover saw the press outside it");
+    assert!(session.scene().overlays().is_empty(), "the popover closed");
+    assert_eq!(
+        clicks.get(),
+        1,
+        "the press still reaches the control it hit"
+    );
+}
+
+#[test]
+fn a_press_inside_a_popover_in_a_hover_wrapper_leaves_it_open() {
+    const INSIDE: ElementId = ElementId(41_011);
+    let (clicks, dismissed) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(0)));
+    let (on_click, on_dismiss) = (Rc::clone(&clicks), Rc::clone(&dismissed));
+    let mut session = mount(WINDOW, move |_| {
+        let (on_click, on_dismiss) = (Rc::clone(&on_click), Rc::clone(&on_dismiss));
+        let inside = ui::button("Inside")
+            .id(INSIDE)
+            .on_click(move || on_click.set(on_click.get() + 1));
+        // The wrapper hides what a press lands on from the elements in it.
+        div().p(8.0).child(ui::hoverable(
+            div().child(
+                ui::popover("Details", ui::button("Anchor"), inside)
+                    .open(true)
+                    .on_dismiss(move || on_dismiss.set(on_dismiss.get() + 1)),
+            ),
+        ))
+    })
+    .expect("mount");
+    session.frame().expect("first frame");
+
+    let inside = bounds_of(&session, INSIDE);
+    click(&mut session, inside.x() + 4.0, inside.y() + 4.0);
+    assert_eq!(dismissed.get(), 0, "a press in its content is not outside");
+    assert_eq!(session.scene().overlays().len(), 1, "the popover is open");
+    assert_eq!(clicks.get(), 1, "the control in the popover is clicked");
 }
 
 /// Whether the frame just drawn paints `id`'s focus ring.

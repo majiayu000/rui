@@ -7,7 +7,7 @@ use rui::core::event::{Cursor, KeyCode, KeyEvent, Modifiers};
 use rui::core::geometry::Bounds;
 use rui::core::{Point, Size};
 use rui::elements::element::{Element, PointerEvent, PointerEventKind};
-use rui::elements::{div, selection_scope, text};
+use rui::elements::{SelectionScope, div, selection_scope, text};
 use rui::renderer::Primitive;
 use rui::testing::{HeadlessSession, mount};
 
@@ -350,4 +350,65 @@ fn an_overlay_opened_in_a_scope_is_not_part_of_its_selection() {
     );
     click(&mut session, inside, 1);
     assert_eq!(selection_quads(session.primitives()).len(), highlighted);
+}
+
+/// Selects the text of a scope, opens the popover beside it, and presses the
+/// button in the scope; `place` puts the scope in the window.
+fn press_a_control_beside_an_open_popover<E: Element>(place: fn(SelectionScope) -> E) {
+    use rui::advanced_ui as ui;
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    let (open, dismissed) = (Rc::new(Cell::new(false)), Rc::new(Cell::new(0)));
+    let (is_open, on_dismiss) = (Rc::clone(&open), Rc::clone(&dismissed));
+    let mut session = mount(Size::new(400.0, 300.0), move |_| {
+        let on_dismiss = Rc::clone(&on_dismiss);
+        place(selection_scope(
+            div()
+                .flex_col()
+                .p(8.0)
+                .gap(60.0)
+                .child(text("Selected words"))
+                .child(
+                    ui::popover("Details", ui::button("Anchor"), text("Floating"))
+                        .open(is_open.get())
+                        .on_dismiss(move || on_dismiss.set(on_dismiss.get() + 1)),
+                )
+                .child(ui::button("Done")),
+        ))
+    })
+    .expect("mount");
+    let words = text_bounds(session.primitives(), "Selected words");
+    let from = left_of(&session, "Selected");
+    drag(
+        &mut session,
+        from,
+        Point::new(words.x() + words.width() + 10.0, from.y),
+    );
+    open.set(true);
+    session.app_context_mut().request_rebuild();
+    session.frame().expect("frame that opens the popover");
+    assert_eq!(session.scene().overlays().len(), 1, "the popover is open");
+    assert_eq!(selection_quads(session.primitives()).len(), 1);
+
+    let done = text_bounds(session.primitives(), "Done");
+    click(
+        &mut session,
+        Point::new(done.x() + 2.0, done.y() + done.height() * 0.5),
+        1,
+    );
+    session.frame().expect("frame after the press");
+    assert_eq!(dismissed.get(), 1, "the press closed the popover");
+    assert_eq!(
+        selection_quads(session.primitives()).len(),
+        1,
+        "a press on a control in the scope leaves its selection"
+    );
+}
+
+#[test]
+fn a_press_that_closes_a_popover_in_a_scope_leaves_the_selection() {
+    // The scope as the window's root, and inside a page.
+    press_a_control_beside_an_open_popover(|scope| scope);
+    press_a_control_beside_an_open_popover(|scope| div().child(scope));
 }

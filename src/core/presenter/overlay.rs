@@ -47,7 +47,7 @@ where
             let focused = *event_cx.focused;
             event_cx.set_overlays(overlays);
             event_cx.set_hit_target(target);
-            event_cx.set_dismiss_pass(true);
+            event_cx.set_dismiss_target(target);
             root.dispatch_pointer_event(event_cx, event);
             *event_cx.focused = focused;
         });
