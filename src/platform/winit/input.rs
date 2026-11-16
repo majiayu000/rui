@@ -12,6 +12,10 @@ use winit::window::Window;
 /// Logical pixels one scroll-wheel line moves, for devices reporting lines.
 const SCROLL_LINE_HEIGHT: f32 = 20.0;
 
+/// Where a pointer that left the window is reported: winit gives no position
+/// for it, and no element is this far from the window.
+const OUTSIDE_WINDOW: Point = Point::new(-1.0e6, -1.0e6);
+
 /// What translating later events needs from earlier ones: winit reports the
 /// pointer position and modifiers apart from the button and key events.
 #[derive(Debug, Clone)]
@@ -19,6 +23,8 @@ pub(super) struct InputState {
     pub(super) scale_factor: f64,
     cursor: Point,
     modifiers: Modifiers,
+    /// The mouse buttons held down, a bit each.
+    held_buttons: u8,
 }
 
 impl InputState {
@@ -27,6 +33,7 @@ impl InputState {
             scale_factor,
             cursor: Point::new(0.0, 0.0),
             modifiers: Modifiers::none(),
+            held_buttons: 0,
         }
     }
 
@@ -52,6 +59,8 @@ impl InputState {
             WindowEvent::Focused(focused) => {
                 if !focused {
                     self.modifiers = Modifiers::none();
+                    // A release that goes to another window is not reported.
+                    self.held_buttons = 0;
                 }
                 Some(PlatformWindowEvent::FocusChanged(*focused))
             }
@@ -73,10 +82,31 @@ impl InputState {
                 self.cursor = Point::new(position.x, position.y);
                 input(self.mouse(PlatformMouseEventKind::Move, None))
             }
+            // winit reports moves only inside the window, so without this one
+            // what the pointer left the window from stays hovered. A held
+            // button keeps the moves coming from outside (X11, Windows) or the
+            // pointer from leaving (Wayland), and a drag is not to jump.
+            // `cursor` keeps the last place in the window: winit on Windows
+            // reports no move for a pointer that returns to it, and a press
+            // there is at that place.
+            WindowEvent::CursorLeft { .. } if self.held_buttons == 0 => {
+                input(PlatformInputEvent::Mouse(PlatformMouseEvent {
+                    kind: PlatformMouseEventKind::Move,
+                    position: OUTSIDE_WINDOW,
+                    button: None,
+                    modifiers: self.modifiers,
+                }))
+            }
             WindowEvent::MouseInput { state, button, .. } => {
                 let kind = match state {
-                    ElementState::Pressed => PlatformMouseEventKind::Down,
-                    ElementState::Released => PlatformMouseEventKind::Up,
+                    ElementState::Pressed => {
+                        self.held_buttons |= button_bit(*button);
+                        PlatformMouseEventKind::Down
+                    }
+                    ElementState::Released => {
+                        self.held_buttons &= !button_bit(*button);
+                        PlatformMouseEventKind::Up
+                    }
                 };
                 input(self.mouse(kind, Some(mouse_button(*button))))
             }
@@ -193,6 +223,19 @@ fn native_cursor_position(window: &Window) -> Option<winit::dpi::PhysicalPositio
 #[cfg(not(any(target_os = "linux", target_os = "windows")))]
 fn native_cursor_position(_window: &Window) -> Option<winit::dpi::PhysicalPosition<i32>> {
     None
+}
+
+/// The bit of `button` in [`InputState::held_buttons`]; the buttons winit
+/// has no name for share one.
+fn button_bit(button: winit::event::MouseButton) -> u8 {
+    match button {
+        winit::event::MouseButton::Left => 1,
+        winit::event::MouseButton::Right => 1 << 1,
+        winit::event::MouseButton::Middle => 1 << 2,
+        winit::event::MouseButton::Back => 1 << 3,
+        winit::event::MouseButton::Forward => 1 << 4,
+        winit::event::MouseButton::Other(_) => 1 << 5,
+    }
 }
 
 fn mouse_button(button: winit::event::MouseButton) -> MouseButton {
@@ -329,6 +372,99 @@ fn character_key_code(ch: char) -> KeyCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::elements::element::{PointerEvent, PointerEventKind};
+    use std::cell::Cell;
+    use std::rc::Rc;
+    use winit::dpi::PhysicalPosition;
+    use winit::event::DeviceId;
+
+    /// The pointer event the window dispatches for `event`, if it is one.
+    fn pointer(state: &mut InputState, event: &WindowEvent) -> Option<PointerEvent> {
+        let PlatformWindowEvent::Input(PlatformInputEvent::Mouse(mouse)) =
+            state.translate(event)?
+        else {
+            return None;
+        };
+        Some(PointerEvent {
+            kind: match mouse.kind {
+                PlatformMouseEventKind::Down => PointerEventKind::Down,
+                PlatformMouseEventKind::Up => PointerEventKind::Up,
+                PlatformMouseEventKind::Move => PointerEventKind::Move,
+            },
+            position: mouse.position,
+            button: mouse.button,
+        })
+    }
+
+    fn moved(x: f64, y: f64) -> WindowEvent {
+        WindowEvent::CursorMoved {
+            device_id: DeviceId::dummy(),
+            position: PhysicalPosition::new(x, y),
+        }
+    }
+
+    fn left() -> WindowEvent {
+        WindowEvent::CursorLeft {
+            device_id: DeviceId::dummy(),
+        }
+    }
+
+    fn button(state: ElementState) -> WindowEvent {
+        WindowEvent::MouseInput {
+            device_id: DeviceId::dummy(),
+            state,
+            button: winit::event::MouseButton::Left,
+        }
+    }
+
+    #[test]
+    fn a_pointer_that_left_the_window_hovers_nothing() {
+        let hovered = Rc::new(Cell::new(false));
+        let seen = Rc::clone(&hovered);
+        let mut session = crate::testing::mount(Size::new(200.0, 100.0), move |_| {
+            let seen = Rc::clone(&seen);
+            crate::elements::div()
+                .w(200.0)
+                .h(100.0)
+                .on_hover(move |hovered| seen.set(hovered))
+        })
+        .expect("mount");
+        let mut state = InputState::new(2.0);
+
+        let over = pointer(&mut state, &moved(200.0, 100.0)).expect("a move");
+        assert_eq!(over.position, Point::new(100.0, 50.0));
+        session.dispatch_pointer_event(over);
+        assert!(hovered.get());
+
+        // winit reports no move once the pointer is outside the window.
+        if let Some(away) = pointer(&mut state, &left()) {
+            session.dispatch_pointer_event(away);
+        }
+        assert!(
+            !hovered.get(),
+            "the pointer left the window and its last place in it is still hovered"
+        );
+    }
+
+    #[test]
+    fn a_pointer_dragged_out_of_the_window_is_still_followed() {
+        let mut state = InputState::new(1.0);
+        pointer(&mut state, &moved(10.0, 20.0)).expect("a move");
+        pointer(&mut state, &button(ElementState::Pressed)).expect("a press");
+        // The window goes on getting the moves of a pointer it holds a button
+        // of: the drag is not sent out of the window when it crosses the edge.
+        assert!(pointer(&mut state, &left()).is_none());
+        let outside = pointer(&mut state, &moved(-30.0, 20.0)).expect("a move");
+        assert_eq!(outside.position, Point::new(-30.0, 20.0));
+
+        let released = pointer(&mut state, &button(ElementState::Released)).expect("a release");
+        assert_eq!(released.position, Point::new(-30.0, 20.0));
+        let away = pointer(&mut state, &left()).expect("a move out of the window");
+        assert_eq!(away.kind, PointerEventKind::Move);
+        // A press with no move before it is where the pointer was last seen.
+        let pressed = pointer(&mut state, &button(ElementState::Pressed)).expect("a press");
+        assert_eq!(pressed.position, Point::new(-30.0, 20.0));
+    }
 
     #[test]
     fn letters_digits_and_named_keys_map_to_key_codes() {
