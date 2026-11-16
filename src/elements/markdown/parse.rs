@@ -412,8 +412,14 @@ pub(super) fn extend(previous: &Document, source: &str) -> Option<Document> {
     let mut starts = previous.blocks.iter().map(|(start, _)| *start).rev();
     let mut start = line_start(starts.next().unwrap_or(0));
     for earlier in starts {
-        let between = &source[earlier..start];
-        if earlier < start && between.lines().skip(1).any(|line| line.trim().is_empty()) {
+        // The blocks an image splits a paragraph into share its start, which
+        // is past its line's start when the paragraph is indented.
+        let ended = earlier < start
+            && source[earlier..start]
+                .lines()
+                .skip(1)
+                .any(|line| line.trim().is_empty());
+        if ended {
             break;
         }
         start = line_start(earlier);

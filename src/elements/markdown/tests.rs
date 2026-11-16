@@ -156,3 +156,10 @@ fn reference_definitions_force_a_full_parse() {
     let previous = parse("[a][r]\n\nmore");
     assert!(super::parse::extend(&previous, "[a][r]\n\nmore\n\n[r]: /x").is_none());
 }
+
+#[test]
+fn streaming_an_indented_paragraph_an_image_splits_matches_a_full_parse() {
+    // The blocks an image splits a paragraph into all start past its indent.
+    assert_streams_like_full_parse("intro\n\n   see ![cat](missing.png) and more\n\nend");
+    assert_streams_like_full_parse("  continued\ntext ![i](u) more");
+}
