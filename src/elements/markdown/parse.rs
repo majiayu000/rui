@@ -439,28 +439,31 @@ fn parse_from(source: &str, base: usize) -> Document {
 /// `previous`, the document of a prefix of it: appended text can only change
 /// the blocks still open at the prefix's end, and those are within the last
 /// top-level block. A block not ended by a blank line is parsed again too,
-/// since a GitHub table takes in the lines after it as rows. `None` when a
-/// link reference definition could resolve links before the restart.
+/// since a GitHub table takes in the lines after it as rows, and so is a
+/// list, which no blank line ends: an item after one is the list's next, and
+/// a line after its last item can be more of that item. `None` when a link
+/// reference definition could resolve links before the restart.
 pub(super) fn extend(previous: &Document, source: &str) -> Option<Document> {
     if previous.has_references {
         return None;
     }
     // From the start of its line, so an indented code block keeps its indent.
     let line_start = |at: usize| source[..at].rfind('\n').map_or(0, |newline| newline + 1);
-    let mut starts = previous.blocks.iter().map(|(start, _)| *start).rev();
-    let mut start = line_start(starts.next().unwrap_or(0));
-    for earlier in starts {
+    let mut earlier_blocks = previous.blocks.iter().rev();
+    let mut start = line_start(earlier_blocks.next().map_or(0, |(start, _)| *start));
+    for (earlier, block) in earlier_blocks {
         // The blocks an image splits a paragraph into share its start, which
         // is past its line's start when the paragraph is indented.
-        let ended = earlier < start
-            && source[earlier..start]
+        let ended = *earlier < start
+            && !matches!(**block, Block::List { .. })
+            && source[*earlier..start]
                 .lines()
                 .skip(1)
                 .any(|line| line.trim().is_empty());
         if ended {
             break;
         }
-        start = line_start(earlier);
+        start = line_start(*earlier);
     }
     let tail = parse_from(&source[start..], start);
     if tail.has_references {

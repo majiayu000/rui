@@ -164,6 +164,19 @@ fn streaming_an_indented_paragraph_an_image_splits_matches_a_full_parse() {
     assert_streams_like_full_parse("  continued\ntext ![i](u) more");
 }
 
+#[test]
+fn streaming_an_item_after_a_blank_line_matches_a_full_parse() {
+    // "1" is a paragraph of its own until its "." makes it the list's next item.
+    assert_streams_like_full_parse("1. first\n\n1. second\n\n1. third");
+}
+
+#[test]
+fn streaming_a_lazy_line_after_a_loose_list_matches_a_full_parse() {
+    // "---" is a rule until its "|" makes it a lazy line of the nested item,
+    // in a list with a blank line inside and none at its end.
+    assert_streams_like_full_parse("- item\npara *two\n\n  - nested\n---|");
+}
+
 /// How deep the quotes and lists of `blocks` nest.
 fn nesting(blocks: &[Block]) -> usize {
     let inside = |block: &Block| match block {
