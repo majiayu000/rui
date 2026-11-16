@@ -202,6 +202,31 @@ fn pages_unfinished_frames_drew_from_are_kept_until_they_finish() {
 }
 
 #[test]
+fn a_sprite_placed_before_the_fonts_change_is_gone_from_the_emptied_atlas() {
+    let mut cache = TextGlyphCache::new();
+    cache.begin_frame();
+    let first = sprite(&mut cache).expect("room");
+    assert!(cache.use_sprite(first.0, first.1));
+    let epoch = cache.epoch();
+
+    // The fonts change: the next text shaped empties the atlas, and its glyphs
+    // go into a new page where the sprite's page was.
+    cache.fonts_changed();
+    cache.begin_frame();
+    let shaped = cache.shape(request("Hello")).expect("shape").expect("ink");
+    for glyph in &shaped.glyphs {
+        cache.glyph(glyph, 28.0, 0).expect("glyph");
+    }
+    assert_ne!(cache.epoch(), epoch, "the atlas was emptied");
+    assert_eq!(cache.atlas().page_count(), 1);
+    assert!(!cache.use_sprite(first.0, first.1), "the old slot is gone");
+
+    let again = sprite(&mut cache).expect("room");
+    assert_eq!(again.0.page, first.0.page);
+    assert!(cache.use_sprite(again.0, again.1));
+}
+
+#[test]
 fn the_frame_being_drawn_never_loses_a_page() {
     let mut cache = small_cache(1);
     cache.begin_frame();

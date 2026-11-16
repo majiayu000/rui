@@ -380,6 +380,12 @@ impl MetalRenderer {
         self.planner.placed_path_sprites()
     }
 
+    /// Has the next text drawn empty the glyph atlas, as a font loading does.
+    #[cfg(test)]
+    pub(super) fn fonts_changed(&mut self) {
+        self.planner.text_cache.fonts_changed();
+    }
+
     /// The kept offscreen texture.
     #[cfg(test)]
     pub(super) fn offscreen_target(&self) -> Option<Texture> {
