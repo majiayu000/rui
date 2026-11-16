@@ -198,6 +198,10 @@ awk '
   function verdict(name, metric, noise,    rui, gpui, ratio) {
     rui = name SUBSEP "rui"; gpui = name SUBSEP "gpui"
     if (!has[rui, metric] || !has[gpui, metric]) return "-"
+    # With GPU_REDRAWS the buffer of a frame can overlap the redraws before it and add
+    # no busy time; a zero is no measurement.
+    if (low[rui, metric] + high[rui, metric] <= 0 || low[gpui, metric] + high[gpui, metric] <= 0)
+      return "-"
     if (low[rui, metric] <= high[gpui, metric] && low[gpui, metric] <= high[rui, metric])
       return "tie (ranges overlap)"
     ratio = (low[rui, metric] + high[rui, metric]) / (low[gpui, metric] + high[gpui, metric])

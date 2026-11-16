@@ -3,7 +3,9 @@
 Both frameworks draw the same fixtures through Metal on one machine. Tracks #197.
 
 > **GPU sampling:** since #277 both sides take GPU time from the same frames, frames
-> 10 to 69 of every window (see [GPU time with matched samples](#gpu-time-with-matched-samples-2026-11-16)).
+> 10 to 69 of every window (see [GPU time with matched samples](#gpu-time-with-matched-samples-2026-11-16)),
+> and `GPU_REDRAWS` reads them with the GPU kept busy (see
+> [GPU time with the GPU kept busy](#gpu-time-with-the-gpu-kept-busy-2026-11-16)).
 > GPU numbers in sections older than that one sampled GPUI across Criterion's warm-up
 > and every window's first frames; they are kept as recorded, not as verdicts.
 
@@ -133,6 +135,56 @@ examples and GPUI's `primitives` bench paint this way.
   - Neither side opens an on-screen window or waits for a presented frame. Startup of
     a real app window is not measured here.
 
+## GPU time with the GPU kept busy (2026-11-16)
+
+RUI `8df7ee7`, GPUI `784374c`, Apple M2 Max, `GPU_REDRAWS=16 REPEATS=3`, all cases.
+Load average 16.8 / 10.5 / 6.4 before and 9.0 / 9.7 / 6.9 after.
+
+Why: in the matched-sample run below, a frame of about 0.1 ms left the GPU idle most
+of the time, and its time followed the clock the GPU picked rather than the work.
+The same empty RUI frame (every sprite culled) took 0.059 ms in `editor_scroll`,
+0.117 ms in `text_paragraphs` and 0.129 ms in `quad_grid`. Drawing 6271 glyphs
+added only about 0.011 ms on top of it in `text_paragraphs`. That case's 1.8x
+"behind" was the clock, not the glyph pass.
+
+With `GPU_REDRAWS=N`, each side draws every frame's scene N more times right after
+it, back to back. The GPU stays busy, so its clock is up. `gpu_time::steady_redraws`
+reads the mean time of a frame's redraws, for the same frames 10 to 69 of every window.
+On RUI the mean was the same with 16 and 64 redraws (0.045 to 0.058 ms across cases).
+
+GPU saturated ms / frame p50, the range over the three runs:
+
+| case | RUI | GPUI | GPUI frames | verdict (10% noise) |
+|---|---|---|---|---|
+| list_full | 0.044-0.052 | 0.162-0.172 | 126 | RUI ahead 3.5x |
+| list_full_one_row | 0.041-0.044 | 2.955-17.339 | 1 | RUI ahead 239x |
+| list_virtual_1k | 0.041-0.048 | 0.079-0.081 | 1124 | RUI ahead 1.8x |
+| list_virtual_100k | 0.045-0.058 | 0.079-0.081 | 1124-1164 | RUI ahead 1.6x |
+| text_paragraphs | 0.046-0.052 | 0.041-0.056 | 938-1072 | tie (ranges overlap) |
+| quad_grid | 0.053-0.076 | 0.115-0.19 | 381 | RUI ahead 2.4x |
+| resize_full | 0.043-0.05 | 0.108-0.141 | 126 | RUI ahead 2.7x |
+| resize_virtual | 0.045-0.048 | 0.077-0.078 | 1124-1164 | RUI ahead 1.7x |
+| editor_scroll | 0.048-0.051 | 0.081-0.083 | 1072-1124 | RUI ahead 1.7x |
+| editor_edit | 0.049 | 0.081-0.083 | 1124-1164 | RUI ahead 1.7x |
+
+Verdict for #277:
+
+- With the clock taken out, RUI uses less GPU time than GPUI in every case but
+  `text_paragraphs`, which is a tie. This includes the virtual-list and resize cases,
+  by 1.6x to 2.7x.
+- RUI's frames sit near 0.05 ms, which is about what clearing and storing the
+  2880x1800 target costs. The draws themselves add little.
+- `list_full_one_row`: GPUI's frames take about 4 ms of GPU each (3983 draw calls),
+  so with the redraws only 1 frame per run reached the sample. The gap is large, but
+  that number rests on very few frames.
+
+Two limits of this run:
+
+- The redraws run inside the frames Criterion times on the GPUI side, so this run's
+  GPUI CPU columns are not valid. For CPU, use a run without `GPU_REDRAWS`.
+- A frame's own buffer can overlap the redraws of the frame before it, so the plain
+  GPU column reads 0 in some GPUI cases. Only the saturated column is read here.
+
 ## GPU time with matched samples (2026-11-16)
 
 RUI `d016531`, GPUI `784374c`, Apple M2 Max, macOS 27.2.1, `REPEATS=3`, all cases.
@@ -156,24 +208,16 @@ GPU ms / frame p50, the range over the three runs, and the samples behind it:
 | editor_scroll | 0.051-0.152 | 0.099 | 1364 (27) | tie (ranges overlap) |
 | editor_edit | 0.072-0.153 | 0.099 | 1364 (27) | tie (ranges overlap) |
 
-RUI samples 60 frames from one window in every case. Verdict for #277: with the same
-frames sampled, **GPU time per frame is a tie in the virtual-list and resize cases**
-and in most others. Both sides spend about 0.1 ms; RUI's p50 moves between about
-0.05 and 0.15 ms from run to run, which looks like the GPU's clock state rather than
-the scene. Two cases are outside that noise:
+RUI samples 60 frames from one window in every case. At this scale both sides spend
+about 0.1 ms, and RUI's p50 moved between about 0.05 and 0.15 ms from run to run with
+the GPU's clock. This run read `text_paragraphs` as RUI behind 1.8x (0.129 ms against
+0.07 ms). [GPU time with the GPU kept busy](#gpu-time-with-the-gpu-kept-busy-2026-11-16)
+shows that was the clock: with the clock taken out, that case is a tie. That section
+holds the GPU verdict, which supersedes the verdicts in this table. A first run the
+same day at load 14 to 19 moved GPUI's numbers in the same way.
 
-- `list_full_one_row`: RUI ahead 45x. GPUI's cached rows give 3983 draw calls a frame
-  against RUI's 1. Its ~22 ms frames leave only 10 sampled frames, but the gap is far
-  outside their spread.
-- `text_paragraphs`: RUI behind 1.8x, 0.129 ms against 0.07 ms in all three runs, with
-  a similar instance count (6271 against 6375). RUI's glyph pass costs more GPU time
-  per instance here.
-
-A first run the same day at load 14 to 19 had GPUI at 0.1 to 0.3 ms in most cases
-and RUI ahead in six of them; at the lower load those leads closed. GPU claims from
-this suite should therefore be ties, apart from the two cases above. The same run's
-CPU verdicts match the earlier ones: RUI ahead in every case, 2.6x to 133x by wall
-p50, and 8.1x from process start to first frame.
+The same run's CPU verdicts match the earlier ones: RUI ahead in every case, 2.6x to
+133x by wall p50, and 8.1x from process start to first frame.
 
 ## One changed row with rows as views
 
