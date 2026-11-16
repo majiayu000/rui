@@ -251,11 +251,13 @@ impl DatePicker {
         true
     }
 
-    /// Enter and Space: open the calendar, or pick its active day.
+    /// Enter and Space: open the calendar, or pick the day focus is on, which
+    /// is its active day unless assistive technology put focus on another.
     fn activate(&mut self, cx: &mut EventContext) {
-        match self.active {
-            Some(active) => {
-                self.pick(active, cx);
+        let focused = cx.focused_id().and_then(|id| self.day_of(id));
+        match focused.or(self.active) {
+            Some(day) => {
+                self.pick(day, cx);
             }
             None => self.open(cx),
         }
@@ -296,8 +298,18 @@ impl DatePicker {
         }
     }
 
+    /// The day of the open calendar that `id` is the cell of.
+    fn day_of(&self, id: ElementId) -> Option<CalendarDate> {
+        self.active?;
+        let calendar = self.calendar(Bounds::default(), Bounds::default());
+        let cell = (0..GRID_DAYS).find(|&index| part_id(self.id.get(), index + 1) == id);
+        cell.map(|index| calendar.day(index))
+    }
+
+    /// Whether focus is on the field or, where assistive technology puts it,
+    /// on the open calendar or one of its days.
     fn has_focus(&self, cx: &EventContext) -> bool {
-        cx.is_focused(Some(self.id.get()))
+        cx.focused_id().is_some_and(|id| self.contains_id(id))
     }
 
     fn handle_calendar_press(
@@ -457,7 +469,7 @@ impl DatePicker {
         let calendar = self.calendar(Bounds::default(), Bounds::default());
         let title = format!("{} {}", calendar.month.month_name(), calendar.month.year());
         let mut grid = AccessibilityNode::label_required(
-            ElementId::derived(self.id.get(), 0, TypeId::of::<Calendar>()),
+            part_id(self.id.get(), 0),
             AccessibilityRole::Grid,
             title,
         )?
@@ -466,7 +478,7 @@ impl DatePicker {
             let date = calendar.day(index);
             let selectable = self.is_selectable(date);
             let mut cell = AccessibilityNode::label_required(
-                ElementId::derived(self.id.get(), index as u64 + 1, TypeId::of::<Calendar>()),
+                part_id(self.id.get(), index + 1),
                 AccessibilityRole::GridCell,
                 date.long_label(),
             )?
@@ -479,6 +491,11 @@ impl DatePicker {
         }
         Ok(grid)
     }
+}
+
+/// The id of a picker's open calendar (`part` 0) or of its `part`th day.
+fn part_id(picker: ElementId, part: usize) -> ElementId {
+    ElementId::derived(picker, part as u64, TypeId::of::<Calendar>())
 }
 
 /// Where the open calendar's parts go.
@@ -754,10 +771,19 @@ impl Element for DatePicker {
                 self.move_by(|date| date.add_days(7), cx)
             }
             ActionId::Standard(StandardAction::Activate) => self.activate(cx),
-            ActionId::Standard(StandardAction::Cancel) if self.active.is_some() => self.close(cx),
+            ActionId::Standard(StandardAction::Cancel) if self.active.is_some() => {
+                self.close(cx);
+                // Off a day of the calendar that went away.
+                cx.request_focus(Some(self.id.get()));
+            }
             _ => return ActionOutcome::Ignored,
         }
         ActionOutcome::handled("advanced_ui.date_picker")
+    }
+
+    fn contains_id(&self, id: ElementId) -> bool {
+        let calendar = self.active.is_some() && id == part_id(self.id.get(), 0);
+        id == self.id.get() || calendar || self.day_of(id).is_some()
     }
 }
 
