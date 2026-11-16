@@ -55,5 +55,37 @@ fn a_frame_with_two_buffers_or_none_is_an_error() {
     gap.retain(|&(tag_, _)| tag_ != tag(0, 30));
     assert!(steady_samples(&gap, 10, 60).is_err());
 
-    assert!(steady_samples(&window(0, 10), 10, 60).is_err(), "nothing after warm-up");
+    assert!(
+        steady_samples(&window(0, 10), 10, 60).is_err(),
+        "nothing after warm-up"
+    );
+}
+
+#[test]
+fn redraws_give_each_sampled_frame_their_mean() {
+    use gpu_time::{redraw_tag, steady_redraws};
+    // Frame f takes 1 ms, and its three redraws f, f + 1 and f + 2 ms.
+    let mut tagged = Vec::new();
+    for window_ in 0..2 {
+        for frame in 0..70 {
+            let tag_ = tag(window_, frame);
+            tagged.push((tag_, 1.0));
+            for redraw in 0..3 {
+                tagged.push((redraw_tag(tag_), (frame + redraw) as f64));
+            }
+        }
+    }
+    let means = steady_redraws(&tagged, 10, 60).expect("redrawn frames");
+    assert_eq!(means.len(), 120);
+    assert_eq!(means[0], 11.0, "window 0 frame 10");
+    assert_eq!(means[60], 11.0, "window 1 frame 10");
+    // The redraws are not frames of their own.
+    let (frames, _) = steady_samples(&tagged, 10, 60).expect("frames");
+    assert!(frames.iter().all(|&ms| ms == 1.0));
+
+    tagged.retain(|&(tag_, _)| tag_ != redraw_tag(tag(1, 40)));
+    assert!(
+        steady_redraws(&tagged, 10, 60).is_err(),
+        "a frame without redraws"
+    );
 }

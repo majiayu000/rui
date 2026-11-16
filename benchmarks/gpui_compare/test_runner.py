@@ -74,6 +74,7 @@ echo '  wall time per iteration: median 2 ms' >&2
         assert result.returncode == 0, result.stderr
         assert "same frames on both sides" in result.stdout
         assert "verdict by GPU p50" in result.stdout
+        assert "verdict by GPU saturated p50" in result.stdout
         metadata = (artifact / "metadata.txt").read_text()
         assert "rui_revision=784374c" in metadata and "zed_revision=784374c" in metadata
         assert "repeats=2" in metadata and "cases=list_virtual_1k" in metadata

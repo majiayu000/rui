@@ -698,15 +698,24 @@ fn counted(
         return;
     }
     // The frames RUI samples, from every window that reached them.
-    let (mut gpu_ms, gpu_windows) =
-        gpu_time::steady_samples(&gpu_time::take_tagged(), GPU_WARMUP, GPU_SAMPLES)
+    let tagged = gpu_time::take_tagged();
+    let (mut gpu_ms, gpu_windows) = gpu_time::steady_samples(&tagged, GPU_WARMUP, GPU_SAMPLES)
+        .unwrap_or_else(|err| panic!("{name}: {err}"));
+    let percentile = |values: &mut Vec<f64>, fraction: f64| {
+        values.sort_by(f64::total_cmp);
+        values[((values.len() - 1) as f64 * fraction).round() as usize]
+    };
+    let saturated = if gpu_time::redraws() > 0 {
+        let mut saturated = gpu_time::steady_redraws(&tagged, GPU_WARMUP, GPU_SAMPLES)
             .unwrap_or_else(|err| panic!("{name}: {err}"));
-    gpu_ms.sort_by(f64::total_cmp);
-    let percentile = |fraction: f64| gpu_ms[((gpu_ms.len() - 1) as f64 * fraction).round() as usize];
+        format!(" gpu_saturated_ms_p50={:.3}", percentile(&mut saturated, 0.5))
+    } else {
+        String::new()
+    };
     eprintln!(
-        "gpui {name} draw_calls={draw_calls} instances={instances} gpu_ms_p50={:.3} gpu_ms_p95={:.3} gpu_windows={gpu_windows} gpu_frames={}",
-        percentile(0.5),
-        percentile(0.95),
+        "gpui {name} draw_calls={draw_calls} instances={instances} gpu_ms_p50={:.3} gpu_ms_p95={:.3} gpu_windows={gpu_windows} gpu_frames={}{saturated}",
+        percentile(&mut gpu_ms, 0.5),
+        percentile(&mut gpu_ms, 0.95),
         gpu_ms.len()
     );
 }

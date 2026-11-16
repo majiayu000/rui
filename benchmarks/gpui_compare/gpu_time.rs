@@ -18,6 +18,11 @@
 //! The comparison tags each frame with its window and its place in that window
 //! ([`tag`]) and keeps the same frames on both sides with [`steady_samples`]: frames
 //! 10 to 69 of every window, as many of them as it drew.
+//!
+//! A frame of about 0.1 ms leaves the GPU idle most of the time, and its time then
+//! follows the clock the GPU picked: the same empty frame took 0.06 ms in one case
+//! and 0.13 ms in another. With `COMPARE_GPU_REDRAWS=N`, each side draws every
+//! frame's scene N more times right after it, and [`steady_redraws`] reads their mean.
 
 use std::ffi::{CStr, c_char, c_ulong, c_void};
 use std::ops::Range;
@@ -161,13 +166,83 @@ pub fn tag(window: usize, frame: usize) -> usize {
 /// sooner, as each of Criterion's is, gives the frames it drew from `warmup` on; one
 /// closed before `warmup` gives none. A sampled frame with no command buffer or more
 /// than one is an error, as is no frame sampled at all. Returns the milliseconds in
-/// window and frame order, with how many windows they came from.
+/// window and frame order, with how many windows they came from. Redraws
+/// ([`redraw_tag`]) are left out.
 #[allow(dead_code)]
 pub fn steady_samples(
     tagged: &[(usize, f64)],
     warmup: usize,
     samples: usize,
 ) -> Result<(Vec<f64>, usize), String> {
+    let (frames, windows) = steady(tagged, warmup, samples)?;
+    Ok((frames.into_iter().map(|(_, busy)| busy).collect(), windows))
+}
+
+/// Bit 31 of a frame number marks the frame's redraws.
+const REDRAW: usize = 1 << 31;
+
+/// The tag of the redraws of the frame tagged `tag`.
+#[allow(dead_code)]
+pub fn redraw_tag(tag: usize) -> usize {
+    tag | REDRAW
+}
+
+/// The number of times `COMPARE_GPU_REDRAWS` asks for each frame's scene to be
+/// drawn again right after it, back to back; 0 when unset.
+#[allow(dead_code)]
+pub fn redraws() -> usize {
+    std::env::var("COMPARE_GPU_REDRAWS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(0)
+}
+
+/// For each frame [`steady_samples`] chooses, the mean GPU time of its redraws
+/// ([`redraw_tag`]). Drawn back to back, they keep the GPU busy, so its clock is up
+/// and their time is the frame's cost rather than the clock the GPU happened to
+/// run at; the mean counts any overlap between them once. A sampled frame with no
+/// redraw is an error.
+#[allow(dead_code)]
+pub fn steady_redraws(
+    tagged: &[(usize, f64)],
+    warmup: usize,
+    samples: usize,
+) -> Result<Vec<f64>, String> {
+    let (frames, _) = steady(tagged, warmup, samples)?;
+    let mut redraws: Vec<(usize, f64)> = tagged
+        .iter()
+        .filter(|&&(tag, _)| tag & REDRAW != 0)
+        .map(|&(tag, busy)| (tag & !REDRAW, busy))
+        .collect();
+    redraws.sort_by_key(|&(tag, _)| tag);
+    let mut means = redraws.chunk_by(|a, b| a.0 == b.0).map(|group| {
+        let total: f64 = group.iter().map(|&(_, busy)| busy).sum();
+        (group[0].0, total / group.len() as f64)
+    });
+    frames
+        .iter()
+        .map(|&(tag, _)| {
+            means
+                .find(|&(redrawn, _)| redrawn >= tag)
+                .filter(|&(redrawn, _)| redrawn == tag)
+                .map(|(_, mean)| mean)
+                .ok_or_else(|| {
+                    format!(
+                        "window {} frame {} has no redraw",
+                        tag >> 32,
+                        tag & 0xffff_ffff
+                    )
+                })
+        })
+        .collect()
+}
+
+/// The frames [`steady_samples`] chooses, with their tags.
+fn steady(
+    tagged: &[(usize, f64)],
+    warmup: usize,
+    samples: usize,
+) -> Result<(Vec<(usize, f64)>, usize), String> {
     let wanted = warmup..warmup + samples;
     let mut frames: Vec<(usize, usize, f64)> = tagged
         .iter()
@@ -184,17 +259,27 @@ pub fn steady_samples(
                 ));
             }
             if frame > expected {
-                return Err(format!("window {index} frame {expected} has no command buffer"));
+                return Err(format!(
+                    "window {index} frame {expected} has no command buffer"
+                ));
             }
         }
-        chosen.extend(window.iter().map(|&(_, _, busy)| busy));
+        chosen.extend(
+            window
+                .iter()
+                .map(|&(index, frame, busy)| (tag(index, frame), busy)),
+        );
         windows += 1;
     }
     if windows == 0 {
         let mut seen: Vec<usize> = tagged.iter().map(|&(tag, _)| tag >> 32).collect();
         seen.sort_unstable();
         seen.dedup();
-        let longest = tagged.iter().map(|&(tag, _)| (tag & 0xffff_ffff) + 1).max();
+        let longest = tagged
+            .iter()
+            .filter(|&&(tag, _)| tag & REDRAW == 0)
+            .map(|&(tag, _)| (tag & 0xffff_ffff) + 1)
+            .max();
         return Err(format!(
             "no window drew frames {warmup}..{} ({} buffers from {} windows, the longest {} frames)",
             warmup + samples,

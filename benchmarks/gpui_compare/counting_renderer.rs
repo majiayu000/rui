@@ -23,10 +23,15 @@ static WINDOWS: AtomicUsize = AtomicUsize::new(0);
 /// [`gpu_time::steady_samples`]. Its Metal renderer issues one instanced draw per
 /// `Scene::batches()` entry; paths and surfaces would add more, but no fixture draws
 /// them.
+///
+/// With `COMPARE_GPU_REDRAWS=N`, each scene is drawn N more times right after it, as
+/// RUI's bench does, for [`gpu_time::steady_redraws`]. They run inside the frame
+/// Criterion times, so that run's CPU columns include them.
 pub(crate) struct CountingRenderer {
     inner: Box<dyn PlatformHeadlessRenderer>,
     window: usize,
     frames: usize,
+    redraws: usize,
 }
 
 impl CountingRenderer {
@@ -35,12 +40,16 @@ impl CountingRenderer {
             inner,
             window: WINDOWS.fetch_add(1, Ordering::Relaxed),
             frames: 0,
+            redraws: crate::gpu_time::redraws(),
         }
     }
 
-    fn next_frame(&mut self) {
-        crate::gpu_time::set_frame(crate::gpu_time::tag(self.window, self.frames));
+    /// Tags the next frame, and returns its tag.
+    fn next_frame(&mut self) -> usize {
+        let tag = crate::gpu_time::tag(self.window, self.frames);
+        crate::gpu_time::set_frame(tag);
         self.frames += 1;
+        tag
     }
 
     fn count(scene: &Scene) {
@@ -82,8 +91,13 @@ impl PlatformHeadlessRenderer for CountingRenderer {
         size: gpui::Size<DevicePixels>,
     ) -> anyhow::Result<()> {
         Self::count(scene);
-        self.next_frame();
-        self.inner.render_scene(scene, size)
+        let tag = self.next_frame();
+        self.inner.render_scene(scene, size)?;
+        crate::gpu_time::set_frame(crate::gpu_time::redraw_tag(tag));
+        for _ in 0..self.redraws {
+            self.inner.render_scene(scene, size)?;
+        }
+        Ok(())
     }
 
     fn sprite_atlas(&self) -> std::sync::Arc<dyn PlatformAtlas> {
