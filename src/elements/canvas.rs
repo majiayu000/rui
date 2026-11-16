@@ -152,6 +152,7 @@ impl Canvas {
     /// primitives are recorded into a [`Picture`], which the canvas paints
     /// instead of calling the closure while the key and its bounds stay the
     /// same, and which the renderer plans once and copies into later frames.
+    /// A picture the closure paints is recorded as the primitives it draws.
     /// A canvas rebuilt with the same key, style and id keeps the previous
     /// instance, closure and picture included, and its paint is replayed: the
     /// closure runs again only when the key changes or layout gives the canvas
@@ -239,7 +240,8 @@ impl Element for Canvas {
                                 scene: &mut recording,
                             },
                         );
-                        let picture = Picture::new(std::mem::take(&mut recording.primitives));
+                        let picture =
+                            Picture::new(flattened(std::mem::take(&mut recording.primitives)));
                         self.recorded = Some((key, bounds, picture.clone()));
                         picture
                     }
@@ -277,6 +279,30 @@ impl Element for Canvas {
         // Moves keep propagating so hover elsewhere stays current, as in `Div`.
         !matches!(event.kind, PointerEventKind::Move)
     }
+}
+
+/// `primitives` with each picture among them replaced by what it draws, as
+/// the [`Picture`] they are recorded into holds no other picture.
+fn flattened(primitives: Vec<Primitive>) -> Vec<Primitive> {
+    let is_picture = |primitive: &Primitive| matches!(primitive, Primitive::Picture { .. });
+    if !primitives.iter().any(is_picture) {
+        return primitives;
+    }
+    let mut flat = Vec::with_capacity(primitives.len());
+    for primitive in primitives {
+        match primitive {
+            // As the renderer draws it: each primitive moved by the offset.
+            Primitive::Picture { picture, offset } => {
+                flat.extend(picture.primitives().iter().map(|drawn| {
+                    let mut drawn = drawn.clone();
+                    drawn.translate(offset.x, offset.y);
+                    drawn
+                }));
+            }
+            other => flat.push(other),
+        }
+    }
+    flat
 }
 
 #[cfg(test)]
