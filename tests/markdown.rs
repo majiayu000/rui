@@ -309,6 +309,20 @@ fn a_local_image_is_drawn_at_its_own_size_scaled_down_to_fit() {
     );
 }
 
+#[test]
+fn quotes_and_lists_nested_thousands_deep_are_drawn() {
+    // A line this short can come from whoever is being replied to.
+    for marker in [">", "- ", "1. ", "> - "] {
+        let source = format!("{}deep inside", marker.repeat(2000));
+        let session = mount(Size::new(640.0, 480.0), move |_| {
+            div().w(640.0).child(markdown(source.clone()))
+        })
+        .expect("mount");
+        let all = joined(session.primitives());
+        assert!(all.contains("deep inside"), "{marker:?}: {all}");
+    }
+}
+
 /// `RUI_MARKDOWN_PNG=<path>` writes the sample, drawn by Metal, to `<path>`.
 #[cfg(all(target_os = "macos", feature = "metal"))]
 #[test]

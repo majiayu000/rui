@@ -496,6 +496,10 @@ markdown(reply)
 Each source is parsed once and kept by source; a source that extends a kept
 one, as a streamed reply does, is parsed again only from its last block.
 
+Quotes and lists nest 16 deep. One nested deeper is drawn as part of the one
+at that depth, with its text, so a source from elsewhere cannot nest elements
+without bound.
+
 Markdown is not selectable by default; `.selectable()` (last in the chain)
 puts the document in a selection scope highlighted with the theme's
 `state.selection` color. List markers and task checks are left out of it.

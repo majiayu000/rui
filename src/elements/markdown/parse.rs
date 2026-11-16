@@ -10,6 +10,12 @@ use std::sync::Arc;
 /// messages.
 const CACHE_CAPACITY: usize = 128;
 
+/// How deep quotes and lists nest. One nested deeper is read as part of the
+/// one at this depth, its text kept: every level is a level of elements, which
+/// are built, laid out and painted by recursion, and a line of a few thousand
+/// `>` would run the thread out of stack.
+pub(super) const MAX_NESTING: usize = 16;
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(super) struct InlineStyle {
     pub strong: bool,
@@ -157,6 +163,8 @@ struct Builder {
     /// Where the top-level construct being read starts.
     top_start: usize,
     stack: Vec<Frame>,
+    /// Open quotes, lists and items past [`MAX_NESTING`], which have no frame.
+    flattened: usize,
     inline: InlineBuilder,
     code: Option<String>,
     /// Destination and alt text of an image being read.
@@ -173,6 +181,27 @@ impl Builder {
             // Lists hold only items and tables only cells.
             Some(Frame::List { .. }) | Some(Frame::Table { .. }) => {}
         }
+    }
+
+    /// Open the quote, list or item `frame`, unless it is nested too deep to
+    /// have one: its blocks are then those of the frame it is in.
+    fn open(&mut self, frame: Frame) {
+        let nested = |frame: &Frame| matches!(frame, Frame::Quote(_) | Frame::List { .. });
+        // An item has a frame whenever its list does.
+        let too_deep =
+            nested(&frame) && self.stack.iter().filter(|open| nested(open)).count() >= MAX_NESTING;
+        if self.flattened > 0 || too_deep {
+            self.flattened += 1;
+        } else {
+            self.stack.push(frame);
+        }
+    }
+
+    /// Whether the quote, list or item ending has a frame to pop.
+    fn close(&mut self) -> bool {
+        let framed = self.flattened == 0;
+        self.flattened = self.flattened.saturating_sub(1);
+        framed
     }
 
     /// End the text read so far as a paragraph, or as a heading of `level`.
@@ -237,7 +266,10 @@ impl Builder {
                 self.push_block(Block::Rule);
             }
             Event::TaskListMarker(checked) => {
-                if let Some(Frame::Item(item)) = self.stack.last_mut() {
+                // The frame of an item without one is another item's.
+                if self.flattened == 0
+                    && let Some(Frame::Item(item)) = self.stack.last_mut()
+                {
                     item.task = Some(checked);
                 }
             }
@@ -253,18 +285,18 @@ impl Builder {
             }
             Tag::BlockQuote(_) => {
                 self.flush(None);
-                self.stack.push(Frame::Quote(Vec::new()));
+                self.open(Frame::Quote(Vec::new()));
             }
             Tag::List(start) => {
                 self.flush(None);
-                self.stack.push(Frame::List {
+                self.open(Frame::List {
                     start,
                     items: Vec::new(),
                 });
             }
             Tag::Item => {
                 self.flush(None);
-                self.stack.push(Frame::Item(Item {
+                self.open(Frame::Item(Item {
                     task: None,
                     blocks: Vec::new(),
                 }));
@@ -303,20 +335,25 @@ impl Builder {
             }
             TagEnd::BlockQuote(_) => {
                 self.flush(None);
-                if let Some(Frame::Quote(blocks)) = self.stack.pop() {
+                if self.close()
+                    && let Some(Frame::Quote(blocks)) = self.stack.pop()
+                {
                     self.push_block(Block::Quote(blocks));
                 }
             }
             TagEnd::Item => {
                 self.flush(None);
-                if let Some(Frame::Item(item)) = self.stack.pop()
+                if self.close()
+                    && let Some(Frame::Item(item)) = self.stack.pop()
                     && let Some(Frame::List { items, .. }) = self.stack.last_mut()
                 {
                     items.push(item);
                 }
             }
             TagEnd::List(_) => {
-                if let Some(Frame::List { start, items }) = self.stack.pop() {
+                if self.close()
+                    && let Some(Frame::List { start, items }) = self.stack.pop()
+                {
                     self.push_block(Block::List { start, items });
                 }
             }
@@ -381,6 +418,7 @@ fn parse_from(source: &str, base: usize) -> Document {
         blocks: Vec::new(),
         top_start: base,
         stack: Vec::new(),
+        flattened: 0,
         inline: InlineBuilder::default(),
         code: None,
         image: None,
