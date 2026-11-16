@@ -1,5 +1,8 @@
 //! One winit window: its presenter, wgpu surface and frame.
 
+mod frame_size;
+
+use self::frame_size::FrameSize;
 use super::UserEvent;
 use super::accessibility::WindowAccessibility;
 use super::accessibility_diff::{Activation, WholeTree};
@@ -404,7 +407,7 @@ where
         if let Some(drop) = self.file_drop.take() {
             self.events.push(QueuedEvent::FileDrop(drop));
         }
-        let mut viewport_size = self.last_viewport_size;
+        let mut frame_size = FrameSize::new(self.last_viewport_size);
         let mut ordered = Vec::new();
         let mut close_requested = false;
         for event in std::mem::take(&mut self.events) {
@@ -423,7 +426,12 @@ where
             };
             mark_platform_event_redraw(&event, context);
             match event {
-                PlatformWindowEvent::Resized(size) => viewport_size = size,
+                event @ (PlatformWindowEvent::Resized(_)
+                | PlatformWindowEvent::ScaleFactorChanged(_)) => {
+                    frame_size.update(&event, || {
+                        self.input.logical_size(self.window.window.inner_size())
+                    });
+                }
                 PlatformWindowEvent::FocusChanged(focused) => {
                     ordered.push(OrderedInputEvent::WinitFocus(focused))
                 }
@@ -433,16 +441,19 @@ where
             }
         }
 
+        let viewport_size = frame_size.logical;
         let viewport_changed = synchronize_viewport_after_platform_events(
             context,
             viewport_size,
             self.last_viewport_size,
         );
         if viewport_changed {
+            schedule_platform_redraw(&self.window, context, RedrawSource::PlatformResize);
+        }
+        if frame_size.surface_changed {
             let physical = self.window.window.inner_size();
             self.surface
                 .resize(&self.renderer, (physical.width, physical.height));
-            schedule_platform_redraw(&self.window, context, RedrawSource::PlatformResize);
         }
 
         let Self {
