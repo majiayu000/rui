@@ -412,3 +412,50 @@ fn a_press_that_closes_a_popover_in_a_scope_leaves_the_selection() {
     press_a_control_beside_an_open_popover(|scope| scope);
     press_a_control_beside_an_open_popover(|scope| div().child(scope));
 }
+
+#[test]
+fn a_drag_held_while_the_text_it_started_in_goes_away_selects_nothing() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    let shown = Rc::new(Cell::new(3));
+    let count = Rc::clone(&shown);
+    let mut session = mount(Size::new(400.0, 300.0), move |_| {
+        let blocks = ["First block", "Second block", "Third block"];
+        selection_scope(
+            div()
+                .w(400.0)
+                .flex_col()
+                .children(blocks.into_iter().take(count.get()).map(text)),
+        )
+    })
+    .expect("mount");
+    let third = text_bounds(session.primitives(), "Third");
+    let from = left_of(&session, "Third");
+    let to = Point::new(third.x() + third.width() * 0.5, from.y);
+    session.pointer_down(from);
+    session.pointer_move(to);
+    session.frame().expect("frame with the selection");
+    assert_eq!(selection_quads(session.primitives()).len(), 1);
+
+    // The button is still down when the last two blocks are removed.
+    shown.set(1);
+    session.app_context_mut().request_rebuild();
+    session.frame().expect("frame without the blocks");
+    assert!(selection_quads(session.primitives()).is_empty());
+    session.pointer_move(Point::new(to.x + 10.0, to.y));
+    session.pointer_up(Point::new(to.x + 10.0, to.y));
+    session.frame().expect("frame after the release");
+    assert_eq!(copy(&mut session), None);
+    assert!(selection_quads(session.primitives()).is_empty());
+
+    // The next drag selects from where it presses.
+    let first = text_bounds(session.primitives(), "First");
+    let from = left_of(&session, "First");
+    drag(
+        &mut session,
+        from,
+        Point::new(first.x() + first.width() + 10.0, from.y),
+    );
+    assert_eq!(copy(&mut session).as_deref(), Some("First block"));
+}
