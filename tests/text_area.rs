@@ -285,7 +285,7 @@ fn text_area_pointer_hit_testing_uses_multiline_shaped_geometry() {
     use rui::renderer::text::{TextMeasureCache, TextRequest};
 
     let id = rui::core::ElementId::new();
-    let mut area = TextArea::new().id(id).value("Wi\nnext");
+    let mut area = TextArea::new().id(id).value("Wi\nnext").w(200.0);
     let (taffy, bounds) = layout_text_area(&mut area);
     let mut cache = TextMeasureCache::new();
     let plan = cache

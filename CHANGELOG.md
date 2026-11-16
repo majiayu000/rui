@@ -6,6 +6,13 @@ All notable project changes should be recorded here.
 
 ### Rendering
 
+- **Breaking:** `font_size` is the em size, as in CSS, Core Text and GPUI. It
+  was the ascent-to-descent height, which is 1.0 to 1.4 em depending on the font,
+  so the same number drew text 15–24% smaller than other toolkits and changed
+  size when the font changed. Text now draws larger at the same `font_size`
+  (SF Mono at 18 advances `0` by 11.13 px, was 9.45). To keep an old look,
+  divide the old size by the font's ascent-to-descent height in ems, e.g. 1.18
+  for SF Mono (#327).
 - **Breaking:** `Primitive::Path` takes `vertices: Arc<[PathVertex]>` and an
   `offset: Point` added to each vertex. Keep the `Arc` and paint clones of it
   while the shape stays the same: the renderer keeps a path's edges and its atlas

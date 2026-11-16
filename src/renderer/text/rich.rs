@@ -17,6 +17,7 @@ use super::{
 };
 use crate::core::geometry::Size;
 use crate::renderer::text_bidi::{line_levels, visual_order};
+use crate::renderer::text_face_size::face_size;
 use rusttype::Scale;
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
@@ -503,7 +504,11 @@ impl TextMeasureCache {
     fn own_baseline(&self, span: &RichSpan, primary: usize) -> (f32, f32) {
         let v_metrics = self.fonts[primary]
             .font()
-            .v_metrics(Scale::uniform(span.font_size));
+            .v_metrics(Scale::uniform(face_size(
+                &self.fonts,
+                primary,
+                span.font_size,
+            )));
         let height = span.font_size * span.line_height;
         let font_height = v_metrics.ascent - v_metrics.descent;
         ((height - font_height) * 0.5 + v_metrics.ascent, height)
