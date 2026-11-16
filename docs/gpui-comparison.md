@@ -389,28 +389,31 @@ Recorded observations and limits:
   GPU winners or investigating a cross-framework cause. The CPU instruction and
   startup observations above are separate metrics; they do not resolve this GPU gap.
 
-## Terminal rows (RUI `516b8c0`)
+## Terminal rows (RUI `a646536`)
 
 `terminal_rows` is the load of a terminal pane that a program keeps printing over:
 Fibo's terminal draws its screen as one canvas, a row at a time. Same machine and
-GPUI revision as above, three rounds, each case in a fresh process, load average 9
-to 13. `editor_edit` ran alongside as a control. Its first RUI round shared the
-machine with a build, which is why that round's wall time is high (0.66 ms against
-0.17).
+GPUI revision as above, three rounds, each case in a fresh process, load average 8
+to 30. `editor_edit` ran alongside as a control. GPU columns use the matched samples
+described above (frames 10 to 69 of every window).
 
-| Case | Side | Instructions (M) / frame | ms p50 | ms p95 | Allocations / frame | Draw calls | Instances | Footprint (MB) |
-|---|---|---|---|---|---|---|---|---|
-| terminal_rows | RUI | 4.18 | 0.27–0.28 | 0.37–0.38 | 865 | 1 | 3 236 | 57 |
-| terminal_rows | GPUI | 6.60–6.61 | 0.50–0.56 | 0.52–0.94 | 357 | 2 | 3 421 | 93–94 |
-| editor_edit | RUI | 2.14–2.22 | 0.17–0.66 | 0.31–2.46 | 354 | 2 | 1 466 | 61 |
-| editor_edit | GPUI | 8.49–8.57 | 0.67–1.13 | 0.74–2.80 | 1 636 | 2 | 1 908 | 84–114 |
+| Case | Side | Instructions (M) / frame | ms p50 | ms p95 | GPU ms p50 | Allocations / frame | Draw calls | Instances | Footprint (MB) |
+|---|---|---|---|---|---|---|---|---|---|
+| terminal_rows | RUI | 4.15–4.16 | 0.26–0.27 | 0.30–0.34 | 0.085–0.151 | 865 | 1 | 3 236 | 55 |
+| terminal_rows | GPUI | 7.25–7.26 | 0.51–0.52 | 0.57–0.58 | 0.132–0.237 | 358 | 2 | 3 421 | 60–91 |
+| editor_edit | RUI | 2.15 | 0.17 | 0.20 | 0.078–0.153 | 354 | 2 | 1 466 | 59 |
+| editor_edit | GPUI | 8.77 | 0.64–0.65 | 0.63–0.66 | 0.169–0.302 | 1 636 | 2 | 1 908 | 81 |
 
-| Case | By instructions | By wall p50 |
-|---|---|---|
-| terminal_rows | RUI ahead 1.6x | RUI ahead 2.0x |
-| editor_edit | RUI ahead 3.9x | RUI ahead 2.2x |
+| Case | By instructions | By wall p50 | By GPU p50 |
+|---|---|---|---|
+| terminal_rows | RUI ahead 1.7x | RUI ahead 2.0x | tie (ranges overlap) |
+| editor_edit | RUI ahead 4.1x | RUI ahead 3.8x | RUI ahead 2.0x |
 
-- **RUI allocates 2.4x more** per terminal frame (865 against 357). Both sides format
+- **GPUI's instruction count rose** from 6.60 to 7.25 M per terminal frame (and 8.5
+  to 8.8 M in `editor_edit`) against the run on `516b8c0`, before the GPU sampling
+  rewrite (#337). RUI's did not move. The likely cause is the `counting_renderer`
+  wrapper on the GPUI side; this was not measured.
+- **RUI allocates 2.4x more** per terminal frame (865 against 358). Both sides format
   the same 45 strings each frame; where RUI's extra ones go was not measured.
 - **Not the best a terminal can do on either side.** Both fixtures shape each row as
   a string, so every changed row is shaped again. Fibo's GPUI painter keeps each
