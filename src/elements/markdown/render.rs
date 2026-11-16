@@ -260,17 +260,20 @@ impl Look {
                         text("\u{2713}")
                             .size(side * 0.8)
                             .line_height(1.0)
-                            .color(self.on_accent),
+                            .color(self.on_accent)
+                            .unselectable(),
                     );
                 }
                 (check.into(), (self.line_box() - side) * 0.5)
             }
-            None => (
-                text(number.unwrap_or_else(|| "\u{2022}".to_string()))
-                    .color(self.muted)
-                    .into(),
-                0.0,
-            ),
+            // A number is read; a bullet is decoration.
+            None => {
+                let marker = match number {
+                    Some(number) => text(number),
+                    None => text("\u{2022}").accessibility_hidden(),
+                };
+                (marker.color(self.muted).unselectable().into(), 0.0)
+            }
         };
         div()
             .flex_row()

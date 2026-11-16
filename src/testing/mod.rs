@@ -3,14 +3,14 @@ mod snapshot;
 mod windows;
 
 use crate::core::ElementId;
-use crate::core::accessibility::{AccessibilityContext, AccessibilityError, AccessibilityTree};
+use crate::core::accessibility::{AccessibilityError, AccessibilityTree};
 use crate::core::action::route_key_event;
 use crate::core::app::{AppContext, RuntimeView};
 use crate::core::drag::FileDragEvent;
 use crate::core::menu::{ContextMenuRequest, Menu};
 use crate::core::prompt::PathPrompt;
 use crate::core::entity::Entity;
-use crate::core::event::{Event, KeyEvent, MouseButton, ScrollEvent};
+use crate::core::event::{Event, KeyEvent, Modifiers, MouseButton, ScrollEvent};
 use crate::core::frame_pipeline::{FramePipeline, FramePresentation, IdlePolicy};
 use crate::core::geometry::{Bounds, Point, Size};
 use crate::core::presenter::{Presenter, PresenterFrame};
@@ -295,8 +295,18 @@ where
     }
 
     pub fn dispatch_pointer_event(&mut self, event: PointerEvent) -> bool {
+        self.dispatch_pointer_event_with(event, Modifiers::none())
+    }
+
+    /// [`Self::dispatch_pointer_event`] with `modifiers` held, as a
+    /// shift-click is.
+    pub fn dispatch_pointer_event_with(
+        &mut self,
+        event: PointerEvent,
+        modifiers: Modifiers,
+    ) -> bool {
         self.dispatch_frame(move |presenter, context| {
-            let dispatch = presenter.dispatch_pointer_event(&event);
+            let dispatch = presenter.dispatch_pointer_event_with(&event, modifiers);
             if dispatch.redraw_requested {
                 context.request_redraw();
             }
@@ -408,12 +418,9 @@ where
         }
     }
 
+    /// The tree a platform bridge would publish, with each node's bounds.
     pub fn accessibility_tree(&self) -> Result<AccessibilityTree, HeadlessError> {
-        let nodes = self
-            .presenter
-            .root()
-            .accessibility_nodes(&AccessibilityContext::new(self.presenter.focused_element()))?;
-        Ok(AccessibilityTree::new(nodes))
+        Ok(self.presenter.accessibility_tree()?)
     }
 
     pub fn primitive_snapshot(&self) -> Result<PrimitiveSnapshot, PrimitiveSnapshotError> {

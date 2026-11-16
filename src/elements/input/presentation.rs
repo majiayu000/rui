@@ -601,6 +601,12 @@ impl Input {
             (true, true) => self.id.get() == previous.id.get(),
             _ => false,
         };
+        // Focus belongs to the element, not to one build of it: without this a
+        // rebuilt editor paints no caret and reports no caret geometry to the
+        // input method until the next pointer or focus event.
+        if same_identity && !self.state.disabled {
+            self.state.focused = previous.state.focused;
+        }
         if same_identity && (!self.value_supplied || self.editor.text() == previous.editor.text()) {
             std::mem::swap(&mut self.editor, &mut previous.editor);
             self.sync_state_from_editor();

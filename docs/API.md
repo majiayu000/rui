@@ -40,7 +40,7 @@ the prelude; the other controls live in `rui::advanced_ui`.
 | Single-line text | `input()` (`elements::Input`) | `advanced_ui::TextField` / `text_field(label)` |
 | Scroll area | `scroll_view()` (`elements::ScrollView`) | `advanced_ui::Scrollable` / `scrollable(child)` |
 | Progress | `advanced_ui::progress_bar(value)` | the terminal-style `elements::Progress` / `progress()` |
-| Text | `text(content)` (`elements::Text`); `.accessible()` adds an accessibility node labelled with the content, which `advanced_ui::text(content)` sets | the `advanced_ui::Text` wrapper |
+| Text | `text(content)` (`elements::Text`); read by screen readers as static text by default (styled text and Markdown too); `.accessibility_hidden()` leaves decoration out | the `advanced_ui::Text` wrapper |
 
 Migration: `text_field("Name")` is `input().accessibility_label("Name").theme(Theme::default())`;
 `scrollable(child)` is `scroll_view().child(child)` and `.background(color)`
@@ -452,6 +452,48 @@ markdown(reply)
 
 Each source is parsed once and kept by source; a source that extends a kept
 one, as a streamed reply does, is parsed again only from its last block.
+
+Markdown is not selectable by default; `.selectable()` (last in the chain)
+puts the document in a selection scope highlighted with the theme's
+`state.selection` color. List markers and task checks are left out of it.
+
+---
+
+### Selectable Text
+
+`selection_scope(child)` makes every `text` and `styled_text` inside `child`
+selectable as one document, in the order they paint:
+
+```rust
+selection_scope(
+    div().flex_col().child(text("Title").bold()).child(text(body).wrap()),
+)
+.theme(&theme) // highlight with theme.state.selection
+
+text("Copy me").selectable()          // a scope of its own
+styled_text(spans).selectable()
+markdown(reply).on_link(open).selectable()
+text("\u{2022}").unselectable()       // left out of the enclosing scope
+```
+
+| Input | Effect |
+|-------|--------|
+| Drag | Selects across wrapped lines and texts |
+| Double / triple click | Selects a word / the line between line breaks |
+| Shift-click | Extends the selection |
+| Cmd/Ctrl+C (`StandardAction::Copy`) | Copies: texts side by side (table cells) joined by tabs, rows by line breaks |
+| Cmd/Ctrl+A (`StandardAction::SelectAll`) | Selects all text of the focused scope |
+| Escape (`StandardAction::Cancel`) | Clears the selection |
+
+A press on the scope focuses it, which the copy and select-all actions need.
+A click that does not drag still reaches links. Overlays opened from inside
+a scope (popovers, menus, dialogs) are documents of their own: their text is
+not selected with it, and a press in them leaves its selection alone. The cursor is an I-beam over
+the scope. The selection survives rebuilds while the texts it starts and ends
+in keep their text up to its ends, so a streamed reply keeps a selection in
+its earlier blocks. Text in a scope still lays out and paints from the
+previous frame; while a selection shows, the scope paints its child again
+off-screen each frame to find where its text is.
 
 ---
 

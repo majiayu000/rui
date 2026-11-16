@@ -316,6 +316,20 @@ fn native_selector_mapping_is_limited_to_declared_action_selectors() {
 }
 
 #[test]
+fn native_elements_do_not_offer_actions_rui_cannot_perform() {
+    assert!(is_undeclared_perform_selector(sel!(
+        accessibilityPerformShowMenu
+    )));
+    assert!(is_undeclared_perform_selector(sel!(
+        accessibilityPerformCancel
+    )));
+    assert!(!is_undeclared_perform_selector(
+        sel!(accessibilityPerformAction:)
+    ));
+    assert!(!is_undeclared_perform_selector(sel!(accessibilityLabel)));
+}
+
+#[test]
 fn native_increment_steps_range_controls_and_scrolls_scroll_areas() {
     let scroll = [
         AccessibilityAction::ScrollForward,
@@ -401,4 +415,79 @@ fn snapshot_action_names_remain_compatible_with_the_public_api() {
         snapshot.nodes()[0].native_actions(),
         ["AXScrollDown", "AXScrollUp"]
     );
+}
+
+#[test]
+fn hit_test_descends_to_the_topmost_child_under_the_point() {
+    let rect = |x: f64, y: f64| NSRect::new(NSPoint::new(x, y), NSSize::new(90.0, 36.0));
+    // A radio group's options stacked vertically, then an overlapping one.
+    let frames = [
+        rect(0.0, 72.0),
+        rect(0.0, 36.0),
+        rect(0.0, 0.0),
+        rect(40.0, 20.0),
+    ];
+
+    assert_eq!(hit_child(&frames, NSPoint::new(10.0, 80.0)), Some(0));
+    assert_eq!(hit_child(&frames, NSPoint::new(10.0, 40.0)), Some(1));
+    assert_eq!(hit_child(&frames, NSPoint::new(50.0, 30.0)), Some(3));
+    assert_eq!(hit_child(&frames, NSPoint::new(10.0, 108.0)), None);
+    assert_eq!(hit_child(&[], NSPoint::new(0.0, 0.0)), None);
+}
+
+#[test]
+fn tabs_and_text_areas_publish_their_native_roles() {
+    let tab =
+        AccessibilityNode::label_required(ElementId::new(), AccessibilityRole::Tab, "General")
+            .and_then(|node| node.value_required("general"))
+            .expect("tab node");
+    let field =
+        AccessibilityNode::label_required(ElementId::new(), AccessibilityRole::TextInput, "Name")
+            .and_then(|node| node.value_required("Ada"))
+            .expect("text field node");
+    let area =
+        AccessibilityNode::label_required(ElementId::new(), AccessibilityRole::TextInput, "Notes")
+            .and_then(|node| node.value_required("a\nb"))
+            .expect("text area node")
+            .with_multiline(true);
+    let tree = AccessibilityTree::new(vec![tab, field, area]);
+    let snapshot = MacAccessibilityBridge::new().snapshot_tree(&tree);
+
+    let roles: Vec<_> = snapshot
+        .nodes()
+        .iter()
+        .map(|node| node.native_role())
+        .collect();
+    assert_eq!(roles, ["AXRadioButton", "AXTextField", "AXTextArea"]);
+    let subrole = native_subrole(AccessibilityRole::Tab).map(|subrole| subrole.to_string());
+    assert_eq!(subrole.as_deref(), Some("AXTabButton"));
+    assert_eq!(native_node_role(&tree.roots()[2]).to_string(), "AXTextArea");
+}
+
+#[test]
+fn text_area_lines_are_counted_in_utf16_units() {
+    // "你好\n" is three UTF-16 units and "😀 ok\n" six (the emoji is a
+    // surrogate pair): line 1 starts at 3, line 2 at 9.
+    let value = "你好\n😀 ok\nend";
+    let starts = utf16_line_starts(value);
+    assert_eq!(starts, [0, 3, 9]);
+    let length = value.encode_utf16().count();
+
+    assert_eq!(line_for_index(&starts, 0), 0);
+    assert_eq!(line_for_index(&starts, 2), 0, "the newline belongs to its line");
+    assert_eq!(line_for_index(&starts, 3), 1);
+    assert_eq!(line_for_index(&starts, length), 2, "the end is on the last line");
+
+    assert_eq!(range_for_line(&starts, length, 0), Some((0, 3)));
+    assert_eq!(range_for_line(&starts, length, 1), Some((3, 9)));
+    assert_eq!(range_for_line(&starts, length, 2), Some((9, 12)));
+    assert_eq!(range_for_line(&starts, length, 3), None);
+}
+
+#[test]
+fn single_line_text_is_line_zero() {
+    let starts = utf16_line_starts("Ada");
+    assert_eq!(starts, [0]);
+    assert_eq!(line_for_index(&starts, 3), 0);
+    assert_eq!(range_for_line(&starts, 3, 0), Some((0, 3)));
 }

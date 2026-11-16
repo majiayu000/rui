@@ -8,7 +8,7 @@ use crate::core::accessibility::{
 use crate::core::action::{ActionId, ActionOutcome};
 use crate::core::app::SharedClipboard;
 use crate::core::drag::{ActiveDrag, SharedDrag};
-use crate::core::event::{Cursor, KeyEvent, MouseButton, ScrollEvent};
+use crate::core::event::{Cursor, KeyEvent, Modifiers, MouseButton, ScrollEvent};
 use crate::core::geometry::{Bounds, Point, Size};
 use crate::core::style::{Dimension as StyleDimension, Style};
 use crate::core::text_editing::{Clipboard, TextInputCommand, TextInputEvent, TextInputSnapshot};
@@ -260,6 +260,7 @@ pub trait Element: Any {
         }
 
         if let Some(node) = self.accessibility(cx)? {
+            drop_repeated_text(&node, &mut child_nodes);
             Ok(vec![node.with_children(child_nodes)])
         } else {
             Ok(child_nodes)
@@ -269,6 +270,38 @@ pub trait Element: Any {
     fn contains_id(&self, id: ElementId) -> bool {
         self.id() == Some(id) || self.children().iter().any(|child| child.contains_id(id))
     }
+}
+
+/// Static text that would only repeat its parent: under a control that names
+/// itself (a button reads its title, not the text inside it), or text equal
+/// to the parent's label or value.
+pub(crate) fn drop_repeated_text(
+    parent: &AccessibilityNode,
+    children: &mut Vec<AccessibilityNode>,
+) {
+    use crate::core::accessibility::AccessibilityRole as Role;
+    let names_itself = matches!(
+        parent.a11y_role(),
+        Role::Button
+            | Role::Checkbox
+            | Role::ComboBox
+            | Role::MenuItem
+            | Role::RadioButton
+            | Role::SegmentedOption
+            | Role::Switch
+            | Role::Tab
+            | Role::TextInput
+            | Role::Slider
+            | Role::ProgressIndicator
+            | Role::GridCell
+    );
+    children.retain(|child| {
+        child.a11y_role() != Role::Text
+            || !(names_itself
+                || child.a11y_label().is_some_and(|text| {
+                    parent.a11y_label() == Some(text) || parent.a11y_value() == Some(text)
+                }))
+    });
 }
 
 /// Trait for types that can be converted into elements

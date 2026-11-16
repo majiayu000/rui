@@ -194,3 +194,19 @@ fn appkit_backtab_maps_to_tab_for_reverse_focus_navigation() {
     assert_eq!(keycode_from_char('\u{19}'), KeyCode::Tab);
     assert_eq!(keycode_from_char('\t'), KeyCode::Tab);
 }
+
+#[test]
+fn poll_dequeues_every_event_type_for_input_methods() {
+    // Pinyin switches modes on Shift alone (flags-changed) and connects to
+    // the app through AppKit's own event types; an event the loop never
+    // dequeues never reaches AppKit, and composition never starts.
+    let mask = platform_event_mask();
+    for kind in [
+        NSEventMask::FlagsChanged,
+        NSEventMask::AppKitDefined,
+        NSEventMask::SystemDefined,
+        NSEventMask::ApplicationDefined,
+    ] {
+        assert!(mask.contains(kind), "{kind:?} is not dequeued");
+    }
+}

@@ -12,7 +12,7 @@ with tempfile.TemporaryDirectory(prefix="rui-gpu-runner-") as temporary:
     bench = root / "benchmarks/gpui_compare"
     bench.mkdir(parents=True)
     shutil.copyfile(Path(__file__).with_name("run.sh"), bench / "run.sh")
-    for name in ("fixtures.rs", "gpu_time.rs", "fonts.rs", "terminal.rs"):
+    for name in ("fixtures.rs", "gpu_time.rs", "counting_renderer.rs", "fonts.rs", "terminal.rs"):
         (bench / name).write_text("// fixture source\n")
     zed = root / "zed checkout"
     (zed / ".git").mkdir(parents=True)
@@ -72,8 +72,9 @@ echo '  wall time per iteration: median 2 ms' >&2
     for mode in ("absolute", "relative"):
         result, artifact = run(PATH_MODE=mode)
         assert result.returncode == 0, result.stderr
-        assert "not equivalent" in result.stdout
-        assert "verdict by GPU" not in result.stdout
+        assert "same frames on both sides" in result.stdout
+        assert "verdict by GPU p50" in result.stdout
+        assert "verdict by GPU saturated p50" in result.stdout
         metadata = (artifact / "metadata.txt").read_text()
         assert "rui_revision=784374c" in metadata and "zed_revision=784374c" in metadata
         assert "repeats=2" in metadata and "cases=list_virtual_1k" in metadata
@@ -82,6 +83,7 @@ echo '  wall time per iteration: median 2 ms' >&2
         assert Path(reported).resolve() == (zed / "gpui-bench").resolve()
         assert (artifact / "rui-source.patch").read_text() == "fixture source diff\n"
         assert (artifact / "fixtures.rs").read_text() == "// fixture source\n"
+        assert (artifact / "counting_renderer.rs").read_text() == "// fixture source\n"
         order = (artifact / "order.txt").read_text().splitlines()
         assert [line.rsplit("=", 1)[1] for line in order] == ["rui", "gpui", "gpui", "rui"]
         for round_number in (1, 2):

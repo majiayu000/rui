@@ -4,7 +4,7 @@ use crate::core::accessibility::{
 };
 use crate::core::app::AppContext;
 use crate::core::drag::SharedDrag;
-use crate::core::event::{Cursor, Event};
+use crate::core::event::{Cursor, Event, Modifiers};
 use crate::core::frame_pipeline::FrameStageDurations;
 use crate::core::frame_pipeline::{FramePipeline, FramePipelineError};
 use crate::core::geometry::{Bounds, Point, Size};
@@ -469,7 +469,13 @@ where
         event_cx.set_drag(Rc::clone(&self.drag));
         event_cx.set_overlays(self.scene.overlay_stack());
         event_cx.set_window(window);
+        let focused_before = event_cx.focused_id();
         let value = dispatch(&mut self.root, &mut event_cx);
+        // Editors keep their own focused flag (caret, focus ring) and see only
+        // the events routed to them: tell every element when focus moved.
+        if event_cx.focused_id() != focused_before {
+            crate::core::action::sync_focus(&mut self.root, &mut event_cx);
+        }
         let redraw_requested = event_cx.redraw_requested();
         let announcements = event_cx.take_accessibility_announcements();
         drop(event_cx);
@@ -482,6 +488,16 @@ where
     }
 
     pub fn dispatch_pointer_event(&mut self, event: &PointerEvent) -> PointerDispatch {
+        self.dispatch_pointer_event_with(event, Modifiers::none())
+    }
+
+    /// [`Self::dispatch_pointer_event`] with the modifier keys held, which
+    /// elements read from [`EventContext::modifiers`].
+    pub fn dispatch_pointer_event_with(
+        &mut self,
+        event: &PointerEvent,
+        modifiers: Modifiers,
+    ) -> PointerDispatch {
         if let Some(dispatch) = self
             .devtools
             .as_mut()
@@ -519,6 +535,7 @@ where
             event_cx.set_hit_target(dispatch_target);
             event_cx.set_previous_hit_target(previous_target);
             event_cx.set_overlays(overlays);
+            event_cx.set_modifiers(modifiers);
             let stopped = root.dispatch_pointer_event(event_cx, event).is_stopped();
             (stopped, event_cx.cursor())
         });

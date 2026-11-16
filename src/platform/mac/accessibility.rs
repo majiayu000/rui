@@ -8,7 +8,7 @@ use crate::core::geometry::Bounds;
 use crate::platform::mac::events::{MAC_ACCESSIBILITY_EVENT_DATA, post_application_event};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, Sel};
-use objc2::{DefinedClass, MainThreadOnly, define_class, msg_send, sel};
+use objc2::{DefinedClass, MainThreadOnly, Message, define_class, msg_send, sel};
 use objc2_app_kit::{
     NSAccessibility, NSAccessibilityActionName, NSAccessibilityAnnouncementKey,
     NSAccessibilityAnnouncementRequestedNotification, NSAccessibilityButtonRole,
@@ -25,7 +25,8 @@ use objc2_app_kit::{
     NSAccessibilityRowRole, NSAccessibilityScrollAreaRole,
     NSAccessibilitySelectedTextChangedNotification, NSAccessibilitySliderRole,
     NSAccessibilitySplitterRole, NSAccessibilityStaticTextRole, NSAccessibilitySubrole,
-    NSAccessibilitySwitchSubrole, NSAccessibilityTabGroupRole, NSAccessibilityTextFieldRole,
+    NSAccessibilitySwitchSubrole, NSAccessibilityTabButtonSubrole, NSAccessibilityTabGroupRole,
+    NSAccessibilityTextAreaRole, NSAccessibilityTextFieldRole,
     NSAccessibilityTitleChangedNotification, NSAccessibilityToolbarRole,
     NSAccessibilityValueChangedNotification, NSView,
 };
@@ -62,6 +63,8 @@ struct MacAccessibilityElementIvars {
     bounds: Cell<Bounds>,
     requests: Rc<RefCell<VecDeque<MacAccessibilityActionRequest>>>,
     window_number: isize,
+    /// UTF-16 offsets where each line of a text input's value starts.
+    line_starts: RefCell<Vec<usize>>,
 }
 
 define_class!(
@@ -113,6 +116,39 @@ define_class!(
             self.enqueue_action(AccessibilityAction::SetValue, Some(value.to_string()));
         }
 
+        // NSAccessibilityElement answers a hit test with itself. Descend, so a
+        // pointer over a radio button or a tab reaches it and not its group.
+        #[unsafe(method_id(accessibilityHitTest:))]
+        fn accessibility_hit_test(&self, point: NSPoint) -> Option<Retained<AnyObject>> {
+            let children: Option<Retained<NSArray<AnyObject>>> =
+                unsafe { msg_send![self, accessibilityChildren] };
+            let children = children.map(|children| children.to_vec()).unwrap_or_default();
+            let frames: Vec<NSRect> = children
+                .iter()
+                .map(|child| unsafe { msg_send![&**child, accessibilityFrame] })
+                .collect();
+            match hit_child(&frames, point) {
+                Some(index) => unsafe { msg_send![&*children[index], accessibilityHitTest: point] },
+                None => Some(unsafe { Retained::cast_unchecked(self.retain()) }),
+            }
+        }
+
+        // VoiceOver moves through multi-line text by line with these.
+        #[unsafe(method(accessibilityLineForIndex:))]
+        fn accessibility_line_for_index(&self, index: isize) -> isize {
+            line_for_index(&self.ivars().line_starts.borrow(), index.max(0) as usize) as isize
+        }
+
+        #[unsafe(method(accessibilityRangeForLine:))]
+        fn accessibility_range_for_line(&self, line: isize) -> NSRange {
+            let length = self.accessibilityNumberOfCharacters().max(0) as usize;
+            let starts = self.ivars().line_starts.borrow();
+            match range_for_line(&starts, length, line.max(0) as usize) {
+                Some((start, end)) => NSRange::new(start, end - start),
+                None => NSRange::new(objc2_foundation::NSNotFound as usize, 0),
+            }
+        }
+
         #[unsafe(method(setAccessibilityFocused:))]
         fn set_accessibility_focused(&self, focused: bool) {
             self.enqueue_request(MacAccessibilityRequest::Focus(focused));
@@ -146,6 +182,9 @@ define_class!(
             if let Some(action) = action_for_selector(selector) {
                 return self.supports(action).into();
             }
+            if is_undeclared_perform_selector(selector) {
+                return false.into();
+            }
             unsafe { msg_send![super(self), isAccessibilitySelectorAllowed: selector] }
         }
     }
@@ -169,6 +208,7 @@ impl RuiAccessibilityElement {
             bounds: Cell::new(bounds),
             requests,
             window_number,
+            line_starts: RefCell::new(vec![0]),
         });
         unsafe { msg_send![super(this), init] }
     }
@@ -487,12 +527,17 @@ impl AppKitAccessibilityHost {
         let bounds = node.a11y_bounds().unwrap_or(parent_bounds);
         element.update_semantics(node.a11y_actions(), bounds);
         element.setAccessibilityElement(true);
-        element.setAccessibilityRole(Some(native_role(node.a11y_role())));
+        element.setAccessibilityRole(Some(native_node_role(node)));
         element.setAccessibilitySubrole(native_subrole(node.a11y_role()));
         element.setAccessibilityEnabled(node.a11y_enabled());
         element.set_native_focused(node.a11y_focused());
         element.setAccessibilityFrameInParentSpace(native_frame_in_parent(bounds, parent_bounds));
-        let label = node.a11y_label().map(NSString::from_str);
+        // Static text carries its words as its value, as AppKit's own does;
+        // a label as well would be read a second time.
+        let label = (node.a11y_role() != AccessibilityRole::Text)
+            .then(|| node.a11y_label())
+            .flatten()
+            .map(NSString::from_str);
         element.setAccessibilityLabel(label.as_deref());
         publish_native_value(&element, node)?;
         publish_text_semantics(&element, node)?;

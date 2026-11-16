@@ -32,9 +32,9 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use gpui::{
-    AnyView, AppContext as _, BenchAppContext, Bounds, Context, DevicePixels, Entity,
-    HighlightStyle, IntoElement, ParentElement, PlatformAtlas, PlatformHeadlessRenderer,
-    PrimitiveBatch, Render, Scene, ScrollStrategy, SharedString, Styled, StyledText,
+    AnyView, AppContext as _, BenchAppContext, Bounds, Context, Entity, HighlightStyle,
+    IntoElement, ParentElement, PlatformHeadlessRenderer, Render, ScrollStrategy,
+    SharedString, Styled, StyledText,
     UniformListScrollHandle, Window, canvas, div, fill, point, px, relative, rgb, size,
     uniform_list,
 };
@@ -634,75 +634,10 @@ mod terminal;
 use fonts::load_sf_mono;
 use terminal::terminal_rows;
 
-/// Batches and instances of each scene rendered since the last [`take_draws`].
-static SCENES: std::sync::Mutex<Vec<(u64, u64)>> = std::sync::Mutex::new(Vec::new());
-/// Scenes with at least one glyph since the last check in [`counted`].
-static FRAMES_WITH_GLYPHS: AtomicUsize = AtomicUsize::new(0);
-
-/// GPUI's headless Metal renderer, counting what each scene asks of the GPU. Its Metal
-/// renderer issues one instanced draw per `Scene::batches()` entry; paths and surfaces
-/// would add more, but no fixture draws them.
-struct CountingRenderer(Box<dyn PlatformHeadlessRenderer>);
-
-impl CountingRenderer {
-    fn count(scene: &Scene) {
-        let (mut batches, mut instances) = (0, 0);
-        for batch in scene.batches() {
-            batches += 1;
-            instances += match batch {
-                PrimitiveBatch::Shadows(range)
-                | PrimitiveBatch::Quads(range)
-                | PrimitiveBatch::Paths(range)
-                | PrimitiveBatch::Underlines(range)
-                | PrimitiveBatch::Surfaces(range)
-                | PrimitiveBatch::MonochromeSprites { range, .. }
-                | PrimitiveBatch::SubpixelSprites { range, .. }
-                | PrimitiveBatch::PolychromeSprites { range, .. } => range.len() as u64,
-            };
-        }
-        SCENES.lock().unwrap().push((batches, instances));
-        if !scene.monochrome_sprites.is_empty() || !scene.subpixel_sprites.is_empty() {
-            FRAMES_WITH_GLYPHS.fetch_add(1, Ordering::Relaxed);
-        }
-    }
-}
-
-impl PlatformHeadlessRenderer for CountingRenderer {
-    fn render_scene_to_image(
-        &mut self,
-        scene: &Scene,
-        size: gpui::Size<DevicePixels>,
-    ) -> anyhow::Result<image::RgbaImage> {
-        Self::count(scene);
-        self.0.render_scene_to_image(scene, size)
-    }
-
-    fn render_scene(
-        &mut self,
-        scene: &Scene,
-        size: gpui::Size<DevicePixels>,
-    ) -> anyhow::Result<()> {
-        Self::count(scene);
-        self.0.render_scene(scene, size)
-    }
-
-    fn sprite_atlas(&self) -> std::sync::Arc<dyn PlatformAtlas> {
-        self.0.sprite_atlas()
-    }
-}
-
-/// Median draw calls and instances per scene since the last call. The median skips
-/// the empty first scene of each new window.
-fn take_draws() -> (u64, u64) {
-    let mut scenes = std::mem::take(&mut *SCENES.lock().unwrap());
-    if scenes.is_empty() {
-        return (0, 0);
-    }
-    let middle = scenes.len() / 2;
-    let batches = *scenes.select_nth_unstable_by_key(middle, |scene| scene.0).1;
-    let instances = *scenes.select_nth_unstable_by_key(middle, |scene| scene.1).1;
-    (batches.0, instances.1)
-}
+mod counting_renderer;
+use counting_renderer::{
+    CountingRenderer, FRAMES_WITH_GLYPHS, GPU_SAMPLES, GPU_WARMUP, SCENES, take_draws,
+};
 
 /// What `#[gpui::bench(fps = 120)]` generates for `body`, with [`CountingRenderer`].
 fn counted(
@@ -722,7 +657,7 @@ fn counted(
                 gpui::bench_platform(
                     Some(Box::new(|| {
                         Ok(gpui_platform::current_headless_renderer()?.map(|renderer| {
-                            Box::new(CountingRenderer(renderer))
+                            Box::new(CountingRenderer::new(renderer))
                                 as Box<dyn PlatformHeadlessRenderer>
                         }))
                     })),
@@ -741,7 +676,6 @@ fn counted(
     if SCENES.lock().unwrap().is_empty() {
         return;
     }
-    let scenes = SCENES.lock().unwrap().len();
     let (draw_calls, instances) = take_draws();
     // Every fixture but the grid draws text, which must reach the scene as glyphs.
     // Built without `font-kit`, GPUI uses `NoopTextSystem` and draws none.
@@ -750,19 +684,32 @@ fn counted(
     }
     // Let the last frames' completed handlers run.
     std::thread::sleep(Duration::from_millis(100));
-    let mut gpu_ms = gpu_time::take();
-    if gpu_ms.len() != scenes {
-        panic!(
-            "{name}: {} command buffers completed for {scenes} scenes; GPU time per frame needs one each",
-            gpu_ms.len()
-        );
+    // Startup draws one frame per window, and RUI's startup case takes no GPU time.
+    if name == "startup" {
+        gpu_time::take_tagged();
+        eprintln!("gpui {name} draw_calls={draw_calls} instances={instances}");
+        return;
     }
-    gpu_ms.sort_by(f64::total_cmp);
-    let percentile = |fraction: f64| gpu_ms[((gpu_ms.len() - 1) as f64 * fraction).round() as usize];
+    // The frames RUI samples, from every window that reached them.
+    let tagged = gpu_time::take_tagged();
+    let (mut gpu_ms, gpu_windows) = gpu_time::steady_samples(&tagged, GPU_WARMUP, GPU_SAMPLES)
+        .unwrap_or_else(|err| panic!("{name}: {err}"));
+    let percentile = |values: &mut Vec<f64>, fraction: f64| {
+        values.sort_by(f64::total_cmp);
+        values[((values.len() - 1) as f64 * fraction).round() as usize]
+    };
+    let saturated = if gpu_time::redraws() > 0 {
+        let mut saturated = gpu_time::steady_redraws(&tagged, GPU_WARMUP, GPU_SAMPLES)
+            .unwrap_or_else(|err| panic!("{name}: {err}"));
+        format!(" gpu_saturated_ms_p50={:.3}", percentile(&mut saturated, 0.5))
+    } else {
+        String::new()
+    };
     eprintln!(
-        "gpui {name} draw_calls={draw_calls} instances={instances} gpu_ms_p50={:.3} gpu_ms_p95={:.3}",
-        percentile(0.5),
-        percentile(0.95)
+        "gpui {name} draw_calls={draw_calls} instances={instances} gpu_ms_p50={:.3} gpu_ms_p95={:.3} gpu_windows={gpu_windows} gpu_frames={}{saturated}",
+        percentile(&mut gpu_ms, 0.5),
+        percentile(&mut gpu_ms, 0.95),
+        gpu_ms.len()
     );
 }
 

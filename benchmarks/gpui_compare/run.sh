@@ -9,10 +9,14 @@
 # Each case runs in its own process on each side, alternating order by round, REPEATS times
 # (default 3); the table shows the range over the repeats. CASES picks cases.
 # Raw output and metadata are kept in target/gpui_compare/run.XXXXXXXX/.
+# GPU_REDRAWS=N draws every frame's scene N more times right after it on both sides and
+# adds their mean GPU time, with the GPU kept busy; GPUI's CPU columns then include them.
 set -euo pipefail
 
 ZED_REV="${ZED_REV:-784374c6794ace885137bc4806427a5f47cc3f06}"
 REPEATS="${REPEATS:-3}"
+GPU_REDRAWS="${GPU_REDRAWS:-0}"
+export COMPARE_GPU_REDRAWS="$GPU_REDRAWS"
 CASES="${CASES:-startup list_full list_full_one_row list_virtual_1k list_virtual_100k text_paragraphs quad_grid resize_full resize_virtual editor_scroll editor_edit terminal_rows}"
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 ZED_DIR="${1:-$ROOT/target/gpui_compare/zed}"
@@ -32,8 +36,8 @@ echo "== artifacts: $RUN_DIR" >&2
 
 cp "$ROOT/benchmarks/gpui_compare/fixtures.rs" "$ZED_DIR/crates/gpui_platform/benches/rui_compare.rs"
 # The bench's own modules: `gpu_time` (both sides read GPU time through the same hook),
-# `fonts` and the `terminal_rows` fixture.
-for module in gpu_time fonts terminal; do
+# `counting_renderer` (counts draws and tags frames), `fonts` and the `terminal_rows` fixture.
+for module in gpu_time counting_renderer fonts terminal; do
   cp "$ROOT/benchmarks/gpui_compare/$module.rs" "$ZED_DIR/crates/gpui_platform/benches/$module.rs"
 done
 manifest="$ZED_DIR/crates/gpui_platform/Cargo.toml"
@@ -54,7 +58,7 @@ fi
   printf 'zed_requested_revision=%s\nzed_dir=%s\n' "$ZED_REV" "$ZED_DIR"
   printf 'repeats=%s\ncases=%s\n' "$REPEATS" "$CASES"
   printf 'gpui_features=bench-support,runtime_shaders,font-kit\nmeasurement=instructions\n'
-  printf 'gpu_sampling=RUI:10-warmup/60-sampled;GPUI:all-Criterion-scenes;not-equivalent\n'
+  printf 'gpu_sampling=frames-10-69-of-every-window\ngpu_redraws=%s\n' "$GPU_REDRAWS"
   printf 'CARGO_TARGET_DIR=%s\nRUSTFLAGS=%s\n' "${CARGO_TARGET_DIR:-}" "${RUSTFLAGS:-}"
   date -u '+started_utc=%Y-%m-%dT%H:%M:%SZ'
   uname -a
@@ -70,7 +74,8 @@ fi
 git -C "$ROOT" diff --binary HEAD > "$RUN_DIR/rui-source.patch"
 git -C "$ZED_DIR" diff --binary HEAD > "$RUN_DIR/zed-source.patch"
 # Copied GPUI benches may be untracked, so retain their source explicitly.
-cp "$ROOT/benchmarks/gpui_compare/fixtures.rs" "$ROOT/benchmarks/gpui_compare/gpu_time.rs" "$RUN_DIR/"
+cp "$ROOT/benchmarks/gpui_compare/fixtures.rs" "$ROOT/benchmarks/gpui_compare/gpu_time.rs" \
+  "$ROOT/benchmarks/gpui_compare/counting_renderer.rs" "$RUN_DIR/"
 
 # Prints the bench executable cargo built, from its "Executable ... (path)" line.
 executable() {
@@ -174,7 +179,10 @@ done
 echo "== load after: $(uptime | sed 's/.*load averages*: //')" | tee -a "$results" >&2
 
 # One row per case and side; each cell is the range over the repeats.
-printf '%s\n\n' 'GPU columns are descriptive only: RUI samples 60 post-warmup frames; GPUI includes all Criterion scenes. Their sampling populations are not equivalent.'
+printf '%s\n\n' 'GPU columns sample the same frames on both sides: frames 10 to 69 of every window (gpu_time::steady_samples). GPU frames shows how many, from how many windows.'
+if (( GPU_REDRAWS > 0 )); then
+  printf '%s\n\n' "GPU_REDRAWS=$GPU_REDRAWS: each frame's scene is drawn $GPU_REDRAWS more times right after it; GPU saturated is their mean (gpu_time::steady_redraws). GPUI's CPU columns include the redraws."
+fi
 awk '
   /^(rui|gpui) / {
     key = $2 SUBSEP $1
@@ -191,6 +199,10 @@ awk '
   function verdict(name, metric, noise,    rui, gpui, ratio) {
     rui = name SUBSEP "rui"; gpui = name SUBSEP "gpui"
     if (!has[rui, metric] || !has[gpui, metric]) return "-"
+    # With GPU_REDRAWS the buffer of a frame can overlap the redraws before it and add
+    # no busy time; a zero is no measurement.
+    if (low[rui, metric] + high[rui, metric] <= 0 || low[gpui, metric] + high[gpui, metric] <= 0)
+      return "-"
     if (low[rui, metric] <= high[gpui, metric] && low[gpui, metric] <= high[rui, metric])
       return "tie (ranges overlap)"
     ratio = (low[rui, metric] + high[rui, metric]) / (low[gpui, metric] + high[gpui, metric])
@@ -204,9 +216,9 @@ awk '
     return sprintf("%g-%g", low[key, metric], high[key, metric])
   }
   END {
-    metric_count = split("instructions_m ms_p50 ms_p95 allocations draw_calls instances gpu_ms_p50 gpu_ms_p95 footprint_mb footprint_end_mb", frame_metrics, " ")
-    print "| case | side | instructions (M) / frame | ms / frame p50 | ms / frame p95 | allocations / frame | draw calls / frame | instances / frame | GPU ms p50 | GPU ms p95 | footprint (MB) | footprint at end (MB) |"
-    print "|---|---|---|---|---|---|---|---|---|---|---|---|"
+    metric_count = split("instructions_m ms_p50 ms_p95 allocations draw_calls instances gpu_ms_p50 gpu_ms_p95 gpu_frames gpu_windows gpu_saturated_ms_p50 footprint_mb footprint_end_mb", frame_metrics, " ")
+    print "| case | side | instructions (M) / frame | ms / frame p50 | ms / frame p95 | allocations / frame | draw calls / frame | instances / frame | GPU ms p50 | GPU ms p95 | GPU frames | GPU windows | GPU saturated ms p50 | footprint (MB) | footprint at end (MB) |"
+    print "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"
     for (row = 1; row <= rows; row++) {
       split(order[row], parts, SUBSEP)
       if (parts[1] == "startup") continue
@@ -225,15 +237,15 @@ awk '
         cell(order[row], "footprint_mb") " |"
     }
     print ""
-    print "| case | verdict by instructions (5% noise) | verdict by wall p50 (10% noise) |"
-    print "|---|---|---|"
+    print "| case | verdict by instructions (5% noise) | verdict by wall p50 (10% noise) | verdict by GPU p50 (10% noise) | verdict by GPU saturated p50 (10% noise) |"
+    print "|---|---|---|---|---|"
     for (row = 1; row <= rows; row++) {
       split(order[row], parts, SUBSEP)
       if (parts[2] != "rui") continue
       if (parts[1] == "startup") {
-        print "| startup | - | " verdict("startup", "process_to_first_frame_ms", 0.10) " (process start to first frame) |"
+        print "| startup | - | " verdict("startup", "process_to_first_frame_ms", 0.10) " (process start to first frame) | - | - |"
         continue
       }
-      print "| " parts[1] " | " verdict(parts[1], "instructions_m", 0.05) " | " verdict(parts[1], "ms_p50", 0.10) " |"
+      print "| " parts[1] " | " verdict(parts[1], "instructions_m", 0.05) " | " verdict(parts[1], "ms_p50", 0.10) " | " verdict(parts[1], "gpu_ms_p50", 0.10) " | " verdict(parts[1], "gpu_saturated_ms_p50", 0.10) " |"
     }
   }' "$results"

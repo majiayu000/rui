@@ -39,7 +39,7 @@ impl TextArea {
         cx: &mut EventContext,
         command: &TextInputCommand,
     ) -> bool {
-        if !cx.is_focused(self.id) && !self.state.focused {
+        if !cx.is_focused(Some(self.id.get())) && !self.state.focused {
             return false;
         }
         match self.apply_text_input_command(command.clone()) {
@@ -278,7 +278,17 @@ impl TextArea {
     pub(crate) fn reconcile_editing_state(&mut self, previous: &mut Self) {
         // Uncontrolled rebuilds keep the editor. Controlled values keep it only
         // when echoing the current text; a different value is a programmatic reset.
-        let same_identity = self.id == previous.id;
+        let same_identity = match (self.id.is_explicit(), previous.id.is_explicit()) {
+            (false, false) => true,
+            (true, true) => self.id.get() == previous.id.get(),
+            _ => false,
+        };
+        // Focus belongs to the element, not to one build of it: without this a
+        // rebuilt editor paints no caret and reports no caret geometry to the
+        // input method until the next pointer or focus event.
+        if same_identity && !self.state.disabled {
+            self.state.focused = previous.state.focused;
+        }
         if same_identity && (!self.value_supplied || self.editor.text() == previous.editor.text()) {
             std::mem::swap(&mut self.editor, &mut previous.editor);
             self.sync_state_from_editor();

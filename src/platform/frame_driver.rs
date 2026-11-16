@@ -4,7 +4,7 @@
 
 use crate::core::action::route_key_event;
 use crate::core::app::{AppContext, RedrawSource};
-use crate::core::event::{KeyEvent, ScrollEvent};
+use crate::core::event::{KeyEvent, Modifiers, ScrollEvent};
 use crate::core::geometry::Size;
 use crate::core::presenter::Presenter;
 use crate::core::text_editing::TextInputEvent;
@@ -90,11 +90,14 @@ pub(crate) fn append_input_event(
                 PlatformMouseEventKind::Up => PointerEventKind::Up,
                 PlatformMouseEventKind::Move => PointerEventKind::Move,
             };
-            ordered_input_events.push(OrderedInputEvent::Pointer(PointerEvent {
-                kind,
-                position: event.position,
-                button: event.button,
-            }));
+            ordered_input_events.push(OrderedInputEvent::Pointer(
+                PointerEvent {
+                    kind,
+                    position: event.position,
+                    button: event.button,
+                },
+                event.modifiers,
+            ));
         }
         PlatformInputEvent::Scroll(event) => {
             ordered_input_events.push(OrderedInputEvent::Scroll(event))
@@ -104,7 +107,8 @@ pub(crate) fn append_input_event(
 
 #[derive(Debug, Clone)]
 pub(crate) enum OrderedInputEvent {
-    Pointer(PointerEvent),
+    /// A pointer event and the modifier keys held with it.
+    Pointer(PointerEvent, Modifiers),
     Scroll(ScrollEvent),
     Key {
         is_down: bool,

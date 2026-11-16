@@ -10,6 +10,7 @@ use std::hash::{BuildHasherDefault, Hasher};
 use std::ops::Range;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+mod accessibility_regions;
 mod overlay;
 pub use overlay::{OVERLAY_Z, Overlay};
 
@@ -277,7 +278,7 @@ pub struct Scene {
     /// Active render-layer stack.
     active_layers: SmallVec<[LayerId; 8]>,
 
-    accessibility_regions: HashMap<ElementId, Bounds>,
+    accessibility_regions: accessibility_regions::AccessibilityRegions,
 
     next_hit_order: usize,
 
@@ -287,6 +288,10 @@ pub struct Scene {
     hit_index: RefCell<HitIndex>,
 
     overlays: overlay::OverlayLayers,
+
+    /// The texts painted into a scene a selection scope collects them with,
+    /// in paint order. `None` in every other scene.
+    pub(crate) selection: Option<Vec<crate::elements::selection::SelectableLeaf>>,
 }
 
 impl Scene {
@@ -306,11 +311,12 @@ impl Scene {
             layer_stack: SmallVec::new(),
             layers: vec![Layer::new(root_id, 0, ZIndex::ROOT, None)],
             active_layers: smallvec::smallvec![root_id],
-            accessibility_regions: HashMap::new(),
+            accessibility_regions: Default::default(),
             next_hit_order: 0,
             hit_queries: Cell::new(0),
             hit_index: RefCell::default(),
             overlays: overlay::OverlayLayers::default(),
+            selection: None,
         }
     }
 
@@ -516,17 +522,33 @@ impl Scene {
         self.replayed
     }
 
-    /// Hit and accessibility regions registered so far this frame.
-    pub(crate) fn region_count(&self) -> (usize, usize) {
-        (self.next_hit_order, self.accessibility_regions.len())
+    /// Hit regions registered so far this frame.
+    pub(crate) fn hit_region_count(&self) -> usize {
+        self.next_hit_order
+    }
+
+    /// Accessibility regions registered so far this frame.
+    pub(crate) fn accessibility_region_count(&self) -> usize {
+        self.accessibility_regions.len()
     }
 
     pub(crate) fn accessibility_regions(&self) -> &HashMap<ElementId, Bounds> {
-        &self.accessibility_regions
+        self.accessibility_regions.by_id()
     }
 
     pub(crate) fn register_accessibility_region(&mut self, id: ElementId, bounds: Bounds) {
-        self.accessibility_regions.insert(id, bounds);
+        self.accessibility_regions.register(id, bounds);
+    }
+
+    /// Bring the previous frame's accessibility regions in `range` into this
+    /// frame, moved by `dx, dy`, for a subtree whose paint is replayed.
+    pub(crate) fn replay_accessibility_regions(
+        &mut self,
+        range: Range<usize>,
+        dx: f32,
+        dy: f32,
+    ) -> Range<usize> {
+        self.accessibility_regions.replay(range, dx, dy)
     }
 
     /// Push a render layer for future z-ordered painting and hit testing.
@@ -717,6 +739,10 @@ pub(crate) struct PaintRecord {
     pub(crate) replayed: bool,
     pub(crate) start: u32,
     pub(crate) end: u32,
+    /// The accessibility regions the subtree registered are the frame's
+    /// `regions_start..regions_end`, in paint order.
+    pub(crate) regions_start: u32,
+    pub(crate) regions_end: u32,
     pub(crate) origin: Point,
     /// Unrounded layout, with its origin summed from the root as taffy sums it.
     pub(crate) unrounded_origin: Point,

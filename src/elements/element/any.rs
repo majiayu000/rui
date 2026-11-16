@@ -93,6 +93,12 @@ pub fn reconcile(next: &mut dyn Element, previous: &mut dyn Element) -> bool {
     // transient state to carry.
     if !pure {
         crate::advanced_ui::reconcile_transient_state(kind, next, previous);
+        if let (Some(next), Some(previous)) = (
+            (next as &mut dyn Any).downcast_mut::<crate::elements::SelectionScope>(),
+            (previous as &mut dyn Any).downcast_mut::<crate::elements::SelectionScope>(),
+        ) {
+            next.reconcile_selection(previous);
+        }
     }
     // Properties can only justify keeping two pure instances. An interactive
     // container still participates in child reconciliation below.
@@ -312,6 +318,10 @@ impl AnyElement {
 
     pub fn paint(&mut self, cx: &mut PaintContext) {
         if !cx.memo {
+            // A selection scope collects its text in a paint of its own.
+            if cx.scene.selection.is_some() {
+                crate::elements::selection::collect_leaf(&mut *self.inner, cx);
+            }
             if let Some(inspection) = cx.inspection {
                 inspection.enter(self, cx.bounds, cx.scene.visible_bounds_for(cx.bounds));
                 self.inner.paint(cx);
@@ -359,12 +369,26 @@ impl AnyElement {
                 None
             };
             if let Some(primitives) = replayed {
+                // Its accessibility regions move with what it drew; one left
+                // out keeps none, and its nodes take their parent's bounds.
+                let regions = if seen {
+                    cx.scene.replay_accessibility_regions(
+                        record.regions_start as usize..record.regions_end as usize,
+                        dx,
+                        dy,
+                    )
+                } else {
+                    let at = cx.scene.accessibility_region_count();
+                    at..at
+                };
                 let index = cx.scene.record(PaintRecord {
                     // A subtree left out has no range to replay next time.
                     painted: seen,
                     replayed: true,
                     start: primitives.start as u32,
                     end: primitives.end as u32,
+                    regions_start: regions.start as u32,
+                    regions_end: regions.end as u32,
                     origin,
                     unrounded_origin: unrounded.origin,
                     unrounded_size: unrounded.size,
@@ -379,11 +403,14 @@ impl AnyElement {
             // frame can pass it by the same way.
             if self.layout_record.is_some() {
                 let start = cx.scene.len() as u32;
+                let regions = cx.scene.accessibility_region_count() as u32;
                 let index = cx.scene.record(PaintRecord {
                     painted: false,
                     replayed: true,
                     start,
                     end: start,
+                    regions_start: regions,
+                    regions_end: regions,
                     origin,
                     unrounded_origin: unrounded.origin,
                     unrounded_size: unrounded.size,
@@ -394,13 +421,16 @@ impl AnyElement {
             return;
         }
         let start = cx.scene.len();
-        let regions = cx.scene.region_count();
+        // Hit regions keep a paint order that a replay cannot reproduce;
+        // accessibility regions are replayed with the primitives.
+        let hits = cx.scene.hit_region_count();
+        let regions = cx.scene.accessibility_region_count();
         let layers = cx.scene.layers().len();
         self.inner.paint(cx);
         let frame = cx.scene.frame();
         let scene = &*cx.scene;
         let replayable = self.layout_record.is_some()
-            && scene.region_count() == regions
+            && scene.hit_region_count() == hits
             && scene.layers().len() == layers
             && self.children().iter().all(|child| {
                 child.paint_record.get().is_some_and(|(at, index)| {
@@ -416,6 +446,8 @@ impl AnyElement {
                 replayed: false,
                 start: start as u32,
                 end: cx.scene.len() as u32,
+                regions_start: regions as u32,
+                regions_end: cx.scene.accessibility_region_count() as u32,
                 origin,
                 unrounded_origin: unrounded.origin,
                 unrounded_size: unrounded.size,

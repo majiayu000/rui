@@ -12,6 +12,8 @@ use crate::elements::element::{
     Capabilities, Element, LayoutContext, PaintContext, StableId, TextWrapRequest, WrappedLines,
     no_reach, style_to_taffy,
 };
+use crate::elements::selection::{LeafFont, LeafLayout, SelectableLeaf};
+use crate::elements::{SelectionScope, selection_scope};
 use crate::renderer::text::BaseDirection;
 use crate::renderer::text::{TextMeasureCache, TextMetrics, TextRequest};
 use crate::renderer::{Primitive, text_reach};
@@ -125,11 +127,12 @@ struct OwnTextStyle {
 ///
 /// Text is one line by default and sized to its content. [`Text::wrap`] makes
 /// it wrap to the width its container offers, and [`Text::max_lines`] cuts it
-/// off with an ellipsis. [`Text::accessible`] exposes it to assistive
-/// technology.
+/// off with an ellipsis. Screen readers read it as static text unless
+/// [`Text::accessibility_hidden`] leaves it out.
 pub struct Text {
     id: Option<ElementId>,
-    /// Set by [`Text::accessible`]: the id of its accessibility node.
+    /// The id of its accessibility node; `None` once
+    /// [`Text::accessibility_hidden`] leaves it out.
     accessible: Option<StableId>,
     content: SharedStr,
     style: Style,
@@ -143,6 +146,8 @@ pub struct Text {
     max_lines: Option<usize>,
     /// Lines laid out for wrapped text; `None` keeps the text on one line.
     wrapped: Option<WrappedLines>,
+    /// Left out of the selection scope it is in, as a list marker is.
+    unselectable: bool,
     layout_node: Option<NodeId>,
 }
 
@@ -151,7 +156,7 @@ impl Text {
         let defaults = TextStyle::default();
         Self {
             id: None,
-            accessible: None,
+            accessible: Some(StableId::new()),
             content: content.into(),
             style: Style::new(),
             color: defaults.color,
@@ -163,6 +168,7 @@ impl Text {
             align: TextAlign::Left,
             max_lines: None,
             wrapped: None,
+            unselectable: false,
             layout_node: None,
         }
     }
@@ -175,11 +181,17 @@ impl Text {
         self
     }
 
-    /// Expose the text as an accessibility node labelled with its content,
-    /// for text that is the only description of what it sits in. Such text is
-    /// laid out and painted every frame: it registers an accessibility region.
+    /// Expose the text to screen readers as static text labelled with its
+    /// content. This is the default; it undoes [`Text::accessibility_hidden`].
     pub fn accessible(mut self) -> Self {
         self.accessible = Some(self.id.map_or_else(StableId::new, StableId::explicit));
+        self
+    }
+
+    /// Leave the text out of the accessibility tree, for decoration such as
+    /// an icon glyph whose meaning a labelled control already carries.
+    pub fn accessibility_hidden(mut self) -> Self {
+        self.accessible = None;
         self
     }
 
@@ -276,6 +288,19 @@ impl Text {
         self.max_lines(1)
     }
 
+    /// This text in a [`SelectionScope`] of its own, so it can be selected
+    /// and copied. Text inside a scope is selectable without this.
+    pub fn selectable(self) -> SelectionScope {
+        selection_scope(self)
+    }
+
+    /// Leave this text out of the [`SelectionScope`] it is in: a drag passes
+    /// over it and copying leaves it out, as a list marker is.
+    pub fn unselectable(mut self) -> Self {
+        self.unselectable = true;
+        self
+    }
+
     /// Take every property not set on this text from `inherited`.
     fn inherit(&mut self, inherited: &TextStyle) {
         if !self.own.color {
@@ -322,6 +347,49 @@ impl Text {
         }
     }
 
+    /// What a selection scope needs to know of this text painted at
+    /// `bounds`, unless it is left out of selections or paints nothing.
+    pub(crate) fn selectable_leaf(
+        &mut self,
+        bounds: Bounds,
+        clip: Option<Bounds>,
+    ) -> Option<SelectableLeaf> {
+        if self.unselectable
+            || self.content.is_empty()
+            || self.font_size <= 0.0
+            || self.line_height <= 0.0
+        {
+            return None;
+        }
+        let font = LeafFont {
+            size: self.font_size,
+            weight: self.font_weight.to_value(),
+            family: self.font_family.clone(),
+            line_height: self.line_height,
+        };
+        let lines = self
+            .wrapped
+            .as_ref()
+            .and_then(|lines| lines.borrow().clone());
+        let layout = match lines {
+            Some(lines) => LeafLayout::Wrapped {
+                font,
+                align: self.align,
+                lines,
+            },
+            None => LeafLayout::Line {
+                font,
+                align: self.align,
+            },
+        };
+        Some(SelectableLeaf::new(
+            bounds,
+            clip,
+            self.content.share(),
+            layout,
+        ))
+    }
+
     /// Measure text width using the configured font metrics.
     #[cfg(test)]
     fn estimate_width(&self) -> f32 {
@@ -336,8 +404,10 @@ impl Text {
 }
 
 impl Element for Text {
+    // Only an id the application set: the accessibility node's adopted id is
+    // derived from the text's place, and layout derives that again each pass.
     fn id(&self) -> Option<ElementId> {
-        self.accessible.map(|id| id.get()).or(self.id)
+        self.id
     }
 
     fn stable_id_mut(&mut self) -> Option<&mut StableId> {
@@ -349,11 +419,8 @@ impl Element for Text {
     }
 
     fn capabilities(&self) -> Capabilities {
-        if self.accessible.is_some() {
-            // Its accessibility region is registered in paint, which a
-            // replay would skip.
-            return Capabilities::default();
-        }
+        // Its accessibility region is registered in paint and replayed with
+        // its primitives.
         Capabilities::PURE_INERT
     }
 
@@ -376,6 +443,8 @@ impl Element for Text {
             && self.align == previous.align
             && self.max_lines == previous.max_lines
             && self.wrapped.is_some() == previous.wrapped.is_some()
+            && self.unselectable == previous.unselectable
+            && self.accessible.is_some() == previous.accessible.is_some()
     }
 
     fn layout(&mut self, cx: &mut LayoutContext) -> NodeId {
@@ -453,9 +522,6 @@ impl Element for Text {
         bounds: Bounds,
         visible: &Bounds,
     ) -> Option<Bounds> {
-        if self.accessible.is_some() {
-            return None;
-        }
         if self.content.is_empty() || self.font_size <= 0.0 || self.line_height <= 0.0 {
             return Some(no_reach());
         }

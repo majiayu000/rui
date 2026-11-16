@@ -603,12 +603,15 @@ impl Element for ToastStack {
         let mut nodes = Vec::with_capacity(self.cards.len());
         for (card, element) in self.cards.iter().zip(&self.elements) {
             let mut node =
-                AccessibilityNode::label_required(card.id, AccessibilityRole::Status, &card.title)?
-                    .with_children(element.accessibility_nodes(cx)?);
+                AccessibilityNode::label_required(card.id, AccessibilityRole::Status, &card.title)?;
             if let Some(description) = &card.description {
                 node = node.with_value(description.clone());
             }
-            nodes.push(node);
+            // The card's title and description are already the node's label
+            // and value; its text would read them a second time.
+            let mut children = element.accessibility_nodes(cx)?;
+            crate::elements::element::drop_repeated_text(&node, &mut children);
+            nodes.push(node.with_children(children));
         }
         Ok(nodes)
     }
