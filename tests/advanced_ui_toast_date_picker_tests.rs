@@ -189,6 +189,41 @@ fn toast_closes_after_its_duration_but_not_while_hovered() {
 }
 
 #[test]
+fn toast_shown_after_a_hovered_one_was_closed_closes_on_time() {
+    let (mut session, toaster, _) =
+        toast_session(|| Toast::info("Synced").duration(Duration::from_millis(60)));
+    toaster.show(Toast::info("Pinned").persistent());
+    session.frame().expect("frame that shows the toast");
+    let close = find_label(tree(&session).roots(), "Dismiss Pinned")
+        .and_then(AccessibilityNode::a11y_bounds)
+        .expect("close button")
+        .center();
+    session.pointer_move(close);
+    session.frame().expect("frame after hover");
+    assert!(toaster.is_paused());
+
+    click(&mut session, close.x, close.y);
+    assert!(toaster.toasts().is_empty());
+    assert!(
+        !toaster.is_paused(),
+        "no toast is left for the pointer to be over"
+    );
+    session.pointer_move(Point::new(10.0, 300.0));
+
+    // The next toast comes from the keyboard, with the pointer at rest.
+    session.request_focus(Some(SAVE_ID));
+    press(&mut session, KeyCode::Enter);
+    assert_eq!(toaster.toasts().len(), 1);
+    assert!(
+        session.next_frame_deadline().is_some(),
+        "the new toast's timer runs"
+    );
+    std::thread::sleep(Duration::from_millis(120));
+    assert!(session.timed_frame().expect("timed frame").is_some());
+    assert!(toaster.toasts().is_empty());
+}
+
+#[test]
 fn toast_countdown_wakes_once_at_its_deadline() {
     let duration = Duration::from_millis(80);
     let (mut session, toaster, renders) =
