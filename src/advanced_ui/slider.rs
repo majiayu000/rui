@@ -7,7 +7,7 @@ use crate::core::accessibility::{
 };
 use crate::core::action::{
     ACCESSIBILITY_DECREMENT_ACTION, ACCESSIBILITY_INCREMENT_ACTION, ActionId, ActionOutcome,
-    StandardAction,
+    StandardAction, accessibility_set_value,
 };
 use crate::core::color::Color;
 use crate::core::event::{KeyCode, KeyEvent, Modifiers, MouseButton};
@@ -279,6 +279,7 @@ impl Element for Slider {
             node = node.with_actions([
                 AccessibilityAction::Increment,
                 AccessibilityAction::Decrement,
+                AccessibilityAction::SetValue,
             ]);
         }
         Ok(Some(node))
@@ -344,7 +345,10 @@ impl Element for Slider {
             ActionId::Custom(name) if name == ACCESSIBILITY_DECREMENT_ACTION => {
                 self.handled(self.current_value() - self.step, cx)
             }
-            _ => ActionOutcome::Ignored,
+            action => match accessibility_set_value(action) {
+                Some(value) => self.handled(value as f32, cx),
+                None => ActionOutcome::Ignored,
+            },
         }
     }
 }

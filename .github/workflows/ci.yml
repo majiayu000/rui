@@ -110,7 +110,7 @@ jobs:
 
       - name: Compare window pixels on lavapipe under Xvfb
         run: |
-          cargo build --locked --no-default-features --features winit --example hello_world --example counter --example multi_window --example interaction_acceptance
+          cargo build --locked --no-default-features --features winit --example hello_world --example counter --example multi_window --example interaction_acceptance --example controls
           xvfb-run -a -s "-screen 0 1024x768x24" scripts/linux_window_pixels.sh
 
       - name: Read the accessibility tree back over AT-SPI
@@ -183,7 +183,7 @@ jobs:
       - name: Compare window pixels
         shell: powershell
         run: |
-          cargo build --locked --no-default-features --features winit --example hello_world --example counter --example interaction_acceptance
+          cargo build --locked --no-default-features --features winit --example hello_world --example counter --example interaction_acceptance --example controls
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ./scripts/windows_window_pixels.ps1
 

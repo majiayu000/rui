@@ -3,7 +3,7 @@
 //! the requests that come back.
 
 use super::accessibility::WindowAccessibility;
-use super::accessibility_tree::{WINDOW_NODE, request_for_action, tree_update};
+use super::accessibility_tree::{TextGeometry, WINDOW_NODE, request_for_action, tree_update};
 use crate::advanced_ui::{Button, Checkbox};
 use crate::core::ElementId;
 use crate::core::accessibility::{
@@ -71,7 +71,12 @@ fn publish(
     let tree = presenter
         .accessibility_tree()
         .expect("accessibility tree should build");
-    accessibility.next_update(tree, "RUI Interaction Acceptance", scale)
+    accessibility.next_update(
+        tree,
+        TextGeometry::new(),
+        "RUI Interaction Acceptance",
+        scale,
+    )
 }
 
 /// The tree an AccessKit platform adapter holds after `update`. It panics on
@@ -175,7 +180,7 @@ fn radio_options_are_toggled_and_tabs_are_selected() {
         AccessibilityNode::new(segment, AccessibilityRole::SegmentedOption).with_selected(false),
         AccessibilityNode::new(tab, AccessibilityRole::Tab).with_selected(true),
     ]);
-    let tree = read_back(tree_update(&tree, "Options", 1.0));
+    let tree = read_back(tree_update(&tree, &TextGeometry::new(), "Options", 1.0));
 
     assert_eq!(node(&tree, radio).toggled(), Some(Toggled::True));
     assert_eq!(node(&tree, segment).toggled(), Some(Toggled::False));
@@ -197,7 +202,12 @@ fn enabled_read_only_text_can_take_focus_without_being_editable() {
             .with_read_only(true)
             .with_enabled(false),
     ]);
-    let tree = read_back(tree_update(&tree, "Read-only inputs", 1.0));
+    let tree = read_back(tree_update(
+        &tree,
+        &TextGeometry::new(),
+        "Read-only inputs",
+        1.0,
+    ));
 
     for id in [input_id, area_id] {
         let field = node(&tree, id);
@@ -223,7 +233,12 @@ fn a_caret_after_an_oversized_cluster_round_trips_through_accesskit() {
                 .with_value(value.clone())
                 .with_text_caret(value.len()),
         ]);
-        let tree = read_back(tree_update(&tree, "Long cluster", 1.0));
+        let tree = read_back(tree_update(
+            &tree,
+            &TextGeometry::new(),
+            "Long cluster",
+            1.0,
+        ));
         let field = node(&tree, id);
         assert_eq!(field.document_range().text(), value);
         assert_eq!(
@@ -307,23 +322,26 @@ fn screen_reader_actions_map_to_the_shared_requests() {
         value: None,
     };
     assert_eq!(
-        request_for_action(&action(SAVE, Action::Click, None)),
+        request_for_action(&action(SAVE, Action::Click, None), None),
         Some((SAVE, activate))
     );
     assert_eq!(
-        request_for_action(&action(FILTER, Action::Focus, None)),
+        request_for_action(&action(FILTER, Action::Focus, None), None),
         Some((FILTER, AccessibilityRequest::Focus(true)))
     );
     assert_eq!(
-        request_for_action(&action(FILTER, Action::Blur, None)),
+        request_for_action(&action(FILTER, Action::Blur, None), None),
         Some((FILTER, AccessibilityRequest::Focus(false)))
     );
     assert_eq!(
-        request_for_action(&action(
-            FILTER,
-            Action::SetValue,
-            Some(ActionData::Value("draft".into()))
-        )),
+        request_for_action(
+            &action(
+                FILTER,
+                Action::SetValue,
+                Some(ActionData::Value("draft".into()))
+            ),
+            None
+        ),
         Some((
             FILTER,
             AccessibilityRequest::Action {
@@ -333,17 +351,17 @@ fn screen_reader_actions_map_to_the_shared_requests() {
         ))
     );
     assert_eq!(
-        request_for_action(&action(FILTER, Action::SetValue, None)),
+        request_for_action(&action(FILTER, Action::SetValue, None), None),
         None,
         "a set value without text"
     );
     assert_eq!(
-        request_for_action(&action(SAVE, Action::ShowContextMenu, None)),
+        request_for_action(&action(SAVE, Action::ShowContextMenu, None), None),
         None
     );
     let mut window = action(SAVE, Action::Click, None);
     window.target_node = WINDOW_NODE;
-    assert_eq!(request_for_action(&window), None);
+    assert_eq!(request_for_action(&window, None), None);
 }
 
 #[test]
@@ -413,7 +431,7 @@ fn each_window_publishes_its_own_tree() {
         .expect("second accessibility tree should build");
     let second_tree = read_back(
         second_accessibility
-            .next_update(tree, "Second", 1.0)
+            .next_update(tree, TextGeometry::new(), "Second", 1.0)
             .expect("second window"),
     );
 
@@ -442,7 +460,7 @@ fn an_id_used_twice_is_published_once() {
     ]);
 
     // AccessKit rejects an update naming a node twice; this one reads back.
-    let tree = read_back(tree_update(&tree, "Twice", 1.0));
+    let tree = read_back(tree_update(&tree, &TextGeometry::new(), "Twice", 1.0));
     assert_eq!(node(&tree, twice).label().as_deref(), Some("First"));
     assert_eq!(node(&tree, ElementId(6)).children().count(), 0);
     assert_eq!(tree.state().root().children().count(), 2);

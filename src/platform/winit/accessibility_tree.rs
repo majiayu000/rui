@@ -1,31 +1,42 @@
 //! The presenter's accessibility tree as AccessKit nodes, and AccessKit
 //! action requests as the requests every runner dispatches.
 
-use super::accessibility_text::text_runs;
+use super::accessibility_text::{offset, text_runs};
 use crate::core::ElementId;
 use crate::core::accessibility::{
     AccessibilityAction, AccessibilityNode, AccessibilityRole, AccessibilityTree,
 };
+use crate::core::text_editing::TextInputGeometry;
 use crate::platform::accessibility_request::AccessibilityRequest;
 use accesskit::{
     Action, ActionData, ActionRequest, Affine, Invalid, Live, Node, NodeId, Rect, Role, Toggled,
     TreeId, TreeInfo, TreeUpdate,
 };
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// The window itself, the parent of the presenter's root nodes. Element ids
 /// map to node ids one to one, and no element is given this one.
 pub(super) const WINDOW_NODE: NodeId = NodeId(u64::MAX);
 
+/// The layouts of the text inputs that have one, which place their
+/// characters.
+pub(super) type TextGeometry = HashMap<ElementId, TextInputGeometry>;
+
 /// A full AccessKit tree for one window: a window node titled `title` over
 /// `tree`'s roots. Element bounds are logical, so the window node scales them
 /// by `scale_factor` to the physical pixels AccessKit expects. Focus is the
 /// focused element, or the window when no element has focus.
-pub(super) fn tree_update(tree: &AccessibilityTree, title: &str, scale_factor: f64) -> TreeUpdate {
+pub(super) fn tree_update(
+    tree: &AccessibilityTree,
+    text: &TextGeometry,
+    title: &str,
+    scale_factor: f64,
+) -> TreeUpdate {
     let mut builder = Builder {
         nodes: Vec::new(),
         seen: HashSet::from([WINDOW_NODE]),
         focus: None,
+        text,
     };
     let mut window = Node::new(Role::Window);
     window.set_label(title);
@@ -52,10 +63,12 @@ pub(super) fn tree_update(tree: &AccessibilityTree, title: &str, scale_factor: f
 }
 
 /// What a screen reader asked for, as the element it names and the request
-/// the shared dispatch takes. None for the window node and for actions rui
-/// does not offer.
+/// the shared dispatch takes. A text selection names positions on the runs
+/// of `published`, the tree the platform holds. None for the window node and
+/// for actions rui does not offer.
 pub(super) fn request_for_action(
     request: &ActionRequest,
+    published: Option<&AccessibilityTree>,
 ) -> Option<(ElementId, AccessibilityRequest)> {
     if request.target_node == WINDOW_NODE || request.target_tree != TreeId::ROOT {
         return None;
@@ -78,6 +91,26 @@ pub(super) fn request_for_action(
                 action: AccessibilityAction::SetValue,
                 value: Some(value.to_string()),
             },
+            Some(ActionData::NumericValue(value)) => AccessibilityRequest::Action {
+                action: AccessibilityAction::SetValue,
+                value: Some(value.to_string()),
+            },
+            _ => return None,
+        },
+        Action::ReplaceSelectedText => match &request.data {
+            Some(ActionData::Value(text)) => {
+                AccessibilityRequest::ReplaceSelectedText(text.to_string())
+            }
+            _ => return None,
+        },
+        Action::SetTextSelection => match &request.data {
+            Some(ActionData::SetTextSelection(selection)) => {
+                let node = published?.find(id)?;
+                AccessibilityRequest::SetTextSelection {
+                    anchor: offset(node, selection.anchor)?,
+                    focus: offset(node, selection.focus)?,
+                }
+            }
             _ => return None,
         },
         _ => return None,
@@ -90,14 +123,15 @@ fn node_id(node: &AccessibilityNode) -> NodeId {
 }
 
 /// The nodes of one update, each id once.
-struct Builder {
+struct Builder<'a> {
     nodes: Vec<(NodeId, Node)>,
     seen: HashSet<NodeId>,
     /// The first focused node.
     focus: Option<NodeId>,
+    text: &'a TextGeometry,
 }
 
-impl Builder {
+impl Builder<'_> {
     /// Add `node` and its subtree, returning its id. A node whose id is
     /// already in the update is left out with its subtree, as AccessKit
     /// rejects an update that names a node twice.
@@ -116,7 +150,7 @@ impl Builder {
         let mut out = accesskit_node(node);
         let mut children = Vec::new();
         if node.a11y_role() == AccessibilityRole::TextInput {
-            let (runs, selection) = text_runs(node);
+            let (runs, selection) = text_runs(node, self.text.get(&node.a11y_id()));
             if let Some(selection) = selection {
                 out.set_text_selection(selection);
             }
@@ -230,6 +264,12 @@ fn accesskit_node(node: &AccessibilityNode) -> Node {
         && (role == AccessibilityRole::TextInput || !node.a11y_actions().is_empty())
     {
         out.add_action(Action::Focus);
+    }
+    if role == AccessibilityRole::TextInput && node.a11y_enabled() {
+        out.add_action(Action::SetTextSelection);
+        if node.a11y_actions().contains(&AccessibilityAction::SetValue) {
+            out.add_action(Action::ReplaceSelectedText);
+        }
     }
     out
 }

@@ -2,10 +2,12 @@
 //! them: the AppKit bridge on macOS and AccessKit in the winit runner.
 
 use crate::core::ElementId;
-use crate::core::accessibility::{AccessibilityAction, AccessibilityNode, AccessibilityTree};
+use crate::core::accessibility::{
+    AccessibilityAction, AccessibilityNode, AccessibilityRole, AccessibilityTree,
+};
 use crate::core::action::{ActionId, StandardAction};
 use crate::core::presenter::Presenter;
-use crate::core::text_editing::TextInputEvent;
+use crate::core::text_editing::{TextInputCommand, TextInputEvent, TextSelection};
 use crate::elements::element::Element;
 
 /// What an assistive technology asked one element to do.
@@ -16,6 +18,14 @@ pub enum AccessibilityRequest {
         value: Option<String>,
     },
     Focus(bool),
+    /// Select from byte offset `anchor` to `focus` of a text input's
+    /// accessibility value; equal offsets place the caret.
+    SetTextSelection {
+        anchor: usize,
+        focus: usize,
+    },
+    /// Replace a text input's selection (or insert at its caret).
+    ReplaceSelectedText(String),
 }
 
 /// Dispatch `request` for element `id` to the presenter's tree. The element
@@ -52,6 +62,25 @@ where
             let redraw_requested = sync_accessibility_focus(presenter);
             return (true, redraw_requested);
         }
+        AccessibilityRequest::SetTextSelection { anchor, focus } => {
+            if node.a11y_role() != AccessibilityRole::TextInput || !node.a11y_enabled() {
+                log::error!("discarded {platform} text selection for non-text element {id:?}");
+                return (false, false);
+            }
+            let command =
+                TextInputCommand::SetAccessibilitySelection(TextSelection::new(*anchor, *focus));
+            return edit_text(presenter, id, &command);
+        }
+        AccessibilityRequest::ReplaceSelectedText(text) => {
+            // Only an editable input offers to set its value.
+            if !node.a11y_actions().contains(&AccessibilityAction::SetValue)
+                || node.a11y_role() != AccessibilityRole::TextInput
+            {
+                log::error!("discarded {platform} text replacement for read-only element {id:?}");
+                return (false, false);
+            }
+            return edit_text(presenter, id, &TextInputCommand::InsertText(text.clone()));
+        }
     };
     if !node.a11y_actions().contains(action) {
         log::error!(
@@ -73,6 +102,20 @@ where
                 log::error!("{platform} accessibility SetValue request for {id:?} had no value");
                 return (false, false);
             };
+            // A range control takes a number, not text.
+            if node.a11y_numeric_value().is_some() {
+                let Some(number) = value.trim().parse::<f64>().ok().filter(|n| n.is_finite())
+                else {
+                    log::error!(
+                        "{platform} accessibility value {value:?} for {id:?} is not a number"
+                    );
+                    return (false, false);
+                };
+                let action = crate::core::action::accessibility_set_value_action(number);
+                let (outcome, redraw_requested) = presenter
+                    .with_event_context(|root, event_cx| root.dispatch_action(event_cx, &action));
+                return (outcome.is_handled(), focus_redraw || redraw_requested);
+            }
             let composition_active = node.a11y_text_composition().is_some();
             let (handled, redraw_requested) = presenter.with_event_context(|root, event_cx| {
                 let composition_cancelled = !composition_active
@@ -107,6 +150,22 @@ where
             (outcome.is_handled(), focus_redraw || redraw_requested)
         }
     }
+}
+
+/// Focus text input `id` and send it `command`.
+fn edit_text<E>(
+    presenter: &mut Presenter<E>,
+    id: ElementId,
+    command: &TextInputCommand,
+) -> (bool, bool)
+where
+    E: Element,
+{
+    presenter.set_focused_element(Some(id));
+    let focus_redraw = sync_accessibility_focus(presenter);
+    let (handled, redraw_requested) = presenter
+        .with_event_context(|root, event_cx| root.handle_text_input_command(event_cx, command));
+    (handled, focus_redraw || redraw_requested)
 }
 
 fn current_accessibility_node<E>(

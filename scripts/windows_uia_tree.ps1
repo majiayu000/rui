@@ -1,10 +1,11 @@
-# Reads the accessibility tree of examples/interaction_acceptance back
-# through UI Automation, as a screen reader would, and drives it: focus, set
-# value, press.
+# Reads the accessibility trees of examples/interaction_acceptance and
+# examples/controls back through UI Automation, as a screen reader would, and
+# drives them: focus, set value, select, read character bounds, press, set a
+# slider.
 #
 # Run with Windows PowerShell in an interactive desktop session, after
-# building the example:
-#   cargo build --no-default-features --features winit --example interaction_acceptance
+# building the examples:
+#   cargo build --no-default-features --features winit --example interaction_acceptance --example controls
 #   powershell -File scripts/windows_uia_tree.ps1
 $ErrorActionPreference = "Stop"
 
@@ -12,6 +13,9 @@ Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
 $AE = [System.Windows.Automation.AutomationElement]
 $CT = [System.Windows.Automation.ControlType]
 $Scope = [System.Windows.Automation.TreeScope]
+$TP = [System.Windows.Automation.TextPattern]
+$Unit = [System.Windows.Automation.Text.TextUnit]
+$Endpoint = [System.Windows.Automation.Text.TextPatternRangeEndpoint]
 
 $targetDir = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { "target" }
 $out = if ($env:RUI_UIA_OUT) { $env:RUI_UIA_OUT } else { "target/windows-uia" }
@@ -83,6 +87,34 @@ try {
     $value = (Find-Node $window $CT::Edit "Filter").GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value
     Check ($value -eq "zzz") "set value reached the Filter field"
 
+    # Select characters 1-3 of "zzz" through the text pattern, as a screen
+    # reader's selection command does, and read the selection back.
+    $text = (Find-Node $window $CT::Edit "Filter").GetCurrentPattern($TP::Pattern)
+    $range = $text.DocumentRange.Clone()
+    $range.MoveEndpointByUnit($Endpoint::Start, $Unit::Character, 1) | Out-Null
+    $range.Select()
+    Wait-For "the selection" {
+        $selected = (Find-Node $window $CT::Edit "Filter").GetCurrentPattern($TP::Pattern).GetSelection()
+        if ($selected.Length -eq 1 -and $selected[0].GetText(-1) -eq "zz") { $true }
+    } | Out-Null
+    Check $true "selecting characters 1-3 reached the Filter field"
+
+    # Where each character is, in screen coordinates.
+    $field = (Find-Node $window $CT::Edit "Filter").Current.BoundingRectangle
+    $text = (Find-Node $window $CT::Edit "Filter").GetCurrentPattern($TP::Pattern)
+    $boxes = foreach ($i in 0..2) {
+        $char = $text.DocumentRange.Clone()
+        $char.MoveEndpointByUnit($Endpoint::Start, $Unit::Character, $i) | Out-Null
+        $char.MoveEndpointByRange($Endpoint::End, $char, $Endpoint::Start)
+        $char.MoveEndpointByUnit($Endpoint::End, $Unit::Character, 1) | Out-Null
+        $rects = $char.GetBoundingRectangles()
+        Write-Host "character ${i}: $($rects -join '; ')"
+        $rects[0]
+    }
+    Check (@($boxes | Where-Object { $_.Width -gt 0 -and $_.Height -gt 0 }).Count -eq 3) "each character has a size"
+    Check (($boxes[0].Right -le $boxes[1].X + 1) -and ($boxes[1].Right -le $boxes[2].X + 1)) "the characters go left to right"
+    Check (@($boxes | Where-Object { $field.Contains($_) }).Count -eq 3) "the characters lie inside the field"
+
     $save.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
     Wait-For "the confirm dialog" { Find-Node $window $CT::Window "Confirm save" } | Out-Null
     Check $true "pressing Save opened the confirm dialog"
@@ -90,6 +122,26 @@ try {
     $cancel.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
     Wait-For "the canceled status" { Find-Node $window $CT::Text "Status: Canceled" } | Out-Null
     Check $true "pressing Cancel reached the app"
+} finally {
+    Stop-Process -Id $app.Id -ErrorAction SilentlyContinue
+}
+
+# examples/controls: set the Volume slider to a number.
+$app = Start-Process -FilePath (Join-Path $targetDir "debug/examples/controls.exe") -PassThru
+try {
+    $titled = New-Object System.Windows.Automation.PropertyCondition($AE::NameProperty, "RUI Window")
+    $window = Wait-For "the controls window" { $AE::RootElement.FindFirst($Scope::Children, $titled) }
+    $volume = Wait-For "the Volume slider" { Find-Node $window $CT::Slider "Volume" }
+    $lines = New-Object System.Collections.Generic.List[string]
+    Write-Tree $window 0 $lines
+    $lines | Tee-Object -FilePath (Join-Path $out "controls-tree.txt")
+
+    $range = [System.Windows.Automation.RangeValuePattern]::Pattern
+    Check ($volume.GetCurrentPattern($range).Current.Value -eq 40) "Volume starts at 40"
+    $volume.GetCurrentPattern($range).SetValue(75)
+    Wait-For "the slider to move" { Find-Node $window $CT::Text "Volume: 75" } | Out-Null
+    $value = (Find-Node $window $CT::Slider "Volume").GetCurrentPattern($range).Current.Value
+    Check ($value -eq 75) "setting the value moved the Volume slider to 75"
 } finally {
     Stop-Process -Id $app.Id -ErrorAction SilentlyContinue
 }

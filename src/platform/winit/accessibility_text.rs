@@ -1,9 +1,11 @@
 //! A text input's value as AccessKit text runs, one per line, so AT-SPI
 //! exposes it through its Text and EditableText interfaces and the caret and
-//! selection have positions to point at.
+//! selection have positions to point at. With the input's layout the runs
+//! also carry where each character is.
 
 use crate::core::accessibility::AccessibilityNode;
-use accesskit::{Node, NodeId, Role, TextPosition, TextSelection};
+use crate::core::text_editing::TextInputGeometry;
+use accesskit::{Node, NodeId, Rect, Role, TextDirection, TextPosition, TextSelection};
 use unicode_segmentation::UnicodeSegmentation;
 
 /// Mixed into an input's id before hashing it, so its runs' ids are spread
@@ -30,10 +32,18 @@ struct Run {
 }
 
 /// The runs of a text input and the selection over them: the selection when
-/// there is one, otherwise the caret.
-pub(super) fn text_runs(node: &AccessibilityNode) -> (Vec<(NodeId, Node)>, Option<TextSelection>) {
+/// there is one, otherwise the caret. `geometry` is the input's layout, when
+/// it has one for this value: each run then has bounds (logical, like the
+/// element's) and each character a position and width in it.
+pub(super) fn text_runs(
+    node: &AccessibilityNode,
+    geometry: Option<&TextInputGeometry>,
+) -> (Vec<(NodeId, Node)>, Option<TextSelection>) {
     let value = node.a11y_value().unwrap_or_default();
     let runs = lines(node.a11y_id().0, value);
+    let geometry = geometry.filter(|geometry| {
+        geometry.layout().text() == value && geometry.layout().lines().len() == runs.len()
+    });
     let range = node
         .a11y_text_selection()
         .map(|range| (range.start(), range.end()))
@@ -44,14 +54,57 @@ pub(super) fn text_runs(node: &AccessibilityNode) -> (Vec<(NodeId, Node)>, Optio
     });
     let nodes = runs
         .into_iter()
-        .map(|run| {
+        .enumerate()
+        .map(|(index, run)| {
             let mut out = Node::new(Role::TextRun);
+            if let Some(geometry) = geometry {
+                place_characters(&mut out, geometry, index, &run.lengths);
+            }
             out.set_value(run.text);
             out.set_character_lengths(run.lengths);
             (run.id, out)
         })
         .collect();
     (nodes, selection)
+}
+
+/// Give run `line` its line's bounds and each character its left edge and
+/// width from the run's left edge.
+fn place_characters(out: &mut Node, geometry: &TextInputGeometry, line: usize, lengths: &[u8]) {
+    let layout = geometry.layout();
+    let text_line = layout.lines()[line];
+    let extents = layout.character_extents(line, lengths);
+    let right = extents
+        .iter()
+        .map(|(left, width)| left + width)
+        .fold(text_line.measured_size().width, f32::max);
+    let x = geometry.origin().x + text_line.origin().x;
+    let y = geometry.origin().y + text_line.origin().y;
+    out.set_bounds(Rect::new(
+        f64::from(x),
+        f64::from(y),
+        f64::from(x + right),
+        f64::from(y + text_line.measured_size().height),
+    ));
+    // Each position is a left edge, right-to-left characters included.
+    out.set_text_direction(TextDirection::LeftToRight);
+    out.set_character_positions(extents.iter().map(|(left, _)| *left).collect::<Vec<_>>());
+    out.set_character_widths(extents.iter().map(|(_, width)| *width).collect::<Vec<_>>());
+}
+
+/// The byte offset in `node`'s value of `position` on one of its runs, or
+/// None when the position names no run of it or lies past the run's end.
+pub(super) fn offset(node: &AccessibilityNode, position: TextPosition) -> Option<usize> {
+    let runs = lines(node.a11y_id().0, node.a11y_value().unwrap_or_default());
+    let run = runs.iter().find(|run| run.id == position.node)?;
+    let within = run.lengths.get(..position.character_index)?;
+    Some(
+        run.start
+            + within
+                .iter()
+                .map(|length| usize::from(*length))
+                .sum::<usize>(),
+    )
 }
 
 fn lines(id: u64, value: &str) -> Vec<Run> {
@@ -153,6 +206,29 @@ mod tests {
         assert_eq!(offsets(value, 3), (1, 0), "after the newline");
         assert_eq!(offsets(value, 6), (1, 1), "after the CJK character");
         assert_eq!(offsets(value, value.len()), (1, 2), "the end");
+    }
+
+    #[test]
+    fn run_positions_map_back_to_byte_offsets() {
+        use crate::core::ElementId;
+        use crate::core::accessibility::AccessibilityRole;
+        let value = "ab\n中é";
+        let node =
+            AccessibilityNode::new(ElementId(1), AccessibilityRole::TextInput).with_value(value);
+        let runs = lines(1, value);
+        for expected in [0, 2, 3, 6, value.len()] {
+            assert_eq!(offset(&node, position(&runs, expected)), Some(expected));
+        }
+        let past = TextPosition {
+            node: runs[0].id,
+            character_index: 4,
+        };
+        assert_eq!(offset(&node, past), None, "past the run's end");
+        let elsewhere = TextPosition {
+            node: NodeId(7),
+            character_index: 0,
+        };
+        assert_eq!(offset(&node, elsewhere), None, "another node's position");
     }
 
     #[test]

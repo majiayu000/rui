@@ -23,7 +23,9 @@ impl TextArea {
         // disabled. It must restore provisional text before detach/focus loss.
         let cancel_existing = matches!(command, TextInputCommand::CancelComposition)
             && self.editor.composition().is_some();
-        if !self.can_edit() && !cancel_existing {
+        // A screen reader may select in a read-only area.
+        let selecting = matches!(command, TextInputCommand::SetAccessibilitySelection(_));
+        if !(self.can_edit() || cancel_existing || selecting && !self.state.disabled) {
             return Ok(TextEditOutcome::default());
         }
         self.sync_editor_from_public_state_if_needed()?;

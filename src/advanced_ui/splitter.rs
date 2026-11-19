@@ -8,7 +8,7 @@ use crate::core::accessibility::{
 };
 use crate::core::action::{
     ACCESSIBILITY_DECREMENT_ACTION, ACCESSIBILITY_INCREMENT_ACTION, ActionId, ActionOutcome,
-    StandardAction,
+    StandardAction, accessibility_set_value,
 };
 use crate::core::color::Color;
 use crate::core::event::{Cursor, KeyCode, KeyEvent, Modifiers, MouseButton, ScrollEvent};
@@ -411,6 +411,7 @@ impl Element for Splitter {
             node = node.with_actions([
                 AccessibilityAction::Increment,
                 AccessibilityAction::Decrement,
+                AccessibilityAction::SetValue,
             ]);
         }
         Ok(Some(node))
@@ -535,7 +536,10 @@ impl Element for Splitter {
             ActionId::Custom(name) if name == ACCESSIBILITY_DECREMENT_ACTION => {
                 self.step(-KEY_STEP, cx)
             }
-            _ => ActionOutcome::Ignored,
+            action => match accessibility_set_value(action) {
+                Some(position) => self.step(position as f32 - self.current_position(), cx),
+                None => ActionOutcome::Ignored,
+            },
         }
     }
 

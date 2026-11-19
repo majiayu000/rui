@@ -27,6 +27,24 @@ impl Input {
         // disabled. It must restore provisional text before detach/focus loss.
         let cancel_existing = matches!(command, TextInputCommand::CancelComposition)
             && self.editor.composition().is_some();
+        // A screen reader selects in the text it reads, the masked text of a
+        // password field, and may select in a read-only field.
+        let command = match command {
+            TextInputCommand::SetAccessibilitySelection(selection) if !self.state.disabled => {
+                let offset = |offset| {
+                    self.value_offset_for_display_offset(offset).ok_or(
+                        TextEditError::InvalidRange {
+                            start: offset,
+                            end: offset,
+                        },
+                    )
+                };
+                let selection =
+                    TextSelection::new(offset(selection.anchor())?, offset(selection.head())?);
+                return self.select_for_accessibility(selection);
+            }
+            command => command,
+        };
         if !self.can_edit() && !cancel_existing {
             return Ok(TextEditOutcome::default());
         }
@@ -36,6 +54,17 @@ impl Input {
         self.sync_state_from_editor();
         self.emit_change_if_needed(outcome.changed);
         Ok(outcome)
+    }
+
+    fn select_for_accessibility(
+        &mut self,
+        selection: TextSelection,
+    ) -> Result<TextEditOutcome, TextEditError> {
+        self.sync_editor_from_public_state_if_needed()?;
+        self.visual_caret = None;
+        self.editor.set_selection(selection)?;
+        self.sync_state_from_editor();
+        Ok(TextEditOutcome::default())
     }
 
     pub(super) fn handle_text_input_command_impl(

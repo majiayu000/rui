@@ -393,6 +393,10 @@ impl TextEditBuffer {
                 self.set_composition_selection_utf16(selection)?;
                 Ok(TextEditOutcome::default())
             }
+            TextInputCommand::SetAccessibilitySelection(selection) => {
+                self.set_selection(selection)?;
+                Ok(TextEditOutcome::default())
+            }
             TextInputCommand::CancelComposition => {
                 self.cancel_composition()?;
                 Ok(changed())

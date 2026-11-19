@@ -7,6 +7,8 @@ use crate::renderer::Primitive;
 use crate::renderer::text::TextShapePlan;
 use unicode_segmentation::UnicodeSegmentation;
 
+#[cfg(feature = "winit")]
+mod extents;
 mod navigation;
 
 /// Horizontal positions this close are the same place. Runs placed in display
@@ -132,6 +134,15 @@ impl TextInputGeometry {
             origin,
             visual_caret: None,
         }
+    }
+
+    /// The layout, whose coordinates [`Self::origin`] places in the window.
+    pub fn layout(&self) -> &TextEditLayout {
+        &self.layout
+    }
+
+    pub fn origin(&self) -> Point {
+        self.origin
     }
 
     pub(crate) fn with_visual_caret(mut self, visual_caret: Option<VisualCaret>) -> Self {
