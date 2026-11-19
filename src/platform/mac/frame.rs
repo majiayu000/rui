@@ -9,7 +9,7 @@ use crate::core::ElementId;
 use crate::core::accessibility::{AccessibilityAction, AccessibilityNode, AccessibilityTree};
 use crate::core::action::{ActionId, StandardAction};
 use crate::core::app::{AppContext, RedrawSource};
-use crate::core::event::{Event, FocusEvent};
+use crate::core::event::Event;
 use crate::core::geometry::Size;
 use crate::core::presenter::Presenter;
 use crate::core::text_editing::TextInputEvent;
@@ -61,13 +61,7 @@ where
     }
 
     if let Some(is_focused) = events.focus_changed {
-        let event = if is_focused {
-            Event::Focus(FocusEvent { focused: true })
-        } else {
-            presenter.set_focused_element(None);
-            Event::Blur(FocusEvent { focused: false })
-        };
-        presenter.handle_window_event(&event);
+        presenter.handle_window_focus(is_focused);
         cancel_composition_if_owner_lost(presenter, window, ime_state);
         schedule_platform_redraw(window, context, RedrawSource::PlatformFocus);
     }

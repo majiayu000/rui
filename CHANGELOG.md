@@ -53,6 +53,11 @@ All notable project changes should be recorded here.
 
 ### Runtime
 
+- The winit runner (Linux, Windows) opens the windows app code opens with
+  `AppContext::open_window` and `open_view_window` instead of closing them:
+  each gets its own presenter, surface and renderer, events go to the window
+  winit names, and closing one leaves the others running. Its window reports
+  the `multi-window` feature.
 - The winit runner (Linux and Windows) copies, cuts and pastes through the
   system clipboard via arboard, X11 or Wayland on Linux, instead of an
   in-memory clipboard only the app could see. Without a system clipboard it
@@ -76,6 +81,20 @@ All notable project changes should be recorded here.
   Native and headless runners share that order and only supply the two
   platform-dependent stages, `DispatchEvents` and `Present`.
 - Added `AppContext::has_frame_work` as the single definition of an idle frame.
+- `testing::mount`, `mount_view` and `HeadlessApp` windows render the child
+  views their first tree places (`view(..)`, `cx.rows(..)`) before laying it
+  out, as native windows do. They used to panic with "view ... was laid out
+  before it rendered". The first frame still builds the root once, also when
+  entities were notified before a headless window opened.
+- A window that loses key status (switching windows or apps) now blurs its
+  focused element and focuses it again when it becomes key, on macOS and
+  winit. Before, focus was dropped: after switching back, Tab started over,
+  Enter on a focused button did nothing, and an input kept its ring and took
+  keys while nothing owned focus. Focus is not given back when app code moved
+  or cleared it meanwhile, or the element was removed, disabled or is behind a
+  modal that opened. `HeadlessSession::dispatch_window_event` with
+  `Event::Blur` / `Event::Focus` and `HeadlessApp::make_key_window` drive the
+  same path in tests.
 
 ### Advanced UI
 

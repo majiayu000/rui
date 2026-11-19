@@ -27,6 +27,9 @@ pub mod view;
 pub mod window;
 mod windows;
 
+#[cfg(feature = "winit")]
+pub(crate) use windows::PendingWindow;
+
 pub use app::{App, AppContext, ImageAsset, RedrawSource, RedrawSourceCounts, Row};
 pub use app_handle::{AppClosed, AppHandle};
 pub use color::{Color, Hsla, Rgba};

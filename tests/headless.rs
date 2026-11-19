@@ -1,10 +1,13 @@
 use rui::advanced_ui::{Button, Checkbox, Flex, column};
 use rui::core::accessibility::AccessibilityRole;
+use rui::core::color::Color;
+use rui::core::entity::Entity;
 use rui::core::event::Event;
-use rui::core::{AppContext, ElementId, Point, Size, View, ViewContext};
+use rui::core::{AppContext, Bounds, ElementId, Point, Size, View, ViewContext};
 use rui::elements::element::{EventContext, LayoutContext, PaintContext, PointerEvent};
-use rui::elements::{Div, Element, div};
-use rui::testing::{HeadlessError, mount, mount_view};
+use rui::elements::{Div, Element, div, view};
+use rui::renderer::Primitive;
+use rui::testing::{HeadlessError, HeadlessSession, mount, mount_view};
 use std::cell::Cell;
 use std::rc::Rc;
 use taffy::prelude::NodeId;
@@ -406,4 +409,198 @@ fn headless_record_frame_keeps_the_prepared_scene_viewport_after_resize() {
 
     assert_eq!(recorded.viewport_size, initial_size);
     assert_eq!(recorded.primitives.len(), session.primitives().len());
+}
+
+/// A child view: a 40 x 20 box in its model's colour.
+struct Swatch {
+    color: Entity<u32>,
+    renders: Rc<Cell<u32>>,
+}
+
+impl View for Swatch {
+    type Element = Div;
+
+    fn render(&mut self, cx: &mut ViewContext<Self>) -> Div {
+        self.renders.set(self.renders.get() + 1);
+        let color = match cx.app().get(self.color) {
+            Some(color) => *color,
+            None => panic!("the swatch's colour is gone"),
+        };
+        div().w(40.0).h(20.0).bg(Color::hex(color))
+    }
+}
+
+/// The bounds of the quad painted in `color`.
+fn quad_in<F, E>(session: &HeadlessSession<F, E>, color: u32) -> Option<Bounds>
+where
+    F: FnMut(&mut AppContext) -> E,
+    E: Element,
+{
+    let color = Color::hex(color).to_rgba();
+    session
+        .primitives()
+        .iter()
+        .find_map(|primitive| match primitive {
+            Primitive::Quad {
+                bounds, background, ..
+            } if *background == color => Some(*bounds),
+            _ => None,
+        })
+}
+
+/// The swatch a root's first build made, with its colour.
+type Placed = (Entity<Swatch>, Entity<u32>);
+
+/// Counts of root builds and swatch renders, and the swatch its first build
+/// made, with its colour.
+#[derive(Clone, Default)]
+struct SwatchRoot {
+    builds: Rc<Cell<u32>>,
+    renders: Rc<Cell<u32>>,
+    placed: Rc<Cell<Option<Placed>>>,
+}
+
+impl SwatchRoot {
+    /// A root that places the swatch from its first build on, in a 200 x 100
+    /// box. With `reads_color`, the box is filled with the swatch's colour
+    /// inverted, so the root reads the colour too.
+    fn build(&self, reads_color: bool) -> impl FnMut(&mut AppContext) -> Div + use<> {
+        let root = self.clone();
+        move |cx: &mut AppContext| {
+            root.builds.set(root.builds.get() + 1);
+            let (swatch, color) = match root.placed.get() {
+                Some(placed) => placed,
+                None => {
+                    let color = cx.create(0x33_66_99_u32);
+                    let renders = Rc::clone(&root.renders);
+                    let placed = (cx.new_view(Swatch { color, renders }), color);
+                    root.placed.set(Some(placed));
+                    placed
+                }
+            };
+            let frame = div().w(200.0).h(100.0).p(10.0);
+            let frame = if reads_color {
+                let color = cx.get(color).map_or(0, |color| *color);
+                frame.bg(Color::hex(color ^ 0xff_ff_ff))
+            } else {
+                frame
+            };
+            frame.child(view(swatch))
+        }
+    }
+
+    fn color(&self) -> Entity<u32> {
+        match self.placed.get() {
+            Some((_, color)) => color,
+            None => panic!("the first build places the swatch"),
+        }
+    }
+}
+
+fn set_color<F, E>(session: &mut HeadlessSession<F, E>, color: Entity<u32>, value: u32)
+where
+    F: FnMut(&mut AppContext) -> E,
+    E: Element,
+{
+    match session.app_context_mut().get_mut(color) {
+        Some(mut color) => *color = value,
+        None => panic!("the swatch's colour is gone"),
+    }
+    session.app_context_mut().notify(color.id());
+    if let Err(err) = session.frame() {
+        panic!("frame after the colour changed failed: {err}");
+    }
+}
+
+/// Where the swatch sits: inside the root's 10 px padding.
+fn swatch_bounds() -> Bounds {
+    Bounds::from_xywh(10.0, 10.0, 40.0, 20.0)
+}
+
+#[test]
+fn mount_renders_a_child_view_its_first_build_places() {
+    let root = SwatchRoot::default();
+    let mut session = mount_or_panic(Size::new(200.0, 100.0), root.build(false));
+
+    assert_eq!(
+        root.builds.get(),
+        1,
+        "the first frame lays out the tree mount built"
+    );
+    assert_eq!(root.renders.get(), 1, "the view rendered before layout");
+    assert_eq!(quad_in(&session, 0x33_66_99), Some(swatch_bounds()));
+
+    // The view renders again for its model alone, without building the root.
+    set_color(&mut session, root.color(), 0x99_33_66);
+    assert_eq!(root.builds.get(), 1);
+    assert_eq!(root.renders.get(), 2);
+    assert_eq!(quad_in(&session, 0x99_33_66), Some(swatch_bounds()));
+}
+
+#[test]
+fn an_entity_the_first_build_read_builds_the_root_again() {
+    let root = SwatchRoot::default();
+    let mut session = mount_or_panic(Size::new(200.0, 100.0), root.build(true));
+    assert_eq!(root.builds.get(), 1);
+    assert_eq!(root.renders.get(), 1);
+    assert_eq!(
+        quad_in(&session, 0x33_66_99 ^ 0xff_ff_ff),
+        Some(Bounds::from_xywh(0.0, 0.0, 200.0, 100.0))
+    );
+
+    set_color(&mut session, root.color(), 0x99_33_66);
+    assert_eq!(root.builds.get(), 2, "the root read the colour");
+    assert_eq!(root.renders.get(), 2, "so did the view");
+    assert_eq!(
+        quad_in(&session, 0x99_33_66 ^ 0xff_ff_ff),
+        Some(Bounds::from_xywh(0.0, 0.0, 200.0, 100.0))
+    );
+    assert_eq!(quad_in(&session, 0x99_33_66), Some(swatch_bounds()));
+}
+
+/// A root view that makes its colours in its first render and shows a row
+/// view per colour.
+struct Palette {
+    colors: Vec<Entity<u32>>,
+    renders: Rc<Cell<u32>>,
+}
+
+const PALETTE: [u32; 3] = [0x33_66_99, 0x66_99_33, 0x99_33_66];
+
+impl View for Palette {
+    type Element = Div;
+
+    fn render(&mut self, cx: &mut ViewContext<Self>) -> Div {
+        self.renders.set(self.renders.get() + 1);
+        if self.colors.is_empty() {
+            self.colors = PALETTE.map(|color| cx.app_mut().create(color)).to_vec();
+        }
+        let rows = cx.rows(&self.colors, |color: &u32, _| {
+            div().w(40.0).h(20.0).bg(Color::hex(*color))
+        });
+        div().w(200.0).flex_col().children(rows)
+    }
+}
+
+#[test]
+fn mount_view_renders_the_rows_its_first_render_places() {
+    let renders = Rc::new(Cell::new(0));
+    let palette = Palette {
+        colors: Vec::new(),
+        renders: Rc::clone(&renders),
+    };
+    let session = match mount_view(Size::new(200.0, 100.0), palette) {
+        Ok(session) => session,
+        Err(err) => panic!("headless view mount should succeed: {err}"),
+    };
+
+    assert_eq!(renders.get(), 1, "the root view rendered once");
+    assert_eq!(session.app_context().child_view_count(), PALETTE.len());
+    for (row, color) in PALETTE.into_iter().enumerate() {
+        assert_eq!(
+            quad_in(&session, color),
+            Some(Bounds::from_xywh(0.0, 20.0 * row as f32, 40.0, 20.0)),
+            "row {row}"
+        );
+    }
 }
