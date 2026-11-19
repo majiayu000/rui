@@ -72,8 +72,9 @@ to Metal without waiting for the GPU.
 | `startup` | the 2000-row list | none | see below | see below |
 | `editor_scroll` | a 10 000-line code view: 20 px lines of 13 px SF Mono, a 64 px gutter of line numbers, 11 colored tokens per line (a comment every ninth line), the cursor's line highlighted; starts at line 5001 | scrolls down one line; the cursor moves with it | `virtual_list` of rows: gutter `text` + `shared_styled_text` of `span_range(..).color(..)` over the line's `Arc<str>` (the editor run below used `styled_text` of `span(..)`, a `String` per token) | `uniform_list` of rows: gutter string + `StyledText::with_highlights` |
 | `editor_edit` | same, not scrolling | the cursor line's first identifier ends in a new letter | the line's tokens change and its `Arc<str>` and ranges are rebuilt | the line's tokens change and its `SharedString` and highlights are rebuilt |
+| `terminal_rows` | a terminal screen: 45 rows of 20 px in 13 px SF Mono, each a frame counter or `static`, the row number and 60 hex characters | rows 0–19 get the new frame counter; rows 20–44 keep their text | one `canvas`, a `Primitive::Text` per row (`benches/compare_terminal`) | one `canvas`, `shape_line` + `ShapedLine::paint` per row (`benchmarks/gpui_compare/terminal.rs`) |
 
-The editor cases use the same font file on both sides,
+The editor and terminal cases use the same font file on both sides,
 `/System/Library/Fonts/SFNSMono.ttf`. RUI calls it "SF Mono"; Core Text hides it from
 apps, so the GPUI fixture loads that file with `TextSystem::add_fonts` and uses the
 family name inside it, ".SF NS Mono". It panics if GPUI resolves the family to
@@ -387,6 +388,51 @@ Recorded observations and limits:
 - Sampling populations and submission conditions must be matched before assigning
   GPU winners or investigating a cross-framework cause. The CPU instruction and
   startup observations above are separate metrics; they do not resolve this GPU gap.
+
+## Terminal rows (RUI `a646536`)
+
+`terminal_rows` is the load of a terminal pane that a program keeps printing over:
+Fibo's terminal draws its screen as one canvas, a row at a time. Same machine and
+GPUI revision as above, three rounds, each case in a fresh process, load average 8
+to 30. `editor_edit` ran alongside as a control. GPU columns use the matched samples
+described above (frames 10 to 69 of every window) with `GPU_REDRAWS=0`; how many
+frames and windows each side sampled was not recorded.
+
+| Case | Side | Instructions (M) / frame | ms p50 | ms p95 | GPU ms p50 | Allocations / frame | Draw calls | Instances | Footprint (MB) |
+|---|---|---|---|---|---|---|---|---|---|
+| terminal_rows | RUI | 4.15–4.16 | 0.26–0.27 | 0.30–0.34 | 0.085–0.151 | 865 | 1 | 3 236 | 55 |
+| terminal_rows | GPUI | 7.25–7.26 | 0.51–0.52 | 0.57–0.58 | 0.132–0.237 | 358 | 2 | 3 421 | 60–91 |
+| editor_edit | RUI | 2.15 | 0.17 | 0.20 | 0.078–0.153 | 354 | 2 | 1 466 | 59 |
+| editor_edit | GPUI | 8.77 | 0.64–0.65 | 0.63–0.66 | 0.169–0.302 | 1 636 | 2 | 1 908 | 81 |
+
+| Case | By instructions | By wall p50 |
+|---|---|---|
+| terminal_rows | RUI ahead 1.7x | RUI ahead 2.0x |
+| editor_edit | RUI ahead 4.1x | RUI ahead 3.8x |
+
+- **No GPU verdict.** At about 0.1 ms a frame leaves the GPU idle and its time
+  follows the GPU's clock, as
+  [GPU time with matched samples](#gpu-time-with-matched-samples-2026-11-16) found;
+  only a run with the GPU kept busy gives a GPU verdict, and this one did not keep
+  it busy. The plain p50 ranges overlap for `terminal_rows`. For `editor_edit` they
+  read RUI ahead 2.0x here, a tie in the matched-sample table and RUI ahead 1.7x
+  with the GPU kept busy, which is the verdict to use.
+- **GPUI's instruction count rose** from 6.60 to 7.25 M per terminal frame (and 8.5
+  to 8.8 M in `editor_edit`). The 6.60 M is from the first run of this fixture, on
+  `3d1f031` (based on `516b8c0`, before the GPU sampling rewrite #337); this run is
+  `6d2dfc6`. RUI's count did not move. The cause is not known. It is not the
+  `counting_renderer` wrapper: that already walked every scene before #337, and #337
+  added only a few stores per frame to it, tens of instructions against 650 000.
+- **RUI allocates 2.4x more** per terminal frame (865 against 358). Both sides format
+  the same 45 strings each frame; where RUI's extra ones go was not measured.
+- **Not the best a terminal can do on either side.** Both fixtures shape each row as
+  a string, so every changed row is shaped again. Fibo's GPUI painter keeps each
+  ASCII glyph once and paints it per cell with `window.paint_glyph`, which skips
+  shaping. RUI's `Painter` has no per-glyph call yet (#176), so that path has no RUI
+  equivalent to compare.
+- **Glyphs are smaller on RUI at the same number.** RUI takes `font_size` as the
+  ascent-to-descent height (#327), so 13 px SF Mono is about an 11 px em in RUI and a
+  13 px em in GPUI. That changes glyph sizes, not glyph counts.
 
 ## Editor-scale fixture (RUI `a31e116`)
 
