@@ -416,6 +416,22 @@ impl<T: Clone> FramePlanner<T> {
                     walk.scale_factor,
                 )?;
             }
+            Primitive::Glyph {
+                glyph,
+                origin,
+                font_size,
+                color,
+            } => {
+                self.build_glyph(
+                    frame,
+                    glyph,
+                    *origin,
+                    *font_size,
+                    *color,
+                    walk.clip,
+                    walk.scale_factor,
+                )?;
+            }
             Primitive::Path {
                 vertices,
                 offset,

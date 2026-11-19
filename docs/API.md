@@ -841,6 +841,64 @@ pub enum SpinnerType {
 
 ---
 
+### Canvas
+
+A leaf element that calls a closure with its bounds to paint primitives,
+clipped to those bounds, for grids, charts, minimaps and editors. Size it like a
+`div`. Coordinates are window coordinates: offset from `bounds.origin`.
+
+```rust
+canvas(|bounds, painter| {
+    painter.fill(bounds, Color::hex(0x101014));
+    painter.clip(bounds, |painter| painter.paint(primitive));
+})
+.w(400.0)
+.h(300.0)
+.cache_key(revision)          // replay the last paint while the key is unchanged
+.on_pointer(|event| { /* positions relative to the canvas origin */ })
+```
+
+#### Painter
+
+| Method | Draws |
+|---|---|
+| `fill(bounds, color)` | a solid quad |
+| `paint(primitive)` | any `Primitive` except clips (text runs, paths, images, ...) |
+| `clip(bounds, f)` | what `f` paints, clipped to `bounds`; clips stay balanced |
+| `glyph(glyph, origin, font_size, color)` | one resolved glyph, its pen at `origin` on the baseline, without shaping |
+
+#### Cell grids: `GlyphResolver` and `FontGlyph`
+
+A text run is shaped as a whole: one changed cell reshapes its row, and wide or
+fallback glyphs advance by their own widths, pushing later columns off the grid.
+For a terminal-style grid, resolve each character once and draw it per cell:
+
+```rust
+use rui::renderer::text::{FontGlyph, GlyphResolver};
+
+let mut resolver = GlyphResolver::new(Some("SF Mono"), 400);
+let cell = resolver.resolve('0').unwrap().advance(13.0);   // cell width
+let (ascent, descent) = resolver.ascent_descent(13.0).unwrap();
+let glyph: FontGlyph = resolver.resolve('中').unwrap();     // falls back as text does
+
+// In the canvas closure: centre a wide glyph on its two cells.
+let x = bounds.x() + column as f32 * cell + (2.0 * cell - glyph.advance(13.0)) / 2.0;
+painter.glyph(glyph, Point::new(x, row_top + ascent), 13.0, Color::WHITE);
+```
+
+- `GlyphResolver::new(family, weight)`, `resolve(ch) -> Option<FontGlyph>`
+  (remembered per character), `ascent_descent(font_size) -> Option<(f32, f32)>`.
+- `FontGlyph::advance(font_size)`, `FontGlyph::is_current()`: a glyph names its
+  face by its place in the process font set; one resolved before the set changed
+  draws nothing, so resolve again when `is_current()` is false.
+- `Primitive::Glyph { glyph, origin, font_size, color }` is what `Painter::glyph`
+  inserts; it is drawn from the same glyph atlas as text.
+
+`examples/canvas_grid.rs` draws a 200x60 grid this way; the `grid_*` stages of
+`cargo bench --bench stress_frame` measure it.
+
+---
+
 ## Colors
 
 ### Color

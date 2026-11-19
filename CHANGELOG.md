@@ -6,6 +6,16 @@ All notable project changes should be recorded here.
 
 ### Rendering
 
+- `Painter::glyph` draws one glyph in a `canvas` at a pen position of the
+  caller's choosing, from the text glyph atlas, without shaping. Characters are
+  resolved once with `renderer::text::GlyphResolver` (falling back to other faces
+  as text does) into `FontGlyph`s, which a grid keeps per cell: editing a cell
+  shapes nothing, and wide or fallback glyphs stay on the cells the grid gives
+  them instead of pushing later columns off it. `examples/canvas_grid.rs` now
+  draws its 200x60 grid this way, and `stress_frame` gains `grid_*` stages for it
+  (#176).
+- **Breaking:** `Primitive` and `PrimitiveKind` gain a `Glyph` variant, so
+  exhaustive matches on them need an arm for it.
 - **Breaking:** `font_size` is the em size, as in CSS, Core Text and GPUI. It
   was the ascent-to-descent height, which is 1.0 to 1.4 em depending on the font,
   so the same number drew text up to 29% smaller than other toolkits and changed
