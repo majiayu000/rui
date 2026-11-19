@@ -6,23 +6,21 @@
 //! `FrameStage::ORDER`, not here.
 
 use crate::core::ElementId;
-use crate::core::accessibility::{AccessibilityAction, AccessibilityNode, AccessibilityTree};
-use crate::core::action::{ActionId, StandardAction};
+use crate::core::accessibility::AccessibilityTree;
 use crate::core::app::{AppContext, RedrawSource};
 use crate::core::event::Event;
 use crate::core::geometry::Size;
 use crate::core::presenter::Presenter;
-use crate::core::text_editing::TextInputEvent;
 use crate::elements::element::Element;
+use crate::platform::accessibility_request::dispatch_accessibility_request;
+use crate::platform::frame_driver::dispatch_key;
+#[cfg(test)]
+use crate::platform::frame_driver::should_forward_key_event_to_tree;
 use crate::platform::mac::accessibility::MacAccessibilityActionRequest;
-use crate::platform::mac::accessibility::MacAccessibilityRequest;
 use crate::platform::mac::app::{OrderedInputEvent, schedule_platform_redraw};
 use crate::platform::mac::ime_state::{
     NativeImeState, cancel_composition_if_owner_lost, dispatch_text_input_event,
 };
-use crate::platform::frame_driver::dispatch_key;
-#[cfg(test)]
-use crate::platform::frame_driver::should_forward_key_event_to_tree;
 use crate::platform::mac::window::MacWindow;
 
 /// Backend-neutral events collected from one poll of the platform window.
@@ -146,128 +144,13 @@ fn dispatch_accessibility_action<E>(
 where
     E: Element,
 {
-    let Some(node) = current_accessibility_node(presenter, request.id, retained_tree) else {
-        if presenter.focused_element() == Some(request.id) {
-            presenter.set_focused_element(None);
-            sync_accessibility_focus(presenter);
-        }
-        log::error!(
-            "discarded stale macOS accessibility request for element {:?}",
-            request.id
-        );
-        return (false, false);
-    };
-    let (action, value) = match &request.request {
-        MacAccessibilityRequest::Action { action, value } => (action, value),
-        MacAccessibilityRequest::Focus(focused) => {
-            if *focused {
-                presenter.set_focused_element(Some(request.id));
-            } else if presenter.focused_element() == Some(request.id) {
-                presenter.set_focused_element(None);
-            }
-            let redraw_requested = sync_accessibility_focus(presenter);
-            return (true, redraw_requested);
-        }
-    };
-    if !node.a11y_actions().contains(action) {
-        log::error!(
-            "discarded stale macOS accessibility action {:?} for element {:?}",
-            action,
-            request.id
-        );
-        return (false, false);
-    }
-    presenter.set_focused_element(Some(request.id));
-    let focus_redraw = sync_accessibility_focus(presenter);
-    match action {
-        AccessibilityAction::Activate => {
-            let (outcome, redraw_requested) = presenter.with_event_context(|root, event_cx| {
-                root.dispatch_action(event_cx, &ActionId::Standard(StandardAction::Activate))
-            });
-            (outcome.is_handled(), focus_redraw || redraw_requested)
-        }
-        AccessibilityAction::SetValue => {
-            let Some(value) = value else {
-                log::error!(
-                    "macOS accessibility SetValue request for {:?} had no value",
-                    request.id
-                );
-                return (false, false);
-            };
-            let composition_active = node.a11y_text_composition().is_some();
-            let (handled, redraw_requested) = presenter.with_event_context(|root, event_cx| {
-                let composition_cancelled = !composition_active
-                    || root.handle_text_input_event(event_cx, &TextInputEvent::CancelComposition);
-                let selection =
-                    root.dispatch_action(event_cx, &ActionId::Standard(StandardAction::SelectAll));
-                let inserted = root
-                    .handle_text_input_event(event_cx, &TextInputEvent::InsertText(value.clone()));
-                composition_cancelled && selection.is_handled() && inserted
-            });
-            (handled, focus_redraw || redraw_requested)
-        }
-        AccessibilityAction::ScrollForward
-        | AccessibilityAction::ScrollBackward
-        | AccessibilityAction::Increment
-        | AccessibilityAction::Decrement => {
-            let action = match action {
-                AccessibilityAction::ScrollForward => {
-                    crate::core::action::ACCESSIBILITY_SCROLL_FORWARD_ACTION
-                }
-                AccessibilityAction::ScrollBackward => {
-                    crate::core::action::ACCESSIBILITY_SCROLL_BACKWARD_ACTION
-                }
-                AccessibilityAction::Increment => {
-                    crate::core::action::ACCESSIBILITY_INCREMENT_ACTION
-                }
-                _ => crate::core::action::ACCESSIBILITY_DECREMENT_ACTION,
-            };
-            let (outcome, redraw_requested) = presenter.with_event_context(|root, event_cx| {
-                root.dispatch_action(event_cx, &ActionId::custom(action))
-            });
-            (outcome.is_handled(), focus_redraw || redraw_requested)
-        }
-    }
-}
-
-fn current_accessibility_node<E>(
-    presenter: &Presenter<E>,
-    id: ElementId,
-    retained_tree: Option<&AccessibilityTree>,
-) -> Option<AccessibilityNode>
-where
-    E: Element,
-{
-    // VoiceOver actions originate from the native host's published tree. Prefer that
-    // retained tree whenever present so we never validate against a rebuild that
-    // succeeded in accessibility_tree() but then failed publish_tree (or any other
-    // unpublished current tree whose node actions/membership may disagree).
-    if let Some(tree) = retained_tree {
-        return tree.find(id).cloned();
-    }
-
-    match presenter.accessibility_tree() {
-        Ok(tree) => tree.find(id).cloned(),
-        Err(err) => {
-            log::error!(
-                "failed to rebuild macOS accessibility tree for request validation: {err}"
-            );
-            None
-        }
-    }
-}
-
-fn sync_accessibility_focus<E>(presenter: &mut Presenter<E>) -> bool
-where
-    E: Element,
-{
-    let (_, redraw_requested) = presenter.with_event_context(|root, event_cx| {
-        root.dispatch_action(
-            event_cx,
-            &ActionId::custom(crate::core::action::SYNC_ACCESSIBILITY_FOCUS_ACTION),
-        )
-    });
-    redraw_requested
+    dispatch_accessibility_request(
+        presenter,
+        request.id,
+        &request.request,
+        retained_tree,
+        "macOS",
+    )
 }
 
 #[cfg(test)]
@@ -277,13 +160,17 @@ mod tests {
         DataList, DataListItem, DataTableCell, DataTableRow, DataTree, DataTreeItem, Menu,
         SegmentedControl, Tab, TabList,
     };
+    use crate::core::accessibility::AccessibilityAction;
     use crate::core::accessibility::{AccessibilityContext, AccessibilityNode, AccessibilityRole};
     use crate::core::action::ActionOutcome;
+    use crate::core::action::{ActionId, StandardAction};
     use crate::core::geometry::Bounds;
     use crate::core::style::Style;
     use crate::core::text_editing::TextInputCommand;
+    use crate::core::text_editing::TextInputEvent;
     use crate::elements::Input;
     use crate::elements::element::{EventContext, LayoutContext, PaintContext};
+    use crate::platform::mac::accessibility::MacAccessibilityRequest;
     use std::cell::RefCell;
     use std::rc::Rc;
     use taffy::prelude::NodeId;
@@ -356,9 +243,11 @@ mod tests {
         ) -> Result<Option<AccessibilityNode>, crate::core::accessibility::AccessibilityError>
         {
             if self.fail_tree {
-                return Err(crate::core::accessibility::AccessibilityError::MissingLabel {
-                    role: AccessibilityRole::TextInput,
-                });
+                return Err(
+                    crate::core::accessibility::AccessibilityError::MissingLabel {
+                        role: AccessibilityRole::TextInput,
+                    },
+                );
             }
             Ok(Some(
                 AccessibilityNode::label_required(self.id, AccessibilityRole::TextInput, "Probe")?

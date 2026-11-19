@@ -1,6 +1,8 @@
 //! Platform-specific implementations
 
 #[cfg(any(all(target_os = "macos", feature = "metal"), feature = "winit"))]
+mod accessibility_request;
+#[cfg(any(all(target_os = "macos", feature = "metal"), feature = "winit"))]
 mod frame_driver;
 pub mod window;
 

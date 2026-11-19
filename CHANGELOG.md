@@ -100,6 +100,15 @@ All notable project changes should be recorded here.
   each gets its own presenter, surface and renderer, events go to the window
   winit names, and closing one leaves the others running. Its window reports
   the `multi-window` feature.
+- The winit runner (Linux and Windows) publishes each window's accessibility
+  tree through AccessKit: UI Automation on Windows, AT-SPI on Linux. It is the
+  tree `Presenter::accessibility_tree` builds for the macOS runner, with roles,
+  names, values, checked and selected state, ranges, bounds and focus, and a
+  text input's value as text runs with its caret. Press, focus, set value,
+  increment, decrement and scroll requests come back through the same dispatch
+  the macOS runner uses. The tree is built only while an assistive technology
+  reads it. Not yet: announcements of action feedback, and text editing beyond
+  replacing the value (#344).
 - The winit runner (Linux and Windows) copies, cuts and pastes through the
   system clipboard via arboard, X11 or Wayland on Linux, instead of an
   in-memory clipboard only the app could see. Without a system clipboard it

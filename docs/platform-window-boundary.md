@@ -25,6 +25,12 @@ and the winit runner both create, route events for and render the windows app
 code opens with `AppContext::open_window`; the winit window reports the
 `multi-window` feature.
 
+Accessibility is not part of `PlatformWindow`: each runner publishes
+`Presenter::accessibility_tree` its own way (the AppKit bridge on macOS,
+AccessKit in the winit runner, one tree per window) and hands screen reader
+requests to the same dispatch, `platform::accessibility_request`, which checks
+them against the tree the platform last received.
+
 ## Current Scope
 
 AppKit and Metal are the default macOS runtime. Its window wrapper owns the
