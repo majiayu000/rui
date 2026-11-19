@@ -162,6 +162,11 @@ path = "benches/hit_test.rs"
 harness = false
 
 [[bench]]
+name = "pointer_frame"
+path = "benches/pointer_frame.rs"
+harness = false
+
+[[bench]]
 name = "text_cache"
 path = "benches/text_cache.rs"
 harness = false
