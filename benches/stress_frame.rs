@@ -2,6 +2,9 @@
 //!
 //! `cargo bench --bench stress_frame` (`STRESS_ROWS=500` for another length)
 //!
+//! The `grid_*` stages draw a 200x60 character grid in one canvas, a quad and a
+//! glyph per cell, editing one cell each round.
+//!
 //! The rows, each a background, a title and a time, sit in one column. Nothing is
 //! scrolled or culled by the benchmark: this measures what the runtime does with a
 //! long list today. Instructions are the whole process's retired instructions. Layout
@@ -11,9 +14,11 @@ use rui::core::frame_pipeline::FramePipeline;
 use rui::elements::element::{Element, LayoutNodes};
 use rui::renderer::Scene;
 use rui::renderer::metal::MetalRenderer;
-use rui::renderer::text::TextMeasureCache;
-use rui::{Bounds, Color, ElementId, Size, div, text};
+use rui::renderer::text::{GlyphResolver, TextMeasureCache};
+use rui::{Bounds, Color, ElementId, Point, Size, canvas, div, text};
+use std::cell::Cell;
 use std::hint::black_box;
+use std::rc::Rc;
 use std::time::Instant;
 use taffy::prelude::TaffyTree;
 
@@ -66,6 +71,41 @@ fn list(selected: usize) -> impl Element {
                 .child(text(format!("task {row}: fix the failing check")))
                 .child(text(format!("{} min", row % 60)))
         }))
+}
+
+const GRID_COLUMNS: usize = 200;
+const GRID_ROWS: usize = 60;
+const GRID_FONT_SIZE: f32 = 12.0;
+const GRID_CELL_HEIGHT: f32 = 15.0;
+
+/// The 200x60 character grid of `examples/canvas_grid.rs`: one canvas, a quad
+/// and a resolved glyph per cell. Each frame's `edit` changes one cell's
+/// character, which reshapes nothing.
+fn grid(edit: Rc<Cell<usize>>) -> impl Element {
+    let mut resolver = GlyphResolver::new(None, 400);
+    let glyphs: Vec<_> = (b'!'..=b'~')
+        .map(|byte| resolver.resolve(char::from(byte)).expect("ASCII glyphs"))
+        .collect();
+    let cell = glyphs[(b'0' - b'!') as usize].advance(GRID_FONT_SIZE);
+    canvas(move |bounds, painter| {
+        let edited = edit.get();
+        for row in 0..GRID_ROWS {
+            let y = bounds.y() + row as f32 * GRID_CELL_HEIGHT;
+            for column in 0..GRID_COLUMNS {
+                let x = bounds.x() + column as f32 * cell;
+                let shade = ((row * 3 + column) % 32) as u32;
+                painter.fill(
+                    Bounds::from_xywh(x, y, cell, GRID_CELL_HEIGHT),
+                    Color::hex(0x101820 + shade * 0x010101),
+                );
+                let bump = usize::from(row == 30 && column == 100) * edited;
+                let glyph = glyphs[(row * 7 + column + bump) % glyphs.len()];
+                painter.glyph(glyph, Point::new(x, y + 11.0), GRID_FONT_SIZE, Color::WHITE);
+            }
+        }
+    })
+    .w(GRID_COLUMNS as f32 * cell)
+    .h(GRID_ROWS as f32 * GRID_CELL_HEIGHT)
 }
 
 struct Sample {
@@ -171,6 +211,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         black_box(renderer.capture_frame_pixels(&scene, viewport).unwrap());
     });
 
+    // The character grid: each round edits one cell and paints and draws the
+    // whole canvas again, as a terminal does.
+    let edit = Rc::new(Cell::new(0));
+    let mut grid_root = div().child(grid(Rc::clone(&edit)));
+    let mut grid_taffy = TaffyTree::<ElementId>::new();
+    let grid_bounds = FramePipeline::layout_root_with_text_measurer(
+        &mut grid_root,
+        &mut grid_taffy,
+        &mut measurer,
+        viewport,
+    )?;
+    let mut grid_scene = Scene::new();
+    let grid_paint = measure(|round| {
+        edit.set(round);
+        FramePipeline::paint_root(&mut grid_root, &grid_taffy, &mut grid_scene, grid_bounds);
+    });
+    let grid_primitives = grid_scene.primitives().len();
+    let grid_render = measure(|round| {
+        edit.set(round);
+        FramePipeline::paint_root(&mut grid_root, &grid_taffy, &mut grid_scene, grid_bounds);
+        black_box(
+            renderer
+                .capture_frame_pixels(&grid_scene, viewport)
+                .unwrap(),
+        );
+    });
+
     println!("{{");
     println!("  \"rows\": {},", rows());
     println!("  \"primitives\": {primitives},");
@@ -180,8 +247,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     line("layout", &layout, false);
     line("layout_retained", &layout_retained, false);
     line("paint", &paint, false);
-    line("metal_render_with_readback", &render, true);
+    line("metal_render_with_readback", &render, false);
+    line("grid_paint", &grid_paint, false);
+    line(
+        "grid_paint_and_metal_render_with_readback",
+        &grid_render,
+        true,
+    );
     println!("  }},");
+    println!("  \"grid\": [{GRID_COLUMNS}, {GRID_ROWS}],");
+    println!("  \"grid_primitives\": {grid_primitives},");
     println!("  \"first_layout_ms\": {first_layout_ms:.1},");
     println!("  \"renderer_new_ms\": {renderer_new_ms:.1},");
     println!("  \"first_render_ms\": {first_render_ms:.1},");

@@ -7,6 +7,7 @@
 
 mod build;
 mod frame;
+mod glyph;
 mod instances;
 mod order;
 mod path;

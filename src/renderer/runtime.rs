@@ -285,6 +285,17 @@ mod tests {
                 align: TextAlign::Left,
                 direction: BaseDirection::Auto,
             },
+            Primitive::Glyph {
+                glyph: crate::renderer::text::FontGlyph {
+                    font_index: 0,
+                    glyph_id: 1,
+                    font_generation: 0,
+                    advance: 0.6,
+                },
+                origin: crate::core::geometry::Point::new(4.0, 30.0),
+                font_size: 14.0,
+                color: Rgba::new(0.0, 0.0, 0.0, 1.0),
+            },
             Primitive::Image {
                 bounds: Bounds::from_xywh(5.0, 6.0, 10.0, 10.0),
                 source: ImageSource::Data {

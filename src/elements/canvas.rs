@@ -8,6 +8,7 @@ use crate::elements::element::{
     Capabilities, Element, EventContext, LayoutContext, PaintContext, PointerEvent,
     PointerEventKind, StableId, style_to_taffy,
 };
+use crate::renderer::text::FontGlyph;
 use crate::renderer::{Picture, Primitive, Scene};
 use std::any::Any;
 use std::hash::{DefaultHasher, Hash, Hasher};
@@ -46,6 +47,28 @@ impl Painter<'_> {
             border_color: Rgba::TRANSPARENT,
             border_widths: Edges::ZERO,
             corner_radii: Corners::default(),
+        });
+    }
+
+    /// Draw `glyph` with its pen at `origin` on the baseline, at an em of
+    /// `font_size`, without shaping anything.
+    ///
+    /// Resolve characters with a [`GlyphResolver`](crate::renderer::text::GlyphResolver)
+    /// once, keep the glyphs per cell, and place each where its cell is: wide
+    /// and fallback glyphs then stay on their cells, and changing one cell
+    /// changes one glyph.
+    pub fn glyph(
+        &mut self,
+        glyph: FontGlyph,
+        origin: Point,
+        font_size: f32,
+        color: impl Into<Color>,
+    ) {
+        self.scene.insert(Primitive::Glyph {
+            glyph,
+            origin,
+            font_size,
+            color: color.into().to_rgba(),
         });
     }
 
