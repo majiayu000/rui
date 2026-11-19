@@ -74,6 +74,13 @@ pub(crate) trait WindowContent {
         cx: &mut AppContext,
         parts: crate::platform::mac::NativeWindowParts,
     ) -> Box<dyn crate::platform::mac::NativeWindowDriver>;
+
+    #[cfg(feature = "winit")]
+    fn into_winit(
+        self: Box<Self>,
+        cx: &mut AppContext,
+        parts: crate::platform::winit::WinitWindowParts,
+    ) -> Box<dyn crate::platform::winit::WinitWindowDriver>;
 }
 
 struct RootContent<F, E> {
@@ -100,6 +107,15 @@ where
         parts: crate::platform::mac::NativeWindowParts,
     ) -> Box<dyn crate::platform::mac::NativeWindowDriver> {
         crate::platform::mac::native_window(cx, parts, self.build_root)
+    }
+
+    #[cfg(feature = "winit")]
+    fn into_winit(
+        self: Box<Self>,
+        cx: &mut AppContext,
+        parts: crate::platform::winit::WinitWindowParts,
+    ) -> Box<dyn crate::platform::winit::WinitWindowDriver> {
+        crate::platform::winit::winit_window(cx, parts, self.build_root)
     }
 }
 

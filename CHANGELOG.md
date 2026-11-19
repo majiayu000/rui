@@ -49,6 +49,11 @@ All notable project changes should be recorded here.
 
 ### Runtime
 
+- The winit runner (Linux, Windows) opens the windows app code opens with
+  `AppContext::open_window` and `open_view_window` instead of closing them:
+  each gets its own presenter, surface and renderer, events go to the window
+  winit names, and closing one leaves the others running. Its window reports
+  the `multi-window` feature.
 - The winit runner (Linux and Windows) copies, cuts and pastes through the
   system clipboard via arboard, X11 or Wayland on Linux, instead of an
   in-memory clipboard only the app could see. Without a system clipboard it

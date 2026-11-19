@@ -25,6 +25,8 @@ use crate::renderer::RendererResourceLimits;
 use crate::renderer::wgpu::{RetainedTarget, WgpuRenderer, WindowSurface};
 use std::cell::Cell;
 use std::sync::Arc;
+use std::time::Duration;
+use winit::event::WindowEvent;
 use winit::event_loop::ActiveEventLoop;
 use winit::window::CursorIcon;
 
@@ -72,7 +74,6 @@ impl PlatformWindow for WinitWindow {
         PlatformWindowFeatures {
             clipboard: self.clipboard.is_available(),
             renderer_attachment: false,
-            multi_window: false,
             ..PlatformWindowFeatures::supported()
         }
     }
@@ -113,34 +114,38 @@ pub(super) fn backend_error(message: impl std::fmt::Display) -> PlatformWindowEr
     PlatformWindowError::backend(PLATFORM, message.to_string())
 }
 
-pub(super) struct WindowDriver<F, E> {
-    id: WindowId,
-    window: WinitWindow,
-    renderer: WgpuRenderer,
-    surface: WindowSurface,
-    /// This window's last frame, so each frame redraws only what changed.
-    retained: RetainedTarget,
-    presenter: Presenter<E>,
-    build_root: F,
-    input: InputState,
-    last_viewport_size: Size,
-    events: Vec<PlatformWindowEvent>,
+/// One open window, behind the type the runner stores.
+pub(crate) trait WinitWindowDriver {
+    fn id(&self) -> WindowId;
+    fn winit_id(&self) -> winit::window::WindowId;
+    /// Queue `event` for the next frame.
+    fn push_event(&mut self, event: &WindowEvent);
+    /// Handle the queued events and draw if there is work. `context` has this
+    /// window active. Returns whether the window asked to close.
+    fn run_iteration(&mut self, context: &mut AppContext) -> bool;
 }
 
-impl<F, E> WindowDriver<F, E>
-where
-    F: FnMut(&mut AppContext) -> E,
-    E: Element,
-{
-    /// Open a window for `options` and build its first tree. `context` has the
-    /// window active.
-    pub(super) fn open(
+/// A winit window with its surface and renderer, before its content is
+/// attached.
+pub(crate) struct WinitWindowParts {
+    id: WindowId,
+    window: Arc<winit::window::Window>,
+    renderer: WgpuRenderer,
+    surface: WindowSurface,
+    clipboard: WindowClipboard,
+    input: InputState,
+    viewport_size: Size,
+    /// The refresh interval of the window's monitor, when it reports one.
+    frame_interval: Option<Duration>,
+}
+
+impl WinitWindowParts {
+    /// Create the window for `options` and its surface and renderer.
+    pub(super) fn create(
         event_loop: &ActiveEventLoop,
         instance: &wgpu::Instance,
-        context: &mut AppContext,
         id: WindowId,
         options: &WindowOptions,
-        mut build_root: F,
         clipboard: WindowClipboard,
     ) -> Result<Self, PlatformWindowError> {
         let window = Arc::new(
@@ -158,14 +163,10 @@ where
             (physical.width, physical.height),
             RendererResourceLimits::default(),
         )?;
-        if let Some(millihertz) = window
+        let frame_interval = window
             .current_monitor()
             .and_then(|monitor| monitor.refresh_rate_millihertz())
-        {
-            context.set_frame_interval(std::time::Duration::from_secs_f64(
-                1000.0 / f64::from(millihertz),
-            ));
-        }
+            .map(|millihertz| Duration::from_secs_f64(1000.0 / f64::from(millihertz)));
         let device = crate::renderer::Renderer::diagnostics(&renderer).device;
         log::info!(
             "winit window presenting through {} on {}",
@@ -173,48 +174,93 @@ where
             device.device_name
         );
         let input = InputState::new(window.scale_factor());
-        // AppContext is the single owner of viewport size.
         let viewport_size = input.logical_size(physical);
-        context.set_viewport_size(viewport_size);
-        let root = build_root(context);
-        let presenter = Presenter::with_root(viewport_size, root);
-        window.request_redraw();
         Ok(Self {
             id,
-            window: WinitWindow {
-                window,
-                cursor: Cell::new(Cursor::Default),
-                clipboard,
-            },
+            window,
+            clipboard,
             renderer,
             surface,
-            retained: RetainedTarget::new(),
-            presenter,
-            build_root,
             input,
-            last_viewport_size: viewport_size,
-            events: Vec::new(),
+            viewport_size,
+            frame_interval,
         })
     }
+}
 
-    pub(super) fn id(&self) -> WindowId {
+/// Attach `build_root` to a created window and build its first tree.
+/// `context` has the window active.
+pub(crate) fn winit_window<F, E>(
+    context: &mut AppContext,
+    parts: WinitWindowParts,
+    mut build_root: F,
+) -> Box<dyn WinitWindowDriver>
+where
+    F: FnMut(&mut AppContext) -> E + 'static,
+    E: Element + 'static,
+{
+    if let Some(interval) = parts.frame_interval {
+        context.set_frame_interval(interval);
+    }
+    // AppContext is the single owner of viewport size. The window's frame state
+    // and its presenter start from the same size, so its first build and its
+    // first layout agree.
+    context.set_viewport_size(parts.viewport_size);
+    let root = build_root(context);
+    let presenter = Presenter::with_root(parts.viewport_size, root);
+    parts.window.request_redraw();
+    Box::new(WindowDriver {
+        id: parts.id,
+        window: WinitWindow {
+            window: parts.window,
+            cursor: Cell::new(Cursor::Default),
+            clipboard: parts.clipboard,
+        },
+        renderer: parts.renderer,
+        surface: parts.surface,
+        retained: RetainedTarget::new(),
+        presenter,
+        build_root,
+        input: parts.input,
+        last_viewport_size: parts.viewport_size,
+        events: Vec::new(),
+    })
+}
+
+struct WindowDriver<F, E> {
+    id: WindowId,
+    window: WinitWindow,
+    renderer: WgpuRenderer,
+    surface: WindowSurface,
+    /// This window's last frame, so each frame redraws only what changed.
+    retained: RetainedTarget,
+    presenter: Presenter<E>,
+    build_root: F,
+    input: InputState,
+    last_viewport_size: Size,
+    events: Vec<PlatformWindowEvent>,
+}
+
+impl<F, E> WinitWindowDriver for WindowDriver<F, E>
+where
+    F: FnMut(&mut AppContext) -> E,
+    E: Element,
+{
+    fn id(&self) -> WindowId {
         self.id
     }
 
-    pub(super) fn winit_id(&self) -> winit::window::WindowId {
+    fn winit_id(&self) -> winit::window::WindowId {
         self.window.window.id()
     }
 
-    /// Queue `event` for the next frame.
-    pub(super) fn push_event(&mut self, event: &winit::event::WindowEvent) {
+    fn push_event(&mut self, event: &WindowEvent) {
         if let Some(event) = self.input.translate(event) {
             self.events.push(event);
         }
     }
 
-    /// Handle the queued events and draw if there is work. `context` has this
-    /// window active. Returns whether the window asked to close.
-    pub(super) fn run_iteration(&mut self, context: &mut AppContext) -> bool {
+    fn run_iteration(&mut self, context: &mut AppContext) -> bool {
         let mut viewport_size = self.last_viewport_size;
         let mut ordered = Vec::new();
         let mut focus_changed = None;
