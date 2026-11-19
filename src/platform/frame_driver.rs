@@ -117,7 +117,7 @@ pub(crate) enum OrderedInputEvent {
     Text(crate::core::text_editing::TextInputCommand),
     #[cfg(all(target_os = "macos", feature = "metal"))]
     Accessibility(crate::platform::mac::MacAccessibilityActionRequest),
-    #[cfg(all(target_os = "macos", feature = "metal"))]
+    #[cfg(any(feature = "winit", all(target_os = "macos", feature = "metal")))]
     FileDrag(crate::core::drag::FileDragEvent),
 }
 

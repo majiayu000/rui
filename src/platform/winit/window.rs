@@ -1,14 +1,15 @@
 //! One winit window: its presenter, wgpu surface and frame.
 
 use super::clipboard::WindowClipboard;
-use super::input::InputState;
+use super::input::{InputState, file_drop_position};
 use crate::core::ElementId;
 use crate::core::app::{AppContext, RedrawSource};
+use crate::core::drag::FileDragEvent;
 use crate::core::event::{Cursor, Event};
 use crate::core::frame_pipeline::{
     FramePipeline, FramePipelineError, FramePresentation, FrameStage, IdlePolicy,
 };
-use crate::core::geometry::Size;
+use crate::core::geometry::{Point, Size};
 use crate::core::presenter::Presenter;
 use crate::core::text_editing::TextInputCommand;
 use crate::core::window::{WindowId, WindowOptions};
@@ -25,6 +26,7 @@ use crate::platform::window::{
 use crate::renderer::RendererResourceLimits;
 use crate::renderer::wgpu::{RetainedTarget, WgpuRenderer, WindowSurface};
 use std::cell::Cell;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use winit::dpi::{LogicalPosition, LogicalSize};
@@ -256,7 +258,28 @@ where
         input: parts.input,
         last_viewport_size: parts.viewport_size,
         events: Vec::new(),
+        file_drop: None,
     })
+}
+
+struct FileDrop {
+    position: Point,
+    paths: Vec<PathBuf>,
+}
+
+impl FileDrop {
+    fn append(self, ordered: &mut Vec<OrderedInputEvent>) {
+        let Self { position, paths } = self;
+        ordered.extend([
+            OrderedInputEvent::FileDrag(FileDragEvent::Entered { position, paths }),
+            OrderedInputEvent::FileDrag(FileDragEvent::Dropped { position }),
+        ]);
+    }
+}
+
+enum QueuedEvent {
+    Platform(PlatformWindowEvent),
+    FileDrop(FileDrop),
 }
 
 struct WindowDriver<F, E> {
@@ -270,7 +293,9 @@ struct WindowDriver<F, E> {
     build_root: F,
     input: InputState,
     last_viewport_size: Size,
-    events: Vec<PlatformWindowEvent>,
+    events: Vec<QueuedEvent>,
+    /// winit sends one consecutive event for each file in a native drop.
+    file_drop: Option<FileDrop>,
 }
 
 impl<F, E> WinitWindowDriver for WindowDriver<F, E>
@@ -287,17 +312,44 @@ where
     }
 
     fn push_event(&mut self, event: &WindowEvent) {
+        if let WindowEvent::DroppedFile(path) = event {
+            if let Some(drop) = &mut self.file_drop {
+                drop.paths.push(path.clone());
+            } else if let Some(position) = file_drop_position(&self.window.window) {
+                self.file_drop = Some(FileDrop {
+                    position,
+                    paths: vec![path.clone()],
+                });
+            } else {
+                log::warn!("winit file drop did not have a native cursor position");
+            }
+            return;
+        }
+        if let Some(drop) = self.file_drop.take() {
+            self.events.push(QueuedEvent::FileDrop(drop));
+        }
         if let Some(event) = self.input.translate(event) {
-            self.events.push(event);
+            self.events.push(QueuedEvent::Platform(event));
         }
     }
 
     fn run_iteration(&mut self, context: &mut AppContext) -> bool {
+        if let Some(drop) = self.file_drop.take() {
+            self.events.push(QueuedEvent::FileDrop(drop));
+        }
         let mut viewport_size = self.last_viewport_size;
         let mut ordered = Vec::new();
         let mut focus_changed = None;
         let mut close_requested = false;
         for event in std::mem::take(&mut self.events) {
+            let event = match event {
+                QueuedEvent::Platform(event) => event,
+                QueuedEvent::FileDrop(drop) => {
+                    context.mark_redraw_from(RedrawSource::PlatformInput);
+                    drop.append(&mut ordered);
+                    continue;
+                }
+            };
             mark_platform_event_redraw(&event, context);
             match event {
                 PlatformWindowEvent::Resized(size) => viewport_size = size,
@@ -449,7 +501,6 @@ fn dispatch_events<E: Element>(
                     RedrawSource::Element,
                 )
             }
-            #[cfg(all(target_os = "macos", feature = "metal"))]
             OrderedInputEvent::FileDrag(event) => {
                 let dispatch = presenter.dispatch_file_drag(event);
                 (
@@ -527,7 +578,9 @@ fn dispatch_ime<E: Element>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::elements::input;
+    use crate::elements::{div, input};
+    use std::cell::RefCell;
+    use std::rc::Rc;
 
     #[test]
     fn composition_updates_then_commits_once_in_the_focused_input() {
@@ -561,5 +614,53 @@ mod tests {
             assert_eq!(text.text(), expected);
             assert_eq!(text.composition().is_some(), composing);
         }
+        assert!(
+            dispatch_ime(
+                &mut presenter,
+                &TextInputCommand::UpdateComposition("音".into())
+            )
+            .0
+        );
+        assert!(dispatch_ime(&mut presenter, &TextInputCommand::CancelComposition).0);
+        let text = presenter
+            .root()
+            .text_input_snapshot(id)
+            .expect("text field");
+        assert_eq!(text.text(), "例拼");
+        assert!(text.composition().is_none());
+    }
+
+    #[test]
+    fn a_native_drop_delivers_all_paths_together_to_the_target_at_its_position() {
+        let paths = vec![PathBuf::from("first.txt"), PathBuf::from("second.txt")];
+        let output = Rc::new(RefCell::new(Vec::new()));
+        let root = div()
+            .w(200.0)
+            .h(100.0)
+            .flex_row()
+            .child(div().w(100.0).h(100.0).on_drop_files(|_| {
+                panic!("a drop on the second target must not reach the first target")
+            }))
+            .child(div().w(100.0).h(100.0).on_drop_files({
+                let output = Rc::clone(&output);
+                move |paths| output.borrow_mut().push(paths.to_vec())
+            }));
+        let size = Size::new(200.0, 100.0);
+        let mut presenter = Presenter::with_root(size, root);
+        presenter.layout(size).expect("drop targets lay out");
+        presenter.paint();
+        let mut ordered = Vec::new();
+        FileDrop {
+            position: Point::new(150.0, 50.0),
+            paths: paths.clone(),
+        }
+        .append(&mut ordered);
+        for event in ordered {
+            let OrderedInputEvent::FileDrag(event) = event else {
+                panic!("the file drop should reach the presenter");
+            };
+            presenter.dispatch_file_drag(&event);
+        }
+        assert_eq!(*output.borrow(), [paths]);
     }
 }

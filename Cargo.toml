@@ -19,7 +19,7 @@ wgpu = ["dep:wgpu", "dep:pollster"]
 # Window and input through winit, drawn by the wgpu backend: the runner for
 # Linux and Windows. On macOS it runs when `metal` is off. arboard is its
 # system clipboard.
-winit = ["wgpu", "dep:winit", "dep:arboard"]
+winit = ["wgpu", "dep:winit", "dep:arboard", "dep:x11-dl", "dep:windows-sys"]
 # The `markdown` element, parsed by pulldown-cmark.
 markdown = ["dep:pulldown-cmark"]
 
@@ -80,6 +80,13 @@ pulldown-cmark = { version = "0.13", default-features = false, optional = true }
 # for std and the platform crates.
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+# winit 0.30 file-drop events include paths but omit the drop position.
+[target.'cfg(target_os = "linux")'.dependencies]
+x11-dl = { version = "2.21", optional = true }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging"], optional = true }
 
 [target.'cfg(target_os = "macos")'.build-dependencies]
 metal = "0.31"

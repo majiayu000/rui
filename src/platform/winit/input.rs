@@ -8,6 +8,7 @@ use crate::platform::window::{
 };
 use winit::event::{ElementState, Ime, MouseScrollDelta, WindowEvent};
 use winit::keyboard::{Key, NamedKey};
+use winit::window::Window;
 
 /// Logical pixels one scroll-wheel line moves, for devices reporting lines.
 const SCROLL_LINE_HEIGHT: f32 = 20.0;
@@ -133,6 +134,73 @@ impl InputState {
             modifiers: self.modifiers,
         })
     }
+}
+
+/// The current native cursor, sampled when the drop reaches winit. winit 0.30
+/// omits the location from the event; the last normal mouse move may predate
+/// the entire drag.
+pub(super) fn file_drop_position(window: &Window) -> Option<Point> {
+    let position = native_cursor_position(window)?.to_logical::<f32>(window.scale_factor());
+    Some(Point::new(position.x, position.y))
+}
+
+#[cfg(target_os = "linux")]
+fn native_cursor_position(window: &Window) -> Option<winit::dpi::PhysicalPosition<i32>> {
+    use std::sync::OnceLock;
+    use wgpu::rwh::{HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle};
+    use x11_dl::xlib::Xlib;
+
+    let RawWindowHandle::Xlib(handle) = window.window_handle().ok()?.as_raw() else {
+        return None;
+    };
+    let RawDisplayHandle::Xlib(display) = window.display_handle().ok()?.as_raw() else {
+        return None;
+    };
+    let display = display.display?;
+    static XLIB: OnceLock<Option<Xlib>> = OnceLock::new();
+    let xlib = XLIB.get_or_init(|| Xlib::open().ok()).as_ref()?;
+    let (mut root, mut child, mut root_x, mut root_y, mut x, mut y, mut mask) =
+        (0, 0, 0, 0, 0, 0, 0);
+    // The display and window handles belong to this live winit window, and
+    // each pointer names writable storage for the corresponding Xlib output.
+    let same_screen = unsafe {
+        (xlib.XQueryPointer)(
+            display.as_ptr().cast(),
+            handle.window,
+            &mut root,
+            &mut child,
+            &mut root_x,
+            &mut root_y,
+            &mut x,
+            &mut y,
+            &mut mask,
+        )
+    };
+    (same_screen != 0).then(|| winit::dpi::PhysicalPosition::new(x, y))
+}
+
+#[cfg(target_os = "windows")]
+fn native_cursor_position(window: &Window) -> Option<winit::dpi::PhysicalPosition<i32>> {
+    use wgpu::rwh::{HasWindowHandle, RawWindowHandle};
+    use windows_sys::Win32::Foundation::POINT;
+    use windows_sys::Win32::Graphics::Gdi::ScreenToClient;
+    use windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos;
+
+    let RawWindowHandle::Win32(handle) = window.window_handle().ok()?.as_raw() else {
+        return None;
+    };
+    let mut point = POINT::default();
+    // GetCursorPos fills the point; ScreenToClient converts it relative to
+    // the live window represented by the handle.
+    let ok = unsafe {
+        GetCursorPos(&mut point) != 0 && ScreenToClient(handle.hwnd.get() as _, &mut point) != 0
+    };
+    ok.then(|| winit::dpi::PhysicalPosition::new(point.x, point.y))
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+fn native_cursor_position(_window: &Window) -> Option<winit::dpi::PhysicalPosition<i32>> {
+    None
 }
 
 fn mouse_button(button: winit::event::MouseButton) -> MouseButton {
