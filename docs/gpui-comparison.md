@@ -430,9 +430,13 @@ frames and windows each side sampled was not recorded.
   ASCII glyph once and paints it per cell with `window.paint_glyph`, which skips
   shaping. RUI's `Painter` has no per-glyph call yet (#176), so that path has no RUI
   equivalent to compare.
-- **Glyphs are smaller on RUI at the same number.** RUI takes `font_size` as the
-  ascent-to-descent height (#327), so 13 px SF Mono is about an 11 px em in RUI and a
-  13 px em in GPUI. That changes glyph sizes, not glyph counts.
+- **Glyphs were smaller on RUI at the same number in this run.** RUI then took
+  `font_size` as the ascent-to-descent height (#327), so 13 px SF Mono was about an
+  11 px em in RUI and a 13 px em in GPUI, about 1/1.39 of GPUI's glyph area. Since
+  #340 `font_size` is the em, as in GPUI. Run alone on RUI before and after #340,
+  `terminal_rows` read 4.17 and 4.21 M instructions with the same 865 allocations
+  and 3 236 instances, so the CPU columns hold; the GPU column was measured with the
+  smaller glyphs.
 
 ## Editor-scale fixture (RUI `a31e116`)
 
@@ -632,6 +636,10 @@ Where RUI is still behind:
 - Fonts differ: with no family set, RUI uses the first face it loads (Arial), GPUI
   `.SystemUIFont` (SF Pro) through Core Text. Both rasterize glyphs at device scale into
   an atlas with subpixel variants.
+- Font size: every run recorded here was taken before #340, when RUI took
+  `font_size` as the ascent-to-descent height, so RUI drew a smaller em than GPUI at
+  the same number: 1/1.12 in Arial, 1/1.18 in the editor and terminal cases' SF Mono.
+  Since #340 both sides take `font_size` as the em.
 - Toolchains differ (rustc 1.99.1 for RUI, 1.98.1 for Zed) and both build with their own
   release profile.
 
