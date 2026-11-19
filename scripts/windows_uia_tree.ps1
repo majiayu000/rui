@@ -16,6 +16,23 @@ $Scope = [System.Windows.Automation.TreeScope]
 $TP = [System.Windows.Automation.TextPattern]
 $Unit = [System.Windows.Automation.Text.TextUnit]
 $Endpoint = [System.Windows.Automation.Text.TextPatternRangeEndpoint]
+# Live region events arrive on UI Automation's own threads, where a
+# PowerShell script block cannot run; collect their names in C#.
+Add-Type -ReferencedAssemblies UIAutomationClient, UIAutomationTypes, WindowsBase -TypeDefinition @"
+using System.Collections.Concurrent;
+using System.Windows.Automation;
+public static class LiveRegions {
+    public static ConcurrentQueue<string> Names = new ConcurrentQueue<string>();
+    public static void Watch(AutomationElement root) {
+        Automation.AddAutomationEventHandler(
+            AutomationElementIdentifiers.LiveRegionChangedEvent, root, TreeScope.Subtree,
+            (sender, e) => {
+                try { Names.Enqueue(((AutomationElement)sender).Current.Name); }
+                catch (ElementNotAvailableException) { Names.Enqueue(""); }
+            });
+    }
+}
+"@
 
 $targetDir = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { "target" }
 $out = if ($env:RUI_UIA_OUT) { $env:RUI_UIA_OUT } else { "target/windows-uia" }
@@ -56,10 +73,20 @@ function Write-Tree($node, $depth, $lines) {
     }
 }
 
+# The app announced $message as action feedback: a LiveRegionChanged event
+# from a text element under the window that says it.
+function Check-Announced($window, $message) {
+    Wait-For "the announcement '$message'" { if ([LiveRegions]::Names.ToArray() -contains $message) { $true } } | Out-Null
+    Write-Output "live regions so far: $([LiveRegions]::Names.ToArray() -join ' | ')"
+    Check $true "the app announced '$message'"
+    Check ($null -ne (Find-Node $window $CT::Text $message)) "a text element under the window says '$message'"
+}
+
 $app = Start-Process -FilePath $example -PassThru
 try {
     $titled = New-Object System.Windows.Automation.PropertyCondition($AE::NameProperty, "RUI Interaction Acceptance")
     $window = Wait-For "the window" { $AE::RootElement.FindFirst($Scope::Children, $titled) }
+    [LiveRegions]::Watch($window)
     # The first tree arrives with the first frame after UI Automation asks.
     $save = Wait-For "the Save button" { Find-Node $window $CT::Button "Save" }
     $lines = New-Object System.Collections.Generic.List[string]
@@ -118,10 +145,12 @@ try {
     $save.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
     Wait-For "the confirm dialog" { Find-Node $window $CT::Window "Confirm save" } | Out-Null
     Check $true "pressing Save opened the confirm dialog"
+    Check-Announced $window "Save activated"
     $cancel = Wait-For "the Cancel button" { Find-Node $window $CT::Button "Cancel" }
     $cancel.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
     Wait-For "the canceled status" { Find-Node $window $CT::Text "Status: Canceled" } | Out-Null
     Check $true "pressing Cancel reached the app"
+    Check-Announced $window "Cancel activated"
 } finally {
     Stop-Process -Id $app.Id -ErrorAction SilentlyContinue
 }

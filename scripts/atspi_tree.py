@@ -79,9 +79,20 @@ def print_desktop():
                     print("    " + "  " * depth + describe(node))
 
 
+# What the app announced (object:announcement), in order.
+ANNOUNCEMENTS = []
+
+
+def on_announcement(event):
+    ANNOUNCEMENTS.append(event.any_data)
+
+
 def wait_for(what, find):
     deadline = time.monotonic() + TIMEOUT
     while True:
+        # Deliver the events that arrived, such as announcements.
+        while GLib.MainContext.default().iteration(False):
+            pass
         try:
             found = find()
         except GLib.Error:
@@ -114,6 +125,9 @@ def check(condition, message):
 def main():
     title = sys.argv[1]
     example = sys.argv[2] if len(sys.argv) > 2 else "interaction_acceptance"
+    # Listen from the start: AccessKit only sends events someone listens for.
+    listener = Atspi.EventListener.new(on_announcement)
+    listener.register("object:announcement")
     window = wait_for(f"window {title!r}", lambda: find_window(title))
     check_example = {
         "interaction_acceptance": check_interaction_acceptance,
@@ -142,6 +156,16 @@ def check_controls(window):
         Atspi.Value.get_current_value(volume.get_value_iface()) == 75.0,
         "setting the value moved the Volume slider to 75",
     )
+
+
+def check_announced(window, message):
+    """The app announced `message` as action feedback: an object:announcement
+    event, from a live label under the window that says it."""
+    wait_for(f"the announcement {message!r}", lambda: message in ANNOUNCEMENTS or None)
+    print(f"announcements so far: {ANNOUNCEMENTS}")
+    check(True, f"the app announced {message!r}")
+    label = find_node(window, "label", message)
+    check(label is not None, f"a label under the window says {message!r}")
 
 
 def selection(window, name):
@@ -246,9 +270,11 @@ def check_interaction_acceptance(window):
     Atspi.Action.do_action(save.get_action_iface(), 0)
     wait_for("the confirm dialog", lambda: find_node(window, "dialog", "Confirm save"))
     check(True, "pressing Save opened the confirm dialog")
+    check_announced(window, "Save activated")
     cancel = wait_for("the Cancel button", lambda: find_node(window, "push button", "Cancel"))
     Atspi.Action.do_action(cancel.get_action_iface(), 0)
     wait_for("the canceled status", lambda: find_node(window, "label", "Status: Canceled"))
+    check_announced(window, "Cancel activated")
     check(True, "pressing Cancel reached the app")
 
 

@@ -5,9 +5,12 @@
 //! NSAccessibility on macOS. Nothing is built until an assistive technology
 //! asks for the tree, so a window no screen reader reads pays nothing.
 
+use super::accessibility_announce::{Announcement, Announcer, add_announcement};
 use super::accessibility_tree::{TextGeometry, request_for_action, tree_update};
 use crate::core::ElementId;
-use crate::core::accessibility::{AccessibilityNode, AccessibilityRole, AccessibilityTree};
+use crate::core::accessibility::{
+    AccessibilityAnnouncementKind, AccessibilityNode, AccessibilityRole, AccessibilityTree,
+};
 use crate::core::presenter::Presenter;
 use crate::elements::element::Element;
 use crate::platform::accessibility_request::AccessibilityRequest;
@@ -21,6 +24,7 @@ struct Published {
     text: TextGeometry,
     scale_factor: f64,
     title: String,
+    announcement: Option<Announcement>,
 }
 
 pub(super) struct WindowAccessibility {
@@ -30,6 +34,7 @@ pub(super) struct WindowAccessibility {
     active: bool,
     published: Option<Published>,
     requests: Vec<(ElementId, AccessibilityRequest)>,
+    announcer: Announcer,
 }
 
 impl WindowAccessibility {
@@ -39,6 +44,7 @@ impl WindowAccessibility {
             active: false,
             published: None,
             requests: Vec::new(),
+            announcer: Announcer::default(),
         }
     }
 
@@ -62,6 +68,7 @@ impl WindowAccessibility {
                 log::info!("an assistive technology asked for the winit accessibility tree");
                 self.active = true;
                 self.published = None;
+                self.announcer.clear();
                 true
             }
             AccessKitEvent::ActionRequested(request) => {
@@ -83,6 +90,7 @@ impl WindowAccessibility {
             AccessKitEvent::AccessibilityDeactivated => {
                 self.active = false;
                 self.published = None;
+                self.announcer.clear();
                 false
             }
         }
@@ -101,6 +109,21 @@ impl WindowAccessibility {
         self.published.as_ref().map(|published| &published.tree)
     }
 
+    /// Take the action feedback ("Save activated") the presenter's elements
+    /// queued, to say with the next update. Ignored while nothing reads.
+    pub(super) fn hear<E>(&mut self, presenter: &mut Presenter<E>) {
+        let feedback = presenter
+            .take_accessibility_announcements()
+            .into_iter()
+            .filter(|announcement| {
+                announcement.kind() == AccessibilityAnnouncementKind::ActionFeedback
+            })
+            .map(|announcement| announcement.message().to_string());
+        if self.active {
+            self.announcer.say(feedback);
+        }
+    }
+
     /// Whether an assistive technology asked for the tree and has not let go.
     pub(super) fn is_reading(&self) -> bool {
         self.active
@@ -111,17 +134,20 @@ impl WindowAccessibility {
         self.active && self.published.is_none()
     }
 
-    /// Publish the presenter's tree under a window node titled `title` if an
-    /// assistive technology is reading and it changed since the last publish.
+    /// Publish the presenter's tree under a window node titled `title`, with
+    /// the action feedback its elements queued, if an assistive technology is
+    /// reading and either changed since the last publish. Focus changes need
+    /// no announcement: the tree's focus carries them.
     pub(super) fn publish<E: Element>(
         &mut self,
-        presenter: &Presenter<E>,
+        presenter: &mut Presenter<E>,
         title: &str,
         scale_factor: f64,
     ) {
         if !self.active {
             return;
         }
+        self.hear(presenter);
         let tree = match presenter.accessibility_tree() {
             Ok(tree) => tree,
             Err(err) => {
@@ -152,16 +178,22 @@ impl WindowAccessibility {
                 && published.text == text
                 && published.scale_factor == scale_factor
                 && published.title == title
+                && published.announcement.as_ref() == self.announcer.current()
         });
         if !self.active || unchanged {
             return None;
         }
-        let update = tree_update(&tree, &text, title, scale_factor);
+        let mut update = tree_update(&tree, &text, title, scale_factor);
+        let announcement = self.announcer.current().cloned();
+        if let Some(announcement) = &announcement {
+            add_announcement(&mut update, announcement);
+        }
         self.published = Some(Published {
             tree,
             text,
             scale_factor,
             title: title.to_string(),
+            announcement,
         });
         Some(update)
     }

@@ -385,6 +385,10 @@ where
     }
 
     fn run_iteration(&mut self, context: &mut AppContext) -> bool {
+        // Elements queue action feedback only while a reader can hear it.
+        let reading = self.accessibility.is_reading();
+        self.presenter
+            .set_accessibility_announcements_enabled(reading);
         if self.accessibility.has_requests() {
             context.mark_redraw_from(RedrawSource::PlatformInput);
         }
@@ -498,7 +502,7 @@ where
         };
         if self.accessibility.is_reading() && (frame_ran || self.accessibility.needs_tree()) {
             self.accessibility.publish(
-                &self.presenter,
+                &mut self.presenter,
                 &self.window.title,
                 self.input.scale_factor,
             );
