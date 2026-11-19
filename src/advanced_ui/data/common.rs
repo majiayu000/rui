@@ -107,6 +107,7 @@ pub(super) fn paint_data_row(cx: &mut PaintContext, bounds: Bounds, row: DataRow
             font_size: text_size,
             font_weight: row.theme.typography.control_weight,
             font_family: None,
+            font_features: Default::default(),
             line_height: row.theme.typography.line_height,
             align: TextAlign::Center,
             direction: BaseDirection::Auto,
@@ -134,6 +135,7 @@ pub(super) fn paint_data_row(cx: &mut PaintContext, bounds: Bounds, row: DataRow
             row.theme.typography.label_weight
         },
         font_family: None,
+        font_features: Default::default(),
         line_height: row.theme.typography.line_height,
         align: row.align,
         direction: BaseDirection::Auto,
@@ -154,6 +156,7 @@ pub(super) fn paint_data_row(cx: &mut PaintContext, bounds: Bounds, row: DataRow
             font_size: (text_size - 2.0).max(10.0),
             font_weight: 400,
             font_family: None,
+            font_features: Default::default(),
             line_height: row.theme.typography.line_height,
             align: row.align,
             direction: BaseDirection::Auto,

@@ -242,6 +242,7 @@ impl Element for Spinner {
             font_size: self.font_size,
             font_weight: 400,
             font_family: None,
+            font_features: Default::default(),
             line_height: 1.4,
             align: crate::elements::text::TextAlign::Left,
             direction: BaseDirection::Auto,

@@ -19,13 +19,17 @@ use std::sync::Arc;
 
 mod atlas;
 mod complex_breaks;
+mod features;
 mod glyph;
 pub(crate) mod hash;
 mod lru;
 mod rich;
 mod wrap;
 
+pub use crate::renderer::font_registry::{register_font, register_font_file};
 pub use crate::renderer::text_bidi::BaseDirection;
+pub use features::{FontFeature, FontFeatures};
+pub(crate) use features::rustybuzz_features;
 pub use crate::renderer::text_shaping::{
     TextCluster, TextDirection, TextRun, TextScript, TextShapeDiagnostic, TextShapePlan,
 };
@@ -43,10 +47,18 @@ pub const TEXT_BOUNDS_TOLERANCE: f32 = 1.0;
 #[derive(Debug, Clone, PartialEq)]
 pub enum TextError {
     MissingFont,
+    /// No longer returned: a family with no loaded face draws in the default
+    /// family and is listed in [`TextMeasureCache::unknown_font_families`].
     UnsupportedFontFamily(String),
     /// Rich text spans that do not tile their content.
     InvalidSpans(String),
     Resource(RendererResourceError),
+}
+
+impl From<FontLoadError> for TextError {
+    fn from(error: FontLoadError) -> Self {
+        font_io_text_error(&error)
+    }
 }
 
 impl From<RendererResourceError> for TextError {
@@ -65,6 +77,8 @@ pub struct TextRequest<'a> {
     pub line_height: f32,
     /// The base direction of the paragraph the text is a line of.
     pub direction: BaseDirection,
+    /// OpenType feature settings over the font's defaults.
+    pub font_features: &'a [FontFeature],
 }
 
 impl<'a> TextRequest<'a> {
@@ -82,12 +96,21 @@ impl<'a> TextRequest<'a> {
             font_family,
             line_height,
             direction: BaseDirection::Auto,
+            font_features: &[],
         }
     }
 
     /// The same request laid out at the paragraph level `direction` gives.
     pub fn with_direction(self, direction: BaseDirection) -> Self {
         Self { direction, ..self }
+    }
+
+    /// The same request shaped with `font_features`.
+    pub fn with_font_features(self, font_features: &'a [FontFeature]) -> Self {
+        Self {
+            font_features,
+            ..self
+        }
     }
 }
 
@@ -123,6 +146,7 @@ struct TextMeasureKey {
     font_weight: u16,
     font_family: String,
     direction: BaseDirection,
+    font_features: Vec<FontFeature>,
 }
 
 impl TextMeasureKey {
@@ -134,6 +158,7 @@ impl TextMeasureKey {
             font_weight: request.font_weight,
             font_family: resolved_family.to_string(),
             direction: request.direction,
+            font_features: request.font_features.to_vec(),
         }
     }
 
@@ -144,6 +169,7 @@ impl TextMeasureKey {
             && self.font_weight == request.font_weight
             && self.font_family == resolved_family
             && self.direction == request.direction
+            && self.font_features == request.font_features
     }
 
     fn hasher(&self) -> FastHasher {
@@ -154,11 +180,13 @@ impl TextMeasureKey {
         self.font_weight.hash(&mut hasher);
         self.font_family.hash(&mut hasher);
         self.direction.hash(&mut hasher);
+        self.font_features.as_slice().hash(&mut hasher);
         hasher
     }
 
     fn retained_bytes(&self) -> usize {
         self.content.len().saturating_add(self.font_family.len())
+            + std::mem::size_of_val(self.font_features.as_slice())
     }
 }
 
@@ -171,6 +199,7 @@ fn request_hasher(request: &TextRequest<'_>, resolved_family: &str) -> FastHashe
     request.font_weight.hash(&mut hasher);
     resolved_family.hash(&mut hasher);
     request.direction.hash(&mut hasher);
+    request.font_features.hash(&mut hasher);
     hasher
 }
 
@@ -211,6 +240,8 @@ pub struct TextMeasureCache {
     /// Faces chosen for requested families and weights, so a measurement does
     /// not search the font set again. Emptied whenever the font set changes.
     primary_faces: Vec<(Option<String>, u16, usize)>,
+    /// Requested families with no loaded face, drawn in the default family.
+    unknown_families: Vec<String>,
     metrics: lru::FrameLru<TextMeasureKey, TextMetrics>,
     wraps: wrap::WrapCache,
     rich_wraps: rich::RichCache,
@@ -240,6 +271,7 @@ impl TextMeasureCache {
             font_error: None,
             refreshed_missing_families: HashSet::new(),
             primary_faces: Vec::new(),
+            unknown_families: Vec::new(),
             metrics: lru::FrameLru::new(
                 RETAINED_METRICS_TARGET,
                 RETAINED_METRIC_BYTES_TARGET,
@@ -290,6 +322,12 @@ impl TextMeasureCache {
 
     pub fn stats(&self) -> TextCacheStats {
         self.stats
+    }
+
+    /// Families text asked for that have no loaded face, in the order first
+    /// seen. Their text was measured and drawn in the default family.
+    pub fn unknown_font_families(&self) -> &[String] {
+        &self.unknown_families
     }
 
     /// Number of measurement entries currently retained across frames.
@@ -452,33 +490,39 @@ impl TextMeasureCache {
     }
 
     /// The face of the requested family closest to `font_weight`; no family,
-    /// `system` or `default` mean the first loaded font's family. A family
-    /// ending in `Italic` asks for its italic face.
+    /// `system` or `default` mean the first loaded font's family, and so does
+    /// a family with no loaded face, which is noted once in
+    /// [`Self::unknown_font_families`]. A family ending in `Italic` asks for
+    /// its italic face.
     fn primary_font_index_prepared(
-        &self,
+        &mut self,
         font_family: Option<&str>,
         font_weight: u16,
     ) -> Result<usize, TextError> {
         let (family, italic) = split_italic(font_family.map_or("", str::trim));
+        let default = self.fonts.first().ok_or(TextError::MissingFont)?;
         let family = Some(family)
             .filter(|family| !family.is_empty() && !matches!(*family, "system" | "default"));
-        let family = match family {
-            Some(family) => family,
-            None => self
-                .fonts
-                .first()
-                .ok_or(TextError::MissingFont)?
-                .family
-                .as_str(),
-        };
-        best_face(&self.fonts, family, italic, font_weight)
-            .ok_or_else(|| TextError::UnsupportedFontFamily(family.to_string()))
+        if let Some(family) = family {
+            if let Some(index) = best_face(&self.fonts, family, italic, font_weight) {
+                return Ok(index);
+            }
+            if !self.unknown_families.iter().any(|known| known == family) {
+                log::warn!(
+                    "font family {family:?} has no loaded face; drawing it in {:?}",
+                    default.family
+                );
+                self.unknown_families.push(family.to_string());
+            }
+        }
+        best_face(&self.fonts, &default.family, italic, font_weight).ok_or(TextError::MissingFont)
     }
 
     fn apply_font_snapshot(&mut self, snapshot: ResourceSnapshot<TextShapingFont>) {
         if snapshot.generation != self.font_generation {
             self.clear_metrics();
             self.refreshed_missing_families.clear();
+            self.unknown_families.clear();
         }
         self.fonts = snapshot.resources;
         self.primary_faces.clear();
@@ -592,7 +636,8 @@ impl TextRasterCache {
             request.font_family,
             request.line_height,
         )
-        .with_direction(request.direction);
+        .with_direction(request.direction)
+        .with_font_features(request.font_features);
         self.measurer.sync_font_snapshot();
         self.invalidate_for_font_generation_change();
         if let Some(error) = self.measurer.font_error.as_ref() {

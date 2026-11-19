@@ -2,6 +2,7 @@
 
 #[cfg(any(all(target_os = "macos", feature = "metal"), feature = "wgpu"))]
 mod picture;
+mod font_registry;
 mod plan;
 mod primitives;
 mod resources;

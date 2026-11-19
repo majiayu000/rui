@@ -16,6 +16,7 @@ mod clipboard;
 mod devtools;
 mod focus;
 mod images;
+mod listener_updates;
 mod menus;
 mod prompts;
 mod release;
@@ -540,7 +541,14 @@ impl<V: View> RuntimeView<V> {
     }
 
     pub(crate) fn render(&mut self, app: &mut AppContext) -> V::Element {
-        // Listener updates run in the order their events arrived; one may queue more.
+        self.apply_updates(app);
+        let mut view_cx = self.context(app);
+        self.view.render(&mut view_cx)
+    }
+
+    /// Run the queued listener updates, in the order their events arrived.
+    pub(crate) fn apply_updates(&mut self, app: &mut AppContext) {
+        // One may queue more.
         loop {
             let updates = self.updates.take();
             if updates.is_empty() {
@@ -551,10 +559,8 @@ impl<V: View> RuntimeView<V> {
                 update(&mut self.view, &mut view_cx);
             }
         }
-        // So this render already shows what observers derive from those updates.
+        // So the next render already shows what observers derive from them.
         app.flush_effects();
-        let mut view_cx = self.context(app);
-        self.view.render(&mut view_cx)
     }
 
     fn context<'a>(&self, app: &'a mut AppContext) -> ViewContext<'a, V> {

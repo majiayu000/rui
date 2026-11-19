@@ -558,6 +558,7 @@ fn paint_cell(
             cell.font_weight.to_value()
         },
         font_family: None,
+        font_features: Default::default(),
         line_height: theme.typography.line_height,
         align: cell.align,
         direction: BaseDirection::Auto,

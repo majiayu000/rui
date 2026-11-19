@@ -457,3 +457,50 @@ fn an_edit_away_from_the_images_leaves_them_out_of_the_damage() {
         }
     }
 }
+
+/// The rows of `list`, the one at `edited` labeled for `round`, inside a panel
+/// and a root that both paint a background (#343).
+fn list_on_backgrounds(edited: usize, round: usize) -> Div {
+    div().w(320.0).h(600.0).bg(Color::hex(0x101418)).child(
+        div()
+            .m(10.0)
+            .p(4.0)
+            .bg(Color::hex(0x1c2228))
+            .rounded(6.0)
+            .child(list(edited, round)),
+    )
+}
+
+#[test]
+fn backgrounds_behind_one_changed_row_redraw_only_about_that_row() {
+    let Some(mut renderer) = renderer() else {
+        return;
+    };
+    let mut measurer = TextMeasureCache::new();
+    let viewport = Size::new(320.0, 600.0);
+    let total = (320.0 * SCALE * 600.0 * SCALE) as u64;
+    let mut incremental = Incremental::new();
+    let mut target = RetainedTarget::new();
+    // The last round builds the tree the one before did: nothing changes.
+    for (round, label) in [0, 1, 2, 3, 3].into_iter().enumerate() {
+        incremental.rebuild(list_on_backgrounds(7, label));
+        incremental.frame(&mut measurer, viewport);
+        let redrawn = assert_same_pixels(
+            &mut renderer,
+            &mut target,
+            &incremental,
+            viewport,
+            &format!("round {round}"),
+        );
+        eprintln!("round {round}: redrew {redrawn} of {total} pixels");
+        match round {
+            0 => assert_eq!(redrawn, total, "the first frame draws everything"),
+            4 => assert_eq!(redrawn, 0, "nothing changed"),
+            // One row and its text's reach, as in `one_changed_row_redraws_about_one_row`.
+            _ => assert!(
+                redrawn * 5 < total,
+                "round {round} redrew {redrawn} of {total} pixels"
+            ),
+        }
+    }
+}

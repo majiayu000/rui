@@ -81,6 +81,7 @@ fn content() -> Vec<Primitive> {
         font_size: 14.0,
         font_weight: 400,
         font_family: None,
+        font_features: Default::default(),
         line_height: 18.0,
         align: TextAlign::Left,
         direction: BaseDirection::Auto,

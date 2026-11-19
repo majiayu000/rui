@@ -427,6 +427,7 @@ impl Element for Image {
                     font_size: 12.0,
                     font_weight: 400,
                     font_family: None,
+                    font_features: Default::default(),
                     line_height: 1.2,
                     align: crate::elements::text::TextAlign::Center,
                     direction: BaseDirection::Auto,

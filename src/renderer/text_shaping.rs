@@ -1,5 +1,5 @@
 use crate::core::geometry::Size;
-use crate::renderer::text::{TextMetrics, TextRequest};
+use crate::renderer::text::{FontFeature, TextMetrics, TextRequest};
 use crate::renderer::text_ascii::AsciiCoverage;
 use crate::renderer::text_bidi::{ink_of, line_levels, place_visually};
 use crate::renderer::text_classify::{
@@ -14,13 +14,14 @@ pub use crate::renderer::text_plan::{
     ShapedGlyph, TextCluster, TextDirection, TextRun, TextScript, TextShapeDiagnostic,
     TextShapePlan,
 };
+use plans::CachedPlan;
 use rusttype::{Font, GlyphId, Scale, point};
-use rustybuzz::{
-    BufferClusterLevel, Direction as HbDirection, Face, Language, Script, ShapePlan, UnicodeBuffer,
-};
+use rustybuzz::{BufferClusterLevel, Direction as HbDirection, Face, UnicodeBuffer};
 use std::ops::Range;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex};
 use unicode_segmentation::UnicodeSegmentation;
+
+mod plans;
 
 /// The bytes of one font file, shared by every face in it.
 #[derive(Debug)]
@@ -28,8 +29,9 @@ pub(crate) enum FontBytes {
     /// Mapped from disk: only the pages that are read become resident, and they
     /// are clean file pages, not part of the process footprint.
     Mapped(crate::renderer::system_fonts::MappedFile),
-    #[cfg_attr(all(unix, not(test)), allow(dead_code))]
     Owned(Vec<u8>),
+    /// Bytes an app registered from its binary.
+    Static(&'static [u8]),
 }
 
 impl FontBytes {
@@ -37,6 +39,7 @@ impl FontBytes {
         match self {
             Self::Mapped(map) => map.as_slice(),
             Self::Owned(bytes) => bytes,
+            Self::Static(bytes) => bytes,
         }
     }
 }
@@ -50,9 +53,6 @@ pub(crate) fn faces_for_weight(fonts: &[TextShapingFont], family: &str, weight: 
     faces.sort_by_key(|&index| (fonts[index].italic, fonts[index].weight.abs_diff(weight)));
     faces
 }
-
-/// A shaping plan and the buffer properties it was built for.
-type CachedPlan = (HbDirection, Script, Option<Language>, Arc<ShapePlan>);
 
 #[derive(Clone)]
 pub(crate) struct TextShapingFont {
@@ -148,28 +148,6 @@ impl TextShapingFont {
 
     fn face(&self) -> &Face<'_> {
         &self.face
-    }
-
-    /// The plan for `buffer`'s direction, script and language, built on first use.
-    fn plan_for(&self, buffer: &UnicodeBuffer) -> Arc<ShapePlan> {
-        let (direction, script, language) =
-            (buffer.direction(), buffer.script(), buffer.language());
-        let mut plans = self.plans.lock().unwrap_or_else(PoisonError::into_inner);
-        if let Some((.., plan)) = plans
-            .iter()
-            .find(|(d, s, l, _)| *d == direction && *s == script && *l == language)
-        {
-            return Arc::clone(plan);
-        }
-        let plan = Arc::new(ShapePlan::new(
-            &self.face,
-            direction,
-            Some(script),
-            language.as_ref(),
-            &[],
-        ));
-        plans.push((direction, script, language, Arc::clone(&plan)));
-        plan
     }
 
     pub(crate) fn supports_cluster(&self, cluster: &str) -> bool {
@@ -579,7 +557,7 @@ fn shape_run(
         )))
         .ascent;
     let glyphs = shape_run_glyphs(
-        font,
+        (font, request.font_features),
         (size, baseline),
         clusters,
         script,
@@ -612,10 +590,10 @@ fn shape_run(
     }
 }
 
-/// `(size, baseline)`: the height `font` is drawn at and the baseline's distance
-/// from the top of the line.
+/// `font` shaped with `features`; `(size, baseline)`: the height it is drawn
+/// at and the baseline's distance from the top of the line.
 fn shape_run_glyphs(
-    font: &TextShapingFont,
+    (font, features): (&TextShapingFont, &[FontFeature]),
     (size, baseline): (f32, f32),
     clusters: &[ClusterDraft],
     script: RunScript,
@@ -640,7 +618,7 @@ fn shape_run_glyphs(
     }
 
     buffer.guess_segment_properties();
-    let plan = font.plan_for(&buffer);
+    let plan = font.plan_for(&buffer, features);
     let shaped = rustybuzz::shape_with_plan(font.face(), &plan, buffer);
     let position_scale = font.font().scale_for_pixel_height(size);
     let mut cursor_x = start_x;

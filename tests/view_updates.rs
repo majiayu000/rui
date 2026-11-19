@@ -2,8 +2,8 @@
 //! application moving state out of its view or notifying by hand.
 
 use rui::advanced_ui::Button;
-use rui::core::entity::Entity;
 use rui::core::action::ActionId;
+use rui::core::entity::Entity;
 use rui::core::event::{KeyCode, KeyEvent, Modifiers};
 use rui::core::{ElementId, Point, Size, View, ViewContext};
 use rui::testing::{HeadlessViewSession, mount_view};
@@ -139,4 +139,131 @@ fn a_key_binding_runs_a_view_action() {
     assert_eq!(label::<Todos>(&session), "2 todos");
     // A key bound to no action reaches nothing here.
     assert!(!session.dispatch_key_event(&KeyEvent::new(KeyCode::M, command)));
+}
+
+const PARENT_BUTTON: ElementId = ElementId(44_002);
+const CHILD_BUTTON: ElementId = ElementId(44_003);
+
+/// A button showing `shown`; clicking it adds one to `bumps`.
+fn counter_button<V: 'static>(
+    cx: &mut ViewContext<V>,
+    id: ElementId,
+    shown: Entity<u32>,
+    bumps: Entity<u32>,
+) -> rui::Div {
+    let value = *cx.app().get(shown).expect("shown");
+    let button = Button::new(format!("shown {value}"))
+        .id(id)
+        .on_click(cx.listener(move |_, cx| {
+            bumps
+                .update(cx.app_mut(), |count, _| *count += 1)
+                .expect("bumps");
+        }));
+    rui::div().h(30.0).child(button)
+}
+
+/// Shows the parent's count; its click bumps the parent's.
+struct Child {
+    shown: Entity<u32>,
+    bumps: Entity<u32>,
+    renders: Rc<Cell<u32>>,
+}
+
+impl View for Child {
+    type Element = rui::Div;
+
+    fn render(&mut self, cx: &mut ViewContext<Self>) -> Self::Element {
+        self.renders.set(self.renders.get() + 1);
+        counter_button(cx, CHILD_BUTTON, self.shown, self.bumps)
+    }
+}
+
+/// Shows its own count above a child view; each one's click bumps the
+/// count the other shows.
+#[derive(Default)]
+struct Parent {
+    parts: Option<(Entity<u32>, Entity<u32>, Entity<Child>)>,
+    child_renders: Rc<Cell<u32>>,
+}
+
+impl View for Parent {
+    type Element = rui::Div;
+
+    fn render(&mut self, cx: &mut ViewContext<Self>) -> Self::Element {
+        let renders = Rc::clone(&self.child_renders);
+        let (parent_count, child_count, child) = *self.parts.get_or_insert_with(|| {
+            let app = cx.app_mut();
+            let (parent_count, child_count) = (app.create(0_u32), app.create(0_u32));
+            let child = app.new_view(Child {
+                shown: child_count,
+                bumps: parent_count,
+                renders,
+            });
+            (parent_count, child_count, child)
+        });
+        rui::div()
+            .w(200.0)
+            .flex_col()
+            .child(counter_button(cx, PARENT_BUTTON, parent_count, child_count))
+            .child(rui::div().h(30.0).child(rui::elements::view(child)))
+    }
+}
+
+fn shown(session: &HeadlessViewSession<Parent>, id: ElementId) -> String {
+    let tree = session.accessibility_tree().expect("accessibility tree");
+    let node = tree.find(id).expect("button");
+    node.a11y_label().expect("label").to_string()
+}
+
+fn click_at(session: &mut HeadlessViewSession<Parent>, at: Point) {
+    assert!(session.pointer_down(at));
+    assert!(session.pointer_up(at));
+}
+
+#[test]
+fn a_parent_listener_update_shows_in_the_child_on_the_next_frame() {
+    let child_renders = Rc::new(Cell::new(0));
+    let parent = Parent {
+        child_renders: Rc::clone(&child_renders),
+        ..Parent::default()
+    };
+    let mut session = mount_view(Size::new(200.0, 60.0), parent).expect("mount");
+    assert_eq!(shown(&session, CHILD_BUTTON), "shown 0");
+    click_at(&mut session, Point::new(4.0, 4.0));
+    session.frame().expect("frame that runs the listener");
+    assert_eq!(shown(&session, CHILD_BUTTON), "shown 1");
+    assert_eq!(shown(&session, PARENT_BUTTON), "shown 0");
+    assert!(
+        !session.app_context().has_frame_work(),
+        "nothing left for another frame"
+    );
+    assert_eq!(
+        child_renders.get(),
+        2,
+        "the child rendered once more, for the click"
+    );
+}
+
+#[test]
+fn a_child_listener_update_shows_in_the_parent_on_the_next_frame() {
+    let child_renders = Rc::new(Cell::new(0));
+    let parent = Parent {
+        child_renders: Rc::clone(&child_renders),
+        ..Parent::default()
+    };
+    let mut session = mount_view(Size::new(200.0, 60.0), parent).expect("mount");
+    assert_eq!(shown(&session, PARENT_BUTTON), "shown 0");
+    click_at(&mut session, Point::new(4.0, 34.0));
+    session.frame().expect("frame that runs the listener");
+    assert_eq!(shown(&session, PARENT_BUTTON), "shown 1");
+    assert_eq!(shown(&session, CHILD_BUTTON), "shown 0");
+    assert!(
+        !session.app_context().has_frame_work(),
+        "nothing left for another frame"
+    );
+    assert_eq!(
+        child_renders.get(),
+        2,
+        "the child rendered once more, for the click"
+    );
 }

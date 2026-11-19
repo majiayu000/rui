@@ -634,6 +634,7 @@ impl Element for StyledText {
                     .unwrap_or(inherited.font_weight)
                     .to_value(),
                 font_family: self.families.get(piece.span).cloned().flatten(),
+                font_features: Default::default(),
                 line_height: refinement.line_height.unwrap_or(inherited.line_height),
                 align: TextAlign::Left,
                 direction: BaseDirection::Auto,

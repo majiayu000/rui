@@ -424,7 +424,7 @@ text("Hello, World!")
 | `.align(TextAlign)` | Text alignment |
 | `.line_height(value)` | Line height multiplier |
 | `.font_weight(weight)` | Numeric weight (100-900) |
-| `.font_family(name)` | Font family name |
+| `.font_family(name)` | Font family name; one with no loaded face draws in the default family and is listed in `renderer.diagnostics().unknown_font_families` |
 
 #### TextAlign
 
@@ -439,6 +439,23 @@ pub enum TextAlign {
 A `styled_text` span can also be `.italic()`, `.underline()`, `.strikethrough()`,
 `.background(color)` and `.link(target)`; `StyledText::on_link(|target| ..)` is
 called when a link span is clicked, and the pointer cursor shows over it.
+
+A family name finds RUI's built-in faces, fonts an app registered, and fonts
+installed in the system and user font directories (every face of a `.ttc`).
+`rui::renderer::text::register_font(bytes)` and `register_font_file(path)` add
+the faces of a font file or collection for the rest of the process and return
+the families they were added under (the typographic family name, else the
+family name):
+
+```rust
+let families = register_font(include_bytes!("JetBrainsMono-Regular.ttf").as_slice())?;
+text("fn main() {}").font("JetBrains Mono")
+```
+
+OpenType features are set on a `Primitive::Text` (for example from a `canvas`)
+with `font_features: FontFeatures::no_ligatures()`, or on a `TextRequest` with
+`.with_font_features(&[FontFeature::new(*b"calt", 0)])`; text elements do not
+set them yet.
 
 ---
 

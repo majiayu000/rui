@@ -474,6 +474,11 @@ impl TextGlyphCache {
         !self.uploads.is_empty()
     }
 
+    /// See [`TextMeasureCache::unknown_font_families`].
+    pub fn unknown_font_families(&self) -> &[String] {
+        self.measurer.unknown_font_families()
+    }
+
     pub fn resource_stats(&self) -> RendererResourceStats {
         RendererResourceStats {
             kind: RendererResourceKind::Glyph,
@@ -546,6 +551,7 @@ impl TextGlyphCache {
                 font_family: request.font_family.map(str::to_string),
                 line_height: request.line_height,
                 direction: request.direction,
+                font_features: request.font_features.to_vec(),
                 text: text.clone(),
                 last_used: self.frame,
             },

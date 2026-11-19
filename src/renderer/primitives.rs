@@ -8,7 +8,7 @@ use crate::elements::fit_bounds;
 use crate::elements::text::TextAlign;
 use crate::renderer::Picture;
 use crate::renderer::picture::moved;
-use crate::renderer::text::{BaseDirection, FontGlyph};
+use crate::renderer::text::{BaseDirection, FontFeatures, FontGlyph};
 use crate::{ImageFit, ImageSource};
 use bytemuck::{Pod, Zeroable};
 use std::sync::Arc;
@@ -63,6 +63,8 @@ pub enum Primitive {
         font_size: f32,
         font_weight: u16,
         font_family: Option<Arc<str>>,
+        /// OpenType feature settings, such as [`FontFeatures::no_ligatures`].
+        font_features: FontFeatures,
         line_height: f32,
         align: TextAlign,
         /// The base direction of the paragraph the text is a line of.
@@ -605,6 +607,7 @@ mod tests {
             font_size: 14.0,
             font_weight: 400,
             font_family: None,
+            font_features: Default::default(),
             line_height: 1.2,
             align: TextAlign::Left,
             direction: BaseDirection::Auto,

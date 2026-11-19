@@ -76,6 +76,9 @@ impl FramePipeline {
             return;
         }
         context.frame.needs_rebuild = false;
+        // What the notified views' listeners change is notified before this
+        // frame works out what renders, so every view that reads it does.
+        context.apply_child_view_updates();
         let notified: Vec<EntityId> = context.frame.pending_updates.drain().collect();
         // Views render again for what they read. The root is built again only
         // when asked to, or for an entity it read or no view read.
@@ -96,6 +99,17 @@ impl FramePipeline {
             // and paint; see `reconcile`.
             if !reconcile(&mut next, root) {
                 *root = next;
+            }
+            // The root's listeners ran in that build; the views that read what
+            // they changed render below. The root may have read it first, so
+            // its own reads stay pending for the next frame.
+            let root_reads = &context.frame.root_reads;
+            let changed: Vec<EntityId> = context.frame.pending_updates.iter().copied().collect();
+            for entity in changed {
+                dirty.extend(context.views_reading(entity));
+                if !root_reads.contains(&entity) {
+                    context.frame.pending_updates.remove(&entity);
+                }
             }
         }
         Self::render_views(root, context, &dirty);
@@ -136,9 +150,9 @@ impl FramePipeline {
     fn render_views<E: Element>(root: &mut E, context: &mut AppContext, dirty: &HashSet<EntityId>) {
         refresh_views(root, context, dirty);
         context.release_unplaced_views();
-        if !context.frame.pending_updates.is_empty() {
-            context.frame.needs_rebuild = true;
-        }
+        // Notifications this frame handled no longer ask for another.
+        let frame = &mut context.frame;
+        frame.needs_rebuild = frame.explicit_rebuild || !frame.pending_updates.is_empty();
     }
 
     pub fn paint_root<E>(

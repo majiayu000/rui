@@ -6,6 +6,7 @@
 //! never stored, so a transient read failure cannot freeze an empty font set
 //! into the rest of the process lifetime.
 
+use crate::renderer::font_registry::{add_installed_family, added_faces};
 use crate::renderer::text_shaping::{FontBytes, TextShapingFont};
 use std::borrow::Cow;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -196,7 +197,7 @@ pub(crate) struct FontLoadError {
 }
 
 impl FontLoadError {
-    fn new(path: &str, error: std::io::Error) -> Self {
+    pub(crate) fn new(path: &str, error: std::io::Error) -> Self {
         Self {
             path: path.to_string(),
             kind: error.kind(),
@@ -204,7 +205,7 @@ impl FontLoadError {
         }
     }
 
-    fn invalid_data(path: &str, message: impl Into<String>) -> Self {
+    pub(crate) fn invalid_data(path: &str, message: impl Into<String>) -> Self {
         Self {
             path: path.to_string(),
             kind: std::io::ErrorKind::InvalidData,
@@ -352,7 +353,12 @@ pub(crate) fn reload_system_fonts_for_family(
 ) -> Result<Option<ResourceSnapshot<TextShapingFont>>, FontLoadError> {
     let has_available_candidate =
         has_available_candidate_with(family, |path| std::path::Path::new(path).try_exists())?;
-    Ok(has_available_candidate.then(|| SYSTEM_TEXT_FONTS.reload(load_system_fonts_uncached)))
+    Ok((has_available_candidate || add_installed_family(family)).then(reload_system_fonts))
+}
+
+/// Loads the font set again, with the faces added since, and publishes it.
+pub(crate) fn reload_system_fonts() -> ResourceSnapshot<TextShapingFont> {
+    SYSTEM_TEXT_FONTS.reload(load_system_fonts_uncached)
 }
 
 fn has_available_candidate_with(
@@ -386,6 +392,7 @@ fn load_system_fonts_uncached() -> ResourceLoad<TextShapingFont> {
             first_error = Some(error);
         }
     }
+    fonts.extend(added_faces());
     match first_error {
         Some(error) => ResourceLoad::retryable_with_error(fonts, error),
         None => ResourceLoad::complete(fonts),
@@ -401,12 +408,12 @@ fn load_font_faces(
 }
 
 #[cfg(unix)]
-fn read_font_file(path: &str) -> std::io::Result<FontBytes> {
+pub(crate) fn read_font_file(path: &str) -> std::io::Result<FontBytes> {
     MappedFile::open(path).map(FontBytes::Mapped)
 }
 
 #[cfg(not(unix))]
-fn read_font_file(path: &str) -> std::io::Result<FontBytes> {
+pub(crate) fn read_font_file(path: &str) -> std::io::Result<FontBytes> {
     std::fs::read(path).map(FontBytes::Owned)
 }
 

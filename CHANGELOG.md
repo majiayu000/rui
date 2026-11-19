@@ -6,6 +6,28 @@ All notable project changes should be recorded here.
 
 ### Rendering
 
+- Text can be shaped with OpenType feature settings:
+  `TextRequest::with_font_features(&[FontFeature])` and the new
+  `font_features: FontFeatures` field of `Primitive::Text`.
+  `FontFeatures::no_ligatures()` turns `calt` and `liga` off, so JetBrains Mono
+  draws `->` as `-` and `>`. The measure, wrap, glyph and raster caches and each
+  face's shaping plans key on the list (#329).
+  **Breaking:** `TextRequest` and `Primitive::Text` built with a struct literal
+  need the new field (`font_features: &[]` / `Default::default()`).
+- `rui::renderer::text::register_font(bytes)` and `register_font_file(path)`
+  add the faces of a font file or collection, and text naming their family uses
+  them. A family outside the built-in table is looked up among the installed
+  fonts (macOS `/System/Library/Fonts`, `/Library/Fonts`, `~/Library/Fonts`;
+  Linux `/usr/share/fonts`, `/usr/local/share/fonts`, `~/.local/share/fonts`,
+  `~/.fonts`; Windows `Fonts` and the per-user fonts folder), scanned once the
+  first time such a family is asked for, so Menlo or a user-installed Nerd Font
+  now draw instead of falling back (#325).
+- A font family with no loaded face draws in the default family (same weight
+  and slant) instead of failing the frame with `RenderFailed` or panicking in
+  layout. It is logged once and listed in the new
+  `RendererDiagnostics::unknown_font_families` (#326).
+  **Breaking:** code that builds `RendererDiagnostics` with a struct literal
+  must add the field; `TextError::UnsupportedFontFamily` is no longer returned.
 - `Painter::glyph` draws one glyph in a `canvas` at a pen position of the
   caller's choosing, from the text glyph atlas, without shaping. Characters are
   resolved once with `renderer::text::GlyphResolver` (falling back to other faces
@@ -56,9 +78,17 @@ All notable project changes should be recorded here.
 
 - System fonts are now parsed once per process and text measurement metrics
   survive across frames, instead of both being rebuilt every frame.
+- A background an ancestor paints again because something inside it changed no
+  longer puts its whole box in the frame's damage when it is drawn the same as
+  in the frame before: with a root and a panel background, one changed row
+  redraws 13% of a 320x600 window at 2x instead of all of it (#343).
 
 ### Runtime
 
+- An entity one view's listener updates shows in the other views that read it
+  on the next frame, parent to child and child to parent, instead of one frame
+  later; child views' queued listener updates run before the frame works out
+  what renders (#341).
 - The winit runner (Linux, Windows) opens the windows app code opens with
   `AppContext::open_window` and `open_view_window` instead of closing them:
   each gets its own presenter, surface and renderer, events go to the window

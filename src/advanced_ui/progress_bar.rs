@@ -222,6 +222,7 @@ impl Element for ProgressBar {
                 font_size: (bounds.height() * 0.62).max(10.0),
                 font_weight: self.theme.typography.control_weight,
                 font_family: None,
+                font_features: Default::default(),
                 line_height: 1.0,
                 align: crate::elements::text::TextAlign::Center,
                 direction: BaseDirection::Auto,

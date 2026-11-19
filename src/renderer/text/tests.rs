@@ -42,23 +42,15 @@ fn missing_font_is_an_explicit_error() {
 }
 
 #[test]
-fn unsupported_font_family_is_an_explicit_error() {
+fn unknown_font_family_measures_in_the_default_family_and_is_reported_once() {
     let mut cache = TextMeasureCache::new();
-    let result = cache.measure_single_line(TextRequest::new(
-        "Hello",
-        20.0,
-        400,
-        Some("Unknown Family"),
-        1.2,
-    ));
-    let err = match result {
-        Ok(metrics) => panic!("expected font family error, got {:?}", metrics),
-        Err(err) => err,
-    };
-    assert_eq!(
-        err,
-        TextError::UnsupportedFontFamily("Unknown Family".to_string())
-    );
+    let unknown = TextRequest::new("Hello", 20.0, 400, Some("Unknown Family"), 1.2);
+    let fallback = measure(&mut cache, unknown);
+    let default = measure(&mut cache, TextRequest::new("Hello", 20.0, 400, None, 1.2));
+    assert_eq!(fallback, default);
+    let rtl = unknown.with_direction(BaseDirection::RightToLeft);
+    measure(&mut cache, rtl);
+    assert_eq!(cache.unknown_font_families(), ["Unknown Family"]);
 }
 
 #[test]
@@ -529,6 +521,7 @@ fn retained_metrics_stay_bounded_for_ever_changing_text() {
                 font_weight: 400,
                 font_family: "test".to_string(),
                 direction: BaseDirection::Auto,
+                font_features: Vec::new(),
             },
             TextMetrics::empty(),
         );
@@ -554,6 +547,7 @@ fn retained_metrics_stay_within_the_byte_budget() {
                 font_weight: 400,
                 font_family: "test".to_string(),
                 direction: BaseDirection::Auto,
+                font_features: Vec::new(),
             },
             TextMetrics::empty(),
         );
@@ -569,6 +563,7 @@ fn retained_metrics_stay_within_the_byte_budget() {
             font_weight: 400,
             font_family: "test".to_string(),
             direction: BaseDirection::Auto,
+            font_features: Vec::new(),
         },
         TextMetrics::empty(),
     );

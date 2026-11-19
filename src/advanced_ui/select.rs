@@ -390,6 +390,7 @@ impl Element for Select {
                 font_size: self.theme.text_size(self.size),
                 font_weight: self.theme.typography.label_weight,
                 font_family: None,
+                font_features: Default::default(),
                 line_height: self.theme.typography.line_height,
                 align,
                 direction: BaseDirection::Auto,

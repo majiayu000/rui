@@ -2,7 +2,7 @@
 
 use crate::core::geometry::Size;
 use crate::renderer::primitives::PrimitiveKind;
-use crate::renderer::text::BaseDirection;
+use crate::renderer::text::{BaseDirection, FontFeature};
 use crate::{DecodedImage, ImageSource};
 use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
@@ -221,6 +221,9 @@ pub struct RendererDiagnostics {
     pub device: RendererDeviceDiagnostics,
     pub resources: Vec<RendererResourceStats>,
     pub unsupported_primitives: Vec<RendererUnsupportedPrimitive>,
+    /// Font families text asked for that have no loaded face; that text was
+    /// drawn in the default family.
+    pub unknown_font_families: Vec<String>,
 }
 
 impl RendererDiagnostics {
@@ -229,6 +232,7 @@ impl RendererDiagnostics {
             device,
             resources,
             unsupported_primitives: Vec::new(),
+            unknown_font_families: Vec::new(),
         }
     }
 
@@ -237,6 +241,7 @@ impl RendererDiagnostics {
             device: RendererDeviceDiagnostics::headless(backend),
             resources: Vec::new(),
             unsupported_primitives: Vec::new(),
+            unknown_font_families: Vec::new(),
         }
     }
 
@@ -245,6 +250,11 @@ impl RendererDiagnostics {
         unsupported_primitives: Vec<RendererUnsupportedPrimitive>,
     ) -> Self {
         self.unsupported_primitives = unsupported_primitives;
+        self
+    }
+
+    pub fn with_unknown_font_families(mut self, families: Vec<String>) -> Self {
+        self.unknown_font_families = families;
         self
     }
 
@@ -727,6 +737,7 @@ pub struct GlyphResourceKey {
     family: Option<String>,
     line_height_bits: u32,
     direction: BaseDirection,
+    font_features: Vec<FontFeature>,
 }
 
 impl GlyphResourceKey {
@@ -744,11 +755,21 @@ impl GlyphResourceKey {
             family: family.map(str::to_string),
             line_height_bits: line_height.to_bits(),
             direction: BaseDirection::Auto,
+            font_features: Vec::new(),
         }
     }
 
     /// The key of the same text laid out at the paragraph level `direction` gives.
     pub fn with_direction(self, direction: BaseDirection) -> Self {
         Self { direction, ..self }
+    }
+
+    /// The key of the same text shaped with `font_features`.
+    pub fn with_font_features(self, font_features: &[FontFeature]) -> Self {
+        let font_features = font_features.to_vec();
+        Self {
+            font_features,
+            ..self
+        }
     }
 }
