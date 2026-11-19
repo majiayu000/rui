@@ -11,7 +11,8 @@ pub(crate) type SharedClipboard = Rc<RefCell<dyn Clipboard>>;
 impl AppContext {
     /// Replace the clipboard that copy, cut, paste and
     /// [`Self::write_to_clipboard`] use. The macOS runner installs the general
-    /// pasteboard; headless sessions keep an in-memory clipboard.
+    /// pasteboard and the winit runner the system clipboard; headless sessions
+    /// keep an in-memory clipboard.
     pub fn set_clipboard(&mut self, clipboard: impl Clipboard + 'static) {
         self.clipboard = Rc::new(RefCell::new(clipboard));
     }

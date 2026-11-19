@@ -1,7 +1,8 @@
 # shellcheck shell=bash
 # The sourcing script exits with $failed.
 # shellcheck disable=SC2034
-# Compares a window capture with its committed reference. Sourced by
+# Compares a window capture with its committed reference, and checks the
+# clipboard round trip. Sourced by
 # scripts/linux_window_pixels.sh and scripts/wayland_window_pixels.sh, which set
 # REFERENCES and OUT. Needs ImageMagick.
 # RUI_PIXELS_UPDATE=1 rewrites the references from this run.
@@ -29,6 +30,18 @@ compare_capture() {
     echo "ok $1: $different pixels differ"
   else
     echo "FAIL $1: $result (at most $MAX_DIFFERENT pixels may differ; see $OUT)" >&2
+    failed=1
+  fi
+}
+
+# The clipboard check puts "from-system" on the system clipboard, pastes it
+# twice into an input, then selects and copies the input: the system clipboard
+# must then hold $1 == both copies.
+check_clipboard() {
+  if [[ "$1" == from-systemfrom-system ]]; then
+    echo "ok clipboard: pasted and copied through the system clipboard"
+  else
+    echo "FAIL clipboard: the system clipboard holds '$1', expected 'from-systemfrom-system'" >&2
     failed=1
   fi
 }

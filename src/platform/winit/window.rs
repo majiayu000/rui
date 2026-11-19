@@ -1,5 +1,6 @@
 //! One winit window: its presenter, wgpu surface and frame.
 
+use super::clipboard::WindowClipboard;
 use super::input::InputState;
 use crate::core::app::{AppContext, RedrawSource};
 use crate::core::event::{Cursor, Event, FocusEvent};
@@ -27,13 +28,14 @@ use std::sync::Arc;
 use winit::event_loop::ActiveEventLoop;
 use winit::window::CursorIcon;
 
-const PLATFORM: &str = "winit";
+pub(super) const PLATFORM: &str = "winit";
 
 /// The winit window behind the shared [`PlatformWindow`] contract.
 pub(super) struct WinitWindow {
     window: Arc<winit::window::Window>,
     /// The cursor last shown, so a pointer move over the same element sets none.
     cursor: Cell<Cursor>,
+    clipboard: WindowClipboard,
 }
 
 impl WinitWindow {
@@ -68,7 +70,7 @@ impl PlatformWindow for WinitWindow {
 
     fn features(&self) -> PlatformWindowFeatures {
         PlatformWindowFeatures {
-            clipboard: false,
+            clipboard: self.clipboard.is_available(),
             renderer_attachment: false,
             multi_window: false,
             ..PlatformWindowFeatures::supported()
@@ -96,10 +98,18 @@ impl PlatformWindow for WinitWindow {
         self.window.request_redraw();
         Ok(())
     }
+
+    fn read_clipboard_text(&mut self) -> Result<String, PlatformWindowError> {
+        self.clipboard.read_text()
+    }
+
+    fn write_clipboard_text(&mut self, text: &str) -> Result<(), PlatformWindowError> {
+        self.clipboard.write_text(text)
+    }
 }
 
-/// Creating a window, its surface or its renderer failed.
-fn backend_error(message: impl std::fmt::Display) -> PlatformWindowError {
+/// Creating a window, its surface or its renderer, or using the clipboard, failed.
+pub(super) fn backend_error(message: impl std::fmt::Display) -> PlatformWindowError {
     PlatformWindowError::backend(PLATFORM, message.to_string())
 }
 
@@ -131,6 +141,7 @@ where
         id: WindowId,
         options: &WindowOptions,
         mut build_root: F,
+        clipboard: WindowClipboard,
     ) -> Result<Self, PlatformWindowError> {
         let window = Arc::new(
             event_loop
@@ -173,6 +184,7 @@ where
             window: WinitWindow {
                 window,
                 cursor: Cell::new(Cursor::Default),
+                clipboard,
             },
             renderer,
             surface,
