@@ -61,10 +61,8 @@ mod complex_text;
 #[path = "../benchmarks/gpui_compare/gpu_time.rs"]
 mod gpu_time;
 
-const WARMUP: usize = 10;
 /// Long enough for the last frames' command buffers to complete.
 const GPU_SETTLE: std::time::Duration = std::time::Duration::from_millis(100);
-const SAMPLES: usize = 60;
 const VIEWPORT: (f32, f32) = (1440.0, 900.0);
 /// The second width of the resize cases; the height stays.
 const RESIZED_WIDTH: f32 = 1280.0;
@@ -346,28 +344,23 @@ fn measure(
     harness: &mut Harness,
     mut frame: impl FnMut(&mut Harness, usize) -> Result<(), Box<dyn std::error::Error>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // `COMPARE_SAMPLES` measures more frames, to profile the steady state.
-    let samples = std::env::var("COMPARE_SAMPLES")
-        .ok()
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(SAMPLES);
+    let samples = gpu_time::sample_count();
+    let warmup = gpu_time::WARMUP_FRAMES;
     // `COMPARE_GPU_REDRAWS` redraws each frame outside its timing (see `gpu_time`).
     let redraws = gpu_time::redraws();
     gpu_time::install();
     gpu_time::take();
-    // One window: its frames are tagged 0, 1, ... and the GPU sample is chosen from
-    // them as GPUI's is from each of its windows.
-    for turn in 0..WARMUP {
-        gpu_time::set_frame(gpu_time::tag(0, turn));
+    for turn in 0..warmup {
+        gpu_time::set_frame(turn);
         frame(harness, turn)?;
         if redraws > 0 {
-            harness.redraw(gpu_time::tag(0, turn), redraws)?;
+            harness.redraw(turn, redraws)?;
         }
     }
     let (mut ms, mut instructions, mut allocations) = (Vec::new(), Vec::new(), Vec::new());
     let (mut draw_calls, mut instances) = (Vec::new(), Vec::new());
-    for turn in WARMUP..WARMUP + samples {
-        gpu_time::set_frame(gpu_time::tag(0, turn));
+    for turn in warmup..warmup + samples {
+        gpu_time::set_frame(turn);
         let (i0, a0) = (rusage()[31], ALLOCATIONS.load(Ordering::Relaxed));
         let t0 = Instant::now();
         frame(harness, turn)?;
@@ -378,17 +371,18 @@ fn measure(
         draw_calls.push(f64::from(stats.draw_calls));
         instances.push(f64::from(stats.instances));
         if redraws > 0 {
-            harness.redraw(gpu_time::tag(0, turn), redraws)?;
+            harness.redraw(turn, redraws)?;
         }
     }
+    gpu_time::set_frame(gpu_time::OUTSIDE_SAMPLE);
     let footprint = footprint_mb();
     std::thread::sleep(GPU_SETTLE);
     let tagged = gpu_time::take_tagged();
-    let (mut gpu_ms, gpu_windows) = gpu_time::steady_samples(&tagged, WARMUP, samples)
+    let mut gpu_ms = gpu_time::steady_samples(&tagged, warmup, samples)
         .map_err(|err| format!("{case}: {err}"))?;
     let gpu_frames = gpu_ms.len();
     let saturated = if redraws > 0 {
-        let mut saturated = gpu_time::steady_redraws(&tagged, WARMUP, samples)
+        let mut saturated = gpu_time::steady_redraws(&tagged, warmup, samples, redraws)
             .map_err(|err| format!("{case}: {err}"))?;
         format!(
             " gpu_saturated_ms_p50={:.3}",
@@ -398,7 +392,7 @@ fn measure(
         String::new()
     };
     println!(
-        "rui {case} instructions_m={:.2} ms_p50={:.3} ms_p95={:.3} allocations={:.0} footprint_mb={footprint:.1} draw_calls={:.0} instances={:.0} gpu_ms_p50={:.3} gpu_ms_p95={:.3} gpu_windows={gpu_windows} gpu_frames={gpu_frames}{saturated}",
+        "rui {case} instructions_m={:.2} ms_p50={:.3} ms_p95={:.3} allocations={:.0} footprint_mb={footprint:.1} draw_calls={:.0} instances={:.0} gpu_ms_p50={:.3} gpu_ms_p95={:.3} gpu_windows=1 gpu_frames={gpu_frames}{saturated}",
         percentile(&mut instructions, 0.5),
         percentile(&mut ms, 0.5),
         percentile(&mut ms, 0.95),

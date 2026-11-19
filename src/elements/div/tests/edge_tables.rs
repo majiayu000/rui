@@ -166,7 +166,7 @@ fn test_div_shadow_presets() {
         let shadow = d
             .style
             .shadow
-            .expect(&format!("shadow should be set for {}", tc.name));
+            .unwrap_or_else(|| panic!("shadow should be set for {}", tc.name));
         assert_eq!(shadow.offset_x, 0.0, "offset_x for {}", tc.name);
         assert_eq!(shadow.offset_y, tc.offset_y, "offset_y for {}", tc.name);
         assert_eq!(

@@ -192,7 +192,7 @@ fn accessibility_tabs_expose_tab_list_tabs_and_selected_panel() {
         AccessibilityRole::Tab
     );
     assert_eq!(tab_list.a11y_children()[1].a11y_selected(), Some(true));
-    assert_eq!(tab_list.a11y_children()[2].a11y_enabled(), false);
+    assert!(!tab_list.a11y_children()[2].a11y_enabled());
     assert!(tab_list.a11y_children()[2].a11y_actions().is_empty());
 
     let panel = tree

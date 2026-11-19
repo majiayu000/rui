@@ -124,7 +124,7 @@ trait DivExt {
 }
 
 impl DivExt for Div {
-    fn mt(mut self, margin: f32) -> Self {
+    fn mt(self, margin: f32) -> Self {
         // Note: In a full implementation, we'd have margin-top style
         self.my(margin / 2.0)
     }

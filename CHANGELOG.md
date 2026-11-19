@@ -76,6 +76,10 @@ All notable project changes should be recorded here.
 
 ### Performance
 
+- The `image` dependency leaves out its `avif` feature, which only adds an AVIF
+  encoder (`ravif`/`rav1e`) RUI never calls; every format RUI could decode
+  before still decodes. A release build of the library compiles 27 fewer
+  crates.
 - System fonts are now parsed once per process and text measurement metrics
   survive across frames, instead of both being rebuilt every frame.
 - A background an ancestor paints again because something inside it changed no
@@ -84,6 +88,10 @@ All notable project changes should be recorded here.
   redraws 13% of a 320x600 window at 2x instead of all of it (#343).
 
 ### Runtime
+
+- **Breaking:** `App::new()` leaves process-wide logger registration to the
+  application. To use `RUST_LOG` with `env_logger`, add it to the binary's
+  dependencies and call `env_logger::init()` in `main`.
 
 - The library builds again with `--no-default-features` (no Metal, no wgpu),
   so the update-path tests `docs/getting-started.md` gives run again; since

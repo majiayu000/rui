@@ -10,6 +10,7 @@ const NATIVE_DOGFOOD_INPUT_ID: ElementId = ElementId(29_001);
 const DEFAULT_DOGFOOD_TEXT: &str = "rui-native-dogfood";
 
 fn main() {
+    env_logger::init();
     let config = NativeDogfoodConfig::load_from_environment();
     let options = WindowOptions::default()
         .title("RUI Native Dogfood")

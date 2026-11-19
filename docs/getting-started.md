@@ -151,3 +151,9 @@ frame's accessibility tree, and cover updates to another entity. The workflow
 test types text, submits it into an entity, clears the draft, and checks that a
 later edit leaves the saved value intact. They do not prove first-time developer
 usability, native IME behavior, or what the Metal-rendered window looks like.
+
+## Logging
+
+Your application chooses how to handle RUI's `log` output. To enable
+`RUST_LOG` with `env_logger`, add the dependency to your application and call
+`env_logger::init()` in `main`.

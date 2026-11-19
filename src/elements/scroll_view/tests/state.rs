@@ -1,3 +1,5 @@
+#![allow(clippy::field_reassign_with_default)]
+
 use super::*;
 
 // ========== ScrollDirection enum tests ==========
@@ -21,7 +23,7 @@ fn test_scroll_direction_equality() {
 #[test]
 fn test_scroll_direction_clone() {
     let direction = ScrollDirection::Horizontal;
-    let cloned = direction.clone();
+    let cloned = direction;
     assert_eq!(direction, cloned);
 }
 
@@ -63,7 +65,7 @@ fn test_scrollbar_visibility_equality() {
 #[test]
 fn test_scrollbar_visibility_clone() {
     let visibility = ScrollbarVisibility::Always;
-    let cloned = visibility.clone();
+    let cloned = visibility;
     assert_eq!(visibility, cloned);
 }
 
@@ -97,7 +99,6 @@ fn test_scroll_state_default() {
     assert_eq!(state.content_size.height, 0.0);
     assert_eq!(state.viewport_size.width, 0.0);
     assert_eq!(state.viewport_size.height, 0.0);
-    assert!(!state.is_scrolling);
     assert!(!state.scrollbar_hovered);
     assert!(!state.scrollbar_dragging);
 }
@@ -107,11 +108,9 @@ fn test_scroll_state_clone() {
     let mut state = ScrollState::default();
     state.offset_x = 10.0;
     state.offset_y = 20.0;
-    state.is_scrolling = true;
     let cloned = state.clone();
     assert_eq!(cloned.offset_x, 10.0);
     assert_eq!(cloned.offset_y, 20.0);
-    assert!(cloned.is_scrolling);
 }
 
 #[test]

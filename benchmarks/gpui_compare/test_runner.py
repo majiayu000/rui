@@ -19,6 +19,8 @@ with tempfile.TemporaryDirectory(prefix="rui-gpu-runner-") as temporary:
     platform = zed / "crates/gpui_platform"
     (platform / "benches").mkdir(parents=True)
     (platform / "Cargo.toml").write_text('name = "rui_compare"\nimage.workspace = true\n')
+    (root / "Cargo.lock").write_text("RUI locked dependencies\n")
+    (zed / "Cargo.lock").write_text("Zed locked dependencies\n")
     commands = root / "fake-tools"
     commands.mkdir()
 
@@ -70,7 +72,7 @@ echo '  wall time per iteration: median 2 ms' >&2
         return result, created.pop()
 
     for mode in ("absolute", "relative"):
-        result, artifact = run(PATH_MODE=mode)
+        result, artifact = run(PATH_MODE=mode, COMPARE_SAMPLES="40")
         assert result.returncode == 0, result.stderr
         assert "same frames on both sides" in result.stdout
         assert "verdict by GPU p50" in result.stdout
@@ -78,10 +80,14 @@ echo '  wall time per iteration: median 2 ms' >&2
         metadata = (artifact / "metadata.txt").read_text()
         assert "rui_revision=784374c" in metadata and "zed_revision=784374c" in metadata
         assert "repeats=2" in metadata and "cases=list_virtual_1k" in metadata
+        assert "gpu_sampling=fixed-single-window" in metadata and "gpu_samples_requested=40" in metadata
+        assert "rui_toolchain:\nrustc fixture" in metadata and "zed_toolchain:\nrustc fixture" in metadata
         assert " M tracked-source.rs" in metadata and "ProductVersion: fixture" in metadata
         reported = next(line.split("=", 1)[1] for line in metadata.splitlines() if line.startswith("gpui_executable="))
         assert Path(reported).resolve() == (zed / "gpui-bench").resolve()
         assert (artifact / "rui-source.patch").read_text() == "fixture source diff\n"
+        assert (artifact / "rui-Cargo.lock").read_text() == "RUI locked dependencies\n"
+        assert (artifact / "zed-Cargo.lock").read_text() == "Zed locked dependencies\n"
         for name in ("fixtures.rs", "gpu_time.rs", "counting_renderer.rs", "fonts.rs", "terminal.rs"):
             assert (artifact / name).read_text() == "// fixture source\n", f"{name} not archived"
         order = (artifact / "order.txt").read_text().splitlines()

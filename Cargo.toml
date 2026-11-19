@@ -18,14 +18,16 @@ metal = ["dep:metal", "dep:objc2", "dep:objc2-foundation", "dep:objc2-app-kit", 
 wgpu = ["dep:wgpu", "dep:pollster"]
 # Window and input through winit, drawn by the wgpu backend: the runner for
 # Linux and Windows. On macOS it runs when `metal` is off. arboard is its
-# system clipboard, and AccessKit publishes each window's accessibility tree
-# (UI Automation on Windows, AT-SPI on Linux, NSAccessibility on macOS).
+# system clipboard, AccessKit publishes each window's accessibility tree
+# (UI Automation on Windows, AT-SPI on Linux, NSAccessibility on macOS),
+# and rfd provides file dialogs.
 winit = [
     "wgpu",
     "dep:winit",
     "dep:arboard",
     "dep:accesskit",
     "dep:accesskit_winit",
+    "dep:rfd",
     "dep:x11-dl",
     "dep:windows-sys",
 ]
@@ -70,14 +72,18 @@ winit = { version = "0.30", optional = true }
 arboard = { version = "3.7", default-features = false, features = ["wayland-data-control"], optional = true }
 accesskit = { version = "0.25", optional = true }
 accesskit_winit = { version = "0.34", optional = true }
+rfd = { version = "0.17.2", optional = true }
 
 # Utilities
 smallvec = "1.13"
 slotmap = "1.0"
 parking_lot = "0.12"
 log = "0.4"
-env_logger = "0.11"
-image = "0.25"
+# Every default format except `avif`, which only adds an AVIF encoder (rav1e)
+# that RUI never uses; RUI only decodes images.
+image = { version = "0.25", default-features = false, features = [
+    "rayon", "bmp", "dds", "exr", "ff", "gif", "hdr", "ico", "jpeg", "png", "pnm", "qoi", "tga", "tiff", "webp",
+] }
 rusttype = "0.9"
 unicode-segmentation = "1.12"
 unicode-bidi = "0.3.18"
@@ -103,6 +109,7 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphic
 metal = "0.31"
 
 [dev-dependencies]
+env_logger = "0.11"
 pollster = "0.4"
 tokio = { version = "1", features = ["full"] }
 reqwest = { version = "0.12", features = ["json"] }

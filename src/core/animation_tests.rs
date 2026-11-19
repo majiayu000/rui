@@ -263,7 +263,7 @@ fn test_easing_bounce() {
     for t in test_points {
         let result = Easing::EaseOutBounce.apply(t);
         assert!(
-            result >= 0.0 && result <= 1.1,
+            (0.0..=1.1).contains(&result),
             "EaseOutBounce({}) = {} should be in [0, 1.1]",
             t,
             result
@@ -351,7 +351,7 @@ fn test_easing_default() {
 #[test]
 fn test_easing_clone_and_copy() {
     let easing = Easing::EaseInOut;
-    let cloned = easing.clone();
+    let cloned = easing;
     let copied = easing;
 
     assert_eq!(easing, cloned);

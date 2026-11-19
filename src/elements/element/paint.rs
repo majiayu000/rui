@@ -11,6 +11,8 @@ pub struct PaintContext<'a> {
     pub(crate) taffy: &'a TaffyTree<ElementId>,
     /// Replay unchanged subtrees from the previous frame and record this one.
     pub(super) memo: bool,
+    /// This pass needs hit regions and overlay order. Pure drawing may be skipped.
+    pub(crate) hit_collection: bool,
     /// Unrounded layout of the element being painted, with its origin summed
     /// from the root as taffy sums it when rounding. `None` when the bounds did
     /// not come from [`Self::child_bounds`].
@@ -46,6 +48,7 @@ impl<'a> PaintContext<'a> {
             bounds,
             taffy,
             memo: true,
+            hit_collection: false,
             unrounded: None,
             last_child: Cell::new(None),
             viewport: None,
@@ -87,12 +90,20 @@ impl<'a> PaintContext<'a> {
         }
     }
 
-    /// Leave out subtrees that nothing in `viewport` can show, as a frame's
-    /// paint does. Without replay, only the hit pass before input sets it:
-    /// what is left out registers no hit region (#246).
-    pub(crate) fn with_viewport(mut self, viewport: Bounds) -> Self {
-        self.viewport = Some(viewport);
-        self
+    /// Collect hit regions for the current layout without replaying the render scene.
+    /// Like frame paint, it leaves out unseen subtrees that register no hits.
+    pub(crate) fn for_hit_collection(
+        scene: &'a mut Scene,
+        bounds: Bounds,
+        taffy: &'a TaffyTree<ElementId>,
+        window: Bounds,
+    ) -> Self {
+        Self {
+            hit_collection: true,
+            viewport: Some(window),
+            window,
+            ..Self::without_replay(scene, bounds, taffy)
+        }
     }
 
     pub fn with_focus(mut self, focused: Option<ElementId>) -> Self {
@@ -171,6 +182,7 @@ impl<'a> PaintContext<'a> {
             bounds,
             taffy: self.taffy,
             memo: self.memo,
+            hit_collection: self.hit_collection,
             unrounded,
             last_child: Cell::new(None),
             viewport: self.viewport,
@@ -201,6 +213,7 @@ impl<'a> PaintContext<'a> {
             bounds,
             taffy: self.taffy,
             memo: false,
+            hit_collection: self.hit_collection,
             unrounded: None,
             last_child: Cell::new(None),
             viewport: None,

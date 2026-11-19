@@ -105,7 +105,7 @@ impl Spinner {
     pub fn spinner_type(mut self, spinner_type: SpinnerType) -> Self {
         self.spinner_type = spinner_type;
         // Reset frame when changing type to avoid out-of-bounds
-        self.frame = self.frame % spinner_type.frame_count();
+        self.frame %= spinner_type.frame_count();
         self
     }
 
@@ -599,7 +599,7 @@ mod tests {
     #[test]
     fn test_spinner_type_clone() {
         let st = SpinnerType::Circle;
-        let st_clone = st.clone();
+        let st_clone = st;
         assert_eq!(st, st_clone);
     }
 

@@ -471,7 +471,7 @@ fn test_keycode_inequality_page_up_vs_page_down() {
 #[test]
 fn test_key_clone_page_up() {
     let key1 = Key::from_key_code_with_modifiers(KeyCode::PageUp, Modifiers::ctrl());
-    let key2 = key1.clone();
+    let key2 = key1;
 
     assert_eq!(key1, key2);
     assert!(key2.page_up);
@@ -481,7 +481,7 @@ fn test_key_clone_page_up() {
 #[test]
 fn test_key_clone_page_down() {
     let key1 = Key::from_key_code_with_modifiers(KeyCode::PageDown, Modifiers::shift());
-    let key2 = key1.clone();
+    let key2 = key1;
 
     assert_eq!(key1, key2);
     assert!(key2.page_down);
@@ -509,7 +509,7 @@ fn test_key_copy_page_down() {
 #[test]
 fn test_keycode_clone_page_up() {
     let code1 = KeyCode::PageUp;
-    let code2 = code1.clone();
+    let code2 = code1;
 
     assert_eq!(code1, code2);
 }
@@ -517,7 +517,7 @@ fn test_keycode_clone_page_up() {
 #[test]
 fn test_keycode_clone_page_down() {
     let code1 = KeyCode::PageDown;
-    let code2 = code1.clone();
+    let code2 = code1;
 
     assert_eq!(code1, code2);
 }

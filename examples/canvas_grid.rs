@@ -4,7 +4,13 @@
 //! grid costs 12,000 quads and 12,000 glyphs and shapes nothing. The cell width
 //! is the advance of `0`; wide characters are centred on two cells, so they do
 //! not push later columns off the grid. Click a cell to change its character.
+//! Above it, a small terminal fixture draws grapheme clusters in explicit
+//! cell spans and connects box-drawing cells with geometry.
 
+#[path = "canvas_grid/fixed_cells.rs"]
+mod fixed_cells;
+
+use fixed_cells::{CELL_HEIGHT, FAMILY, FIXTURE_HEIGHT, FONT_SIZE};
 use rui::elements::element::PointerEventKind;
 use rui::prelude::*;
 use rui::renderer::text::{FontGlyph, GlyphResolver};
@@ -13,14 +19,6 @@ use std::rc::Rc;
 
 const COLUMNS: usize = 200;
 const ROWS: usize = 60;
-const FONT_SIZE: f32 = 13.0;
-const CELL_HEIGHT: f32 = 16.0;
-#[cfg(target_os = "macos")]
-const FAMILY: Option<&str> = Some("SF Mono");
-#[cfg(target_os = "windows")]
-const FAMILY: Option<&str> = Some("Consolas");
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
-const FAMILY: Option<&str> = None;
 
 fn cell_color(row: usize, column: usize) -> Color {
     let hue = column as f32 / COLUMNS as f32 * 360.0;
@@ -56,17 +54,12 @@ impl Grid {
             .collect();
         Self { resolver, cells }
     }
-
-    fn cell_width(&mut self) -> f32 {
-        self.resolver
-            .resolve('0')
-            .map_or(8.0, |zero| zero.advance(FONT_SIZE))
-    }
 }
 
 struct GridView {
     grid: Rc<RefCell<Grid>>,
     cell_width: f32,
+    sentinel: Option<FontGlyph>,
     /// Baseline from a cell's top: the line centred in the cell, as a text
     /// line is centred in its box.
     baseline: f32,
@@ -78,12 +71,14 @@ impl View for GridView {
     fn render(&mut self, cx: &mut ViewContext<Self>) -> Self::Element {
         let (painted, clicked) = (Rc::clone(&self.grid), Rc::clone(&self.grid));
         let (cell_width, baseline) = (self.cell_width, self.baseline);
+        let sentinel = self.sentinel;
         let notifier = cx.notifier();
         div().bg(Color::hex(0x101014)).p(16.0).child(
             canvas(move |bounds, painter| {
+                fixed_cells::paint(bounds, painter, cell_width, baseline, sentinel);
                 let grid = painted.borrow();
                 for row in 0..ROWS {
-                    let y = bounds.y() + row as f32 * CELL_HEIGHT;
+                    let y = bounds.y() + FIXTURE_HEIGHT + row as f32 * CELL_HEIGHT;
                     for column in 0..COLUMNS {
                         let x = bounds.x() + column as f32 * cell_width;
                         let cell = Bounds::from_xywh(x, y, cell_width, CELL_HEIGHT);
@@ -104,12 +99,12 @@ impl View for GridView {
                 }
             })
             .w(COLUMNS as f32 * cell_width)
-            .h(ROWS as f32 * CELL_HEIGHT)
+            .h(FIXTURE_HEIGHT + ROWS as f32 * CELL_HEIGHT)
             .on_pointer(move |event| {
-                if event.kind != PointerEventKind::Up {
+                if event.kind != PointerEventKind::Up || event.position.y < FIXTURE_HEIGHT {
                     return;
                 }
-                let row = (event.position.y / CELL_HEIGHT) as usize;
+                let row = ((event.position.y - FIXTURE_HEIGHT) / CELL_HEIGHT) as usize;
                 let column = (event.position.x / cell_width) as usize;
                 if row < ROWS && column < COLUMNS {
                     let mut grid = clicked.borrow_mut();
@@ -124,21 +119,19 @@ impl View for GridView {
 
 fn main() {
     let mut grid = Grid::new();
-    let cell_width = grid.cell_width();
-    let (ascent, descent) = grid
-        .resolver
-        .ascent_descent(FONT_SIZE)
-        .unwrap_or((FONT_SIZE * 0.8, -FONT_SIZE * 0.2));
+    let (cell_width, baseline) = fixed_cells::cell_metrics(&mut grid.resolver);
+    let sentinel = grid.resolver.resolve('e');
     let options = WindowOptions::default().title("RUI Canvas Grid").size(
         COLUMNS as f32 * cell_width + 32.0,
-        ROWS as f32 * CELL_HEIGHT + 32.0,
+        FIXTURE_HEIGHT + ROWS as f32 * CELL_HEIGHT + 32.0,
     );
     App::new().run_view_with_options(
         options,
         GridView {
             grid: Rc::new(RefCell::new(grid)),
             cell_width,
-            baseline: (CELL_HEIGHT - (ascent - descent)) * 0.5 + ascent,
+            baseline,
+            sentinel,
         },
     );
 }

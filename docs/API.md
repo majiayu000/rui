@@ -174,7 +174,11 @@ div()
 
 `cx.prompt_for_paths(options)` and `cx.prompt_for_new_path(directory)` ask the
 user for paths and return a `Task` that finishes with them, or `None` when the
-user cancels. On macOS they show `NSOpenPanel` / `NSSavePanel`.
+user cancels. The AppKit runner shows `NSOpenPanel` / `NSSavePanel`. The
+winit runner uses the system file chooser (the desktop portal or Zenity on
+Linux). Request either files or directories with winit. Requesting both at
+once completes with `PromptDismissed`; an unavailable or cancelled system
+dialog returns `None`.
 
 ```rust
 use rui::core::prompt::PathPromptOptions;

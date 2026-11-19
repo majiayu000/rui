@@ -43,7 +43,7 @@ pub(super) fn read_texture_rgba(texture: &TextureRef, width: u64, height: u64) -
         0,
     );
 
-    for pixel in pixels.chunks_exact_mut(4) {
+    for pixel in pixels.as_chunks_mut::<4>().0 {
         pixel.swap(0, 2);
     }
     pixels
