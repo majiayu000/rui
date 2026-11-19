@@ -121,7 +121,12 @@ fn metal_frame_capture_renders_representative_scene_pixels() {
     assert_eq!(frame.pixels.len(), 96 * 64 * 4);
     let first = &frame.pixels[0..4];
     assert!(
-        frame.pixels.chunks_exact(4).any(|pixel| pixel != first),
+        frame
+            .pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .any(|pixel| pixel != first),
         "captured frame should contain rendered content beyond clear color"
     );
 }

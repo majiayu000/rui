@@ -4,6 +4,8 @@ All notable project changes should be recorded here.
 
 ## Unreleased
 
+## 0.3.0-rc.1
+
 ### Rendering
 
 - Text can be shaped with OpenType feature settings:
@@ -76,6 +78,10 @@ All notable project changes should be recorded here.
 
 ### Performance
 
+- The `image` dependency leaves out its `avif` feature, which only adds an AVIF
+  encoder (`ravif`/`rav1e`) RUI never calls; every format RUI could decode
+  before still decodes. A release build of the library compiles 27 fewer
+  crates.
 - System fonts are now parsed once per process and text measurement metrics
   survive across frames, instead of both being rebuilt every frame.
 - A background an ancestor paints again because something inside it changed no
@@ -85,6 +91,14 @@ All notable project changes should be recorded here.
 
 ### Runtime
 
+- **Breaking:** `App::new()` leaves process-wide logger registration to the
+  application. To use `RUST_LOG` with `env_logger`, add it to the binary's
+  dependencies and call `env_logger::init()` in `main`.
+
+- The library builds again with `--no-default-features` (no Metal, no wgpu),
+  so the update-path tests `docs/getting-started.md` gives run again; since
+  `Primitive::Picture` the `picture` module was left out of that build while
+  the plan and primitives still used it. CI now runs that command.
 - An entity one view's listener updates shows in the other views that read it
   on the next frame, parent to child and child to parent, instead of one frame
   later; child views' queued listener updates run before the frame works out
@@ -113,6 +127,12 @@ All notable project changes should be recorded here.
   `AccessibilityAction::SetValue`, also on macOS.
   **Breaking:** `AccessibilityRequest` (and `MacAccessibilityRequest`) has the
   new variants `SetTextSelection` and `ReplaceSelectedText` (#344).
+- CI reads the winit runner's accessibility tree back over AT-SPI under
+  Wayland (a headless sway) as well as X11, with the same checks
+  (`scripts/wayland_atspi_tree.sh`). AT-SPI goes over D-Bus, so the tree,
+  focus and actions work the same; positions are reported relative to the
+  window, since a Wayland client cannot learn where its window is on screen
+  (#344).
 - The winit runner (Linux and Windows) copies, cuts and pastes through the
   system clipboard via arboard, X11 or Wayland on Linux, instead of an
   in-memory clipboard only the app could see. Without a system clipboard it

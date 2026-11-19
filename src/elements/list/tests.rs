@@ -327,7 +327,7 @@ fn test_list_style_default() {
 #[test]
 fn test_list_style_clone() {
     let style = ListStyle::Numbered;
-    let cloned = style.clone();
+    let cloned = style;
     assert_eq!(style, cloned);
 }
 

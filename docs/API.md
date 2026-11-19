@@ -152,11 +152,33 @@ changed. On macOS the first menu is the application menu. A right press runs
 choose items with `choose_menu_item(&menu, label)` and read requested context
 menus with `take_context_menu()`.
 
+The winit runner has no system menu bar. Put an `advanced_ui::menu` inside
+the view and call the same command from its selection handler and the
+shortcut bound in your keymap.
+
+```rust,ignore
+use rui::advanced_ui::menu;
+
+div()
+    .on_action(ActionId::custom("file.open"), cx.listener(|view, _| view.open()))
+    .child(menu("File", [("open", "Open…")]).on_select(cx.text_listener(
+        |view, item, _| {
+            if item == "open" {
+                view.open();
+            }
+        },
+    )))
+```
+
 #### File Dialogs
 
 `cx.prompt_for_paths(options)` and `cx.prompt_for_new_path(directory)` ask the
 user for paths and return a `Task` that finishes with them, or `None` when the
-user cancels. On macOS they show `NSOpenPanel` / `NSSavePanel`.
+user cancels. The AppKit runner shows `NSOpenPanel` / `NSSavePanel`. The
+winit runner uses the system file chooser (the desktop portal or Zenity on
+Linux). Request either files or directories with winit. Requesting both at
+once completes with `PromptDismissed`; an unavailable or cancelled system
+dialog returns `None`.
 
 ```rust
 use rui::core::prompt::PathPromptOptions;

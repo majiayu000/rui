@@ -1,6 +1,6 @@
 [package]
 name = "rui"
-version = "0.2.5"
+version = "0.3.0-rc.1"
 edition = "2024"
 rust-version = "1.88"
 description = "A Rust UI framework for native macOS apps with Metal rendering and declarative components"
@@ -18,9 +18,19 @@ metal = ["dep:metal", "dep:objc2", "dep:objc2-foundation", "dep:objc2-app-kit", 
 wgpu = ["dep:wgpu", "dep:pollster"]
 # Window and input through winit, drawn by the wgpu backend: the runner for
 # Linux and Windows. On macOS it runs when `metal` is off. arboard is its
-# system clipboard, and AccessKit publishes each window's accessibility tree
-# (UI Automation on Windows, AT-SPI on Linux, NSAccessibility on macOS).
-winit = ["wgpu", "dep:winit", "dep:arboard", "dep:accesskit", "dep:accesskit_winit"]
+# system clipboard, AccessKit publishes each window's accessibility tree
+# (UI Automation on Windows, AT-SPI on Linux, NSAccessibility on macOS),
+# and rfd provides file dialogs.
+winit = [
+    "wgpu",
+    "dep:winit",
+    "dep:arboard",
+    "dep:accesskit",
+    "dep:accesskit_winit",
+    "dep:rfd",
+    "dep:x11-dl",
+    "dep:windows-sys",
+]
 # The `markdown` element, parsed by pulldown-cmark.
 markdown = ["dep:pulldown-cmark"]
 
@@ -62,14 +72,18 @@ winit = { version = "0.30", optional = true }
 arboard = { version = "3.7", default-features = false, features = ["wayland-data-control"], optional = true }
 accesskit = { version = "0.25", optional = true }
 accesskit_winit = { version = "0.34", optional = true }
+rfd = { version = "0.17.2", optional = true }
 
 # Utilities
 smallvec = "1.13"
 slotmap = "1.0"
 parking_lot = "0.12"
 log = "0.4"
-env_logger = "0.11"
-image = "0.25"
+# Every default format except `avif`, which only adds an AVIF encoder (rav1e)
+# that RUI never uses; RUI only decodes images.
+image = { version = "0.25", default-features = false, features = [
+    "rayon", "bmp", "dds", "exr", "ff", "gif", "hdr", "ico", "jpeg", "png", "pnm", "qoi", "tga", "tiff", "webp",
+] }
 rusttype = "0.9"
 unicode-segmentation = "1.12"
 unicode-bidi = "0.3.18"
@@ -84,10 +98,18 @@ pulldown-cmark = { version = "0.13", default-features = false, optional = true }
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+# winit 0.30 file-drop events include paths but omit the drop position.
+[target.'cfg(target_os = "linux")'.dependencies]
+x11-dl = { version = "2.21", optional = true }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging"], optional = true }
+
 [target.'cfg(target_os = "macos")'.build-dependencies]
 metal = "0.31"
 
 [dev-dependencies]
+env_logger = "0.11"
 pollster = "0.4"
 tokio = { version = "1", features = ["full"] }
 reqwest = { version = "0.12", features = ["json"] }

@@ -22,7 +22,7 @@ RUI helps you build native macOS interfaces in Rust with declarative components,
 RUI is an early-stage, pre-1.0 framework. APIs, component behavior, and renderer internals may change before the first stable release.
 
 - macOS is the supported runtime platform today, using the Metal renderer.
-- Linux and Windows have an experimental runner (feature `winit`: a winit window drawn by the wgpu backend). It opens the main window and every window app code opens with `AppContext::open_window`, each with pointer, keyboard, scroll, resize and DPI input, copy and paste go through the system clipboard, and each window publishes its accessibility tree through AccessKit (UI Automation on Windows, AT-SPI on Linux) and takes screen reader actions back; IME composition, menus and file drops are macOS-only so far. Web is a roadmap item.
+- Linux and Windows have an experimental winit runner with the wgpu backend. The main window and every window opened through `AppContext::open_window` support pointer, keyboard, scroll, resize and DPI input. Copy and paste use the system clipboard, and IME composition goes to the focused text field. Each window publishes its accessibility tree and accepts screen reader actions through AccessKit (UI Automation on Windows, AT-SPI on Linux). File drops arrive on X11 and Windows. [In-window menus](docs/API.md#menus) serve app commands. The system menu bar uses AppKit. Web is a roadmap item.
 - Accessibility semantics and advanced component interactions are still active development areas.
 - Visual behavior should be verified on a local macOS desktop session; CI covers compile and automated tests, but not full end-to-end visual QA.
 - The recommended install path is the Git dependency shown below until crates.io package ownership or naming is resolved.
@@ -42,10 +42,10 @@ Add this repository as a Git dependency in `Cargo.toml`:
 
 ```toml
 [dependencies]
-rui = { git = "https://github.com/majiayu000/rui", rev = "1311a1d6b98a601de603d215ebc1d21f408fd7a3" }
+rui = { git = "https://github.com/majiayu000/rui", rev = "8161ebcf0f0bf7d8fff38435ad12430c4eefbe17" }
 ```
 
-This pins the source baseline checked by both installation guides, including the listener and native input changes; it is not a new release. This is `majiayu000/rui`. The [separate `audulus/rui` project](https://github.com/audulus/rui) also uses the name `rui`; installing `rui` from crates.io does not select this repository. Use the Git URL above for the API shown here.
+Both installation guides pin the same Git revision. The [`rui` package on crates.io](https://crates.io/crates/rui) belongs to [`audulus/rui`](https://github.com/audulus/rui). Use the Git dependency above for this project.
 
 Replace `src/main.rs` with:
 
@@ -92,7 +92,7 @@ Continue with the [examples guide](docs/EXAMPLES.md) for component demos and the
 ### First-run questions
 
 - **`no example target named hello_world`?** Run the example command inside the cloned RUI repository. In your own project, use `cargo run` for `src/main.rs`.
-- **Can this run on Linux, Windows, or in a headless job?** Experimentally: `cargo run --example hello_world --no-default-features --features winit` uses the winit runner and the wgpu backend (Vulkan or DX12). The same command on macOS runs it on Metal through winit, for testing the runner. CI opens `hello_world` and `counter` this way on Linux under Xvfb and lavapipe, clicks, presses keys and resizes them with xdotool, and compares screenshots of the windows with `tests/linux_window/` (`scripts/linux_window_pixels.sh`; `RUI_PIXELS_UPDATE=1` rewrites the references). It also reads `interaction_acceptance`'s accessibility tree back over AT-SPI on Linux (`scripts/linux_atspi_tree.sh`) and through UI Automation on Windows (`scripts/windows_uia_tree.ps1`), focusing a field, setting its text and pressing buttons the way a screen reader does. On X11, winit loads `libxkbcommon-x11` and the Xcursor, Xrandr and Xi libraries at runtime.
+- **Can this run on Linux, Windows, or in a headless job?** Experimentally: `cargo run --example hello_world --no-default-features --features winit` uses the winit runner and the wgpu backend (Vulkan or DX12). The same command on macOS runs it on Metal through winit, for testing the runner. CI opens `hello_world` and `counter` this way on Linux under Xvfb and lavapipe, clicks, presses keys and resizes them with xdotool, and compares screenshots of the windows with `tests/linux_window/` (`scripts/linux_window_pixels.sh`; `RUI_PIXELS_UPDATE=1` rewrites the references). It also reads `interaction_acceptance`'s accessibility tree back over AT-SPI on Linux under X11 and Wayland (`scripts/linux_atspi_tree.sh`, `scripts/wayland_atspi_tree.sh`) and through UI Automation on Windows (`scripts/windows_uia_tree.ps1`), focusing a field, setting its text and pressing buttons the way a screen reader does. On X11, winit loads `libxkbcommon-x11` and the Xcursor, Xrandr and Xi libraries at runtime.
 - **Does a successful compile prove the UI works?** It checks types and dependencies. Inspect the actual window and interactions separately; [status and limitations](#status-and-limitations) explains the current scope.
 
 ## Examples
@@ -304,11 +304,8 @@ Color::hsla(180.0, 0.5, 0.5, 0.8)
 
 ## Release Status
 
-- The manifest still says `0.2.5`; that number alone does not identify the current source snapshot.
-- The `v0.2.5` tag predates the native IME and font-cache changes listed under Unreleased. Use the pinned Git revision above for those APIs, not the old tag.
-- Local changes on top of that revision are review candidates until committed and published; this README does not announce a new release.
-- The crates.io package named `rui` belongs to the separate `audulus/rui` project. Install this project from its Git URL and pin the intended commit.
-- Release history and unreleased launch-readiness changes are tracked in [CHANGELOG.md](CHANGELOG.md).
+- The latest published version is listed in [GitHub Releases](https://github.com/majiayu000/rui/releases).
+- The quick start pins a newer source revision that includes the listener, native input and font changes. See [CHANGELOG.md](CHANGELOG.md) for the status of those changes.
 
 ## Running Examples
 

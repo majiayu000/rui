@@ -9,15 +9,15 @@
 # Each case runs in its own process on each side, alternating order by round, REPEATS times
 # (default 3); the table shows the range over the repeats. CASES picks cases.
 # Raw output and metadata are kept in target/gpui_compare/run.XXXXXXXX/.
-# GPU_REDRAWS=N draws every frame's scene N more times right after it on both sides and
-# adds their mean GPU time, with the GPU kept busy; GPUI's CPU columns then include them.
+# GPU_REDRAWS=N draws each scene N more times in the GPU sample on both sides,
+# adding their mean GPU time with the GPU kept busy.
 set -euo pipefail
 
 ZED_REV="${ZED_REV:-784374c6794ace885137bc4806427a5f47cc3f06}"
 REPEATS="${REPEATS:-3}"
 GPU_REDRAWS="${GPU_REDRAWS:-0}"
 export COMPARE_GPU_REDRAWS="$GPU_REDRAWS"
-CASES="${CASES:-startup list_full list_full_one_row list_virtual_1k list_virtual_100k text_paragraphs quad_grid resize_full resize_virtual editor_scroll editor_edit terminal_rows}"
+CASES="${CASES:-startup list_full list_full_one_row list_virtual_1k list_virtual_100k text_paragraphs quad_grid resize_full resize_virtual editor_scroll editor_edit terminal_rows workbench_pane workbench_full}"
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 ZED_DIR="${1:-$ROOT/target/gpui_compare/zed}"
 OUT="$ROOT/target/gpui_compare"
@@ -37,7 +37,7 @@ echo "== artifacts: $RUN_DIR" >&2
 cp "$ROOT/benchmarks/gpui_compare/fixtures.rs" "$ZED_DIR/crates/gpui_platform/benches/rui_compare.rs"
 # The bench's own modules: `gpu_time` (both sides read GPU time through the same hook),
 # `counting_renderer` (counts draws and tags frames), `fonts` and the `terminal_rows` fixture.
-modules="gpu_time counting_renderer fonts terminal"
+modules="gpu_time counting_renderer fonts terminal workbench workbench_data"
 for module in $modules; do
   cp "$ROOT/benchmarks/gpui_compare/$module.rs" "$ZED_DIR/crates/gpui_platform/benches/$module.rs"
 done
@@ -59,14 +59,17 @@ fi
   printf 'zed_requested_revision=%s\nzed_dir=%s\n' "$ZED_REV" "$ZED_DIR"
   printf 'repeats=%s\ncases=%s\n' "$REPEATS" "$CASES"
   printf 'gpui_features=bench-support,runtime_shaders,font-kit\nmeasurement=instructions\n'
-  printf 'gpu_sampling=frames-10-69-of-every-window\ngpu_redraws=%s\n' "$GPU_REDRAWS"
+  printf 'gpu_sampling=fixed-single-window\ngpu_warmup_frames=10\ngpu_samples_requested=%s\ngpu_redraws=%s\n' "${COMPARE_SAMPLES:-60}" "$GPU_REDRAWS"
   printf 'CARGO_TARGET_DIR=%s\nRUSTFLAGS=%s\n' "${CARGO_TARGET_DIR:-}" "${RUSTFLAGS:-}"
   date -u '+started_utc=%Y-%m-%dT%H:%M:%SZ'
   uname -a
   sw_vers
   sysctl machdep.cpu.brand_string hw.ncpu hw.memsize
+  printf '\nrui_toolchain:\n'
   rustc --version
   cargo --version
+  printf '\nzed_toolchain:\n'
+  (cd "$ZED_DIR" && rustc --version && cargo --version)
   printf '\nrui_worktree:\n'
   git -C "$ROOT" status --porcelain
   printf '\nzed_worktree:\n'
@@ -95,13 +98,15 @@ resolve_executable() {
 }
 
 echo "== building RUI ($(git -C "$ROOT" rev-parse --short HEAD))" >&2
-rui_bin="$(cd "$ROOT" && cargo bench --bench compare_frame --no-run 2>&1 | tee "$RUN_DIR/build-rui.log" | executable)"
+rui_bin="$(cd "$ROOT" && cargo bench --locked --bench compare_frame --no-run 2>&1 | tee "$RUN_DIR/build-rui.log" | executable)"
 rui_bin="$(resolve_executable "$ROOT" "$rui_bin")"
+cp "$ROOT/Cargo.lock" "$RUN_DIR/rui-Cargo.lock"
 echo "== building GPUI (${ZED_REV:0:7})" >&2
 # Without font-kit, gpui_macos uses NoopTextSystem: fixed advances and no glyphs.
 gpui_bin="$(cd "$ZED_DIR" && cargo bench -p gpui_platform --features bench-support,runtime_shaders,font-kit \
   --bench rui_compare --no-run 2>&1 | tee "$RUN_DIR/build-gpui.log" | executable)"
 gpui_bin="$(resolve_executable "$ZED_DIR" "$gpui_bin")"
+cp "$ZED_DIR/Cargo.lock" "$RUN_DIR/zed-Cargo.lock"
 
 # Turns one GPUI bench run's report into RUI's line format.
 gpui_line() {
@@ -182,9 +187,9 @@ done
 echo "== load after: $(uptime | sed 's/.*load averages*: //')" | tee -a "$results" >&2
 
 # One row per case and side; each cell is the range over the repeats.
-printf '%s\n\n' 'GPU columns sample the same frames on both sides: frames 10 to 69 of every window (gpu_time::steady_samples). GPU frames shows how many, from how many windows.'
+printf '%s\n\n' 'GPU columns sample the same frames on both sides: one window per side, 10 warm-up frames followed by 60 measured frames by default (COMPARE_SAMPLES changes the count).'
 if (( GPU_REDRAWS > 0 )); then
-  printf '%s\n\n' "GPU_REDRAWS=$GPU_REDRAWS: each frame's scene is drawn $GPU_REDRAWS more times right after it; GPU saturated is their mean (gpu_time::steady_redraws). GPUI's CPU columns include the redraws."
+  printf '%s\n\n' "GPU_REDRAWS=$GPU_REDRAWS: each GPU sample frame is redrawn $GPU_REDRAWS times. GPU saturated is their mean (gpu_time::steady_redraws)."
 fi
 awk '
   /^(rui|gpui) / {

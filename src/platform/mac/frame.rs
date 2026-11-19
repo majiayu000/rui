@@ -116,6 +116,8 @@ where
                     dispatch_text_input_event(presenter, window, ime_state, event);
                 (handled, redraw_requested, RedrawSource::PlatformInput)
             }
+            #[cfg(feature = "winit")]
+            OrderedInputEvent::WinitIme(_) | OrderedInputEvent::WinitFocus(_) => continue,
             OrderedInputEvent::Accessibility(request) => {
                 let retained_tree = window.accessibility_bridge().last_published_tree();
                 let (handled, redraw_requested) =

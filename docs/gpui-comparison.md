@@ -2,12 +2,11 @@
 
 Both frameworks draw the same fixtures through Metal on one machine. Tracks #197.
 
-> **GPU sampling:** since #277 both sides take GPU time from the same frames, frames
-> 10 to 69 of every window (see [GPU time with matched samples](#gpu-time-with-matched-samples-2026-11-16)),
-> and `GPU_REDRAWS` reads them with the GPU kept busy (see
-> [GPU time with the GPU kept busy](#gpu-time-with-the-gpu-kept-busy-2026-11-16)).
-> GPU numbers in sections older than that one sampled GPUI across Criterion's warm-up
-> and every window's first frames; they are kept as recorded, not as verdicts.
+> **GPU sampling (#277):** each side now runs one window with 10 warm-up frames
+> and 60 sampled frames by default. GPUI collects this sequence separately from
+> Criterion's CPU iterations. The 2026-11-16 results below used the same per-window
+> frame range but included multiple GPUI windows, some of which contributed only
+> part of that range. Use the fixed single-window run for new comparisons.
 
 Run it with:
 
@@ -21,8 +20,9 @@ process, alternating RUI/GPUI and GPUI/RUI order by round, `REPEATS` times (defa
 It prints one table with the range over the repeats. After checkout preparation, each run creates a fresh
 `target/gpui_compare/run.XXXXXXXX/` directory (printed on stderr), preserving
 `results.txt`, full per-round stdout/stderr, build logs, execution order and commands.
-`metadata.txt` records actual revisions, dirty status, parameters, toolchain and host;
-source patches and the copied GPUI fixture/hook retain local benchmark changes.
+`metadata.txt` records actual revisions, dirty status, parameters, both toolchains
+and the host. The runner archives both resolved Cargo lockfiles, source patches and
+the copied GPUI fixtures.
 Untracked files other than those copied fixtures are listed, not archived. Use a
 clean dedicated checkout when reproducing a run. The runner modifies the supplied
 Zed checkout's manifest and bench files.
@@ -73,6 +73,14 @@ to Metal without waiting for the GPU.
 | `editor_scroll` | a 10 000-line code view: 20 px lines of 13 px SF Mono, a 64 px gutter of line numbers, 11 colored tokens per line (a comment every ninth line), the cursor's line highlighted; starts at line 5001 | scrolls down one line; the cursor moves with it | `virtual_list` of rows: gutter `text` + `shared_styled_text` of `span_range(..).color(..)` over the line's `Arc<str>` (the editor run below used `styled_text` of `span(..)`, a `String` per token) | `uniform_list` of rows: gutter string + `StyledText::with_highlights` |
 | `editor_edit` | same, not scrolling | the cursor line's first identifier ends in a new letter | the line's tokens change and its `Arc<str>` and ranges are rebuilt | the line's tokens change and its `SharedString` and highlights are rebuilt |
 | `terminal_rows` | a terminal screen: 45 rows of 20 px in 13 px SF Mono, each a frame counter or `static`, the row number and 60 hex characters | rows 0–19 get the new frame counter; rows 20–44 keep their text | one `canvas`, a `Primitive::Text` per row (`benches/compare_terminal`) | one `canvas`, `shape_line` + `ShapedLine::paint` per row (`benchmarks/gpui_compare/terminal.rs`) |
+| `workbench_pane`, `workbench_full` | a 288 px virtual sidebar with 2,000 session rows, 8 spaces and 60 bindings, beside the same terminal screen | terminal ticks each turn. The full case also invalidates the sidebar and root | two entity-backed views with a `virtual_list` and terminal canvas | cached `uniform_list` view and terminal canvas. Full redraw notifies both views |
+
+The workbench cases share their data and geometry in
+`benchmarks/gpui_compare/workbench_data.rs`. Both sides check 45 visible sidebar
+rows and 45 terminal rows, and ensure pane-only changes retain the sidebar. The
+fixture measures a synthetic application frame. Fibo's real workbench also has
+session subscriptions, live terminal processes, its own formatting and a host
+process, which are outside this fixture.
 
 The editor and terminal cases use the same font file on both sides,
 `/System/Library/Fonts/SFNSMono.ttf`. RUI calls it "SF Mono"; Core Text hides it from
@@ -112,14 +120,14 @@ examples and GPUI's `primitives` bench paint this way.
     therefore start before the previous one ends, so each frame counts from the later
     of its `GPUStartTime` and the previous frame's `GPUEndTime`: the GPU busy time it
     added.
-  - Both sides keep the same frames, through one function,
-    `gpu_time::steady_samples`: each command buffer is tagged with its window and
-    its frame in that window, and frames 10 to 69 of every window are kept. RUI draws
-    one window of 70 frames; Criterion opens a new GPUI window for every call, so a
-    GPUI window gives the frames it drew from frame 10 on, and one closed sooner gives
-    none. A sampled frame with no command buffer or two fails the bench. Each side
-    prints how many frames and windows it sampled. `tests/gpu_sample_window.rs`
-    checks the selection without a GPU.
+  - Both sides tag the same fixed sequence: frames 0–9 warm up and frames 10–69
+    are sampled. `COMPARE_SAMPLES` sets the sample count for both. GPUI runs these
+    updates in a dedicated window before Criterion's CPU loop. Its setup draws
+    and Criterion's frames stay out of the sample. A missing or duplicate sampled
+    frame fails the run. `tests/gpu_sample_window.rs` checks those rules without a
+    GPU, and each side reports its actual sample count.
+  - With `GPU_REDRAWS=N`, each sampled scene is drawn N more times. Both sides
+    measure these redraws outside their CPU timings.
   - `startup` takes no GPU time on either side: each window draws one frame.
   - Before this, RUI's GPU column came from a separate pass that waited for every
     frame, and GPUI had none.
@@ -168,7 +176,7 @@ GPU saturated ms / frame p50, the range over the three runs:
 | editor_scroll | 0.048-0.051 | 0.081-0.083 | 1072-1124 | RUI ahead 1.7x |
 | editor_edit | 0.049 | 0.081-0.083 | 1124-1164 | RUI ahead 1.7x |
 
-Verdict for #277:
+Observations for this sampling run:
 
 - With the clock taken out, RUI uses less GPU time than GPUI in every case but
   `text_paragraphs`, which is a tie. This includes the virtual-list and resize cases,
@@ -213,9 +221,8 @@ RUI samples 60 frames from one window in every case. At this scale both sides sp
 about 0.1 ms, and RUI's p50 moved between about 0.05 and 0.15 ms from run to run with
 the GPU's clock. This run read `text_paragraphs` as RUI behind 1.8x (0.129 ms against
 0.07 ms). [GPU time with the GPU kept busy](#gpu-time-with-the-gpu-kept-busy-2026-11-16)
-shows that was the clock: with the clock taken out, that case is a tie. That section
-holds the GPU verdict, which supersedes the verdicts in this table. A first run the
-same day at load 14 to 19 moved GPUI's numbers in the same way.
+shows a tie in that setup, consistent with a clock effect. A first run the same day
+at load 14 to 19 moved GPUI's numbers in the same way.
 
 The same run's CPU verdicts match the earlier ones: RUI ahead in every case, 2.6x to
 133x by wall p50, and 8.1x from process start to first frame.

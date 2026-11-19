@@ -6,6 +6,7 @@ use crate::core::text_editing::{
     TextEditError, TextInputCommand, TextInputSnapshot, Utf16TextRange,
 };
 use crate::elements::element::Element;
+use crate::platform::frame_driver::dispatch_text_input_event_to;
 use crate::platform::mac::window::MacWindow;
 
 #[derive(Debug, Default)]
@@ -165,22 +166,6 @@ pub(crate) fn clear_owner_after_rejected_begin(
     }
     ime_state.composition_owner = None;
     true
-}
-
-fn dispatch_text_input_event_to<E>(
-    presenter: &mut Presenter<E>,
-    target: ElementId,
-    event: &TextInputCommand,
-) -> (bool, bool)
-where
-    E: Element,
-{
-    let focused = presenter.focused_element();
-    *presenter.focused_element_mut() = Some(target);
-    let result = presenter
-        .with_event_context(|root, event_cx| root.handle_text_input_command(event_cx, event));
-    *presenter.focused_element_mut() = focused;
-    result
 }
 
 pub(crate) fn cancel_composition_if_owner_lost<E>(

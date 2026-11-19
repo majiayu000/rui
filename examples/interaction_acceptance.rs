@@ -104,6 +104,7 @@ impl View for Editor {
     }
 }
 fn main() {
+    env_logger::init();
     App::new().run_view_with_options(
         WindowOptions::default()
             .title("RUI Interaction Acceptance")

@@ -580,9 +580,6 @@ pub struct App {
 
 impl App {
     pub fn new() -> Self {
-        // Initialize logging
-        let _ = env_logger::try_init();
-
         Self {
             context: AppContext::new(),
         }

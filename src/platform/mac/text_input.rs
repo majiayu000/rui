@@ -681,7 +681,7 @@ pub(crate) fn suppress_key_down_for_ime(
         return false;
     }
 
-    let consumed_key_down = if let Some(index) = events.iter().rposition(|event| {
+    if let Some(index) = events.iter().rposition(|event| {
         matches!(
             event,
             PlatformWindowEvent::Input(PlatformInputEvent::KeyDown(_))
@@ -691,9 +691,7 @@ pub(crate) fn suppress_key_down_for_ime(
         true
     } else {
         false
-    };
-
-    consumed_key_down
+    }
 }
 
 fn text_from_native_object(object: &AnyObject) -> Option<String> {

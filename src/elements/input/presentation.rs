@@ -474,9 +474,7 @@ impl Input {
             return None;
         };
 
-        let Some(layout) = self.current_text_layout() else {
-            return None;
-        };
+        let layout = self.current_text_layout()?;
         let style = TextEditPaintStyle::new(
             INPUT_CARET_WIDTH,
             self.paint_tokens()

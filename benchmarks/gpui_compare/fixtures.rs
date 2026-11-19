@@ -18,8 +18,7 @@
 //!   gutter of line numbers, per-token colors as `StyledText` highlights in SF Mono (loaded from RUI's file),
 //!   the cursor's line highlighted. It scrolls one line per frame, or one character
 //!   of the cursor's line changes per frame.
-//! - `terminal_rows`: one `canvas` paints 45 rows of SF Mono, one shaped line per row;
-//!   20 rows get new text each frame. In `terminal.rs`.
+//! - `terminal_rows`: 45 SF Mono lines on a canvas, with 20 rows updated per frame.
 //!
 //! The benches are registered as `#[gpui::bench(fps = 120)]` registers them, but with
 //! the headless renderer wrapped by [`CountingRenderer`], which counts draw calls.
@@ -33,8 +32,7 @@ use std::time::{Duration, Instant};
 
 use gpui::{
     AnyView, AppContext as _, BenchAppContext, Bounds, Context, Entity, HighlightStyle,
-    IntoElement, ParentElement, PlatformHeadlessRenderer, Render, ScrollStrategy,
-    SharedString, Styled, StyledText,
+    IntoElement, ParentElement, Render, ScrollStrategy, SharedString, Styled, StyledText,
     UniformListScrollHandle, Window, canvas, div, fill, point, px, relative, rgb, size,
     uniform_list,
 };
@@ -455,15 +453,25 @@ fn viewport() -> gpui::Size<gpui::Pixels> {
 fn bench_view<V: Render>(
     cx: &mut BenchAppContext,
     case: &str,
+    sample_gpu: bool,
     view: impl FnOnce(&mut Context<V>) -> V,
-    update: impl FnMut(&mut V, &mut Window, &mut Context<V>),
+    mut update: impl FnMut(&mut V, &mut Window, &mut Context<V>),
 ) {
     let mut window = cx.add_empty_window();
     window.simulate_resize(viewport());
     let root = window.update(|window, cx| window.replace_root(cx, |_, cx| view(cx)));
     cx.run_until_idle();
-    cx.bench_renderer(root, update);
-    eprintln!("gpui {case} footprint_mb={:.1}", footprint_mb());
+    if sample_gpu {
+        for turn in 0..gpu_time::WARMUP_FRAMES + gpu_time::sample_count() {
+            gpu_time::set_frame(turn);
+            window.update(|window, cx| root.update(cx, |view, cx| update(view, window, cx)));
+            cx.run_until_idle();
+        }
+        gpu_time::set_frame(gpu_time::OUTSIDE_SAMPLE);
+    } else {
+        cx.bench_renderer(root, update);
+        eprintln!("gpui {case} footprint_mb={:.1}", footprint_mb());
+    }
     window.update(|window, _| window.remove_window());
     cx.run_until_idle();
 }
@@ -476,7 +484,7 @@ fn alternate_width(turn: &mut usize, window: &mut Window, cx: &mut gpui::App) {
     window.bounds_changed(cx);
 }
 
-fn startup(cx: &mut BenchAppContext) {
+fn startup(cx: &mut BenchAppContext, _sample_gpu: bool) {
     static MEASURED: AtomicBool = AtomicBool::new(false);
     let to_fixture = ms_since_process_start();
     let t0 = Instant::now();
@@ -500,10 +508,11 @@ fn startup(cx: &mut BenchAppContext) {
     cx.run_until_idle();
 }
 
-fn list_full(cx: &mut BenchAppContext) {
+fn list_full(cx: &mut BenchAppContext, sample_gpu: bool) {
     bench_view(
         cx,
         "list_full",
+        sample_gpu,
         |_| List { selected: 0 },
         |list, _, cx| {
             list.selected = (list.selected + 1) % LIST_ROWS;
@@ -512,10 +521,11 @@ fn list_full(cx: &mut BenchAppContext) {
     );
 }
 
-fn list_full_one_row(cx: &mut BenchAppContext) {
+fn list_full_one_row(cx: &mut BenchAppContext, sample_gpu: bool) {
     bench_view(
         cx,
         "list_full_one_row",
+        sample_gpu,
         |cx| CachedList {
             rows: (0..LIST_ROWS)
                 .map(|index| {
@@ -538,10 +548,11 @@ fn list_full_one_row(cx: &mut BenchAppContext) {
     );
 }
 
-fn virtual_list(cx: &mut BenchAppContext, case: &str, count: usize) {
+fn virtual_list(cx: &mut BenchAppContext, case: &str, count: usize, sample_gpu: bool) {
     bench_view(
         cx,
         case,
+        sample_gpu,
         |_| VirtualList::new(count),
         |list, _, cx| {
             list.turn += 1;
@@ -551,18 +562,19 @@ fn virtual_list(cx: &mut BenchAppContext, case: &str, count: usize) {
     );
 }
 
-fn list_virtual_1k(cx: &mut BenchAppContext) {
-    virtual_list(cx, "list_virtual_1k", 1_000);
+fn list_virtual_1k(cx: &mut BenchAppContext, sample_gpu: bool) {
+    virtual_list(cx, "list_virtual_1k", 1_000, sample_gpu);
 }
 
-fn list_virtual_100k(cx: &mut BenchAppContext) {
-    virtual_list(cx, "list_virtual_100k", 100_000);
+fn list_virtual_100k(cx: &mut BenchAppContext, sample_gpu: bool) {
+    virtual_list(cx, "list_virtual_100k", 100_000, sample_gpu);
 }
 
-fn text_paragraphs(cx: &mut BenchAppContext) {
+fn text_paragraphs(cx: &mut BenchAppContext, sample_gpu: bool) {
     bench_view(
         cx,
         "text_paragraphs",
+        sample_gpu,
         |_| Paragraphs { revision: 0 },
         |page, _, cx| {
             page.revision += 1;
@@ -571,10 +583,11 @@ fn text_paragraphs(cx: &mut BenchAppContext) {
     );
 }
 
-fn quad_grid(cx: &mut BenchAppContext) {
+fn quad_grid(cx: &mut BenchAppContext, sample_gpu: bool) {
     bench_view(
         cx,
         "quad_grid",
+        sample_gpu,
         |_| Grid { changed: 0 },
         |grid, _, cx| {
             grid.changed = (grid.changed + 1) % (GRID.0 * GRID.1);
@@ -583,21 +596,23 @@ fn quad_grid(cx: &mut BenchAppContext) {
     );
 }
 
-fn resize_full(cx: &mut BenchAppContext) {
+fn resize_full(cx: &mut BenchAppContext, sample_gpu: bool) {
     let mut turn = 0;
     bench_view(
         cx,
         "resize_full",
+        sample_gpu,
         |_| List { selected: 0 },
         |_, window, cx| alternate_width(&mut turn, window, cx),
     );
 }
 
-fn resize_virtual(cx: &mut BenchAppContext) {
+fn resize_virtual(cx: &mut BenchAppContext, sample_gpu: bool) {
     let mut turn = 0;
     bench_view(
         cx,
         "resize_virtual",
+        sample_gpu,
         |_| VirtualList::new(1_000),
         |_, window, cx| alternate_width(&mut turn, window, cx),
     );
@@ -608,68 +623,97 @@ fn scrolled_top(turn: usize) -> usize {
     EDITOR_TOP + turn % (EDITOR_LINES - EDITOR_TOP - 100)
 }
 
-fn editor_scroll(cx: &mut BenchAppContext) {
-    bench_view(cx, "editor_scroll", Editor::new, |editor, _, cx| {
-        editor.turn += 1;
-        let top = scrolled_top(editor.turn);
-        editor.scroll_to(top);
-        editor.cursor = top + CURSOR_ROW;
-        cx.notify();
-    });
+fn editor_scroll(cx: &mut BenchAppContext, sample_gpu: bool) {
+    bench_view(
+        cx,
+        "editor_scroll",
+        sample_gpu,
+        Editor::new,
+        |editor, _, cx| {
+            editor.turn += 1;
+            let top = scrolled_top(editor.turn);
+            editor.scroll_to(top);
+            editor.cursor = top + CURSOR_ROW;
+            cx.notify();
+        },
+    );
 }
 
-fn editor_edit(cx: &mut BenchAppContext) {
-    bench_view(cx, "editor_edit", Editor::new, |editor, _, cx| {
-        editor.turn += 1;
-        let cursor = editor.cursor;
-        edit_line(&mut editor.tokens[cursor], editor.turn);
-        editor.lines[cursor] = CodeLine::new(&editor.tokens[cursor]);
-        cx.notify();
-    });
+fn editor_edit(cx: &mut BenchAppContext, sample_gpu: bool) {
+    bench_view(
+        cx,
+        "editor_edit",
+        sample_gpu,
+        Editor::new,
+        |editor, _, cx| {
+            editor.turn += 1;
+            let cursor = editor.cursor;
+            edit_line(&mut editor.tokens[cursor], editor.turn);
+            editor.lines[cursor] = CodeLine::new(&editor.tokens[cursor]);
+            cx.notify();
+        },
+    );
 }
 
 mod fonts;
 mod gpu_time;
 mod terminal;
+mod workbench;
+mod workbench_data;
 use fonts::load_sf_mono;
 use terminal::terminal_rows;
+use workbench::{workbench_full, workbench_pane};
 
 mod counting_renderer;
-use counting_renderer::{
-    CountingRenderer, FRAMES_WITH_GLYPHS, GPU_SAMPLES, GPU_WARMUP, SCENES, take_draws,
-};
+use counting_renderer::{CountingRenderer, FRAMES_WITH_GLYPHS, SCENES, take_draws};
 
 /// What `#[gpui::bench(fps = 120)]` generates for `body`, with [`CountingRenderer`].
 fn counted(
     criterion: &mut criterion::Criterion<gpui::BenchMeasurement>,
     name: &'static str,
-    body: fn(&mut BenchAppContext),
+    body: fn(&mut BenchAppContext, bool),
 ) {
     let report = gpui::BenchReport::with_fps(120);
     gpu_time::install();
+    gpu_time::set_frame(gpu_time::OUTSIDE_SAMPLE);
     take_draws();
     gpu_time::take();
     FRAMES_WITH_GLYPHS.store(0, Ordering::Relaxed);
-    criterion.bench_function(name, {
-        let report = report.clone();
-        move |bencher| {
+    let platform = || {
+        gpui::bench_platform(
+            Some(Box::new(move || {
+                Ok(gpui_platform::current_headless_renderer()?
+                    .map(|renderer| CountingRenderer::wrap(renderer, name)))
+            })),
+            gpui_platform::bench_text_system(),
+        )
+    };
+    let mut gpu_sample = None;
+    criterion.bench_function(name, |bencher| {
+        if name != "startup" && gpu_sample.is_none() {
+            // A dedicated window runs the fixture once without the Criterion loop.
             let mut cx = BenchAppContext::new_with_platform_and_report(
-                gpui::bench_platform(
-                    Some(Box::new(|| {
-                        Ok(gpui_platform::current_headless_renderer()?.map(|renderer| {
-                            Box::new(CountingRenderer::new(renderer))
-                                as Box<dyn PlatformHeadlessRenderer>
-                        }))
-                    })),
-                    gpui_platform::bench_text_system(),
-                ),
+                platform(),
                 Some(name),
-                bencher,
-                report.clone(),
+                &mut *bencher,
+                gpui::BenchReport::default(),
             );
-            body(&mut cx);
+            body(&mut cx, true);
             cx.teardown();
+            // Let the last sampled frames' completion handlers run before reading them.
+            std::thread::sleep(Duration::from_millis(100));
+            gpu_sample = Some(gpu_time::take_tagged());
+            take_draws();
+            FRAMES_WITH_GLYPHS.store(0, Ordering::Relaxed);
         }
+        let mut cx = BenchAppContext::new_with_platform_and_report(
+            platform(),
+            Some(name),
+            bencher,
+            report.clone(),
+        );
+        body(&mut cx, false);
+        cx.teardown();
     });
     report.print(name);
     // Criterion skips benches its filter does not select; they render nothing.
@@ -682,31 +726,32 @@ fn counted(
     if name != "quad_grid" && FRAMES_WITH_GLYPHS.load(Ordering::Relaxed) == 0 {
         panic!("{name}: GPUI drew no glyphs; build gpui_platform with the font-kit feature");
     }
-    // Let the last frames' completed handlers run.
-    std::thread::sleep(Duration::from_millis(100));
-    // Startup draws one frame per window, and RUI's startup case takes no GPU time.
-    if name == "startup" {
-        gpu_time::take_tagged();
+    let Some(tagged) = gpu_sample else {
+        // Startup is measured only on the CPU.
         eprintln!("gpui {name} draw_calls={draw_calls} instances={instances}");
         return;
-    }
-    // The frames RUI samples, from every window that reached them.
-    let tagged = gpu_time::take_tagged();
-    let (mut gpu_ms, gpu_windows) = gpu_time::steady_samples(&tagged, GPU_WARMUP, GPU_SAMPLES)
+    };
+    let warmup = gpu_time::WARMUP_FRAMES;
+    let samples = gpu_time::sample_count();
+    let mut gpu_ms = gpu_time::steady_samples(&tagged, warmup, samples)
         .unwrap_or_else(|err| panic!("{name}: {err}"));
     let percentile = |values: &mut Vec<f64>, fraction: f64| {
         values.sort_by(f64::total_cmp);
         values[((values.len() - 1) as f64 * fraction).round() as usize]
     };
-    let saturated = if gpu_time::redraws() > 0 {
-        let mut saturated = gpu_time::steady_redraws(&tagged, GPU_WARMUP, GPU_SAMPLES)
+    let redraws = gpu_time::redraws();
+    let saturated = if redraws > 0 {
+        let mut saturated = gpu_time::steady_redraws(&tagged, warmup, samples, redraws)
             .unwrap_or_else(|err| panic!("{name}: {err}"));
-        format!(" gpu_saturated_ms_p50={:.3}", percentile(&mut saturated, 0.5))
+        format!(
+            " gpu_saturated_ms_p50={:.3}",
+            percentile(&mut saturated, 0.5)
+        )
     } else {
         String::new()
     };
     eprintln!(
-        "gpui {name} draw_calls={draw_calls} instances={instances} gpu_ms_p50={:.3} gpu_ms_p95={:.3} gpu_windows={gpu_windows} gpu_frames={}{saturated}",
+        "gpui {name} draw_calls={draw_calls} instances={instances} gpu_ms_p50={:.3} gpu_ms_p95={:.3} gpu_windows=1 gpu_frames={}{saturated}",
         percentile(&mut gpu_ms, 0.5),
         percentile(&mut gpu_ms, 0.95),
         gpu_ms.len()
@@ -736,6 +781,7 @@ counted_benches!(
     bench_editor_scroll => editor_scroll,
     bench_editor_edit => editor_edit,
     bench_terminal_rows => terminal_rows,
+    bench_workbench_pane => workbench_pane, bench_workbench_full => workbench_full,
 );
 
 gpui::bench_group!(
@@ -746,6 +792,7 @@ gpui::bench_group!(
         .sample_size(20);
     targets = bench_startup, bench_list_full, bench_list_full_one_row, bench_list_virtual_1k,
         bench_list_virtual_100k, bench_text_paragraphs, bench_quad_grid, bench_resize_full,
-        bench_resize_virtual, bench_editor_scroll, bench_editor_edit, bench_terminal_rows
+        bench_resize_virtual, bench_editor_scroll, bench_editor_edit, bench_terminal_rows,
+        bench_workbench_pane, bench_workbench_full
 );
 gpui::bench_main!(benches);

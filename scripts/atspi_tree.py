@@ -207,6 +207,11 @@ def check_interaction_acceptance(window):
     check(heading is not None, "the heading is a label")
     save = find_node(window, "push button", "Save")
     check(save.get_state_set().contains(Atspi.StateType.ENABLED), "Save is enabled")
+    # Window coordinates: under Wayland a client cannot learn where its window
+    # is on screen, so screen coordinates there are the window's.
+    extents = Atspi.Component.get_extents(save.get_component_iface(), Atspi.CoordType.WINDOW)
+    print(f"Save extents in the window: {extents.x},{extents.y} {extents.width}x{extents.height}")
+    check(extents.width > 0 and extents.height > 0, "Save has a size in the window")
     disabled = find_node(window, "push button", "Disabled")
     check(disabled is not None, "the disabled button is exposed")
     check(

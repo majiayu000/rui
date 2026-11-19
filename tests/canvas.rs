@@ -1,10 +1,11 @@
 use rui::core::color::Color;
-use rui::core::{Bounds, ElementId, Point, Size};
+use rui::core::event::MouseButton;
+use rui::core::{Bounds, ElementId, Point, Presenter, Size};
 use rui::elements::element::{PointerEvent, PointerEventKind};
 use rui::elements::{Canvas, Div, Painter, canvas, div};
 use rui::renderer::Primitive;
 use rui::testing::mount;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 const PADDING: f32 = 20.0;
@@ -158,4 +159,57 @@ fn a_canvas_without_a_handler_does_not_take_hits() {
     })
     .expect("mount");
     assert_eq!(session.scene().hit_test(Point::new(30.0, 30.0)), None);
+}
+
+#[test]
+fn hit_refresh_registers_the_canvas_without_running_its_painter() {
+    let size = Size::new(400.0, 300.0);
+    let paint_calls = Rc::new(Cell::new(0));
+    let pressed = Rc::new(Cell::new(false));
+    let calls = Rc::clone(&paint_calls);
+    let color_state = Rc::clone(&pressed);
+    let canvas = canvas(move |bounds, painter| {
+        calls.set(calls.get() + 1);
+        let color = if color_state.get() {
+            Color::WHITE
+        } else {
+            Color::BLACK
+        };
+        painter.fill(bounds, color);
+    })
+    .id(canvas_id())
+    .on_pointer(move |event| pressed.set(event.kind == PointerEventKind::Down));
+    let mut presenter = Presenter::with_root(size, framed(canvas));
+    presenter.layout(size).expect("initial layout");
+    presenter.paint();
+    let rendered_frame = presenter.scene().frame();
+    let before = paint_calls.get();
+
+    presenter.layout(size).expect("layout before input");
+    let dispatch = presenter.dispatch_pointer_event(&PointerEvent {
+        kind: PointerEventKind::Down,
+        position: Point::new(30.0, 30.0),
+        button: Some(MouseButton::Left),
+    });
+    assert!(dispatch.stopped, "the hit-only pass still finds the canvas");
+    assert_eq!(paint_calls.get(), before, "input must not run the painter");
+    assert_eq!(presenter.scene().frame(), rendered_frame);
+
+    presenter.paint();
+    assert!(
+        paint_calls.get() > before,
+        "real paint still runs the painter"
+    );
+    assert_eq!(presenter.scene().previous_frame(), rendered_frame);
+    assert!(
+        presenter
+            .scene()
+            .primitives()
+            .iter()
+            .any(|primitive| matches!(
+                primitive,
+                Primitive::Quad { background, .. } if *background == Color::WHITE.to_rgba()
+            )),
+        "the real frame includes the pointer handler's new paint"
+    );
 }

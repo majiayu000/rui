@@ -41,7 +41,7 @@ fn capture(scene: &Scene) -> Option<Vec<u8>> {
 fn lit_box(pixels: &[u8], x0: usize, x1: usize) -> Option<(usize, usize, usize, usize)> {
     let width = VIEWPORT.width as usize;
     let mut lit = None::<(usize, usize, usize, usize)>;
-    for (index, pixel) in pixels.chunks_exact(4).enumerate() {
+    for (index, pixel) in pixels.as_chunks::<4>().0.iter().enumerate() {
         let (x, y) = (index % width, index / width);
         if pixel[1] <= 128 || x < x0 || x >= x1 {
             continue;
