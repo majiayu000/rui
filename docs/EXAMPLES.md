@@ -105,83 +105,21 @@ fn feature_card(title: &str, description: &str, color: u32) -> Div {
 
 ## Counter
 
-**File:** `examples/counter.rs`
+[Counter source](../examples/counter.rs) · [State and events guide](getting-started.md)
 
-Interactive counter demonstrating buttons and layout.
-
-```rust
-use rui::prelude::*;
-
-fn main() {
-    App::new().run(|cx| {
-        let count = 0i32;
-
-        div()
-            .w(400.0)
-            .h(300.0)
-            .bg(Color::hex(0x2d3436))
-            .flex_col()
-            .items_center()
-            .justify_center()
-            .gap(24.0)
-            .child(
-                text("Counter")
-                    .size(32.0)
-                    .bold()
-                    .color(Color::WHITE)
-            )
-            .child(
-                div()
-                    .w(200.0)
-                    .h(80.0)
-                    .bg(Color::hex(0x636e72))
-                    .rounded(12.0)
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child(
-                        text(format!("{}", count))
-                            .size(48.0)
-                            .bold()
-                            .color(Color::WHITE)
-                    )
-            )
-            .child(
-                div()
-                    .flex_row()
-                    .gap(16.0)
-                    .child(button("-", Color::hex(0xd63031)))
-                    .child(button("+", Color::hex(0x00b894)))
-            )
-    });
-}
-
-fn button(label: &str, bg_color: Color) -> Div {
-    div()
-        .w(60.0)
-        .h(60.0)
-        .bg(bg_color)
-        .rounded(30.0)
-        .flex()
-        .items_center()
-        .justify_center()
-        .shadow_md()
-        .child(
-            text(label)
-                .size(32.0)
-                .bold()
-                .color(Color::WHITE)
-        )
-}
+```bash
+cargo run --example counter
 ```
 
-### Key Concepts Demonstrated
+Click `+` or `-` to change the displayed count. The view keeps the count in
+an `i32`. Register the click handler inside `render`.
 
-1. **Circular Buttons** - `.rounded(30.0)` on 60x60
-2. **Dynamic Text** - `format!("{}", count)`
-3. **Flex Row Layout** - Horizontal button arrangement
-4. **Shadows** - `.shadow_md()`
-5. **Color Theming** - Consistent color scheme
+```rust,ignore
+button("+").on_click(cx.listener(|this, _| this.count += 1))
+```
+
+The listener updates the view and schedules a rebuild. The state and events
+guide has a complete counter you can copy into your own project.
 
 ---
 

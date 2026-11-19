@@ -25,10 +25,10 @@ Git dependency below (the crates.io package named `rui` is a different project):
 
 ```toml
 [dependencies]
-rui = { git = "https://github.com/majiayu000/rui", rev = "1311a1d6b98a601de603d215ebc1d21f408fd7a3" }
+rui = { git = "https://github.com/majiayu000/rui", rev = "8161ebcf0f0bf7d8fff38435ad12430c4eefbe17" }
 ```
 
-This is the same source baseline as the README and includes the listener APIs below; it is not a release tag.
+This is the same Git revision as the README and includes the listener APIs below.
 Replace `src/main.rs` with this complete program and run `cargo run`:
 
 ```rust

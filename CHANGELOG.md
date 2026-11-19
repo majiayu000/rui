@@ -4,6 +4,8 @@ All notable project changes should be recorded here.
 
 ## Unreleased
 
+## 0.3.0-rc.1
+
 ### Rendering
 
 - Text can be shaped with OpenType feature settings:
