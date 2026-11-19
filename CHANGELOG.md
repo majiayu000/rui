@@ -59,6 +59,10 @@ All notable project changes should be recorded here.
 
 ### Runtime
 
+- An entity one view's listener updates shows in the other views that read it
+  on the next frame, parent to child and child to parent, instead of one frame
+  later; child views' queued listener updates run before the frame works out
+  what renders (#341).
 - The winit runner (Linux, Windows) opens the windows app code opens with
   `AppContext::open_window` and `open_view_window` instead of closing them:
   each gets its own presenter, surface and renderer, events go to the window

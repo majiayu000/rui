@@ -364,6 +364,8 @@ impl<'a, T: 'static> ViewContext<'a, T> {
 pub(crate) trait ChildView {
     /// Apply queued listener updates and render.
     fn render_any(&mut self, app: &mut AppContext) -> crate::elements::AnyElement;
+    /// Apply queued listener updates without rendering.
+    fn apply_updates(&mut self, app: &mut AppContext);
 }
 
 impl<T> AsMut<AppContext> for ViewContext<'_, T> {
@@ -375,6 +377,10 @@ impl<T> AsMut<AppContext> for ViewContext<'_, T> {
 impl<V: View> ChildView for crate::core::app::RuntimeView<V> {
     fn render_any(&mut self, app: &mut AppContext) -> crate::elements::AnyElement {
         crate::elements::AnyElement::new(self.render(app))
+    }
+
+    fn apply_updates(&mut self, app: &mut AppContext) {
+        crate::core::app::RuntimeView::apply_updates(self, app);
     }
 }
 
