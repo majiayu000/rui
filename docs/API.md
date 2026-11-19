@@ -105,7 +105,11 @@ App::new().run(|cx: &mut AppContext| {
 #### Clipboard
 
 `AppContext` and `ViewContext` read and write plain text on the app clipboard:
-the general pasteboard on macOS, an in-memory clipboard in headless sessions.
+the general pasteboard on macOS, the system clipboard in the winit runner (X11
+or Wayland on Linux, Windows), an in-memory clipboard in headless sessions. When
+the winit runner cannot open the system clipboard (on Linux: no X server, and no
+Wayland compositor with the data-control protocol), it logs an error and keeps
+the in-memory clipboard, so copy and paste work only inside the app.
 
 ```rust
 cx.write_to_clipboard(ClipboardItem::new_string("rui://link"))?;
@@ -116,7 +120,7 @@ let pasted = cx.read_from_clipboard()?.map(|item| item.text().to_owned());
 `AppContext::set_clipboard` replaces the clipboard, for example with a
 `MemoryClipboard` in tests. `Input` and `TextArea` copy, cut and paste through
 it on the `Copy` / `Cut` / `Paste` standard actions, bound to Cmd+C / Cmd+X /
-Cmd+V in the standard keymap.
+Cmd+V in the standard keymap, and also to Ctrl+C / Ctrl+X / Ctrl+V off macOS.
 
 #### Menus
 

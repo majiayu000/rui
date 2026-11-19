@@ -1,16 +1,18 @@
 //! Window and input through winit, frames through the wgpu backend: the runner
 //! for Linux and Windows, and for macOS builds without the `metal` feature.
 //!
-//! It drives the shared frame pipeline for the main window. IME composition,
-//! accessibility, the system clipboard, menus, file drops and further windows
-//! are macOS-only for now.
+//! It drives the shared frame pipeline for the main window, and copy, cut and
+//! paste go through the system clipboard (arboard). IME composition,
+//! accessibility, menus, file drops and further windows are macOS-only for now.
 
+mod clipboard;
 mod input;
 mod window;
 
 use crate::core::app::AppContext;
 use crate::core::window::WindowOptions;
 use crate::elements::element::Element;
+use clipboard::WindowClipboard;
 use std::sync::Mutex;
 use std::time::Instant;
 use window::WindowDriver;
@@ -30,6 +32,7 @@ where
 {
     let mut context = context;
     context.use_background_threads();
+    let clipboard = clipboard::install_system_clipboard(&mut context);
     let main_window = match context.active_window() {
         Some(window) => window,
         None => context.register_window(options.clone()),
@@ -52,6 +55,7 @@ where
     let mut runner = Runner {
         context,
         instance: wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle()),
+        clipboard,
         main: Some((main_window, options, build_root)),
         window: None,
         next_tick: None,
@@ -64,6 +68,8 @@ where
 struct Runner<F, E> {
     context: AppContext,
     instance: wgpu::Instance,
+    /// The system clipboard, for the windows' `PlatformWindow` methods.
+    clipboard: WindowClipboard,
     /// The main window until the event loop can create it.
     main: Option<(crate::core::window::WindowId, WindowOptions, F)>,
     window: Option<WindowDriver<F, E>>,
@@ -118,6 +124,7 @@ where
             id,
             &options,
             build_root,
+            self.clipboard.clone(),
         ) {
             Ok(window) => self.window = Some(window),
             Err(err) => panic!("failed to open the main window: {err}"),

@@ -4,9 +4,9 @@
 # the references in tests/wayland_window/.
 #
 # Run after building the examples with the winit feature:
-#   cargo build --no-default-features --features winit --example hello_world --example counter
+#   cargo build --no-default-features --features winit --example hello_world --example counter --example interaction_acceptance
 #   scripts/wayland_window_pixels.sh
-# Needs sway, grim, wtype, jq, ImageMagick and a Vulkan driver (Mesa lavapipe in
+# Needs sway, grim, wtype, wl-clipboard, jq, ImageMagick and a Vulkan driver (Mesa lavapipe in
 # CI). RUI_PIXELS_UPDATE=1 rewrites the references from this run.
 set -euo pipefail
 
@@ -116,6 +116,17 @@ wtype -s 1000 -k Return
 check counter_input
 swaymsg -q "[pid=$app] resize set width 500 px height 340 px"
 check counter_resized
+close_example
+
+# The system clipboard: paste text another app copied, then copy it back.
+open_example interaction_acceptance
+# A click on the empty bottom of the window focuses it.
+click 300 500
+printf 'from-system' | wl-copy
+# Tab focuses the first input; pasting twice shows the text came through the app.
+wtype -s 1000 -k Tab -M ctrl -k v -k v -k a -k c -m ctrl
+settle
+check_clipboard "$(wl-paste --no-newline)"
 close_example
 
 exit "$failed"
