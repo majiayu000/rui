@@ -17,6 +17,7 @@ pub use crate::renderer::text_plan::{
 use plans::CachedPlan;
 use rusttype::{Font, GlyphId, Scale, point};
 use rustybuzz::{BufferClusterLevel, Direction as HbDirection, Face, UnicodeBuffer};
+use std::collections::VecDeque;
 use std::ops::Range;
 use std::sync::{Arc, Mutex};
 use unicode_segmentation::UnicodeSegmentation;
@@ -69,8 +70,8 @@ pub(crate) struct TextShapingFont {
     /// Parsed once: building a face reads the font's layout tables, far more
     /// work than shaping a short string with it.
     face: Face<'static>,
-    /// Plans built so far, one per direction, script and language shaped.
-    plans: Arc<Mutex<Vec<CachedPlan>>>,
+    /// Recently used plans, keyed by the buffer properties and feature settings.
+    plans: Arc<Mutex<VecDeque<CachedPlan>>>,
     boxes: Arc<GlyphBoxes>,
     ascii: AsciiCoverage,
     /// Owns the bytes `font` and `face` read; never read directly.
@@ -108,7 +109,7 @@ impl TextShapingFont {
             height_em,
             font,
             face,
-            plans: Arc::new(Mutex::new(Vec::new())),
+            plans: Arc::default(),
             boxes: Arc::default(),
             ascii: AsciiCoverage::default(),
             data,
