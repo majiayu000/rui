@@ -221,6 +221,9 @@ pub struct RendererDiagnostics {
     pub device: RendererDeviceDiagnostics,
     pub resources: Vec<RendererResourceStats>,
     pub unsupported_primitives: Vec<RendererUnsupportedPrimitive>,
+    /// Font families text asked for that have no loaded face; that text was
+    /// drawn in the default family.
+    pub unknown_font_families: Vec<String>,
 }
 
 impl RendererDiagnostics {
@@ -229,6 +232,7 @@ impl RendererDiagnostics {
             device,
             resources,
             unsupported_primitives: Vec::new(),
+            unknown_font_families: Vec::new(),
         }
     }
 
@@ -237,6 +241,7 @@ impl RendererDiagnostics {
             device: RendererDeviceDiagnostics::headless(backend),
             resources: Vec::new(),
             unsupported_primitives: Vec::new(),
+            unknown_font_families: Vec::new(),
         }
     }
 
@@ -245,6 +250,11 @@ impl RendererDiagnostics {
         unsupported_primitives: Vec<RendererUnsupportedPrimitive>,
     ) -> Self {
         self.unsupported_primitives = unsupported_primitives;
+        self
+    }
+
+    pub fn with_unknown_font_families(mut self, families: Vec<String>) -> Self {
+        self.unknown_font_families = families;
         self
     }
 

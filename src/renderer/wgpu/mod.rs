@@ -405,6 +405,7 @@ impl Renderer for WgpuRenderer {
             ],
         )
         .with_unsupported_primitives(RendererPrimitiveSupport::wgpu().unsupported_primitives())
+        .with_unknown_font_families(self.planner.text_cache.unknown_font_families().to_vec())
     }
 }
 

@@ -6,6 +6,12 @@ All notable project changes should be recorded here.
 
 ### Rendering
 
+- A font family with no loaded face draws in the default family (same weight
+  and slant) instead of failing the frame with `RenderFailed` or panicking in
+  layout. It is logged once and listed in the new
+  `RendererDiagnostics::unknown_font_families` (#326).
+  **Breaking:** code that builds `RendererDiagnostics` with a struct literal
+  must add the field; `TextError::UnsupportedFontFamily` is no longer returned.
 - `Painter::glyph` draws one glyph in a `canvas` at a pen position of the
   caller's choosing, from the text glyph atlas, without shaping. Characters are
   resolved once with `renderer::text::GlyphResolver` (falling back to other faces

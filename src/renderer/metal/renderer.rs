@@ -562,6 +562,7 @@ impl Renderer for MetalRenderer {
             ],
         )
         .with_unsupported_primitives(RendererPrimitiveSupport::metal().unsupported_primitives())
+        .with_unknown_font_families(self.planner.text_cache.unknown_font_families().to_vec())
     }
 }
 

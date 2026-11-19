@@ -474,6 +474,11 @@ impl TextGlyphCache {
         !self.uploads.is_empty()
     }
 
+    /// See [`TextMeasureCache::unknown_font_families`].
+    pub fn unknown_font_families(&self) -> &[String] {
+        self.measurer.unknown_font_families()
+    }
+
     pub fn resource_stats(&self) -> RendererResourceStats {
         RendererResourceStats {
             kind: RendererResourceKind::Glyph,
