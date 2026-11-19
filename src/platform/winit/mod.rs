@@ -6,7 +6,8 @@
 //! presenter, surface and renderer, and copy, cut and paste go through the
 //! system clipboard (arboard). Each window publishes its own accessibility
 //! tree through AccessKit and takes screen reader actions back. IME
-//! composition, menus and file drops are macOS-only for now.
+//! composition goes to the focused text field. File drops arrive on X11
+//! and Windows. App commands can use an in-window menu.
 
 mod accessibility;
 #[cfg(test)]
@@ -14,6 +15,7 @@ mod accessibility_tests;
 mod accessibility_text;
 mod accessibility_tree;
 mod clipboard;
+mod ime;
 mod input;
 mod open_windows;
 mod prompts;
