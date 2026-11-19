@@ -179,7 +179,7 @@ fn radio_options_are_toggled_and_tabs_are_selected() {
 
     assert_eq!(node(&tree, radio).toggled(), Some(Toggled::True));
     assert_eq!(node(&tree, segment).toggled(), Some(Toggled::False));
-    assert_eq!(node(&tree, tab).data().selected(), Some(true));
+    assert_eq!(node(&tree, tab).data().is_selected(), Some(true));
     assert_eq!(node(&tree, tab).toggled(), None);
 }
 
