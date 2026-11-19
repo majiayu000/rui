@@ -166,6 +166,77 @@ fn the_acceptance_controls_are_read_back_with_roles_names_values_and_state() {
 }
 
 #[test]
+fn radio_options_are_toggled_and_tabs_are_selected() {
+    let radio = ElementId(1);
+    let segment = ElementId(2);
+    let tab = ElementId(3);
+    let tree = AccessibilityTree::new(vec![
+        AccessibilityNode::new(radio, AccessibilityRole::RadioButton).with_selected(true),
+        AccessibilityNode::new(segment, AccessibilityRole::SegmentedOption).with_selected(false),
+        AccessibilityNode::new(tab, AccessibilityRole::Tab).with_selected(true),
+    ]);
+    let tree = read_back(tree_update(&tree, "Options", 1.0));
+
+    assert_eq!(node(&tree, radio).toggled(), Some(Toggled::True));
+    assert_eq!(node(&tree, segment).toggled(), Some(Toggled::False));
+    assert_eq!(node(&tree, tab).data().selected(), Some(true));
+    assert_eq!(node(&tree, tab).toggled(), None);
+}
+
+#[test]
+fn enabled_read_only_text_can_take_focus_without_being_editable() {
+    let input_id = ElementId(1);
+    let area_id = ElementId(2);
+    let disabled_id = ElementId(3);
+    let tree = AccessibilityTree::new(vec![
+        AccessibilityNode::new(input_id, AccessibilityRole::TextInput).with_read_only(true),
+        AccessibilityNode::new(area_id, AccessibilityRole::TextInput)
+            .with_read_only(true)
+            .with_multiline(true),
+        AccessibilityNode::new(disabled_id, AccessibilityRole::TextInput)
+            .with_read_only(true)
+            .with_enabled(false),
+    ]);
+    let tree = read_back(tree_update(&tree, "Read-only inputs", 1.0));
+
+    for id in [input_id, area_id] {
+        let field = node(&tree, id);
+        assert!(field.data().supports_action(Action::Focus));
+        assert!(!field.data().supports_action(Action::SetValue));
+    }
+    assert!(
+        !node(&tree, disabled_id)
+            .data()
+            .supports_action(Action::Focus)
+    );
+}
+
+#[test]
+fn a_caret_after_an_oversized_cluster_round_trips_through_accesskit() {
+    let id = ElementId(1);
+    // 255 is a scalar boundary with the acute accent and lies inside the
+    // enclosing circle. Both splits must preserve the following character.
+    for cluster in ["\u{0301}".repeat(128), "\u{20dd}".repeat(85)] {
+        let value = format!("a{cluster}b");
+        let tree = AccessibilityTree::new(vec![
+            AccessibilityNode::new(id, AccessibilityRole::TextInput)
+                .with_value(value.clone())
+                .with_text_caret(value.len()),
+        ]);
+        let tree = read_back(tree_update(&tree, "Long cluster", 1.0));
+        let field = node(&tree, id);
+        assert_eq!(field.document_range().text(), value);
+        assert_eq!(
+            field
+                .text_selection_focus()
+                .expect("text caret")
+                .to_global_usv_index(),
+            value.chars().count()
+        );
+    }
+}
+
+#[test]
 fn bounds_are_logical_and_the_window_scales_them_to_pixels() {
     let saved = Rc::new(Cell::new(0));
     let presenter = acceptance_window(&saved);

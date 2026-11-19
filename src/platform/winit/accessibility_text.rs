@@ -21,7 +21,7 @@ fn run_id(id: u64, line: usize) -> NodeId {
 }
 
 /// One line of the value: its node id, where it starts in the value, and the
-/// UTF-8 length of each of its grapheme clusters, the newline included.
+/// UTF-8 lengths of its grapheme clusters (split if oversized), including the newline.
 struct Run {
     id: NodeId,
     start: usize,
@@ -62,12 +62,7 @@ fn lines(id: u64, value: &str) -> Vec<Run> {
             id: run_id(id, runs.len()),
             start,
             text: line.to_string(),
-            // A cluster longer than 255 bytes is counted as 255; nothing
-            // typed into a field comes close.
-            lengths: line
-                .graphemes(true)
-                .map(|cluster| u8::try_from(cluster.len()).unwrap_or(u8::MAX))
-                .collect(),
+            lengths: character_lengths(line),
         });
         start += line.len();
     }
@@ -82,6 +77,25 @@ fn lines(id: u64, value: &str) -> Vec<Run> {
         });
     }
     runs
+}
+
+fn character_lengths(line: &str) -> Vec<u8> {
+    let limit = usize::from(u8::MAX);
+    let mut lengths = Vec::new();
+    for mut cluster in line.graphemes(true) {
+        // AccessKit stores the lengths in bytes as u8 and sums them to slice
+        // the text, so oversized graphemes have to yield aligned chunks.
+        while cluster.len() > limit {
+            let mut boundary = limit;
+            while !cluster.is_char_boundary(boundary) {
+                boundary -= 1;
+            }
+            lengths.push(boundary as u8);
+            cluster = &cluster[boundary..];
+        }
+        lengths.push(cluster.len() as u8);
+    }
+    lengths
 }
 
 /// The run and cluster index at UTF-8 offset `offset` of the value. An offset

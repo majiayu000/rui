@@ -181,7 +181,11 @@ fn accesskit_node(node: &AccessibilityNode) -> Node {
         out.set_toggled(Toggled::from(checked));
     }
     if let Some(selected) = node.a11y_selected() {
-        out.set_selected(selected);
+        if out.role() == Role::RadioButton {
+            out.set_toggled(Toggled::from(selected));
+        } else {
+            out.set_selected(selected);
+        }
     }
     if !node.a11y_enabled() {
         out.set_disabled();
@@ -221,9 +225,10 @@ fn accesskit_node(node: &AccessibilityNode) -> Node {
             AccessibilityAction::ScrollBackward => Action::ScrollUp,
         });
     }
-    // An element that takes actions takes focus: the dispatch focuses it
-    // before acting, as keyboard focus would.
-    if node.a11y_enabled() && !node.a11y_actions().is_empty() {
+    // Read-only text fields still accept focus for selection and copying.
+    if node.a11y_enabled()
+        && (role == AccessibilityRole::TextInput || !node.a11y_actions().is_empty())
+    {
         out.add_action(Action::Focus);
     }
     out
