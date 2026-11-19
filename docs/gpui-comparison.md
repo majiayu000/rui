@@ -395,7 +395,8 @@ Recorded observations and limits:
 Fibo's terminal draws its screen as one canvas, a row at a time. Same machine and
 GPUI revision as above, three rounds, each case in a fresh process, load average 8
 to 30. `editor_edit` ran alongside as a control. GPU columns use the matched samples
-described above (frames 10 to 69 of every window).
+described above (frames 10 to 69 of every window) with `GPU_REDRAWS=0`; how many
+frames and windows each side sampled was not recorded.
 
 | Case | Side | Instructions (M) / frame | ms p50 | ms p95 | GPU ms p50 | Allocations / frame | Draw calls | Instances | Footprint (MB) |
 |---|---|---|---|---|---|---|---|---|---|
@@ -404,15 +405,24 @@ described above (frames 10 to 69 of every window).
 | editor_edit | RUI | 2.15 | 0.17 | 0.20 | 0.078–0.153 | 354 | 2 | 1 466 | 59 |
 | editor_edit | GPUI | 8.77 | 0.64–0.65 | 0.63–0.66 | 0.169–0.302 | 1 636 | 2 | 1 908 | 81 |
 
-| Case | By instructions | By wall p50 | By GPU p50 |
-|---|---|---|---|
-| terminal_rows | RUI ahead 1.7x | RUI ahead 2.0x | tie (ranges overlap) |
-| editor_edit | RUI ahead 4.1x | RUI ahead 3.8x | RUI ahead 2.0x |
+| Case | By instructions | By wall p50 |
+|---|---|---|
+| terminal_rows | RUI ahead 1.7x | RUI ahead 2.0x |
+| editor_edit | RUI ahead 4.1x | RUI ahead 3.8x |
 
+- **No GPU verdict.** At about 0.1 ms a frame leaves the GPU idle and its time
+  follows the GPU's clock, as
+  [GPU time with matched samples](#gpu-time-with-matched-samples-2026-11-16) found;
+  only a run with the GPU kept busy gives a GPU verdict, and this one did not keep
+  it busy. The plain p50 ranges overlap for `terminal_rows`. For `editor_edit` they
+  read RUI ahead 2.0x here, a tie in the matched-sample table and RUI ahead 1.7x
+  with the GPU kept busy, which is the verdict to use.
 - **GPUI's instruction count rose** from 6.60 to 7.25 M per terminal frame (and 8.5
-  to 8.8 M in `editor_edit`) against the run on `516b8c0`, before the GPU sampling
-  rewrite (#337). RUI's did not move. The likely cause is the `counting_renderer`
-  wrapper on the GPUI side; this was not measured.
+  to 8.8 M in `editor_edit`). The 6.60 M is from the first run of this fixture, on
+  `3d1f031` (based on `516b8c0`, before the GPU sampling rewrite #337); this run is
+  `6d2dfc6`. RUI's count did not move. The cause is not known. It is not the
+  `counting_renderer` wrapper: that already walked every scene before #337, and #337
+  added only a few stores per frame to it, tens of instructions against 650 000.
 - **RUI allocates 2.4x more** per terminal frame (865 against 358). Both sides format
   the same 45 strings each frame; where RUI's extra ones go was not measured.
 - **Not the best a terminal can do on either side.** Both fixtures shape each row as

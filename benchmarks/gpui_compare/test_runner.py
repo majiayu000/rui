@@ -82,8 +82,8 @@ echo '  wall time per iteration: median 2 ms' >&2
         reported = next(line.split("=", 1)[1] for line in metadata.splitlines() if line.startswith("gpui_executable="))
         assert Path(reported).resolve() == (zed / "gpui-bench").resolve()
         assert (artifact / "rui-source.patch").read_text() == "fixture source diff\n"
-        assert (artifact / "fixtures.rs").read_text() == "// fixture source\n"
-        assert (artifact / "counting_renderer.rs").read_text() == "// fixture source\n"
+        for name in ("fixtures.rs", "gpu_time.rs", "counting_renderer.rs", "fonts.rs", "terminal.rs"):
+            assert (artifact / name).read_text() == "// fixture source\n", f"{name} not archived"
         order = (artifact / "order.txt").read_text().splitlines()
         assert [line.rsplit("=", 1)[1] for line in order] == ["rui", "gpui", "gpui", "rui"]
         for round_number in (1, 2):

@@ -37,7 +37,8 @@ echo "== artifacts: $RUN_DIR" >&2
 cp "$ROOT/benchmarks/gpui_compare/fixtures.rs" "$ZED_DIR/crates/gpui_platform/benches/rui_compare.rs"
 # The bench's own modules: `gpu_time` (both sides read GPU time through the same hook),
 # `counting_renderer` (counts draws and tags frames), `fonts` and the `terminal_rows` fixture.
-for module in gpu_time counting_renderer fonts terminal; do
+modules="gpu_time counting_renderer fonts terminal"
+for module in $modules; do
   cp "$ROOT/benchmarks/gpui_compare/$module.rs" "$ZED_DIR/crates/gpui_platform/benches/$module.rs"
 done
 manifest="$ZED_DIR/crates/gpui_platform/Cargo.toml"
@@ -74,8 +75,10 @@ fi
 git -C "$ROOT" diff --binary HEAD > "$RUN_DIR/rui-source.patch"
 git -C "$ZED_DIR" diff --binary HEAD > "$RUN_DIR/zed-source.patch"
 # Copied GPUI benches may be untracked, so retain their source explicitly.
-cp "$ROOT/benchmarks/gpui_compare/fixtures.rs" "$ROOT/benchmarks/gpui_compare/gpu_time.rs" \
-  "$ROOT/benchmarks/gpui_compare/counting_renderer.rs" "$RUN_DIR/"
+cp "$ROOT/benchmarks/gpui_compare/fixtures.rs" "$RUN_DIR/"
+for module in $modules; do
+  cp "$ROOT/benchmarks/gpui_compare/$module.rs" "$RUN_DIR/"
+done
 
 # Prints the bench executable cargo built, from its "Executable ... (path)" line.
 executable() {
