@@ -1,5 +1,6 @@
 //! One winit window: its presenter, wgpu surface and frame.
 
+use super::clipboard::WindowClipboard;
 use super::input::InputState;
 use crate::core::app::{AppContext, RedrawSource};
 use crate::core::event::{Cursor, Event, FocusEvent};
@@ -29,13 +30,14 @@ use winit::event::WindowEvent;
 use winit::event_loop::ActiveEventLoop;
 use winit::window::CursorIcon;
 
-const PLATFORM: &str = "winit";
+pub(super) const PLATFORM: &str = "winit";
 
 /// The winit window behind the shared [`PlatformWindow`] contract.
 pub(super) struct WinitWindow {
     window: Arc<winit::window::Window>,
     /// The cursor last shown, so a pointer move over the same element sets none.
     cursor: Cell<Cursor>,
+    clipboard: WindowClipboard,
 }
 
 impl WinitWindow {
@@ -70,7 +72,7 @@ impl PlatformWindow for WinitWindow {
 
     fn features(&self) -> PlatformWindowFeatures {
         PlatformWindowFeatures {
-            clipboard: false,
+            clipboard: self.clipboard.is_available(),
             renderer_attachment: false,
             ..PlatformWindowFeatures::supported()
         }
@@ -97,10 +99,18 @@ impl PlatformWindow for WinitWindow {
         self.window.request_redraw();
         Ok(())
     }
+
+    fn read_clipboard_text(&mut self) -> Result<String, PlatformWindowError> {
+        self.clipboard.read_text()
+    }
+
+    fn write_clipboard_text(&mut self, text: &str) -> Result<(), PlatformWindowError> {
+        self.clipboard.write_text(text)
+    }
 }
 
-/// Creating a window, its surface or its renderer failed.
-fn backend_error(message: impl std::fmt::Display) -> PlatformWindowError {
+/// Creating a window, its surface or its renderer, or using the clipboard, failed.
+pub(super) fn backend_error(message: impl std::fmt::Display) -> PlatformWindowError {
     PlatformWindowError::backend(PLATFORM, message.to_string())
 }
 
@@ -122,6 +132,7 @@ pub(crate) struct WinitWindowParts {
     window: Arc<winit::window::Window>,
     renderer: WgpuRenderer,
     surface: WindowSurface,
+    clipboard: WindowClipboard,
     input: InputState,
     viewport_size: Size,
     /// The refresh interval of the window's monitor, when it reports one.
@@ -135,6 +146,7 @@ impl WinitWindowParts {
         instance: &wgpu::Instance,
         id: WindowId,
         options: &WindowOptions,
+        clipboard: WindowClipboard,
     ) -> Result<Self, PlatformWindowError> {
         let window = Arc::new(
             event_loop
@@ -166,6 +178,7 @@ impl WinitWindowParts {
         Ok(Self {
             id,
             window,
+            clipboard,
             renderer,
             surface,
             input,
@@ -201,6 +214,7 @@ where
         window: WinitWindow {
             window: parts.window,
             cursor: Cell::new(Cursor::Default),
+            clipboard: parts.clipboard,
         },
         renderer: parts.renderer,
         surface: parts.surface,

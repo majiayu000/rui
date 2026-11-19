@@ -47,7 +47,11 @@ impl OpenWindows {
 
     /// Queue `event` for the window `id` names. Returns whether it is open.
     pub(super) fn push_event(&mut self, id: winit::window::WindowId, event: &WindowEvent) -> bool {
-        match self.windows.iter_mut().find(|window| window.winit_id() == id) {
+        match self
+            .windows
+            .iter_mut()
+            .find(|window| window.winit_id() == id)
+        {
             Some(window) => {
                 window.push_event(event);
                 true
@@ -194,7 +198,10 @@ mod tests {
         assert!(!windows.push_event(3.into(), &WindowEvent::RedrawRequested));
         windows.run(&mut context, Some(2.into()));
 
-        assert_eq!(*frames.borrow(), [frame(second, Size::new(640.0, 480.0), 1)]);
+        assert_eq!(
+            *frames.borrow(),
+            [frame(second, Size::new(640.0, 480.0), 1)]
+        );
     }
 
     #[test]
@@ -212,7 +219,10 @@ mod tests {
 
         frames.borrow_mut().clear();
         windows.run(&mut context, None);
-        assert_eq!(*frames.borrow(), [frame(second, Size::new(640.0, 480.0), 0)]);
+        assert_eq!(
+            *frames.borrow(),
+            [frame(second, Size::new(640.0, 480.0), 0)]
+        );
 
         windows.push_event(2.into(), &WindowEvent::CloseRequested);
         windows.run(&mut context, None);

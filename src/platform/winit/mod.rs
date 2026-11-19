@@ -3,9 +3,11 @@
 //!
 //! It drives the shared frame pipeline for the main window and for each window
 //! app code opens with [`AppContext::open_window`], every one with its own
-//! presenter, surface and renderer. IME composition, accessibility, the system
-//! clipboard, menus and file drops are macOS-only for now.
+//! presenter, surface and renderer, and copy, cut and paste go through the
+//! system clipboard (arboard). IME composition, accessibility, menus and file
+//! drops are macOS-only for now.
 
+mod clipboard;
 mod input;
 mod open_windows;
 mod window;
@@ -15,6 +17,7 @@ pub(crate) use window::{WinitWindowDriver, WinitWindowParts, winit_window};
 use crate::core::app::AppContext;
 use crate::core::window::{WindowId, WindowOptions};
 use crate::elements::element::Element;
+use clipboard::WindowClipboard;
 use open_windows::OpenWindows;
 use std::sync::Mutex;
 use std::time::Instant;
@@ -38,6 +41,7 @@ where
 {
     let mut context = context;
     context.use_background_threads();
+    let clipboard = clipboard::install_system_clipboard(&mut context);
     let main_window = match context.active_window() {
         Some(window) => window,
         None => context.register_window(options.clone()),
@@ -63,6 +67,7 @@ where
     let mut runner = Runner {
         context,
         instance: wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle()),
+        clipboard,
         main: Some((main_window, options, main)),
         windows: OpenWindows::default(),
         next_tick: None,
@@ -75,6 +80,8 @@ where
 struct Runner {
     context: AppContext,
     instance: wgpu::Instance,
+    /// The system clipboard, for the windows' `PlatformWindow` methods.
+    clipboard: WindowClipboard,
     /// The main window until the event loop can create it.
     main: Option<(WindowId, WindowOptions, MainContent)>,
     windows: OpenWindows,
@@ -99,7 +106,13 @@ impl ApplicationHandler<Wake> for Runner {
             return;
         };
         self.context.activate_window(id);
-        match WinitWindowParts::create(event_loop, &self.instance, id, &options) {
+        match WinitWindowParts::create(
+            event_loop,
+            &self.instance,
+            id,
+            &options,
+            self.clipboard.clone(),
+        ) {
             Ok(parts) => self.windows.push(main(&mut self.context, parts)),
             Err(err) => panic!("failed to open the main window: {err}"),
         }
@@ -120,10 +133,16 @@ impl ApplicationHandler<Wake> for Runner {
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         let instance = &self.instance;
+        let clipboard = &self.clipboard;
         self.windows
             .open_pending(&mut self.context, |context, pending| {
-                let parts =
-                    WinitWindowParts::create(event_loop, instance, pending.id, &pending.options)?;
+                let parts = WinitWindowParts::create(
+                    event_loop,
+                    instance,
+                    pending.id,
+                    &pending.options,
+                    clipboard.clone(),
+                )?;
                 Ok(pending.content.into_winit(context, parts))
             });
         let now = Instant::now();

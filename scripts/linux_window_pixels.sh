@@ -3,9 +3,9 @@
 # screenshots of the windows with the references in tests/linux_window/.
 #
 # Run under an X server, after building the examples with the winit feature:
-#   cargo build --no-default-features --features winit --example hello_world --example counter --example multi_window
+#   cargo build --no-default-features --features winit --example hello_world --example counter --example multi_window --example interaction_acceptance
 #   xvfb-run -a -s "-screen 0 1024x768x24" scripts/linux_window_pixels.sh
-# Needs xdotool, ImageMagick and a Vulkan driver (Mesa lavapipe in CI).
+# Needs xdotool, xclip, ImageMagick and a Vulkan driver (Mesa lavapipe in CI).
 # RUI_PIXELS_UPDATE=1 rewrites the references from this run.
 set -euo pipefail
 
@@ -84,6 +84,16 @@ xdotool key Return
 check counter_input
 xdotool windowsize --sync "$window" 500 340
 check counter_resized
+close_example
+
+# The system clipboard: paste text another app copied, then copy it back.
+open_example interaction_acceptance
+xdotool windowfocus --sync "$window"
+printf 'from-system' | xclip -selection clipboard
+# Tab focuses the first input; pasting twice shows the text came through the app.
+xdotool key Tab ctrl+v ctrl+v ctrl+a ctrl+c
+settle
+check_clipboard "$(xclip -selection clipboard -o)"
 close_example
 
 # The example opens a second window from its first frame. A click in the
