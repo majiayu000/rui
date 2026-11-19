@@ -70,7 +70,7 @@ echo '  wall time per iteration: median 2 ms' >&2
         return result, created.pop()
 
     for mode in ("absolute", "relative"):
-        result, artifact = run(PATH_MODE=mode)
+        result, artifact = run(PATH_MODE=mode, COMPARE_SAMPLES="40")
         assert result.returncode == 0, result.stderr
         assert "same frames on both sides" in result.stdout
         assert "verdict by GPU p50" in result.stdout
@@ -78,6 +78,7 @@ echo '  wall time per iteration: median 2 ms' >&2
         metadata = (artifact / "metadata.txt").read_text()
         assert "rui_revision=784374c" in metadata and "zed_revision=784374c" in metadata
         assert "repeats=2" in metadata and "cases=list_virtual_1k" in metadata
+        assert "gpu_sampling=fixed-single-window" in metadata and "gpu_samples_requested=40" in metadata
         assert " M tracked-source.rs" in metadata and "ProductVersion: fixture" in metadata
         reported = next(line.split("=", 1)[1] for line in metadata.splitlines() if line.startswith("gpui_executable="))
         assert Path(reported).resolve() == (zed / "gpui-bench").resolve()

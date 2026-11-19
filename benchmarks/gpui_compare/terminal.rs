@@ -70,9 +70,15 @@ impl Render for Terminal {
     }
 }
 
-pub(crate) fn terminal_rows(cx: &mut BenchAppContext) {
-    super::bench_view(cx, "terminal_rows", Terminal::new, |terminal, _, cx| {
-        terminal.turn += 1;
-        cx.notify();
-    });
+pub(crate) fn terminal_rows(cx: &mut BenchAppContext, sample_gpu: bool) {
+    super::bench_view(
+        cx,
+        "terminal_rows",
+        sample_gpu,
+        Terminal::new,
+        |terminal, _, cx| {
+            terminal.turn += 1;
+            cx.notify();
+        },
+    );
 }
