@@ -22,7 +22,7 @@ RUI helps you build native macOS interfaces in Rust with declarative components,
 RUI is an early-stage, pre-1.0 framework. APIs, component behavior, and renderer internals may change before the first stable release.
 
 - macOS is the supported runtime platform today, using the Metal renderer.
-- Linux and Windows have an experimental runner (feature `winit`: a winit window drawn by the wgpu backend). It opens the main window and every window app code opens with `AppContext::open_window`, each with pointer, keyboard, scroll, resize and DPI input, and copy and paste go through the system clipboard; IME composition, accessibility, menus and file drops are macOS-only so far. Web is a roadmap item.
+- Linux and Windows have an experimental runner (feature `winit`: a winit window drawn by the wgpu backend). It opens the main window and every window app code opens with `AppContext::open_window`, each with pointer, keyboard, scroll, resize and DPI input. Copy and paste use the system clipboard, and IME composition goes to the focused text field. The runner delivers file drops on X11 and Windows. Its [in-window menus](docs/API.md#menus) are available for app commands. The native accessibility bridge and system menu bar use AppKit. Web is a roadmap item.
 - Accessibility semantics and advanced component interactions are still active development areas.
 - Visual behavior should be verified on a local macOS desktop session; CI covers compile and automated tests, but not full end-to-end visual QA.
 - The recommended install path is the Git dependency shown below until crates.io package ownership or naming is resolved.

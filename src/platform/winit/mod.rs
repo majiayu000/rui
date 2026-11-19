@@ -4,8 +4,9 @@
 //! It drives the shared frame pipeline for the main window and for each window
 //! app code opens with [`AppContext::open_window`], every one with its own
 //! presenter, surface and renderer, and copy, cut and paste go through the
-//! system clipboard (arboard). IME composition, accessibility, menus and file
-//! drops are macOS-only for now.
+//! system clipboard (arboard). IME composition goes to the focused text field.
+//! File drops arrive on X11 and Windows. App commands can use an in-window
+//! menu. The native accessibility bridge and system menu bar use AppKit.
 
 mod clipboard;
 mod input;
