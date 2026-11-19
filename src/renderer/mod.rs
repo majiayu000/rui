@@ -1,8 +1,7 @@
 //! Rendering subsystem
 
-#[cfg(any(all(target_os = "macos", feature = "metal"), feature = "wgpu"))]
-mod picture;
 mod font_registry;
+mod picture;
 mod plan;
 mod primitives;
 mod resources;
