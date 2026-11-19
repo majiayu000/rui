@@ -184,7 +184,6 @@ impl View for Child {
 struct Parent {
     parts: Option<(Entity<u32>, Entity<u32>, Entity<Child>)>,
     child_renders: Rc<Cell<u32>>,
-    rendered: bool,
 }
 
 impl View for Parent {
@@ -202,19 +201,11 @@ impl View for Parent {
             });
             (parent_count, child_count, child)
         });
-        let root = rui::div().w(200.0).flex_col().child(counter_button(
-            cx,
-            PARENT_BUTTON,
-            parent_count,
-            child_count,
-        ));
-        // The child is placed from the second render on: the first one is
-        // mount's, which lays out views it places before they render (#342).
-        if std::mem::replace(&mut self.rendered, true) {
-            root.child(rui::div().h(30.0).child(rui::elements::view(child)))
-        } else {
-            root
-        }
+        rui::div()
+            .w(200.0)
+            .flex_col()
+            .child(counter_button(cx, PARENT_BUTTON, parent_count, child_count))
+            .child(rui::div().h(30.0).child(rui::elements::view(child)))
     }
 }
 
@@ -237,8 +228,6 @@ fn a_parent_listener_update_shows_in_the_child_on_the_next_frame() {
         ..Parent::default()
     };
     let mut session = mount_view(Size::new(200.0, 60.0), parent).expect("mount");
-    session.app_context_mut().request_rebuild();
-    session.frame().expect("frame that places the child");
     assert_eq!(shown(&session, CHILD_BUTTON), "shown 0");
     click_at(&mut session, Point::new(4.0, 4.0));
     session.frame().expect("frame that runs the listener");
@@ -263,8 +252,6 @@ fn a_child_listener_update_shows_in_the_parent_on_the_next_frame() {
         ..Parent::default()
     };
     let mut session = mount_view(Size::new(200.0, 60.0), parent).expect("mount");
-    session.app_context_mut().request_rebuild();
-    session.frame().expect("frame that places the child");
     assert_eq!(shown(&session, PARENT_BUTTON), "shown 0");
     click_at(&mut session, Point::new(4.0, 34.0));
     session.frame().expect("frame that runs the listener");
