@@ -152,6 +152,24 @@ changed. On macOS the first menu is the application menu. A right press runs
 choose items with `choose_menu_item(&menu, label)` and read requested context
 menus with `take_context_menu()`.
 
+The winit runner has no system menu bar. Put an `advanced_ui::menu` inside
+the view and call the same command from its selection handler and the
+shortcut bound in your keymap.
+
+```rust,ignore
+use rui::advanced_ui::menu;
+
+div()
+    .on_action(ActionId::custom("file.open"), cx.listener(|view, _| view.open()))
+    .child(menu("File", [("open", "Open…")]).on_select(cx.text_listener(
+        |view, item, _| {
+            if item == "open" {
+                view.open();
+            }
+        },
+    )))
+```
+
 #### File Dialogs
 
 `cx.prompt_for_paths(options)` and `cx.prompt_for_new_path(directory)` ask the
