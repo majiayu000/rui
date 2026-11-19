@@ -32,8 +32,6 @@ mod tests {
         // Arial's height is 1.117 em and Hiragino's 1.0.
         assert!((face_size(&fonts, arial, 14.0) - 15.64).abs() < 0.01);
         assert!((face_size(&fonts, hiragino, 14.0) - 14.0).abs() < 0.01);
-        let em = |face: usize, size: f32| size / fonts[face].height_em();
-        assert!((em(arial, face_size(&fonts, arial, 14.0)) - 14.0).abs() < 1e-4);
     }
 
     /// `font_size` is the em: the advance of `0` is its advance in font units

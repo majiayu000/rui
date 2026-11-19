@@ -64,8 +64,8 @@ pub(super) struct PlacedText {
 
 impl TextGlyphCache {
     /// The sprites of `text`'s inked glyphs, its ink origin at `origin_x`
-    /// logical pixels, drawn at `scale_factor` with glyphs `device_font_size`
-    /// pixels high: each glyph rasterized at the subpixel offset its pen
+    /// logical pixels, drawn at `scale_factor` with an em of `device_font_size`
+    /// device pixels: each glyph rasterized at the subpixel offset its pen
     /// position falls on, on first use.
     pub fn sprites(
         &mut self,
