@@ -3,7 +3,7 @@
 # screenshots of the windows with the references in tests/linux_window/.
 #
 # Run under an X server, after building the examples with the winit feature:
-#   cargo build --no-default-features --features winit --example hello_world --example counter
+#   cargo build --no-default-features --features winit --example hello_world --example counter --example multi_window
 #   xvfb-run -a -s "-screen 0 1024x768x24" scripts/linux_window_pixels.sh
 # Needs xdotool, ImageMagick and a Vulkan driver (Mesa lavapipe in CI).
 # RUI_PIXELS_UPDATE=1 rewrites the references from this run.
@@ -48,12 +48,24 @@ click() {
   sleep 0.2
 }
 
-# Compare the window with reference $1.png.
-check() {
+# Capture the window as $OUT/$1.png.
+capture() {
   # Park the pointer outside the window so no hover state shows.
   xdotool mousemove 1023 767
   settle
   import -window "$window" "PNG24:$OUT/$1.png"
+}
+
+# How many pixels differ between captures $OUT/$1.png and $OUT/$2.png.
+differing_pixels() {
+  local result
+  result="$(compare -metric AE -fuzz "$FUZZ" "$OUT/$1.png" "$OUT/$2.png" null: 2>&1)" || true
+  echo "${result%% *}"
+}
+
+# Compare the window with reference $1.png.
+check() {
+  capture "$1"
   compare_capture "$1"
 }
 
@@ -72,6 +84,35 @@ xdotool key Return
 check counter_input
 xdotool windowsize --sync "$window" 500 340
 check counter_resized
+close_example
+
+# The example opens a second window from its first frame. A click in the
+# second window redraws it and leaves the first window as it was.
+open_example multi_window
+first="$(xdotool search --all --onlyvisible --pid "$app" --name '^RUI first$' | head -n 1 || true)"
+second="$(timeout 10 xdotool search --all --sync --onlyvisible --pid "$app" --name '^RUI second$' | head -n 1 || true)"
+if [[ -z "$first" || -z "$second" ]]; then
+  echo "FAIL multi_window: expected windows titled RUI first and RUI second" >&2
+  failed=1
+else
+  # Xvfb has no window manager: both windows start at the origin.
+  timeout 10 xdotool windowmove --sync "$second" 500 0 || true
+  settle
+  presented="$(grep -c "winit window presenting through" "$OUT/multi_window.log" || true)"
+  window="$first"; capture multi_window_first_before
+  window="$second"; capture multi_window_second_before
+  # The second window's own click counter, its first button.
+  click 32 28
+  window="$first"; capture multi_window_first_after
+  window="$second"; capture multi_window_second_after
+  first_changed="$(differing_pixels multi_window_first_before multi_window_first_after)"
+  second_changed="$(differing_pixels multi_window_second_before multi_window_second_after)"
+  echo "multi_window: $presented windows presented; first $first_changed, second $second_changed pixels changed"
+  if [[ "$presented" != 2 || "$first_changed" != 0 || ! "$second_changed" =~ ^[0-9]+$ || "$second_changed" -eq 0 ]]; then
+    echo "FAIL multi_window: expected 2 windows presented, the first window unchanged and the second redrawn" >&2
+    failed=1
+  fi
+fi
 close_example
 
 exit "$failed"

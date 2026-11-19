@@ -101,14 +101,14 @@ jobs:
           sudo apt-get install -y xvfb mesa-vulkan-drivers libxkbcommon-x11-0 libxcursor1 libxrandr2 libxi6 xdotool imagemagick fonts-dejavu-core
 
       - name: Check the winit runner and examples
-        run: cargo check --locked --no-default-features --features winit --lib --example hello_world --example counter
+        run: cargo check --locked --no-default-features --features winit --lib --example hello_world --example counter --example multi_window
 
       - name: Library tests without Metal
         run: cargo test --locked --no-default-features --features winit --lib
 
       - name: Compare window pixels on lavapipe under Xvfb
         run: |
-          cargo build --locked --no-default-features --features winit --example hello_world --example counter
+          cargo build --locked --no-default-features --features winit --example hello_world --example counter --example multi_window
           xvfb-run -a -s "-screen 0 1024x768x24" scripts/linux_window_pixels.sh
 
       - name: Upload window captures
@@ -168,7 +168,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Check the winit runner and examples
-        run: cargo check --locked --no-default-features --features winit --lib --example hello_world --example counter
+        run: cargo check --locked --no-default-features --features winit --lib --example hello_world --example counter --example multi_window
 
       - name: Library tests without Metal
         run: cargo test --locked --no-default-features --features winit --lib

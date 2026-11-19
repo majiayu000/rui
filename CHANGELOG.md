@@ -32,6 +32,11 @@ All notable project changes should be recorded here.
 
 ### Runtime
 
+- The winit runner (Linux, Windows) opens the windows app code opens with
+  `AppContext::open_window` and `open_view_window` instead of closing them:
+  each gets its own presenter, surface and renderer, events go to the window
+  winit names, and closing one leaves the others running. Its window reports
+  the `multi-window` feature.
 - macOS native windows now route AppKit text input through `NSTextInputClient`,
   including composition begin, update, commit, and cancel events without
   duplicating the corresponding key text.
