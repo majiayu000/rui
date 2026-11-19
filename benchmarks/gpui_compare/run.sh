@@ -17,7 +17,7 @@ ZED_REV="${ZED_REV:-784374c6794ace885137bc4806427a5f47cc3f06}"
 REPEATS="${REPEATS:-3}"
 GPU_REDRAWS="${GPU_REDRAWS:-0}"
 export COMPARE_GPU_REDRAWS="$GPU_REDRAWS"
-CASES="${CASES:-startup list_full list_full_one_row list_virtual_1k list_virtual_100k text_paragraphs quad_grid resize_full resize_virtual editor_scroll editor_edit terminal_rows}"
+CASES="${CASES:-startup list_full list_full_one_row list_virtual_1k list_virtual_100k text_paragraphs quad_grid resize_full resize_virtual editor_scroll editor_edit terminal_rows workbench_pane workbench_full}"
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 ZED_DIR="${1:-$ROOT/target/gpui_compare/zed}"
 OUT="$ROOT/target/gpui_compare"
@@ -37,7 +37,7 @@ echo "== artifacts: $RUN_DIR" >&2
 cp "$ROOT/benchmarks/gpui_compare/fixtures.rs" "$ZED_DIR/crates/gpui_platform/benches/rui_compare.rs"
 # The bench's own modules: `gpu_time` (both sides read GPU time through the same hook),
 # `counting_renderer` (counts draws and tags frames), `fonts` and the `terminal_rows` fixture.
-modules="gpu_time counting_renderer fonts terminal"
+modules="gpu_time counting_renderer fonts terminal workbench workbench_data"
 for module in $modules; do
   cp "$ROOT/benchmarks/gpui_compare/$module.rs" "$ZED_DIR/crates/gpui_platform/benches/$module.rs"
 done

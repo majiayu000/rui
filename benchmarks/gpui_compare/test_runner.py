@@ -12,7 +12,11 @@ with tempfile.TemporaryDirectory(prefix="rui-gpu-runner-") as temporary:
     bench = root / "benchmarks/gpui_compare"
     bench.mkdir(parents=True)
     shutil.copyfile(Path(__file__).with_name("run.sh"), bench / "run.sh")
-    for name in ("fixtures.rs", "gpu_time.rs", "counting_renderer.rs", "fonts.rs", "terminal.rs"):
+    sources = (
+        "fixtures.rs", "gpu_time.rs", "counting_renderer.rs", "fonts.rs", "terminal.rs",
+        "workbench.rs", "workbench_data.rs",
+    )
+    for name in sources:
         (bench / name).write_text("// fixture source\n")
     zed = root / "zed checkout"
     (zed / ".git").mkdir(parents=True)
@@ -88,7 +92,7 @@ echo '  wall time per iteration: median 2 ms' >&2
         assert (artifact / "rui-source.patch").read_text() == "fixture source diff\n"
         assert (artifact / "rui-Cargo.lock").read_text() == "RUI locked dependencies\n"
         assert (artifact / "zed-Cargo.lock").read_text() == "Zed locked dependencies\n"
-        for name in ("fixtures.rs", "gpu_time.rs", "counting_renderer.rs", "fonts.rs", "terminal.rs"):
+        for name in sources:
             assert (artifact / name).read_text() == "// fixture source\n", f"{name} not archived"
         order = (artifact / "order.txt").read_text().splitlines()
         assert [line.rsplit("=", 1)[1] for line in order] == ["rui", "gpui", "gpui", "rui"]

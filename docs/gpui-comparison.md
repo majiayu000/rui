@@ -73,6 +73,14 @@ to Metal without waiting for the GPU.
 | `editor_scroll` | a 10 000-line code view: 20 px lines of 13 px SF Mono, a 64 px gutter of line numbers, 11 colored tokens per line (a comment every ninth line), the cursor's line highlighted; starts at line 5001 | scrolls down one line; the cursor moves with it | `virtual_list` of rows: gutter `text` + `shared_styled_text` of `span_range(..).color(..)` over the line's `Arc<str>` (the editor run below used `styled_text` of `span(..)`, a `String` per token) | `uniform_list` of rows: gutter string + `StyledText::with_highlights` |
 | `editor_edit` | same, not scrolling | the cursor line's first identifier ends in a new letter | the line's tokens change and its `Arc<str>` and ranges are rebuilt | the line's tokens change and its `SharedString` and highlights are rebuilt |
 | `terminal_rows` | a terminal screen: 45 rows of 20 px in 13 px SF Mono, each a frame counter or `static`, the row number and 60 hex characters | rows 0–19 get the new frame counter; rows 20–44 keep their text | one `canvas`, a `Primitive::Text` per row (`benches/compare_terminal`) | one `canvas`, `shape_line` + `ShapedLine::paint` per row (`benchmarks/gpui_compare/terminal.rs`) |
+| `workbench_pane`, `workbench_full` | a 288 px virtual sidebar with 2,000 session rows, 8 spaces and 60 bindings, beside the same terminal screen | terminal ticks each turn. The full case also invalidates the sidebar and root | two entity-backed views with a `virtual_list` and terminal canvas | cached `uniform_list` view and terminal canvas. Full redraw notifies both views |
+
+The workbench cases share their data and geometry in
+`benchmarks/gpui_compare/workbench_data.rs`. Both sides check 45 visible sidebar
+rows and 45 terminal rows, and ensure pane-only changes retain the sidebar. The
+fixture measures a synthetic application frame. Fibo's real workbench also has
+session subscriptions, live terminal processes, its own formatting and a host
+process, which are outside this fixture.
 
 The editor and terminal cases use the same font file on both sides,
 `/System/Library/Fonts/SFNSMono.ttf`. RUI calls it "SF Mono"; Core Text hides it from
