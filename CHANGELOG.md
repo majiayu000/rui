@@ -49,6 +49,10 @@ All notable project changes should be recorded here.
 
 ### Runtime
 
+- An entity one view's listener updates shows in the other views that read it
+  on the next frame, parent to child and child to parent, instead of one frame
+  later; child views' queued listener updates run before the frame works out
+  what renders (#341).
 - The winit runner (Linux and Windows) copies, cuts and pastes through the
   system clipboard via arboard, X11 or Wayland on Linux, instead of an
   in-memory clipboard only the app could see. Without a system clipboard it
