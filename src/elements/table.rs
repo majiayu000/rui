@@ -588,6 +588,7 @@ impl Element for Table {
                     font_size: cell.font_size,
                     font_weight: cell.font_weight.to_value(),
                     font_family: None,
+                    font_features: Default::default(),
                     line_height: CELL_LINE_HEIGHT,
                     align: cell.align,
                     direction: BaseDirection::Auto,

@@ -73,6 +73,7 @@ mod metal {
             font_size: 24.0,
             font_weight: 400,
             font_family: family.map(Into::into),
+            font_features: Default::default(),
             line_height: 1.2,
             align: TextAlign::Left,
             direction: BaseDirection::Auto,

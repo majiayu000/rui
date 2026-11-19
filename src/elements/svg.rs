@@ -343,6 +343,7 @@ fn paint_error(cx: &mut PaintContext, bounds: Bounds, message: &str) {
         font_size: 11.0,
         font_weight: 400,
         font_family: None,
+        font_features: Default::default(),
         line_height: 1.2,
         align: TextAlign::Left,
         direction: BaseDirection::Auto,

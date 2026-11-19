@@ -521,6 +521,7 @@ fn retained_metrics_stay_bounded_for_ever_changing_text() {
                 font_weight: 400,
                 font_family: "test".to_string(),
                 direction: BaseDirection::Auto,
+                font_features: Vec::new(),
             },
             TextMetrics::empty(),
         );
@@ -546,6 +547,7 @@ fn retained_metrics_stay_within_the_byte_budget() {
                 font_weight: 400,
                 font_family: "test".to_string(),
                 direction: BaseDirection::Auto,
+                font_features: Vec::new(),
             },
             TextMetrics::empty(),
         );
@@ -561,6 +563,7 @@ fn retained_metrics_stay_within_the_byte_budget() {
             font_weight: 400,
             font_family: "test".to_string(),
             direction: BaseDirection::Auto,
+            font_features: Vec::new(),
         },
         TextMetrics::empty(),
     );

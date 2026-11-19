@@ -551,6 +551,7 @@ impl TextGlyphCache {
                 font_family: request.font_family.map(str::to_string),
                 line_height: request.line_height,
                 direction: request.direction,
+                font_features: request.font_features.to_vec(),
                 text: text.clone(),
                 last_used: self.frame,
             },

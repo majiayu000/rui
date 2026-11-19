@@ -200,6 +200,7 @@ fn primitive_line(index: usize, primitive: &Primitive) -> Result<String, Primiti
             line_height,
             align,
             direction: _,
+            font_features: _,
         } => format!(
             "primitive[{index}].text bounds={} content=\"{}\" color={} font_size={} weight={} family={} line_height={} align={:?}",
             bounds_text(*bounds),

@@ -281,6 +281,7 @@ mod tests {
                 font_size: 14.0,
                 font_weight: 400,
                 font_family: None,
+                font_features: Default::default(),
                 line_height: 1.2,
                 align: TextAlign::Left,
                 direction: BaseDirection::Auto,

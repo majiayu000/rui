@@ -110,6 +110,7 @@ fn a_glyph_is_the_same_raster_as_its_character_in_text() {
         font_size: FONT_SIZE,
         font_weight: 400,
         font_family: None,
+        font_features: Default::default(),
         line_height: 1.2,
         align: TextAlign::Left,
         direction: BaseDirection::Auto,

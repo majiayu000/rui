@@ -19,6 +19,7 @@ use std::sync::Arc;
 
 mod atlas;
 mod complex_breaks;
+mod features;
 mod glyph;
 pub(crate) mod hash;
 mod lru;
@@ -27,6 +28,8 @@ mod wrap;
 
 pub use crate::renderer::font_registry::{register_font, register_font_file};
 pub use crate::renderer::text_bidi::BaseDirection;
+pub use features::{FontFeature, FontFeatures};
+pub(crate) use features::rustybuzz_features;
 pub use crate::renderer::text_shaping::{
     TextCluster, TextDirection, TextRun, TextScript, TextShapeDiagnostic, TextShapePlan,
 };
@@ -74,6 +77,8 @@ pub struct TextRequest<'a> {
     pub line_height: f32,
     /// The base direction of the paragraph the text is a line of.
     pub direction: BaseDirection,
+    /// OpenType feature settings over the font's defaults.
+    pub font_features: &'a [FontFeature],
 }
 
 impl<'a> TextRequest<'a> {
@@ -91,12 +96,21 @@ impl<'a> TextRequest<'a> {
             font_family,
             line_height,
             direction: BaseDirection::Auto,
+            font_features: &[],
         }
     }
 
     /// The same request laid out at the paragraph level `direction` gives.
     pub fn with_direction(self, direction: BaseDirection) -> Self {
         Self { direction, ..self }
+    }
+
+    /// The same request shaped with `font_features`.
+    pub fn with_font_features(self, font_features: &'a [FontFeature]) -> Self {
+        Self {
+            font_features,
+            ..self
+        }
     }
 }
 
@@ -132,6 +146,7 @@ struct TextMeasureKey {
     font_weight: u16,
     font_family: String,
     direction: BaseDirection,
+    font_features: Vec<FontFeature>,
 }
 
 impl TextMeasureKey {
@@ -143,6 +158,7 @@ impl TextMeasureKey {
             font_weight: request.font_weight,
             font_family: resolved_family.to_string(),
             direction: request.direction,
+            font_features: request.font_features.to_vec(),
         }
     }
 
@@ -153,6 +169,7 @@ impl TextMeasureKey {
             && self.font_weight == request.font_weight
             && self.font_family == resolved_family
             && self.direction == request.direction
+            && self.font_features == request.font_features
     }
 
     fn hasher(&self) -> FastHasher {
@@ -163,11 +180,13 @@ impl TextMeasureKey {
         self.font_weight.hash(&mut hasher);
         self.font_family.hash(&mut hasher);
         self.direction.hash(&mut hasher);
+        self.font_features.as_slice().hash(&mut hasher);
         hasher
     }
 
     fn retained_bytes(&self) -> usize {
         self.content.len().saturating_add(self.font_family.len())
+            + std::mem::size_of_val(self.font_features.as_slice())
     }
 }
 
@@ -180,6 +199,7 @@ fn request_hasher(request: &TextRequest<'_>, resolved_family: &str) -> FastHashe
     request.font_weight.hash(&mut hasher);
     resolved_family.hash(&mut hasher);
     request.direction.hash(&mut hasher);
+    request.font_features.hash(&mut hasher);
     hasher
 }
 
@@ -616,7 +636,8 @@ impl TextRasterCache {
             request.font_family,
             request.line_height,
         )
-        .with_direction(request.direction);
+        .with_direction(request.direction)
+        .with_font_features(request.font_features);
         self.measurer.sync_font_snapshot();
         self.invalidate_for_font_generation_change();
         if let Some(error) = self.measurer.font_error.as_ref() {

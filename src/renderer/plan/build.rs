@@ -395,6 +395,7 @@ impl<T: Clone> FramePlanner<T> {
                 font_size,
                 font_weight,
                 font_family,
+                font_features,
                 line_height,
                 align,
                 direction,
@@ -410,7 +411,8 @@ impl<T: Clone> FramePlanner<T> {
                         font_family.as_deref(),
                         *line_height,
                     )
-                    .with_direction(*direction),
+                    .with_direction(*direction)
+                    .with_font_features(font_features.as_slice()),
                     *align,
                     walk.clip,
                     walk.scale_factor,

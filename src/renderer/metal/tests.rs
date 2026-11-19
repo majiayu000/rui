@@ -96,6 +96,7 @@ pub(crate) fn random_scene(seed: u64) -> Scene {
                 font_size: rng.range(8.0, 24.0),
                 font_weight: 400,
                 font_family: None,
+                font_features: Default::default(),
                 line_height: 1.2,
                 align: [TextAlign::Left, TextAlign::Center, TextAlign::Right]
                     [rng.below(3) as usize],

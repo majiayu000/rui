@@ -1,7 +1,7 @@
 //! What a kept shaping result was shaped from, and trimming the kept results.
 
 use super::super::hash::FastHasher;
-use super::super::{BaseDirection, TextRequest};
+use super::super::{BaseDirection, FontFeature, TextRequest};
 use super::{ShapedText, TextGlyphCache};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -13,6 +13,7 @@ pub(super) struct ShapedEntry {
     pub(super) font_family: Option<String>,
     pub(super) line_height: f32,
     pub(super) direction: BaseDirection,
+    pub(super) font_features: Vec<FontFeature>,
     pub(super) text: Option<Arc<ShapedText>>,
     pub(super) last_used: u64,
 }
@@ -29,6 +30,7 @@ impl ShapedEntry {
             && self.font_family.as_deref() == request.font_family
             && self.line_height.to_bits() == request.line_height.to_bits()
             && self.direction == request.direction
+            && self.font_features == request.font_features
     }
 }
 
@@ -41,6 +43,7 @@ pub(super) fn shape_hash(request: &TextRequest<'_>) -> u64 {
     request.font_family.hash(&mut hasher);
     request.line_height.to_bits().hash(&mut hasher);
     request.direction.hash(&mut hasher);
+    request.font_features.hash(&mut hasher);
     hasher.finish()
 }
 

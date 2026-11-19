@@ -543,6 +543,7 @@ impl Element for TextArea {
                 font_size: 14.0,
                 font_weight: 400,
                 font_family: None,
+                font_features: Default::default(),
                 line_height: 1.0,
                 align: crate::elements::text::TextAlign::Left,
                 direction: BaseDirection::Auto,
