@@ -3,7 +3,7 @@
 use super::clipboard::WindowClipboard;
 use super::input::InputState;
 use crate::core::app::{AppContext, RedrawSource};
-use crate::core::event::{Cursor, Event, FocusEvent};
+use crate::core::event::{Cursor, Event};
 use crate::core::frame_pipeline::{
     FramePipeline, FramePipelineError, FramePresentation, FrameStage, IdlePolicy,
 };
@@ -379,13 +379,7 @@ fn dispatch_events<E: Element>(
         });
     }
     if let Some(focused) = focus_changed {
-        let event = if focused {
-            Event::Focus(FocusEvent { focused: true })
-        } else {
-            presenter.set_focused_element(None);
-            Event::Blur(FocusEvent { focused: false })
-        };
-        presenter.handle_window_event(&event);
+        presenter.handle_window_focus(focused);
         schedule_platform_redraw(window, context, RedrawSource::PlatformFocus);
     }
     if close_requested {

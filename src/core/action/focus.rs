@@ -59,6 +59,28 @@ pub(crate) fn focus_order<E: Element>(
     Some(order)
 }
 
+/// Whether focus can go back to `id`: it is still in the tree and not
+/// disabled, and is `scope` or inside it when `scope` is in the tree. An
+/// element without an accessibility node counts as enabled, but not as inside.
+pub(crate) fn can_refocus<E: Element>(root: &E, id: ElementId, scope: Option<ElementId>) -> bool {
+    if !root.contains_id(id) {
+        return false;
+    }
+    let nodes = match root.accessibility_nodes(&AccessibilityContext::new(None)) {
+        Ok(nodes) => nodes,
+        Err(err) => {
+            log::error!("cannot restore focus: the tree's accessibility nodes failed: {err}");
+            return false;
+        }
+    };
+    match scope.and_then(|scope| find_node(&nodes, scope)) {
+        Some(scope) => {
+            find_node(std::slice::from_ref(scope), id).is_some_and(AccessibilityNode::a11y_enabled)
+        }
+        None => find_node(&nodes, id).is_none_or(AccessibilityNode::a11y_enabled),
+    }
+}
+
 /// Whether `id` is `scope` or inside it.
 pub(crate) fn scope_contains<E: Element>(root: &E, scope: ElementId, id: ElementId) -> bool {
     let Ok(nodes) = root.accessibility_nodes(&AccessibilityContext::new(None)) else {
