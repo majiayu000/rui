@@ -44,6 +44,9 @@ pub(super) struct WinitWindow {
     /// The cursor last shown, so a pointer move over the same element sets none.
     cursor: Cell<Cursor>,
     clipboard: WindowClipboard,
+    /// The title last set, which names the window to screen readers. winit
+    /// cannot read it back on X11.
+    title: String,
 }
 
 impl WinitWindow {
@@ -98,6 +101,7 @@ impl PlatformWindow for WinitWindow {
 
     fn set_title(&mut self, title: &str) -> Result<(), PlatformWindowError> {
         self.window.set_title(title);
+        self.title = title.to_string();
         Ok(())
     }
 
@@ -142,6 +146,7 @@ pub(crate) struct WinitWindowParts {
     surface: WindowSurface,
     clipboard: WindowClipboard,
     accessibility: WindowAccessibility,
+    title: String,
     input: InputState,
     viewport_size: Size,
     /// The refresh interval of the window's monitor, when it reports one.
@@ -197,6 +202,7 @@ impl WinitWindowParts {
             window,
             clipboard,
             accessibility: WindowAccessibility::new(Some(adapter)),
+            title: options.title.clone(),
             renderer,
             surface,
             input,
@@ -232,6 +238,7 @@ where
         window: WinitWindow {
             window: parts.window,
             cursor: Cell::new(Cursor::Default),
+            title: parts.title,
             clipboard: parts.clipboard,
         },
         renderer: parts.renderer,
@@ -381,12 +388,10 @@ where
             Ok(None) => false,
             Err(err) => panic!("frame failed: {err}"),
         };
-        // Checked first, so a window no screen reader reads asks winit for
-        // no title.
         if self.accessibility.is_reading() && (frame_ran || self.accessibility.needs_tree()) {
             self.accessibility.publish(
                 &self.presenter,
-                &self.window.window.title(),
+                &self.window.title,
                 self.input.scale_factor,
             );
         }
