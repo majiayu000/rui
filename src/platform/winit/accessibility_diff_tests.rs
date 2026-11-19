@@ -101,7 +101,7 @@ fn incremental_updates_build_the_same_tree_as_whole_ones() {
             group(1, vec![button(3, "b"), button(2, "a")]),
         ]),
     ];
-    let mut accessibility = WindowAccessibility::new(None);
+    let mut accessibility = WindowAccessibility::new(None, Default::default());
     assert!(accessibility.handle_event(AccessKitEvent::InitialTreeRequested));
     let mut held = None;
     for (index, (step, scale, title)) in steps
@@ -130,7 +130,7 @@ fn incremental_updates_build_the_same_tree_as_whole_ones() {
 
 #[test]
 fn an_update_names_only_the_nodes_that_changed() {
-    let mut accessibility = WindowAccessibility::new(None);
+    let mut accessibility = WindowAccessibility::new(None, Default::default());
     assert!(accessibility.handle_event(AccessKitEvent::InitialTreeRequested));
     let tree = |label: &str| {
         AccessibilityTree::new(vec![group(
@@ -166,4 +166,36 @@ fn an_update_names_only_the_nodes_that_changed() {
         .expect("the whole tree again");
     assert_eq!(again.nodes.len(), 51);
     assert!(again.tree.is_some());
+}
+
+#[test]
+fn an_adapter_waiting_for_a_whole_tree_gets_one_before_the_event_arrives() {
+    use super::accessibility_diff::{WholeTree, pick};
+    let mut accessibility = WindowAccessibility::new(None, Default::default());
+    assert!(accessibility.handle_event(AccessKitEvent::InitialTreeRequested));
+    let tree = |label: &str| AccessibilityTree::new(vec![group(1, vec![button(2, label)])]);
+    accessibility
+        .next_update(tree("a"), TextGeometry::new(), "Window", 1.0)
+        .expect("the whole tree");
+    let full = tree_update(&tree("b"), &TextGeometry::new(), "Window", 1.0);
+    let changes = accessibility
+        .next_update(tree("b"), TextGeometry::new(), "Window", 1.0)
+        .expect("a change");
+
+    let whole = WholeTree::default();
+    assert!(
+        pick(full.clone(), Some(changes.clone()), &whole)
+            .tree
+            .is_none()
+    );
+    // The adapter deactivated and started again on its own thread, and the
+    // InitialTreeRequested event is still in the event loop's queue.
+    whole.set();
+    let picked = pick(full.clone(), Some(changes.clone()), &whole);
+    assert!(picked.tree.is_some(), "the whole tree");
+    Tree::new(picked, true);
+    assert!(
+        pick(full, Some(changes), &whole).tree.is_none(),
+        "once only"
+    );
 }

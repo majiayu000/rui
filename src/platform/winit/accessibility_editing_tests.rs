@@ -75,7 +75,7 @@ struct Reader {
 
 impl Reader {
     fn new() -> Self {
-        let mut accessibility = WindowAccessibility::new(None);
+        let mut accessibility = WindowAccessibility::new(None, Default::default());
         assert!(accessibility.handle_event(AccessKitEvent::InitialTreeRequested));
         Self {
             accessibility,

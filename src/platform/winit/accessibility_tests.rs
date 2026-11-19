@@ -59,7 +59,7 @@ fn acceptance_window(saved: &Rc<Cell<u32>>) -> Presenter<Div> {
 
 /// A window a screen reader asked to read.
 fn reading() -> WindowAccessibility {
-    let mut accessibility = WindowAccessibility::new(None);
+    let mut accessibility = WindowAccessibility::new(None, Default::default());
     assert!(accessibility.handle_event(AccessKitEvent::InitialTreeRequested));
     accessibility
 }
@@ -278,7 +278,7 @@ fn bounds_are_logical_and_the_window_scales_them_to_pixels() {
 fn a_tree_is_published_only_while_read_and_only_when_it_changed() {
     let saved = Rc::new(Cell::new(0));
     let mut presenter = acceptance_window(&saved);
-    let mut accessibility = WindowAccessibility::new(None);
+    let mut accessibility = WindowAccessibility::new(None, Default::default());
     assert!(
         publish(&mut accessibility, &presenter, 1.0).is_none(),
         "no tree is built before a screen reader asks"

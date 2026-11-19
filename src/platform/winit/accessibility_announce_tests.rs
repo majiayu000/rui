@@ -31,7 +31,7 @@ fn window() -> Presenter<Div> {
 }
 
 fn reading() -> WindowAccessibility {
-    let mut accessibility = WindowAccessibility::new(None);
+    let mut accessibility = WindowAccessibility::new(None, Default::default());
     assert!(accessibility.handle_event(AccessKitEvent::InitialTreeRequested));
     accessibility
 }

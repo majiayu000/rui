@@ -6,7 +6,7 @@
 //! asks for the tree, so a window no screen reader reads pays nothing.
 
 use super::accessibility_announce::{Announcement, Announcer, add_announcement};
-use super::accessibility_diff::{HeldNodes, changes};
+use super::accessibility_diff::{HeldNodes, WholeTree, changes, pick};
 use super::accessibility_tree::{TextGeometry, request_for_action, tree_update};
 use crate::core::ElementId;
 use crate::core::accessibility::{
@@ -39,12 +39,16 @@ pub(super) struct WindowAccessibility {
     published: Option<Published>,
     requests: Vec<(ElementId, AccessibilityRequest)>,
     announcer: Announcer,
+    /// Set by the adapter when it waits for a whole tree.
+    whole: WholeTree,
 }
 
 impl WindowAccessibility {
-    pub(super) fn new(adapter: Option<accesskit_winit::Adapter>) -> Self {
+    /// `whole` is the flag the adapter's activation handler sets.
+    pub(super) fn new(adapter: Option<accesskit_winit::Adapter>, whole: WholeTree) -> Self {
         Self {
             adapter,
+            whole,
             active: false,
             published: None,
             requests: Vec::new(),
@@ -160,17 +164,23 @@ impl WindowAccessibility {
             }
         };
         let text = text_geometry(presenter, &tree);
-        if let Some(update) = self.next_update(tree, text, title, scale_factor)
-            && let Some(adapter) = &mut self.adapter
-        {
-            adapter.update_if_active(|| update);
+        let Some((full, changes)) = self.prepare(tree, text, title, scale_factor) else {
+            return;
+        };
+        let whole = &self.whole;
+        if let Some(adapter) = &mut self.adapter {
+            // An adapter waiting for a whole tree gets one, even if the
+            // event saying it waits has not arrived.
+            adapter.update_if_active(|| pick(full, changes, whole));
         }
     }
 
     /// The update that brings the platform to `tree`, or None when no
     /// assistive technology is reading or it already holds the tree. The
     /// first update carries the whole tree, later ones only the nodes that
-    /// changed.
+    /// changed. (The runner publishes through [`Self::publish`], which also
+    /// sends a whole tree to an adapter that waits for one.)
+    #[cfg(test)]
     pub(super) fn next_update(
         &mut self,
         tree: AccessibilityTree,
@@ -178,6 +188,19 @@ impl WindowAccessibility {
         title: &str,
         scale_factor: f64,
     ) -> Option<TreeUpdate> {
+        let (full, changes) = self.prepare(tree, text, title, scale_factor)?;
+        Some(changes.unwrap_or(full))
+    }
+
+    /// The whole update for `tree` and, when the platform already holds a
+    /// tree, the incremental one; None when nothing reads or nothing changed.
+    fn prepare(
+        &mut self,
+        tree: AccessibilityTree,
+        text: TextGeometry,
+        title: &str,
+        scale_factor: f64,
+    ) -> Option<(TreeUpdate, Option<TreeUpdate>)> {
         let unchanged = self.published.as_ref().is_some_and(|published| {
             published.tree == tree
                 && published.text == text
@@ -193,7 +216,7 @@ impl WindowAccessibility {
         if let Some(announcement) = &announcement {
             add_announcement(&mut full, announcement);
         }
-        let (update, nodes) = changes(full, self.published.as_ref().map(|held| &held.nodes));
+        let (incremental, nodes) = changes(&full, self.published.as_ref().map(|held| &held.nodes));
         self.published = Some(Published {
             tree,
             text,
@@ -202,7 +225,7 @@ impl WindowAccessibility {
             announcement,
             nodes,
         });
-        Some(update)
+        Some((full, incremental))
     }
 }
 
