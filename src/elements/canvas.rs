@@ -221,6 +221,10 @@ impl Element for Canvas {
         if self.on_pointer.is_some() {
             cx.register_hit_region(self.id.get(), bounds);
         }
+        // The painter emits only visual primitives and clips.
+        if cx.hit_collection {
+            return;
+        }
         cx.scene.push_layer(bounds);
         match self.cache_key {
             None => (self.paint)(bounds, &mut Painter { scene: cx.scene }),
