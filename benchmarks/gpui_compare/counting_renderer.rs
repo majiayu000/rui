@@ -1,6 +1,6 @@
 //! GPUI's headless renderer wrapped for the comparison: it counts draw calls and
-//! instances per scene and tags each frame for the GPU sample. `run.sh` copies it next
-//! to the fixtures, which declare `mod counting_renderer;`.
+//! instances per scene, and can redraw scenes during the dedicated GPU sample.
+//! `run.sh` copies it next to the fixtures.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -11,26 +11,15 @@ pub(crate) static SCENES: std::sync::Mutex<Vec<(u64, u64)>> = std::sync::Mutex::
 /// Scenes with at least one glyph since the last check in [`counted`].
 pub(crate) static FRAMES_WITH_GLYPHS: AtomicUsize = AtomicUsize::new(0);
 
-/// Frames RUI's comparison bench discards before it samples, and frames it samples:
-/// GPU time is taken from the same frames of every GPUI window.
-pub(crate) const GPU_WARMUP: usize = 10;
-pub(crate) const GPU_SAMPLES: usize = 60;
-/// Windows made so far; each gets its own renderer.
-static WINDOWS: AtomicUsize = AtomicUsize::new(0);
-
 /// GPUI's headless Metal renderer of one window, counting what each scene asks of the
-/// GPU and tagging each frame with the window and its place in it, for
-/// [`gpu_time::steady_samples`]. Its Metal renderer issues one instanced draw per
+/// GPU. Its Metal renderer issues one instanced draw per
 /// `Scene::batches()` entry; paths and surfaces would add more, but no fixture draws
 /// them.
 ///
 /// With `COMPARE_GPU_REDRAWS=N`, each scene is drawn N more times right after it, as
-/// RUI's bench does, for [`gpu_time::steady_redraws`]. They run inside the frame
-/// Criterion times, so that run's CPU columns include them.
+/// RUI's bench does. They run only in the GPU sample.
 pub(crate) struct CountingRenderer {
     inner: Box<dyn PlatformHeadlessRenderer>,
-    window: usize,
-    frames: usize,
     redraws: usize,
 }
 
@@ -38,18 +27,8 @@ impl CountingRenderer {
     pub(crate) fn new(inner: Box<dyn PlatformHeadlessRenderer>) -> Self {
         Self {
             inner,
-            window: WINDOWS.fetch_add(1, Ordering::Relaxed),
-            frames: 0,
             redraws: crate::gpu_time::redraws(),
         }
-    }
-
-    /// Tags the next frame, and returns its tag.
-    fn next_frame(&mut self) -> usize {
-        let tag = crate::gpu_time::tag(self.window, self.frames);
-        crate::gpu_time::set_frame(tag);
-        self.frames += 1;
-        tag
     }
 
     fn count(scene: &Scene) {
@@ -81,7 +60,6 @@ impl PlatformHeadlessRenderer for CountingRenderer {
         size: gpui::Size<DevicePixels>,
     ) -> anyhow::Result<image::RgbaImage> {
         Self::count(scene);
-        self.next_frame();
         self.inner.render_scene_to_image(scene, size)
     }
 
@@ -91,11 +69,13 @@ impl PlatformHeadlessRenderer for CountingRenderer {
         size: gpui::Size<DevicePixels>,
     ) -> anyhow::Result<()> {
         Self::count(scene);
-        let tag = self.next_frame();
         self.inner.render_scene(scene, size)?;
-        crate::gpu_time::set_frame(crate::gpu_time::redraw_tag(tag));
-        for _ in 0..self.redraws {
-            self.inner.render_scene(scene, size)?;
+        if let Some(frame) = crate::gpu_time::sample_frame().filter(|_| self.redraws > 0) {
+            crate::gpu_time::set_frame(crate::gpu_time::redraw_tag(frame));
+            for _ in 0..self.redraws {
+                self.inner.render_scene(scene, size)?;
+            }
+            crate::gpu_time::set_frame(frame);
         }
         Ok(())
     }
