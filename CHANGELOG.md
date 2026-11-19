@@ -115,8 +115,7 @@ All notable project changes should be recorded here.
   text input's value as text runs with its caret. Press, focus, set value,
   increment, decrement and scroll requests come back through the same dispatch
   the macOS runner uses. The tree is built only while an assistive technology
-  reads it. Not yet: announcements of action feedback, and text editing beyond
-  replacing the value (#344).
+  reads it (#344).
 - A screen reader can now select text in a winit window's text inputs (AT-SPI
   `set_selection` / `set_caret_offset`, UI Automation `TextPatternRange.Select`),
   including read-only ones, replace the selection (AccessKit
@@ -133,6 +132,10 @@ All notable project changes should be recorded here.
   under the window, added afresh for each message, so AT-SPI sends
   `object:announcement` and UI Automation `LiveRegionChanged`. Focus changes
   are not announced: the tree's focus already carries them (#344).
+- After the first, whole tree, each AccessKit update from the winit runner
+  names only the nodes that changed (a parent whose children changed among
+  them) instead of the whole tree; a reader that starts again gets the whole
+  tree (#344).
 - CI reads the winit runner's accessibility tree back over AT-SPI under
   Wayland (a headless sway) as well as X11, with the same checks
   (`scripts/wayland_atspi_tree.sh`). AT-SPI goes over D-Bus, so the tree,

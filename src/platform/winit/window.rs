@@ -2,6 +2,7 @@
 
 use super::UserEvent;
 use super::accessibility::WindowAccessibility;
+use super::accessibility_diff::{Activation, WholeTree};
 use super::clipboard::WindowClipboard;
 use super::ime::ImeSession;
 use super::input::{InputState, file_drop_position};
@@ -215,9 +216,16 @@ impl WinitWindowParts {
                 .create_window(window_attributes(options).with_visible(false))
                 .map_err(backend_error)?,
         );
-        let adapter = accesskit_winit::Adapter::with_event_loop_proxy(
+        let whole = WholeTree::default();
+        let activation = Activation {
+            window_id: window.id(),
+            proxy: accessibility_proxy.clone(),
+            whole: whole.clone(),
+        };
+        let adapter = accesskit_winit::Adapter::with_mixed_handlers(
             event_loop,
             &window,
+            activation,
             accessibility_proxy,
         );
         window.set_visible(true);
@@ -247,7 +255,7 @@ impl WinitWindowParts {
             id,
             window,
             clipboard,
-            accessibility: WindowAccessibility::new(Some(adapter)),
+            accessibility: WindowAccessibility::new(Some(adapter), whole),
             title: options.title.clone(),
             renderer,
             surface,
