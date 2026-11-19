@@ -4,7 +4,7 @@
 #
 # Run with Windows PowerShell (its .NET has System.Drawing) in an interactive
 # desktop session, after building the examples:
-#   cargo build --no-default-features --features winit --example hello_world --example counter
+#   cargo build --no-default-features --features winit --example hello_world --example counter --example interaction_acceptance
 #   powershell -File scripts/windows_window_pixels.ps1
 # $env:RUI_PIXELS_UPDATE = "1" rewrites the references from this run.
 $ErrorActionPreference = "Stop"
@@ -75,6 +75,13 @@ public static class WindowPixels {
     public static void Key(byte vk) {
         keybd_event(vk, 0, 0, UIntPtr.Zero);
         keybd_event(vk, 0, 0x2, UIntPtr.Zero);
+    }
+
+    /// Press vk while modifier is held.
+    public static void Chord(byte modifier, byte vk) {
+        keybd_event(modifier, 0, 0, UIntPtr.Zero);
+        Key(vk);
+        keybd_event(modifier, 0, 0x2, UIntPtr.Zero);
     }
 
     public static void Capture(Rectangle area, string path) {
@@ -194,6 +201,25 @@ Check "counter_input"
 $scale = Scale
 [WindowPixels]::ResizeClient($script:window, [int](500 * $scale), [int](340 * $scale))
 Check "counter_resized"
+Close-Example
+
+# The system clipboard: paste text another app copied, then copy it back.
+Open-Example "interaction_acceptance"
+# A click on the empty bottom of the window focuses it.
+Click 300 500
+Set-Clipboard -Value "from-system"
+# Tab focuses the first input; pasting twice shows the text came through the app.
+$ctrl = 0x11
+[WindowPixels]::Key(0x09)
+foreach ($key in 0x56, 0x56, 0x41, 0x43) { [WindowPixels]::Chord($ctrl, $key) }
+Start-Sleep -Seconds 1
+$copied = Get-Clipboard -Raw
+if ($copied -eq "from-systemfrom-system") {
+    Write-Output "ok clipboard: pasted and copied through the system clipboard"
+} else {
+    Write-Output "FAIL clipboard: the system clipboard holds '$copied', expected 'from-systemfrom-system'"
+    $script:failed = $true
+}
 Close-Example
 
 if ($script:failed) { exit 1 }
