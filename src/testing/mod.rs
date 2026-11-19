@@ -7,13 +7,13 @@ use crate::core::accessibility::{AccessibilityError, AccessibilityTree};
 use crate::core::action::route_key_event;
 use crate::core::app::{AppContext, RuntimeView};
 use crate::core::drag::FileDragEvent;
-use crate::core::menu::{ContextMenuRequest, Menu};
-use crate::core::prompt::PathPrompt;
 use crate::core::entity::Entity;
 use crate::core::event::{Event, KeyEvent, Modifiers, MouseButton, ScrollEvent};
 use crate::core::frame_pipeline::{FramePipeline, FramePresentation, IdlePolicy};
 use crate::core::geometry::{Bounds, Point, Size};
+use crate::core::menu::{ContextMenuRequest, Menu};
 use crate::core::presenter::{Presenter, PresenterFrame};
+use crate::core::prompt::PathPrompt;
 use crate::core::view::{View, ViewNotifier};
 use crate::elements::element::{Element, PointerEvent, PointerEventKind};
 use crate::renderer::{RecordedScene, RecordingRenderer, Renderer, RendererError, Scene};
@@ -79,6 +79,9 @@ where
 pub type HeadlessViewBuilder<V> = Box<dyn FnMut(&mut AppContext) -> <V as View>::Element>;
 pub type HeadlessViewSession<V> = HeadlessSession<HeadlessViewBuilder<V>, <V as View>::Element>;
 
+/// Build `build_root`'s tree for a window `viewport_size` large and draw its
+/// first frame. The root is built once; the views it places render before
+/// that frame lays the tree out, as in a native window.
 pub fn mount<F, E>(
     viewport_size: Size,
     build_root: F,
@@ -92,6 +95,7 @@ where
     mount_with_context(context, viewport_size, build_root)
 }
 
+/// [`mount`] with a long-lived stateful view as the root.
 pub fn mount_view<V>(viewport_size: Size, view: V) -> Result<HeadlessViewSession<V>, HeadlessError>
 where
     V: View,
@@ -120,9 +124,8 @@ where
     E: Element,
 {
     context.set_viewport_size(viewport_size);
-    let root = build_root(&mut context);
-    context.frame.needs_rebuild = false;
-    context.frame.dirty = true;
+    // The first frame draws this tree instead of building it again.
+    let root = FramePipeline::build_first_tree(&mut context, &mut build_root);
 
     let mut session = HeadlessSession {
         context,

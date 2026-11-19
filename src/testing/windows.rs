@@ -53,10 +53,8 @@ where
     F: FnMut(&mut AppContext) -> E + 'static,
     E: Element + 'static,
 {
-    let root = build_root(cx);
     // The first frame draws this tree instead of building it again.
-    cx.frame.needs_rebuild = false;
-    cx.frame.dirty = true;
+    let root = FramePipeline::build_first_tree(cx, &mut build_root);
     Box::new(HeadlessWindow {
         build_root,
         presenter: Presenter::with_root(cx.viewport_size(), root),

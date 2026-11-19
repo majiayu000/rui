@@ -51,6 +51,11 @@ All notable project changes should be recorded here.
   Native and headless runners share that order and only supply the two
   platform-dependent stages, `DispatchEvents` and `Present`.
 - Added `AppContext::has_frame_work` as the single definition of an idle frame.
+- `testing::mount`, `mount_view` and `HeadlessApp` windows render the child
+  views their first tree places (`view(..)`, `cx.rows(..)`) before laying it
+  out, as native windows do. They used to panic with "view ... was laid out
+  before it rendered". The first frame still builds the root once, also when
+  entities were notified before a headless window opened.
 
 ### Advanced UI
 
