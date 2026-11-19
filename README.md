@@ -42,7 +42,7 @@ Add this repository as a Git dependency in `Cargo.toml`:
 
 ```toml
 [dependencies]
-rui = { git = "https://github.com/majiayu000/rui", rev = "58a788414b4e1e69b52b647bf8f71533beef0a07" }
+rui = { git = "https://github.com/majiayu000/rui", rev = "8161ebcf0f0bf7d8fff38435ad12430c4eefbe17" }
 ```
 
 Both installation guides pin the same Git revision. The [`rui` package on crates.io](https://crates.io/crates/rui) belongs to [`audulus/rui`](https://github.com/audulus/rui). Use the Git dependency above for this project.

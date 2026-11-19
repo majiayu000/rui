@@ -25,7 +25,7 @@ Git dependency below (the crates.io package named `rui` is a different project):
 
 ```toml
 [dependencies]
-rui = { git = "https://github.com/majiayu000/rui", rev = "58a788414b4e1e69b52b647bf8f71533beef0a07" }
+rui = { git = "https://github.com/majiayu000/rui", rev = "8161ebcf0f0bf7d8fff38435ad12430c4eefbe17" }
 ```
 
 This is the same Git revision as the README and includes the listener APIs below.
