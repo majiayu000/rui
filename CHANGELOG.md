@@ -51,6 +51,15 @@ All notable project changes should be recorded here.
   Native and headless runners share that order and only supply the two
   platform-dependent stages, `DispatchEvents` and `Present`.
 - Added `AppContext::has_frame_work` as the single definition of an idle frame.
+- A window that loses key status (switching windows or apps) now blurs its
+  focused element and focuses it again when it becomes key, on macOS and
+  winit. Before, focus was dropped: after switching back, Tab started over,
+  Enter on a focused button did nothing, and an input kept its ring and took
+  keys while nothing owned focus. Focus is not given back when app code moved
+  or cleared it meanwhile, or the element was removed, disabled or is behind a
+  modal that opened. `HeadlessSession::dispatch_window_event` with
+  `Event::Blur` / `Event::Focus` and `HeadlessApp::make_key_window` drive the
+  same path in tests.
 
 ### Advanced UI
 

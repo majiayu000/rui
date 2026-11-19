@@ -63,6 +63,8 @@ pub struct Presenter<E = ()> {
     text_measurer: TextMeasureCache,
     root_bounds: Bounds,
     focused_element: Option<ElementId>,
+    /// What had focus when the window lost key status, to focus on its return.
+    focus_before_blur: Option<ElementId>,
     accessibility_announcements_enabled: bool,
     pending_accessibility_announcements: Vec<AccessibilityAnnouncement>,
     /// Live regions in the last tree published, so only new ones are announced.
@@ -97,6 +99,7 @@ impl<E> Presenter<E> {
             text_measurer: TextMeasureCache::new(),
             root_bounds,
             focused_element: None,
+            focus_before_blur: None,
             accessibility_announcements_enabled: false,
             pending_accessibility_announcements: Vec::new(),
             live_regions: Vec::new(),
