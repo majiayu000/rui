@@ -11,6 +11,7 @@ use std::ops::Range;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 mod accessibility_regions;
+mod damage;
 mod overlay;
 pub use overlay::{OVERLAY_Z, Overlay};
 
@@ -263,6 +264,8 @@ pub struct Scene {
     /// Ranges of this frame replayed in place and in order, which drew exactly
     /// what they drew in the previous frame.
     unchanged: Vec<Range<usize>>,
+    /// Each range replayed in place, with where it came from.
+    in_place_sources: Vec<damage::InPlaceSource>,
     /// End of the last range replayed from the previous frame, to notice a
     /// replay that changed order.
     replayed_from: usize,
@@ -306,6 +309,7 @@ impl Scene {
             previous_frame: 0,
             replayed: 0,
             unchanged: Vec::new(),
+            in_place_sources: Vec::new(),
             replayed_from: 0,
             moved: Reach::Nothing,
             layer_stack: SmallVec::new(),
@@ -331,6 +335,7 @@ impl Scene {
         self.frame = NEXT_SCENE_FRAME.fetch_add(1, Ordering::Relaxed);
         self.replayed = 0;
         self.unchanged.clear();
+        self.in_place_sources.clear();
         self.replayed_from = 0;
         self.moved = Reach::Nothing;
         self.layer_stack.clear();
@@ -411,6 +416,7 @@ impl Scene {
         // Drawn over something painted in between, or moved: its old and new
         // places change. In place and in order, nothing it covers does.
         let in_place = !moved && range.start >= self.replayed_from;
+        let (range_start, range_end) = (range.start, range.end);
         self.replayed_from = range.end;
         for index in range {
             if !in_place {
@@ -426,6 +432,11 @@ impl Scene {
         self.replayed += self.primitives.len() - start;
         let end = self.primitives.len();
         if in_place {
+            self.in_place_sources.push(damage::InPlaceSource {
+                start,
+                previous_start: range_start,
+                previous_end: range_end,
+            });
             match self.unchanged.last_mut() {
                 Some(last) if last.end == start => last.end = end,
                 _ => self.unchanged.push(start..end),
@@ -449,43 +460,6 @@ impl Scene {
     /// view or was not painted for being out of it does not.
     pub fn damage(&self, visible: Bounds) -> Reach {
         self.damage_before_previous(visible, self.previous_primitives.len())
-    }
-
-    /// [`Self::damage`] counting only the previous frame's primitives before
-    /// `end`, to leave out content drawn over the frame after its paint.
-    pub(crate) fn damage_before_previous(&self, visible: Bounds, end: usize) -> Reach {
-        let seen = |reach: Reach| match reach {
-            Reach::Within(bounds) => bounds
-                .intersection(&visible)
-                .map_or(Reach::Nothing, Reach::Within),
-            other => other,
-        };
-        let mut damage = seen(self.moved);
-        let mut unchanged = self.unchanged.iter().peekable();
-        let mut index = 0;
-        while index < self.primitives.len() {
-            if let Some(range) = unchanged.peek()
-                && range.start == index
-            {
-                index = range.end;
-                unchanged.next();
-                continue;
-            }
-            damage = union(damage, seen(damage_reach(&self.primitives[index])));
-            if damage == Reach::Unbounded {
-                return damage;
-            }
-            index += 1;
-        }
-        // Replayed primitives were moved out, leaving clip pops that draw nothing.
-        let end = end.min(self.previous_primitives.len());
-        for primitive in &self.previous_primitives[..end] {
-            damage = union(damage, seen(damage_reach(primitive)));
-            if damage == Reach::Unbounded {
-                return damage;
-            }
-        }
-        damage
     }
 
     /// Bounds of everything the primitives in `range` can draw on; covering

@@ -46,6 +46,10 @@ All notable project changes should be recorded here.
 
 - System fonts are now parsed once per process and text measurement metrics
   survive across frames, instead of both being rebuilt every frame.
+- A background an ancestor paints again because something inside it changed no
+  longer puts its whole box in the frame's damage when it is drawn the same as
+  in the frame before: with a root and a panel background, one changed row
+  redraws 13% of a 320x600 window at 2x instead of all of it (#343).
 
 ### Runtime
 
