@@ -425,6 +425,7 @@ impl Div {
         self
     }
 
+    /// Font size of descendant text: the em, in logical pixels.
     pub fn text_size(mut self, size: f32) -> Self {
         self.text_style.font_size = Some(size);
         self

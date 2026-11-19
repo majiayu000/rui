@@ -17,6 +17,7 @@ use super::{
 };
 use crate::core::geometry::Size;
 use crate::renderer::text_bidi::{line_levels, visual_order};
+use crate::renderer::text_face_size::face_size;
 use rusttype::Scale;
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
@@ -79,6 +80,9 @@ pub struct RichPiece {
     pub top: f32,
     /// Height of the piece's own line box: its font size times its line height.
     pub height: f32,
+    /// Baseline below the top of the piece's own line box, where a text
+    /// primitive of that box draws it.
+    pub baseline: f32,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -450,6 +454,7 @@ impl TextMeasureCache {
                 width: layout.width(start, stop),
                 top: 0.0,
                 height: 0.0,
+                baseline: 0.0,
             });
             start = stop;
         }
@@ -474,6 +479,7 @@ impl TextMeasureCache {
                 width: ellipsis_width,
                 top: 0.0,
                 height: 0.0,
+                baseline: 0.0,
             });
             width += ellipsis_width;
         }
@@ -490,6 +496,7 @@ impl TextMeasureCache {
                 self.own_baseline(&spans[piece.span], primaries[piece.span]);
             piece.top = line_box.baseline - own_baseline;
             piece.height = own_height;
+            piece.baseline = own_baseline;
         }
         RichLine {
             pieces,
@@ -503,7 +510,11 @@ impl TextMeasureCache {
     fn own_baseline(&self, span: &RichSpan, primary: usize) -> (f32, f32) {
         let v_metrics = self.fonts[primary]
             .font()
-            .v_metrics(Scale::uniform(span.font_size));
+            .v_metrics(Scale::uniform(face_size(
+                &self.fonts,
+                primary,
+                span.font_size,
+            )));
         let height = span.font_size * span.line_height;
         let font_height = v_metrics.ascent - v_metrics.descent;
         ((height - font_height) * 0.5 + v_metrics.ascent, height)

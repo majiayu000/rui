@@ -7,9 +7,12 @@ use crate::core::style::{Background, Corners, Style};
 use crate::elements::element::{Element, LayoutContext, PaintContext, style_to_taffy};
 use crate::elements::text::{FontWeight, TextAlign};
 use crate::renderer::Primitive;
-use crate::renderer::text::BaseDirection;
+use crate::renderer::text::{BaseDirection, TextMeasureCache, TextRequest};
 use smallvec::SmallVec;
 use taffy::prelude::*;
+
+/// Line height of cell text.
+const CELL_LINE_HEIGHT: f32 = 1.4;
 
 /// A table cell element
 #[derive(Debug, Clone)]
@@ -135,15 +138,25 @@ impl TableCell {
         self.rowspan
     }
 
-    /// Estimate cell width based on content
-    fn estimate_width(&self) -> f32 {
-        let text_width = self.content.len() as f32 * self.font_size * 0.5;
-        text_width + self.padding.horizontal_sum()
+    /// Width the cell needs: its text as drawn, plus padding.
+    fn measure_width(&self, measurer: &mut TextMeasureCache) -> f32 {
+        let text_width = measurer
+            .measure_single_line(TextRequest::new(
+                &self.content,
+                self.font_size,
+                self.font_weight.to_value(),
+                None,
+                CELL_LINE_HEIGHT,
+            ))
+            .map_or(0.0, |metrics| {
+                metrics.ink_bounds.width().max(metrics.advance_width)
+            });
+        text_width.ceil() + self.padding.horizontal_sum()
     }
 
     /// Estimate cell height
     fn estimate_height(&self) -> f32 {
-        self.font_size * 1.4 + self.padding.vertical_sum()
+        self.font_size * CELL_LINE_HEIGHT + self.padding.vertical_sum()
     }
 }
 
@@ -281,6 +294,8 @@ pub struct Table {
     stripe_background: Option<Color>,
     cell_padding: Edges,
     layout_node: Option<NodeId>,
+    /// Column widths the last layout measured, which paint draws.
+    laid_out_widths: Vec<f32>,
 }
 
 impl Table {
@@ -296,6 +311,7 @@ impl Table {
             stripe_background: None,
             cell_padding: Edges::all(8.0),
             layout_node: None,
+            laid_out_widths: Vec::new(),
         }
     }
 
@@ -391,7 +407,7 @@ impl Table {
     }
 
     /// Calculate column widths based on content
-    fn calculate_column_widths(&self) -> Vec<f32> {
+    fn calculate_column_widths(&self, measurer: &mut TextMeasureCache) -> Vec<f32> {
         if let Some(ref widths) = self.column_widths {
             return widths.clone();
         }
@@ -406,7 +422,7 @@ impl Table {
         for row in &self.rows {
             for (i, cell) in row.cells.iter().enumerate() {
                 if i < num_cols && cell.colspan == 1 {
-                    widths[i] = widths[i].max(cell.estimate_width());
+                    widths[i] = widths[i].max(cell.measure_width(measurer));
                 }
             }
         }
@@ -456,7 +472,7 @@ impl Element for Table {
     }
 
     fn layout(&mut self, cx: &mut LayoutContext) -> NodeId {
-        let col_widths = self.calculate_column_widths();
+        let col_widths = self.calculate_column_widths(cx.text_measurer());
         let row_heights = self.calculate_row_heights();
 
         let total_width: f32 = col_widths.iter().sum::<f32>() + self.border_width;
@@ -481,12 +497,13 @@ impl Element for Table {
             .expect("Failed to create table layout node");
 
         self.layout_node = Some(node);
+        self.laid_out_widths = col_widths;
         node
     }
 
     fn paint(&mut self, cx: &mut PaintContext) {
         let bounds = cx.bounds();
-        let col_widths = self.calculate_column_widths();
+        let col_widths = &self.laid_out_widths;
         let row_heights = self.calculate_row_heights();
 
         // Paint table background/border
@@ -571,7 +588,7 @@ impl Element for Table {
                     font_size: cell.font_size,
                     font_weight: cell.font_weight.to_value(),
                     font_family: None,
-                    line_height: 1.4,
+                    line_height: CELL_LINE_HEIGHT,
                     align: cell.align,
                     direction: BaseDirection::Auto,
                 });

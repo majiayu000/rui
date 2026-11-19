@@ -494,3 +494,84 @@ fn a_notification_from_before_a_window_opened_is_in_its_first_build() {
     assert_eq!(counts.builds.get(), 1, "the root is not built again for it");
     assert_eq!(counts.renders.get(), 1, "nor is the view rendered again");
 }
+
+#[test]
+fn switching_the_key_window_moves_focus_with_it_and_back() {
+    use rui::core::event::{KeyCode, KeyEvent, Modifiers};
+    use rui::core::text_editing::TextInputEvent;
+    use rui::elements::input;
+    use std::{cell::RefCell, rc::Rc};
+
+    const FIELD: ElementId = ElementId(43_001);
+    const SAVE: ElementId = ElementId(43_002);
+    let mut app = headless_app();
+    let values = Rc::new(RefCell::new([String::new(), String::new()]));
+    let clicks = Rc::new(RefCell::new([0, 0]));
+    let windows = [0, 1].map(|index| {
+        let values = Rc::clone(&values);
+        let clicks = Rc::clone(&clicks);
+        app.open_window(WindowOptions::new().size(300.0, 200.0), move |_| {
+            let changed = Rc::clone(&values);
+            let clicked = Rc::clone(&clicks);
+            div()
+                .flex_col()
+                .child(
+                    input()
+                        .id(FIELD)
+                        .accessibility_label("Draft")
+                        .value(values.borrow()[index].clone())
+                        .on_change(move |value| changed.borrow_mut()[index] = value.to_owned()),
+                )
+                .child(
+                    Button::new("Save")
+                        .id(SAVE)
+                        .on_click(move || clicked.borrow_mut()[index] += 1),
+                )
+        })
+        .expect("open editor")
+    });
+    let [left, right] = windows;
+    let tab = KeyEvent::new(KeyCode::Tab, Modifiers::none());
+    let enter = KeyEvent::new(KeyCode::Enter, Modifiers::none());
+    let text = |value: &str| TextInputEvent::InsertText(value.into());
+    let focused = |app: &rui::testing::HeadlessApp| {
+        [left, right].map(|window| app.focused_element(window).expect("open window"))
+    };
+    app.frame().expect("settle both windows");
+
+    // The native acceptance sequence: Draft focused on the left, Save on the
+    // right, switching key status between them.
+    app.make_key_window(left).unwrap();
+    assert!(app.dispatch_key_event(left, &tab).unwrap());
+    assert!(app.dispatch_text_input_event(left, &text("left")).unwrap());
+    app.make_key_window(right).unwrap();
+    assert_eq!(
+        focused(&app),
+        [None, None],
+        "the left window lost key status"
+    );
+    assert!(app.dispatch_key_event(right, &tab).unwrap());
+    assert!(app.dispatch_key_event(right, &tab).unwrap());
+    assert_eq!(focused(&app), [None, Some(SAVE)]);
+
+    app.make_key_window(left).unwrap();
+    assert_eq!(focused(&app), [Some(FIELD), None]);
+    assert!(app.dispatch_text_input_event(left, &text("!")).unwrap());
+    assert_eq!(*values.borrow(), ["left!", ""]);
+
+    app.make_key_window(right).unwrap();
+    assert_eq!(focused(&app), [None, Some(SAVE)]);
+    assert!(app.dispatch_key_event(right, &enter).unwrap());
+    assert_eq!(
+        *clicks.borrow(),
+        [0, 1],
+        "Enter activates only the right Save"
+    );
+
+    // Closing the key window leaves the other one to take key status back.
+    assert!(app.app_context_mut().close_window(right));
+    app.make_key_window(left).unwrap();
+    assert_eq!(app.focused_element(left).unwrap(), Some(FIELD));
+    assert!(app.dispatch_text_input_event(left, &text("?")).unwrap());
+    assert_eq!(*values.borrow(), ["left!?", ""]);
+}

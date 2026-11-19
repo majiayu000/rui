@@ -35,6 +35,8 @@ pub(crate) trait HeadlessWindowDriver {
         cx: &mut AppContext,
         event: &TextInputEvent,
     ) -> Result<bool, HeadlessError>;
+    /// The window lost (`false`) or got back (`true`) key status.
+    fn window_focus(&mut self, cx: &mut AppContext, focused: bool) -> Result<bool, HeadlessError>;
     fn accessibility_tree(&self) -> Result<AccessibilityTree, HeadlessError>;
     fn scene(&self) -> &Scene;
     fn focused_element(&self) -> Option<ElementId>;
@@ -162,6 +164,10 @@ where
         })
     }
 
+    fn window_focus(&mut self, cx: &mut AppContext, focused: bool) -> Result<bool, HeadlessError> {
+        self.dispatch_frame(cx, |presenter, _| presenter.handle_window_focus(focused))
+    }
+
     fn accessibility_tree(&self) -> Result<AccessibilityTree, HeadlessError> {
         let nodes = self
             .presenter
@@ -192,6 +198,7 @@ struct OpenWindow {
 pub struct HeadlessApp {
     context: AppContext,
     windows: Vec<OpenWindow>,
+    key_window: Option<WindowId>,
 }
 
 /// Start a headless application with no windows yet.
@@ -201,6 +208,7 @@ pub fn headless_app() -> HeadlessApp {
     HeadlessApp {
         context,
         windows: Vec::new(),
+        key_window: None,
     }
 }
 
@@ -339,6 +347,39 @@ impl HeadlessApp {
             .dispatch_text_input_event(&mut self.context, event)?;
         self.windows[index].frames_drawn += 1;
         Ok(handled)
+    }
+
+    /// Make `window` the key window, as clicking it or switching to it does
+    /// natively: the key window it replaces loses key status first, each in a
+    /// frame of its own. A window losing key status blurs its focused element
+    /// and focuses it again when it gets key status back, as
+    /// [`HeadlessSession::dispatch_window_event`](super::HeadlessSession::dispatch_window_event)
+    /// does for `Event::Blur` and `Event::Focus`. Windows open without key
+    /// status.
+    pub fn make_key_window(&mut self, window: WindowId) -> Result<(), HeadlessError> {
+        self.activate_window(window)?;
+        if self.key_window == Some(window) {
+            return Ok(());
+        }
+        // A key window closed since then has nothing to blur.
+        if let Some(previous) = self.key_window.take()
+            && self.activate_window(previous).is_ok()
+        {
+            self.window_focus(previous, false)?;
+        }
+        self.activate_window(window)?;
+        self.window_focus(window, true)?;
+        self.key_window = Some(window);
+        Ok(())
+    }
+
+    fn window_focus(&mut self, window: WindowId, focused: bool) -> Result<(), HeadlessError> {
+        let index = self.index_of(window)?;
+        self.windows[index]
+            .driver
+            .window_focus(&mut self.context, focused)?;
+        self.windows[index].frames_drawn += 1;
+        Ok(())
     }
 
     /// Resize `window`; it redraws on the next [`Self::frame`].

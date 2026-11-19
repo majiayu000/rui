@@ -414,9 +414,18 @@ where
         self.context.request_redraw();
     }
 
+    /// Deliver a window event to the tree. [`Event::Blur`] and
+    /// [`Event::Focus`] are the window losing and getting back key status:
+    /// as in a native runner, they run in a frame of their own and blur the
+    /// focused element, then focus it again. Returns whether the tree
+    /// handled the event.
     pub fn dispatch_window_event(&mut self, event: &Event) -> bool {
         match event {
             Event::WindowResize { width, height } => self.resize(Size::new(*width, *height)),
+            Event::Focus(_) | Event::Blur(_) => {
+                let focused = matches!(event, Event::Focus(_));
+                self.dispatch_frame(|presenter, _| presenter.handle_window_focus(focused))
+            }
             _ => self.presenter.handle_window_event(event),
         }
     }

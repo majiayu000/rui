@@ -118,12 +118,16 @@ pub(crate) fn ink_of(
 ) -> InkBounds {
     let baseline = fonts[primary_index]
         .font()
-        .v_metrics(Scale::uniform(request.font_size))
+        .v_metrics(Scale::uniform(face_size(
+            fonts,
+            primary_index,
+            request.font_size,
+        )))
         .ascent;
     let mut ink = InkBounds::empty();
     for glyph in glyphs {
         let font = &fonts[glyph.font_index];
-        let size = face_size(fonts, primary_index, glyph.font_index, request.font_size);
+        let size = face_size(fonts, glyph.font_index, request.font_size);
         let position = point(glyph.x_offset, baseline + glyph.y_offset);
         if let Some(bounds) = font.pixel_bounds(glyph.glyph_id, size, position) {
             ink.include(bounds);

@@ -10,11 +10,10 @@ use crate::renderer::text_face_size::face_size;
 use crate::renderer::text_shaping::{GlyphDraft, TextShapingFont};
 use std::sync::Arc;
 
-/// `glyphs`, shaped in text whose requested face is `fonts[primary]`, each on
-/// that face's baseline, `ascent` below the line top, at its face's size.
+/// `glyphs`, each on the requested face's baseline, `ascent` below the line
+/// top, at its face's size.
 pub(super) fn place_glyphs(
     fonts: &[TextShapingFont],
-    primary: usize,
     glyphs: &[GlyphDraft],
     ascent: f32,
 ) -> Vec<PlacedGlyph> {
@@ -26,7 +25,7 @@ pub(super) fn place_glyphs(
             glyph_id: glyph.glyph_id,
             x: glyph.x_offset,
             baseline_y: ascent + glyph.y_offset,
-            font_scale: face_size(fonts, primary, glyph.font_index, 1.0),
+            font_scale: face_size(fonts, glyph.font_index, 1.0),
         })
         .collect()
 }
@@ -65,8 +64,8 @@ pub(super) struct PlacedText {
 
 impl TextGlyphCache {
     /// The sprites of `text`'s inked glyphs, its ink origin at `origin_x`
-    /// logical pixels, drawn at `scale_factor` with glyphs `device_font_size`
-    /// pixels high: each glyph rasterized at the subpixel offset its pen
+    /// logical pixels, drawn at `scale_factor` with an em of `device_font_size`
+    /// device pixels: each glyph rasterized at the subpixel offset its pen
     /// position falls on, on first use.
     pub fn sprites(
         &mut self,
