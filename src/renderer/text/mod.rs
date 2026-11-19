@@ -25,6 +25,7 @@ mod lru;
 mod rich;
 mod wrap;
 
+pub use crate::renderer::font_registry::{register_font, register_font_file};
 pub use crate::renderer::text_bidi::BaseDirection;
 pub use crate::renderer::text_shaping::{
     TextCluster, TextDirection, TextRun, TextScript, TextShapeDiagnostic, TextShapePlan,
@@ -49,6 +50,12 @@ pub enum TextError {
     /// Rich text spans that do not tile their content.
     InvalidSpans(String),
     Resource(RendererResourceError),
+}
+
+impl From<FontLoadError> for TextError {
+    fn from(error: FontLoadError) -> Self {
+        font_io_text_error(&error)
+    }
 }
 
 impl From<RendererResourceError> for TextError {

@@ -6,6 +6,14 @@ All notable project changes should be recorded here.
 
 ### Rendering
 
+- `rui::renderer::text::register_font(bytes)` and `register_font_file(path)`
+  add the faces of a font file or collection, and text naming their family uses
+  them. A family outside the built-in table is looked up among the installed
+  fonts (macOS `/System/Library/Fonts`, `/Library/Fonts`, `~/Library/Fonts`;
+  Linux `/usr/share/fonts`, `/usr/local/share/fonts`, `~/.local/share/fonts`,
+  `~/.fonts`; Windows `Fonts` and the per-user fonts folder), scanned once the
+  first time such a family is asked for, so Menlo or a user-installed Nerd Font
+  now draw instead of falling back (#325).
 - A font family with no loaded face draws in the default family (same weight
   and slant) instead of failing the frame with `RenderFailed` or panicking in
   layout. It is logged once and listed in the new

@@ -28,8 +28,9 @@ pub(crate) enum FontBytes {
     /// Mapped from disk: only the pages that are read become resident, and they
     /// are clean file pages, not part of the process footprint.
     Mapped(crate::renderer::system_fonts::MappedFile),
-    #[cfg_attr(all(unix, not(test)), allow(dead_code))]
     Owned(Vec<u8>),
+    /// Bytes an app registered from its binary.
+    Static(&'static [u8]),
 }
 
 impl FontBytes {
@@ -37,6 +38,7 @@ impl FontBytes {
         match self {
             Self::Mapped(map) => map.as_slice(),
             Self::Owned(bytes) => bytes,
+            Self::Static(bytes) => bytes,
         }
     }
 }
