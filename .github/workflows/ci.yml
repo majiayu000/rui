@@ -97,8 +97,9 @@ jobs:
         run: |
           sudo apt-get update
           # winit loads the X11 and xkbcommon libraries at runtime; xdotool
-          # and ImageMagick drive and capture the windows.
-          sudo apt-get install -y xvfb mesa-vulkan-drivers libxkbcommon-x11-0 libxcursor1 libxrandr2 libxi6 xdotool imagemagick fonts-dejavu-core
+          # and ImageMagick drive and capture the windows, xclip is the other
+          # app on the clipboard.
+          sudo apt-get install -y xvfb mesa-vulkan-drivers libxkbcommon-x11-0 libxcursor1 libxrandr2 libxi6 xdotool xclip imagemagick fonts-dejavu-core
 
       - name: Check the winit runner and examples
         run: cargo check --locked --no-default-features --features winit --lib --example hello_world --example counter
@@ -108,7 +109,7 @@ jobs:
 
       - name: Compare window pixels on lavapipe under Xvfb
         run: |
-          cargo build --locked --no-default-features --features winit --example hello_world --example counter
+          cargo build --locked --no-default-features --features winit --example hello_world --example counter --example interaction_acceptance
           xvfb-run -a -s "-screen 0 1024x768x24" scripts/linux_window_pixels.sh
 
       - name: Upload window captures
@@ -136,13 +137,13 @@ jobs:
       - name: Install sway, lavapipe and fonts
         run: |
           sudo apt-get update
-          # sway is the headless compositor; its seat clicks, wtype types and
-          # grim captures.
-          sudo apt-get install -y sway grim wtype jq mesa-vulkan-drivers libxkbcommon0 libwayland-client0 libwayland-cursor0 imagemagick fonts-dejavu-core
+          # sway is the headless compositor; its seat clicks, wtype types,
+          # grim captures and wl-clipboard is the other app on the clipboard.
+          sudo apt-get install -y sway grim wtype wl-clipboard jq mesa-vulkan-drivers libxkbcommon0 libwayland-client0 libwayland-cursor0 imagemagick fonts-dejavu-core
 
       - name: Compare window pixels on lavapipe under Wayland
         run: |
-          cargo build --locked --no-default-features --features winit --example hello_world --example counter
+          cargo build --locked --no-default-features --features winit --example hello_world --example counter --example interaction_acceptance
           scripts/wayland_window_pixels.sh
 
       - name: Upload window captures
@@ -176,7 +177,7 @@ jobs:
       - name: Compare window pixels
         shell: powershell
         run: |
-          cargo build --locked --no-default-features --features winit --example hello_world --example counter
+          cargo build --locked --no-default-features --features winit --example hello_world --example counter --example interaction_acceptance
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ./scripts/windows_window_pixels.ps1
 
