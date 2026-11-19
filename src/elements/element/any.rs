@@ -318,6 +318,10 @@ impl AnyElement {
 
     pub fn paint(&mut self, cx: &mut PaintContext) {
         if !cx.memo {
+            // Nothing a frame leaves out registers a hit region; see `with_viewport`.
+            if cx.unseen_reach(&*self.inner).is_some() {
+                return;
+            }
             // A selection scope collects its text in a paint of its own.
             if cx.scene.selection.is_some() {
                 crate::elements::selection::collect_leaf(&mut *self.inner, cx);

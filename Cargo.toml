@@ -17,8 +17,9 @@ metal = ["dep:metal", "dep:objc2", "dep:objc2-foundation", "dep:objc2-app-kit", 
 # Cross-platform rendering through wgpu (ADR 0002): Vulkan, DX12 and Metal.
 wgpu = ["dep:wgpu", "dep:pollster"]
 # Window and input through winit, drawn by the wgpu backend: the runner for
-# Linux and Windows. On macOS it runs when `metal` is off.
-winit = ["wgpu", "dep:winit"]
+# Linux and Windows. On macOS it runs when `metal` is off. arboard is its
+# system clipboard.
+winit = ["wgpu", "dep:winit", "dep:arboard"]
 # The `markdown` element, parsed by pulldown-cmark.
 markdown = ["dep:pulldown-cmark"]
 
@@ -55,6 +56,9 @@ objc2-quartz-core = { version = "0.3", features = ["CAMetalLayer", "CALayer"], o
 wgpu = { version = "29", default-features = false, features = ["std", "parking_lot", "wgsl", "metal", "vulkan", "dx12"], optional = true }
 pollster = { version = "0.4", optional = true }
 winit = { version = "0.30", optional = true }
+# Plain text only, so arboard's image support stays off. On Wayland it uses the
+# data-control protocol and falls back to X11 (XWayland) without it.
+arboard = { version = "3.7", default-features = false, features = ["wayland-data-control"], optional = true }
 
 # Utilities
 smallvec = "1.13"
@@ -155,6 +159,11 @@ harness = false
 [[bench]]
 name = "hit_test"
 path = "benches/hit_test.rs"
+harness = false
+
+[[bench]]
+name = "pointer_frame"
+path = "benches/pointer_frame.rs"
 harness = false
 
 [[bench]]

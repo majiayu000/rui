@@ -515,12 +515,15 @@ where
         let hit_target = if self.scene_dirty {
             // Use a transient scene without replay: advancing the render scene
             // here would break its previous-frame/damage chain, and replay would
-            // consume retained primitives before the real paint pass.
+            // consume retained primitives before the real paint pass. Like that
+            // paint, it leaves out what the window cannot show.
             let mut hits = Scene::new();
+            let window = self.window_bounds();
             self.root.paint(
                 &mut PaintContext::without_replay(&mut hits, self.root_bounds, &self.taffy)
                     .with_focus(self.focused_element)
-                    .with_window(self.window_bounds()),
+                    .with_window(window)
+                    .with_viewport(window),
             );
             hits.finish();
             overlays = Some(hits.overlay_stack());

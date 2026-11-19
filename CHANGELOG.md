@@ -32,6 +32,10 @@ All notable project changes should be recorded here.
 
 ### Runtime
 
+- The winit runner (Linux and Windows) copies, cuts and pastes through the
+  system clipboard via arboard, X11 or Wayland on Linux, instead of an
+  in-memory clipboard only the app could see. Without a system clipboard it
+  logs an error and keeps the in-memory one.
 - macOS native windows now route AppKit text input through `NSTextInputClient`,
   including composition begin, update, commit, and cancel events without
   duplicating the corresponding key text.
