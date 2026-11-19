@@ -30,6 +30,7 @@ fn primitive_names(scene: &Scene) -> Vec<&'static str> {
             Primitive::LinearGradient { .. } => "linear_gradient",
             Primitive::RadialGradient { .. } => "radial_gradient",
             Primitive::Text { .. } => "text",
+            Primitive::Glyph { .. } => "glyph",
             Primitive::Image { .. } => "image",
             Primitive::Path { .. } => "path",
             Primitive::Picture { .. } => "picture",

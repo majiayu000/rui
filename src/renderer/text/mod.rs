@@ -19,6 +19,7 @@ use std::sync::Arc;
 
 mod atlas;
 mod complex_breaks;
+mod glyph;
 pub(crate) mod hash;
 mod lru;
 mod rich;
@@ -32,6 +33,7 @@ pub use atlas::{
     ATLAS_PAGE_SIZE, AtlasGlyph, AtlasRect, AtlasSlot, GlyphAtlas, GlyphSprite, GlyphUpload,
     PlacedGlyph, SUBPIXEL_VARIANTS, ShapedText, TextGlyphCache,
 };
+pub use glyph::{FontGlyph, GlyphResolver};
 pub(crate) use hash::FastMap;
 pub use rich::{RichLine, RichPiece, RichPieceText, RichSpan, RichWrapped};
 pub use wrap::{TextLine, WrappedText};

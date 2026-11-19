@@ -8,7 +8,7 @@ use crate::elements::fit_bounds;
 use crate::elements::text::TextAlign;
 use crate::renderer::Picture;
 use crate::renderer::picture::moved;
-use crate::renderer::text::BaseDirection;
+use crate::renderer::text::{BaseDirection, FontGlyph};
 use crate::{ImageFit, ImageSource};
 use bytemuck::{Pod, Zeroable};
 use std::sync::Arc;
@@ -69,6 +69,17 @@ pub enum Primitive {
         direction: BaseDirection,
     },
 
+    /// One glyph a [`GlyphResolver`](crate::renderer::text::GlyphResolver)
+    /// resolved, its pen at `origin` on the baseline, at an em of `font_size`.
+    /// Nothing is shaped: a grid draws each cell's glyph where the cell puts it,
+    /// and changing one cell redraws only that glyph.
+    Glyph {
+        glyph: FontGlyph,
+        origin: Point,
+        font_size: f32,
+        color: Rgba,
+    },
+
     /// Image rendering
     Image {
         bounds: Bounds,
@@ -114,6 +125,7 @@ pub enum PrimitiveKind {
     LinearGradient,
     RadialGradient,
     Text,
+    Glyph,
     Image,
     Path,
     Picture,
@@ -122,12 +134,13 @@ pub enum PrimitiveKind {
 }
 
 impl PrimitiveKind {
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 11] = [
         Self::Quad,
         Self::Shadow,
         Self::LinearGradient,
         Self::RadialGradient,
         Self::Text,
+        Self::Glyph,
         Self::Image,
         Self::Path,
         Self::Picture,
@@ -142,6 +155,7 @@ impl PrimitiveKind {
             Self::LinearGradient => "linear_gradient",
             Self::RadialGradient => "radial_gradient",
             Self::Text => "text",
+            Self::Glyph => "glyph",
             Self::Image => "image",
             Self::Path => "path",
             Self::Picture => "picture",
@@ -192,7 +206,9 @@ impl Primitive {
                     })
             }
             // Its primitives are drawn at the offset either way.
-            Self::Picture { offset, .. } => exact(offset.x, dx) && exact(offset.y, dy),
+            Self::Picture { offset, .. } | Self::Glyph { origin: offset, .. } => {
+                exact(offset.x, dx) && exact(offset.y, dy)
+            }
             Self::PopClip => true,
         }
     }
@@ -211,7 +227,9 @@ impl Primitive {
             | Self::Text { bounds, .. }
             | Self::Image { bounds, .. }
             | Self::PushClip { bounds, .. } => shift(bounds),
-            Self::Path { offset, .. } | Self::Picture { offset, .. } => {
+            Self::Path { offset, .. }
+            | Self::Picture { offset, .. }
+            | Self::Glyph { origin: offset, .. } => {
                 offset.x += dx;
                 offset.y += dy;
             }
@@ -226,6 +244,7 @@ impl Primitive {
             Self::LinearGradient { .. } => PrimitiveKind::LinearGradient,
             Self::RadialGradient { .. } => PrimitiveKind::RadialGradient,
             Self::Text { .. } => PrimitiveKind::Text,
+            Self::Glyph { .. } => PrimitiveKind::Glyph,
             Self::Image { .. } => PrimitiveKind::Image,
             Self::Path { .. } => PrimitiveKind::Path,
             Self::Picture { .. } => PrimitiveKind::Picture,
@@ -264,6 +283,12 @@ impl Primitive {
             Self::Text {
                 bounds, font_size, ..
             } => text_reach(*bounds, *font_size),
+            Self::Glyph {
+                glyph,
+                origin,
+                font_size,
+                ..
+            } => glyph_reach(glyph, *origin, *font_size),
             Self::Path {
                 vertices,
                 offset,
@@ -352,6 +377,20 @@ pub(crate) fn quad_reach(bounds: Bounds) -> Bounds {
 /// ink, which can be wider than its bounds, so it is unbounded horizontally.
 pub(crate) fn text_reach(bounds: Bounds, font_size: f32) -> Bounds {
     outset(bounds, f32::INFINITY, font_size.max(0.0) * 2.0 + EDGE)
+}
+
+/// What a [`Primitive::Glyph`] can draw on: its advance from two ems above
+/// the baseline to one below, and half an em to either side for side bearings
+/// and fallback faces drawn larger than the em.
+fn glyph_reach(glyph: &FontGlyph, origin: Point, font_size: f32) -> Bounds {
+    let em = font_size.max(0.0);
+    let advance = glyph.advance(em).max(0.0);
+    let pad = em * 0.5 + EDGE;
+    outset(
+        Bounds::from_xywh(origin.x, origin.y - em * 1.5, advance, em * 2.0),
+        pad,
+        pad,
+    )
 }
 
 /// Antialiasing reaches about one pixel past an edge.

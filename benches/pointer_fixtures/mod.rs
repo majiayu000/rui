@@ -384,8 +384,9 @@ fn pad(probe: &Rc<Probe>) -> Canvas {
     })
 }
 
-/// The grid of `examples/canvas_grid.rs`: a quad per cell and a text run per
-/// row, painted by one canvas.
+/// The grid of `examples/canvas_grid.rs` as it was before it drew a glyph per
+/// cell: a quad per cell and a text run per row, painted by one canvas. Kept so
+/// pointer costs stay comparable across runs.
 fn grid(probe: &Rc<Probe>, cached: bool) -> Canvas {
     let lines: Vec<SharedStr> = (0..GRID.1)
         .map(|row| {

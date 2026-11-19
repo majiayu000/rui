@@ -15,6 +15,8 @@ use crate::renderer::{
 use metal::*;
 
 mod encoding;
+#[cfg(test)]
+mod glyph_tests;
 mod offscreen;
 mod resources;
 

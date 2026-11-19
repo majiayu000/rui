@@ -782,6 +782,7 @@ impl Default for TextGlyphCache {
 }
 
 mod color;
+mod font_glyph;
 mod placed;
 mod shaped_entry;
 #[cfg(test)]

@@ -211,6 +211,19 @@ fn primitive_line(index: usize, primitive: &Primitive) -> Result<String, Primiti
             f32_text(*line_height),
             align
         ),
+        Primitive::Glyph {
+            glyph,
+            origin,
+            font_size,
+            color,
+        } => format!(
+            "primitive[{index}].glyph origin=({},{}) advance={} color={} font_size={}",
+            f32_text(origin.x),
+            f32_text(origin.y),
+            f32_text(glyph.advance(*font_size)),
+            rgba_text(*color),
+            f32_text(*font_size)
+        ),
         Primitive::Image {
             bounds,
             source,
