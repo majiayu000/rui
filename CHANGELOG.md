@@ -89,6 +89,10 @@ All notable project changes should be recorded here.
 
 ### Runtime
 
+- **Breaking:** `App::new()` leaves process-wide logger registration to the
+  application. To use `RUST_LOG` with `env_logger`, add it to the binary's
+  dependencies and call `env_logger::init()` in `main`.
+
 - The library builds again with `--no-default-features` (no Metal, no wgpu),
   so the update-path tests `docs/getting-started.md` gives run again; since
   `Primitive::Picture` the `picture` module was left out of that build while
