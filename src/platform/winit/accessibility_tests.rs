@@ -3,10 +3,12 @@
 //! the requests that come back.
 
 use super::accessibility::WindowAccessibility;
-use super::accessibility_tree::{WINDOW_NODE, request_for_action};
+use super::accessibility_tree::{WINDOW_NODE, request_for_action, tree_update};
 use crate::advanced_ui::{Button, Checkbox};
 use crate::core::ElementId;
-use crate::core::accessibility::AccessibilityAction;
+use crate::core::accessibility::{
+    AccessibilityAction, AccessibilityNode, AccessibilityRole, AccessibilityTree,
+};
 use crate::core::geometry::Size;
 use crate::core::presenter::Presenter;
 use crate::elements::{Div, div, input, text};
@@ -352,4 +354,25 @@ fn each_window_publishes_its_own_tree() {
         second_tree.state().root().label().as_deref(),
         Some("Second")
     );
+}
+
+#[test]
+fn an_id_used_twice_is_published_once() {
+    let twice = ElementId(5);
+    let button = |label: &str| {
+        AccessibilityNode::label_required(twice, AccessibilityRole::Button, label)
+            .expect("button node")
+    };
+    let tree = AccessibilityTree::new(vec![
+        button("First"),
+        AccessibilityNode::new(ElementId(6), AccessibilityRole::Toolbar)
+            .with_label("Tools")
+            .with_child(button("Second")),
+    ]);
+
+    // AccessKit rejects an update naming a node twice; this one reads back.
+    let tree = read_back(tree_update(&tree, "Twice", 1.0));
+    assert_eq!(node(&tree, twice).label().as_deref(), Some("First"));
+    assert_eq!(node(&tree, ElementId(6)).children().count(), 0);
+    assert_eq!(tree.state().root().children().count(), 2);
 }

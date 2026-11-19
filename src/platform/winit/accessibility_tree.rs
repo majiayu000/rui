@@ -11,6 +11,7 @@ use accesskit::{
     Action, ActionData, ActionRequest, Affine, Invalid, Live, Node, NodeId, Rect, Role, Toggled,
     TreeId, TreeInfo, TreeUpdate,
 };
+use std::collections::HashSet;
 
 /// The window itself, the parent of the presenter's root nodes. Element ids
 /// map to node ids one to one, and no element is given this one.
@@ -21,16 +22,24 @@ pub(super) const WINDOW_NODE: NodeId = NodeId(u64::MAX);
 /// by `scale_factor` to the physical pixels AccessKit expects. Focus is the
 /// focused element, or the window when no element has focus.
 pub(super) fn tree_update(tree: &AccessibilityTree, title: &str, scale_factor: f64) -> TreeUpdate {
-    let mut nodes = Vec::new();
+    let mut builder = Builder {
+        nodes: Vec::new(),
+        seen: HashSet::from([WINDOW_NODE]),
+        focus: None,
+    };
     let mut window = Node::new(Role::Window);
     window.set_label(title);
     window.set_transform(Affine::scale(scale_factor));
-    window.set_children(tree.roots().iter().map(node_id).collect::<Vec<_>>());
+    window.set_children(
+        tree.roots()
+            .iter()
+            .filter_map(|root| builder.push(root))
+            .collect::<Vec<_>>(),
+    );
+    let Builder {
+        mut nodes, focus, ..
+    } = builder;
     nodes.push((WINDOW_NODE, window));
-    let mut focus = None;
-    for root in tree.roots() {
-        push_node(root, &mut nodes, &mut focus);
-    }
     let mut info = TreeInfo::new(WINDOW_NODE);
     info.toolkit_name = Some("rui".to_string());
     info.toolkit_version = Some(env!("CARGO_PKG_VERSION").to_string());
@@ -80,30 +89,52 @@ fn node_id(node: &AccessibilityNode) -> NodeId {
     NodeId(node.a11y_id().0)
 }
 
-fn push_node(
-    node: &AccessibilityNode,
-    nodes: &mut Vec<(NodeId, Node)>,
-    focus: &mut Option<NodeId>,
-) {
-    if node.a11y_focused() && focus.is_none() {
-        *focus = Some(node_id(node));
-    }
-    let mut out = accesskit_node(node);
-    if node.a11y_role() == AccessibilityRole::TextInput {
-        let (runs, selection) = text_runs(node);
-        for (id, _) in &runs {
-            out.push_child(*id);
+/// The nodes of one update, each id once.
+struct Builder {
+    nodes: Vec<(NodeId, Node)>,
+    seen: HashSet<NodeId>,
+    /// The first focused node.
+    focus: Option<NodeId>,
+}
+
+impl Builder {
+    /// Add `node` and its subtree, returning its id. A node whose id is
+    /// already in the update is left out with its subtree, as AccessKit
+    /// rejects an update that names a node twice.
+    fn push(&mut self, node: &AccessibilityNode) -> Option<NodeId> {
+        let id = node_id(node);
+        if !self.seen.insert(id) {
+            log::warn!(
+                "left element {:?} out of the winit accessibility tree: its id is used twice",
+                node.a11y_id()
+            );
+            return None;
         }
-        if let Some(selection) = selection {
-            out.set_text_selection(selection);
+        if node.a11y_focused() && self.focus.is_none() {
+            self.focus = Some(id);
         }
-        nodes.push((node_id(node), out));
-        nodes.extend(runs);
-    } else {
-        nodes.push((node_id(node), out));
-    }
-    for child in node.a11y_children() {
-        push_node(child, nodes, focus);
+        let mut out = accesskit_node(node);
+        let mut children = Vec::new();
+        if node.a11y_role() == AccessibilityRole::TextInput {
+            let (runs, selection) = text_runs(node);
+            if let Some(selection) = selection {
+                out.set_text_selection(selection);
+            }
+            for (run, run_node) in runs {
+                if self.seen.insert(run) {
+                    children.push(run);
+                    self.nodes.push((run, run_node));
+                }
+            }
+        }
+        children.extend(
+            node.a11y_children()
+                .iter()
+                .filter_map(|child| self.push(child)),
+        );
+        out.set_children(children);
+        self.nodes.push((id, out));
+        Some(id)
     }
 }
 
@@ -195,7 +226,6 @@ fn accesskit_node(node: &AccessibilityNode) -> Node {
     if node.a11y_enabled() && !node.a11y_actions().is_empty() {
         out.add_action(Action::Focus);
     }
-    out.set_children(node.a11y_children().iter().map(node_id).collect::<Vec<_>>());
     out
 }
 
