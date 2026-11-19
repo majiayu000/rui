@@ -87,6 +87,10 @@ All notable project changes should be recorded here.
 
 ### Runtime
 
+- The library builds again with `--no-default-features` (no Metal, no wgpu),
+  so the update-path tests `docs/getting-started.md` gives run again; since
+  `Primitive::Picture` the `picture` module was left out of that build while
+  the plan and primitives still used it. CI now runs that command.
 - An entity one view's listener updates shows in the other views that read it
   on the next frame, parent to child and child to parent, instead of one frame
   later; child views' queued listener updates run before the frame works out
