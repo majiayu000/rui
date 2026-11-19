@@ -58,6 +58,7 @@ impl WindowAccessibility {
     pub(super) fn handle_event(&mut self, event: AccessKitEvent) -> bool {
         match event {
             AccessKitEvent::InitialTreeRequested => {
+                log::info!("an assistive technology asked for the winit accessibility tree");
                 self.active = true;
                 self.published = None;
                 true

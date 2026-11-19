@@ -60,6 +60,23 @@ def describe(node):
     return f"{node.get_role_name()} {node.get_name()!r}{value} [{' '.join(flags)}]"
 
 
+def print_desktop():
+    """What AT-SPI holds, for a failed wait."""
+    desktop = Atspi.get_desktop(0)
+    print(f"desktop: {desktop.get_child_count()} applications")
+    for i in range(desktop.get_child_count()):
+        app = desktop.get_child_at_index(i)
+        if app is None:
+            continue
+        app.clear_cache()
+        print(f"  application {app.get_name()!r}, {app.get_child_count()} windows")
+        for j in range(app.get_child_count()):
+            window = app.get_child_at_index(j)
+            if window is not None:
+                for depth, node in walk(window):
+                    print("    " + "  " * depth + describe(node))
+
+
 def wait_for(what, find):
     deadline = time.monotonic() + TIMEOUT
     while True:
@@ -70,6 +87,7 @@ def wait_for(what, find):
         if found is not None:
             return found
         if time.monotonic() > deadline:
+            print_desktop()
             sys.exit(f"FAIL: timed out waiting for {what}")
         time.sleep(0.2)
 
