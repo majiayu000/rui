@@ -56,6 +56,7 @@ impl From<RendererResourceError> for TextError {
 #[derive(Debug, Clone, Copy)]
 pub struct TextRequest<'a> {
     pub content: &'a str,
+    /// The em, in logical pixels.
     pub font_size: f32,
     pub font_weight: u16,
     pub font_family: Option<&'a str>,

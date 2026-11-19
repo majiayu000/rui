@@ -293,9 +293,12 @@ fn bitmap_emoji_become_color_glyphs() {
         .expect("an emoji has pixels");
     assert!(emoji.color, "{emoji:?}");
     let size = (emoji.slot.rect.width, emoji.slot.rect.height);
-    // A fallback face is drawn at the size that gives it the requested face's
-    // em, about 25 px for 28 px of Arial; its square images match its advance.
-    assert!(glyph.font_scale > 1.0, "{glyph:?}");
+    // A fallback face is drawn at an em of the requested 28 px; its square
+    // images match its advance.
+    assert!(
+        (size.1 as f32 - 28.0).abs() <= 1.0,
+        "{size:?} for a 28 px em"
+    );
     let advance = cache.measurer.fonts[glyph.font_index as usize]
         .font()
         .glyph(GlyphId(glyph.glyph_id))

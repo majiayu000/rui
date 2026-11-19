@@ -59,6 +59,7 @@ pub enum Primitive {
         bounds: Bounds,
         content: SharedStr,
         color: Rgba,
+        /// The em, in logical pixels.
         font_size: f32,
         font_weight: u16,
         font_family: Option<Arc<str>>,

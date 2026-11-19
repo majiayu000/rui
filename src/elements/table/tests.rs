@@ -207,7 +207,7 @@ fn test_table_calculate_column_widths_with_explicit_widths() {
         .column_widths(vec![100.0, 200.0])
         .row(row().cells(["A", "B"]));
 
-    let widths = t.calculate_column_widths();
+    let widths = t.calculate_column_widths(&mut TextMeasureCache::new());
     assert_eq!(widths, vec![100.0, 200.0]);
 }
 
@@ -215,7 +215,7 @@ fn test_table_calculate_column_widths_with_explicit_widths() {
 fn test_table_calculate_column_widths_auto() {
     let t = table().row(row().cells(["Short", "A much longer text value"]));
 
-    let widths = t.calculate_column_widths();
+    let widths = t.calculate_column_widths(&mut TextMeasureCache::new());
     assert_eq!(widths.len(), 2);
     assert!(widths[1] > widths[0]); // Longer text should have wider column
 }
@@ -273,11 +273,14 @@ fn test_table_id() {
 }
 
 #[test]
-fn test_cell_estimate_width() {
+fn test_cell_measure_width_is_text_plus_padding() {
+    let mut measurer = TextMeasureCache::new();
     let cell = cell("Test").size(14.0).p(8.0);
-    let width = cell.estimate_width();
-    // 4 chars * 14.0 * 0.5 + 16 (padding) = 28 + 16 = 44
-    assert!((width - 44.0).abs() < 0.1);
+    let text = measurer
+        .measure_single_line(TextRequest::new("Test", 14.0, 400, None, 1.4))
+        .expect("measure");
+    let want = text.ink_bounds.width().max(text.advance_width).ceil() + 16.0;
+    assert_eq!(cell.measure_width(&mut measurer), want);
 }
 
 #[test]
@@ -340,14 +343,14 @@ fn test_table_calculate_widths_minimum() {
     // Test that columns have a minimum width even for very short content
     let t = table().row(row().cells(["A"])); // Single character
 
-    let widths = t.calculate_column_widths();
+    let widths = t.calculate_column_widths(&mut TextMeasureCache::new());
     assert!(widths[0] >= 40.0); // Minimum width enforced
 }
 
 #[test]
 fn test_table_calculate_widths_empty() {
     let t = table();
-    let widths = t.calculate_column_widths();
+    let widths = t.calculate_column_widths(&mut TextMeasureCache::new());
     assert!(widths.is_empty());
 }
 

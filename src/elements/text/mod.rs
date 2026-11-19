@@ -201,6 +201,7 @@ impl Text {
         self
     }
 
+    /// The font size: the em, in logical pixels.
     pub fn size(mut self, size: f32) -> Self {
         self.font_size = size;
         self.own.font_size = true;
