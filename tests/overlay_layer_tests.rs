@@ -561,7 +561,7 @@ fn a_button_keeps_its_press_across_a_rebuild() {
             .iter()
             .flat_map(|layer| layer.hit_regions())
             .map(|region| region.id)
-            .last()
+            .next_back()
             .expect("button hit region");
         let bounds = bounds_of(&session, button);
         let at = Point::new(bounds.x() + 4.0, bounds.y() + 4.0);

@@ -10,7 +10,6 @@ pub struct ScrollState {
     pub offset_y: f32,
     pub content_size: Size,
     pub viewport_size: Size,
-    pub is_scrolling: bool,
     pub scrollbar_hovered: bool,
     pub scrollbar_dragging: bool,
 }
@@ -61,10 +60,12 @@ impl ScrollState {
         self.scroll_to(self.offset_x + dx, self.offset_y + dy);
     }
 
+    #[cfg(test)]
     pub fn scroll_to_top(&mut self) {
         self.offset_y = 0.0;
     }
 
+    #[cfg(test)]
     pub fn scroll_to_bottom(&mut self) {
         self.offset_y = self.max_scroll_y();
     }

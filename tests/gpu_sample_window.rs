@@ -2,6 +2,8 @@
 //! of every window, as many as it drew. This checks that choice without a GPU.
 #![cfg(target_os = "macos")]
 
+// The benches use the rest of this file; this test only its sample selection.
+#[allow(dead_code)]
 #[path = "../benchmarks/gpui_compare/gpu_time.rs"]
 mod gpu_time;
 

@@ -3,6 +3,7 @@
 use std::time::{Duration, Instant};
 
 /// Easing functions for animations
+#[allow(unpredictable_function_pointer_comparisons)]
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum Easing {
     #[default]
@@ -35,6 +36,8 @@ pub enum Easing {
         stiffness: f32,
         damping: f32,
     },
+    /// Compared by function address: the same function can compare unequal
+    /// when its address differs between codegen units.
     Custom(fn(f32) -> f32),
 }
 

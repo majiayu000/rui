@@ -1,3 +1,5 @@
+#![allow(clippy::field_reassign_with_default)]
+
 use super::*;
 use crate::elements::text::text;
 
@@ -448,7 +450,6 @@ fn test_default_scroll_state() {
     let sv = ScrollView::new();
     assert_eq!(sv.state.offset_x, 0.0);
     assert_eq!(sv.state.offset_y, 0.0);
-    assert!(!sv.state.is_scrolling);
     assert!(!sv.state.scrollbar_hovered);
     assert!(!sv.state.scrollbar_dragging);
 }

@@ -248,7 +248,7 @@ mod edge_cases {
     fn test_rgba_copy_and_clone() {
         let original = Rgba::new(0.1, 0.2, 0.3, 0.4);
         let copied = original;
-        let cloned = original.clone();
+        let cloned = original;
         assert_eq!(original, copied);
         assert_eq!(original, cloned);
     }
@@ -257,7 +257,7 @@ mod edge_cases {
     fn test_hsla_copy_and_clone() {
         let original = Hsla::new(180.0, 0.5, 0.6, 0.7);
         let copied = original;
-        let cloned = original.clone();
+        let cloned = original;
         assert_eq!(original, copied);
         assert_eq!(original, cloned);
     }
@@ -266,7 +266,7 @@ mod edge_cases {
     fn test_color_copy_and_clone() {
         let original = Color::rgba(0.1, 0.2, 0.3, 0.4);
         let copied = original;
-        let cloned = original.clone();
+        let cloned = original;
         assert_eq!(original, copied);
         assert_eq!(original, cloned);
     }

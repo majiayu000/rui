@@ -441,10 +441,10 @@ impl Element for Menu {
             }
             PointerEventKind::Up => {
                 let release = self.indexed_state.release(index, cx, self.state);
-                if release.activated {
-                    if let Some(index) = release.released_index {
-                        return self.activate_index(index, cx);
-                    }
+                if release.activated
+                    && let Some(index) = release.released_index
+                {
+                    return self.activate_index(index, cx);
                 }
                 inside
             }
@@ -477,14 +477,10 @@ impl Element for Menu {
                 .hovered_index()
                 .map(|index| self.activate_index(index, cx))
                 .unwrap_or(false),
-            KeyCode::Escape => {
-                if self.indexed_state.hovered_index().is_some() {
-                    self.indexed_state.clear();
-                    cx.request_redraw();
-                    true
-                } else {
-                    false
-                }
+            KeyCode::Escape if self.indexed_state.hovered_index().is_some() => {
+                self.indexed_state.clear();
+                cx.request_redraw();
+                true
             }
             _ => false,
         }

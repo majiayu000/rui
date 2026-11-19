@@ -63,7 +63,13 @@ fn difference(metal: &[u8], wgpu: &[u8], width: usize) -> Difference {
         pixels: metal.len() / 4,
         ..Default::default()
     };
-    for (index, (a, b)) in metal.chunks_exact(4).zip(wgpu.chunks_exact(4)).enumerate() {
+    for (index, (a, b)) in metal
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(wgpu.as_chunks::<4>().0)
+        .enumerate()
+    {
         let channel = a
             .iter()
             .zip(b)
@@ -75,12 +81,7 @@ fn difference(metal: &[u8], wgpu: &[u8], width: usize) -> Difference {
         }
         if channel > diff.max {
             diff.max = channel;
-            diff.worst = Some((
-                index % width,
-                index / width,
-                a.try_into().unwrap(),
-                b.try_into().unwrap(),
-            ));
+            diff.worst = Some((index % width, index / width, *a, *b));
         }
     }
     diff
@@ -213,7 +214,7 @@ fn wgpu_draws_the_fixture_as_metal_does() {
     let first = wgpu
         .capture_frame_pixels(&scene, viewport)
         .expect("wgpu capture");
-    let colors: std::collections::HashSet<&[u8]> = first.chunks_exact(4).collect();
+    let colors: std::collections::HashSet<&[u8; 4]> = first.as_chunks::<4>().0.iter().collect();
     assert!(colors.len() > 100, "the fixture draws something to compare");
     for scale in [1.0, 2.0] {
         // The second capture draws small paths from the atlas.
