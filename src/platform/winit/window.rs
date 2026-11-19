@@ -2,6 +2,7 @@
 
 use super::clipboard::WindowClipboard;
 use super::input::InputState;
+use crate::core::ElementId;
 use crate::core::app::{AppContext, RedrawSource};
 use crate::core::event::{Cursor, Event};
 use crate::core::frame_pipeline::{
@@ -18,14 +19,15 @@ use crate::platform::frame_driver::{
     synchronize_viewport_after_platform_events,
 };
 use crate::platform::window::{
-    PlatformWindow, PlatformWindowError, PlatformWindowEvent, PlatformWindowFeatures,
-    PlatformWindowState,
+    PlatformImeEvent, PlatformInputEvent, PlatformWindow, PlatformWindowError, PlatformWindowEvent,
+    PlatformWindowFeatures, PlatformWindowState,
 };
 use crate::renderer::RendererResourceLimits;
 use crate::renderer::wgpu::{RetainedTarget, WgpuRenderer, WindowSurface};
 use std::cell::Cell;
 use std::sync::Arc;
 use std::time::Duration;
+use winit::dpi::{LogicalPosition, LogicalSize};
 use winit::event::WindowEvent;
 use winit::event_loop::ActiveEventLoop;
 use winit::window::CursorIcon;
@@ -37,10 +39,39 @@ pub(super) struct WinitWindow {
     window: Arc<winit::window::Window>,
     /// The cursor last shown, so a pointer move over the same element sets none.
     cursor: Cell<Cursor>,
+    ime_owner: Cell<Option<ElementId>>,
     clipboard: WindowClipboard,
 }
 
 impl WinitWindow {
+    /// Point the system input method at the focused field's painted caret.
+    fn sync_ime<E: Element>(&self, presenter: &Presenter<E>) {
+        let focused = presenter.focused_element().and_then(|id| {
+            presenter
+                .root()
+                .text_input_snapshot(id)
+                .map(|text| (id, text))
+        });
+        let owner = focused.as_ref().map(|(id, _)| *id);
+        let previous = self.ime_owner.replace(owner);
+        if previous != owner {
+            if previous.is_some() {
+                self.window.set_ime_allowed(false);
+            }
+            if owner.is_some() {
+                self.window.set_ime_allowed(true);
+            }
+        }
+        if let Some((_, text)) = focused
+            && let Some(bounds) = text.caret_bounds()
+        {
+            self.window.set_ime_cursor_area(
+                LogicalPosition::new(bounds.x(), bounds.y()),
+                LogicalSize::new(bounds.width().max(1.0), bounds.height().max(1.0)),
+            );
+        }
+    }
+
     /// Show the cursor the elements under the pointer asked for.
     fn show_cursor(&self, cursor: Cursor) {
         if self.cursor.replace(cursor) == cursor {
@@ -214,6 +245,7 @@ where
         window: WinitWindow {
             window: parts.window,
             cursor: Cell::new(Cursor::Default),
+            ime_owner: Cell::new(None),
             clipboard: parts.clipboard,
         },
         renderer: parts.renderer,
@@ -271,7 +303,7 @@ where
                 PlatformWindowEvent::Resized(size) => viewport_size = size,
                 PlatformWindowEvent::FocusChanged(focused) => focus_changed = Some(focused),
                 PlatformWindowEvent::CloseRequested => close_requested = true,
-                PlatformWindowEvent::Input(input) => append_input_event(input, &mut ordered),
+                PlatformWindowEvent::Input(input) => append_winit_input(input, &mut ordered),
                 _ => {}
             }
         }
@@ -333,6 +365,7 @@ where
         match outcome {
             Ok(Some(outcome)) => {
                 self.last_viewport_size = viewport_size;
+                self.window.sync_ime(&self.presenter);
                 if mark_deferred_frame_for_retry(context, outcome.presented) {
                     self.window.window.request_redraw();
                 }
@@ -342,6 +375,20 @@ where
         }
         close_requested
     }
+}
+
+fn append_winit_input(input: PlatformInputEvent, ordered: &mut Vec<OrderedInputEvent>) {
+    // winit sends an empty preedit immediately before a commit. Keep the
+    // composition intact when the two events arrive in this frame.
+    if matches!(&input, PlatformInputEvent::Ime(PlatformImeEvent::Commit(_)))
+        && matches!(
+            ordered.last(),
+            Some(OrderedInputEvent::Text(TextInputCommand::CancelComposition))
+        )
+    {
+        ordered.pop();
+    }
+    append_input_event(input, ordered);
 }
 
 fn window_attributes(options: &WindowOptions) -> winit::window::WindowAttributes {
@@ -439,9 +486,7 @@ fn dispatch_events<E: Element>(
                 (handled, redraw_requested, RedrawSource::PlatformInput)
             }
             OrderedInputEvent::Text(command) => {
-                let (handled, redraw_requested) = presenter.with_event_context(|root, event_cx| {
-                    root.handle_text_input_command(event_cx, command)
-                });
+                let (handled, redraw_requested) = dispatch_ime(presenter, command);
                 (handled, redraw_requested, RedrawSource::PlatformInput)
             }
             // Only the AppKit accessibility bridge produces these.
@@ -454,5 +499,67 @@ fn dispatch_events<E: Element>(
     }
     if context.consume_runtime_view_notification() {
         schedule_platform_redraw(window, context, RedrawSource::ViewNotification);
+    }
+}
+
+fn dispatch_ime<E: Element>(
+    presenter: &mut Presenter<E>,
+    command: &TextInputCommand,
+) -> (bool, bool) {
+    let Some(focused) = presenter.focused_element() else {
+        return (false, false);
+    };
+    let Some(text) = presenter.root().text_input_snapshot(focused) else {
+        return (false, false);
+    };
+    let command = match command {
+        TextInputCommand::UpdateComposition(text_value) if text.composition().is_none() => {
+            &TextInputCommand::BeginComposition(text_value.clone())
+        }
+        TextInputCommand::CancelComposition if text.composition().is_none() => {
+            return (false, false);
+        }
+        _ => command,
+    };
+    presenter.with_event_context(|root, event_cx| root.handle_text_input_command(event_cx, command))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::elements::input;
+
+    #[test]
+    fn composition_updates_then_commits_once_in_the_focused_input() {
+        let id = ElementId(1);
+        let mut presenter =
+            Presenter::with_root(Size::new(200.0, 100.0), input().id(id).value("例"));
+        presenter.set_focused_element(Some(id));
+        let mut ordered = Vec::new();
+        for event in [
+            PlatformImeEvent::UpdateComposition("p".into()),
+            PlatformImeEvent::UpdateComposition("pin".into()),
+            PlatformImeEvent::CancelComposition,
+            PlatformImeEvent::Commit("拼".into()),
+        ] {
+            append_winit_input(PlatformInputEvent::Ime(event), &mut ordered);
+        }
+        assert_eq!(ordered.len(), 3);
+        for (event, (expected, composing)) in
+            ordered
+                .iter()
+                .zip([("例p", true), ("例pin", true), ("例拼", false)])
+        {
+            let OrderedInputEvent::Text(command) = event else {
+                panic!("composition should reach the text input");
+            };
+            assert!(dispatch_ime(&mut presenter, command).0);
+            let text = presenter
+                .root()
+                .text_input_snapshot(id)
+                .expect("text field");
+            assert_eq!(text.text(), expected);
+            assert_eq!(text.composition().is_some(), composing);
+        }
     }
 }
