@@ -65,8 +65,11 @@ fi
   uname -a
   sw_vers
   sysctl machdep.cpu.brand_string hw.ncpu hw.memsize
+  printf '\nrui_toolchain:\n'
   rustc --version
   cargo --version
+  printf '\nzed_toolchain:\n'
+  (cd "$ZED_DIR" && rustc --version && cargo --version)
   printf '\nrui_worktree:\n'
   git -C "$ROOT" status --porcelain
   printf '\nzed_worktree:\n'
@@ -95,13 +98,15 @@ resolve_executable() {
 }
 
 echo "== building RUI ($(git -C "$ROOT" rev-parse --short HEAD))" >&2
-rui_bin="$(cd "$ROOT" && cargo bench --bench compare_frame --no-run 2>&1 | tee "$RUN_DIR/build-rui.log" | executable)"
+rui_bin="$(cd "$ROOT" && cargo bench --locked --bench compare_frame --no-run 2>&1 | tee "$RUN_DIR/build-rui.log" | executable)"
 rui_bin="$(resolve_executable "$ROOT" "$rui_bin")"
+cp "$ROOT/Cargo.lock" "$RUN_DIR/rui-Cargo.lock"
 echo "== building GPUI (${ZED_REV:0:7})" >&2
 # Without font-kit, gpui_macos uses NoopTextSystem: fixed advances and no glyphs.
 gpui_bin="$(cd "$ZED_DIR" && cargo bench -p gpui_platform --features bench-support,runtime_shaders,font-kit \
   --bench rui_compare --no-run 2>&1 | tee "$RUN_DIR/build-gpui.log" | executable)"
 gpui_bin="$(resolve_executable "$ZED_DIR" "$gpui_bin")"
+cp "$ZED_DIR/Cargo.lock" "$RUN_DIR/zed-Cargo.lock"
 
 # Turns one GPUI bench run's report into RUI's line format.
 gpui_line() {

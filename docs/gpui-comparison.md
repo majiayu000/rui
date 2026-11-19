@@ -20,8 +20,9 @@ process, alternating RUI/GPUI and GPUI/RUI order by round, `REPEATS` times (defa
 It prints one table with the range over the repeats. After checkout preparation, each run creates a fresh
 `target/gpui_compare/run.XXXXXXXX/` directory (printed on stderr), preserving
 `results.txt`, full per-round stdout/stderr, build logs, execution order and commands.
-`metadata.txt` records actual revisions, dirty status, parameters, toolchain and host;
-source patches and the copied GPUI fixture/hook retain local benchmark changes.
+`metadata.txt` records actual revisions, dirty status, parameters, both toolchains
+and the host. The runner archives both resolved Cargo lockfiles, source patches and
+the copied GPUI fixtures.
 Untracked files other than those copied fixtures are listed, not archived. Use a
 clean dedicated checkout when reproducing a run. The runner modifies the supplied
 Zed checkout's manifest and bench files.
