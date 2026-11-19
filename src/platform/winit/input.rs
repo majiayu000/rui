@@ -3,10 +3,9 @@
 use crate::core::event::{KeyCode, KeyEvent, Modifiers, MouseButton, ScrollEvent};
 use crate::core::geometry::{Point, Size};
 use crate::platform::window::{
-    PlatformImeEvent, PlatformInputEvent, PlatformMouseEvent, PlatformMouseEventKind,
-    PlatformWindowEvent,
+    PlatformInputEvent, PlatformMouseEvent, PlatformMouseEventKind, PlatformWindowEvent,
 };
-use winit::event::{ElementState, Ime, MouseScrollDelta, WindowEvent};
+use winit::event::{ElementState, MouseScrollDelta, WindowEvent};
 use winit::keyboard::{Key, NamedKey};
 use winit::window::Window;
 
@@ -98,13 +97,6 @@ impl InputState {
                     modifiers: self.modifiers,
                 }))
             }
-            WindowEvent::Ime(event) => input(PlatformInputEvent::Ime(match event {
-                Ime::Enabled => return None,
-                Ime::Disabled => PlatformImeEvent::CancelComposition,
-                Ime::Preedit(text, _) if text.is_empty() => PlatformImeEvent::CancelComposition,
-                Ime::Preedit(text, _) => PlatformImeEvent::UpdateComposition(text.clone()),
-                Ime::Commit(text) => PlatformImeEvent::Commit(text.clone()),
-            })),
             WindowEvent::KeyboardInput { event, .. } => {
                 let mut key = KeyEvent::new(key_code(&event.logical_key), self.modifiers);
                 key.is_repeat = event.repeat;
@@ -355,33 +347,5 @@ mod tests {
             panic!("a resize should translate to Resized");
         };
         assert_eq!(size, Size::new(100.0, 50.0));
-    }
-
-    #[test]
-    fn ime_events_translate_to_text_composition_and_preserve_utf8() {
-        let mut state = InputState::new(1.0);
-        for (event, want) in [
-            (
-                Ime::Preedit("拼音".into(), Some((0, 6))),
-                PlatformImeEvent::UpdateComposition("拼音".into()),
-            ),
-            (
-                Ime::Preedit(String::new(), None),
-                PlatformImeEvent::CancelComposition,
-            ),
-            (
-                Ime::Commit("中文".into()),
-                PlatformImeEvent::Commit("中文".into()),
-            ),
-            (Ime::Disabled, PlatformImeEvent::CancelComposition),
-        ] {
-            let Some(PlatformWindowEvent::Input(PlatformInputEvent::Ime(translated))) =
-                state.translate(&WindowEvent::Ime(event))
-            else {
-                panic!("a changed or disabled composition should reach the frame");
-            };
-            assert_eq!(translated, want);
-        }
-        assert!(state.translate(&WindowEvent::Ime(Ime::Enabled)).is_none());
     }
 }

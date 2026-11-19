@@ -2,16 +2,16 @@
 //! scheduling, input ordering and key routing. Nothing here calls a platform
 //! API; each runner supplies its window through [`PlatformWindow`].
 
+use crate::core::ElementId;
 use crate::core::action::route_key_event;
 use crate::core::app::{AppContext, RedrawSource};
 use crate::core::event::{KeyEvent, Modifiers, ScrollEvent};
 use crate::core::geometry::Size;
 use crate::core::presenter::Presenter;
-use crate::core::text_editing::TextInputEvent;
+use crate::core::text_editing::TextInputCommand;
 use crate::elements::element::{Element, PointerEvent, PointerEventKind};
 use crate::platform::window::{
-    PlatformImeEvent, PlatformInputEvent, PlatformMouseEventKind, PlatformWindow,
-    PlatformWindowEvent,
+    PlatformInputEvent, PlatformMouseEventKind, PlatformWindow, PlatformWindowEvent,
 };
 
 /// Propagates a platform-reported size change to the single viewport-size owner.
@@ -74,16 +74,14 @@ pub(crate) fn append_input_event(
             is_down: false,
             event,
         }),
-        PlatformInputEvent::Ime(PlatformImeEvent::Commit(text)) => {
-            ordered_input_events.push(OrderedInputEvent::Text(
-                TextInputEvent::CommitComposition(text).into(),
-            ));
-        }
+        #[cfg(all(target_os = "macos", feature = "metal"))]
         PlatformInputEvent::Ime(event) => {
             ordered_input_events.push(OrderedInputEvent::Text(
                 event.into_text_input_event().into(),
             ));
         }
+        #[cfg(not(all(target_os = "macos", feature = "metal")))]
+        PlatformInputEvent::Ime(_) => {}
         PlatformInputEvent::Mouse(event) => {
             let kind = match event.kind {
                 PlatformMouseEventKind::Down => PointerEventKind::Down,
@@ -114,11 +112,30 @@ pub(crate) enum OrderedInputEvent {
         is_down: bool,
         event: KeyEvent,
     },
-    Text(crate::core::text_editing::TextInputCommand),
+    #[cfg(all(target_os = "macos", feature = "metal"))]
+    Text(TextInputCommand),
+    #[cfg(feature = "winit")]
+    WinitIme(winit::event::Ime),
+    #[cfg(feature = "winit")]
+    WinitFocus(bool),
     #[cfg(all(target_os = "macos", feature = "metal"))]
     Accessibility(crate::platform::mac::MacAccessibilityActionRequest),
     #[cfg(any(feature = "winit", all(target_os = "macos", feature = "metal")))]
     FileDrag(crate::core::drag::FileDragEvent),
+}
+
+/// Route an IME command to its editor without changing the user's focus.
+pub(crate) fn dispatch_text_input_event_to<E: Element>(
+    presenter: &mut Presenter<E>,
+    target: ElementId,
+    command: &TextInputCommand,
+) -> (bool, bool) {
+    let focused = presenter.focused_element();
+    *presenter.focused_element_mut() = Some(target);
+    let result = presenter
+        .with_event_context(|root, event_cx| root.handle_text_input_command(event_cx, command));
+    *presenter.focused_element_mut() = focused;
+    result
 }
 
 pub(crate) fn mark_deferred_frame_for_retry(context: &mut AppContext, presented: bool) -> bool {

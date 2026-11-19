@@ -9,6 +9,7 @@
 //! menu. The native accessibility bridge and system menu bar use AppKit.
 
 mod clipboard;
+mod ime;
 mod input;
 mod open_windows;
 mod window;
