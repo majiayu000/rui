@@ -76,6 +76,7 @@ impl View for ToastView {
     }
 }
 
+#[allow(clippy::type_complexity)]
 fn toast_session(
     toast: impl Fn() -> Toast + 'static,
 ) -> (
@@ -241,6 +242,7 @@ impl View for DateView {
     }
 }
 
+#[allow(clippy::type_complexity)]
 fn date_session(
     value: Option<CalendarDate>,
 ) -> (

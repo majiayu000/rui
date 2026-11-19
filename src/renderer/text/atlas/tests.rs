@@ -318,7 +318,9 @@ fn bitmap_emoji_become_color_glyphs() {
     // Not gray: an emoji has color.
     assert!(
         pixels
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .any(|p| p[3] > 200 && p[0].abs_diff(p[2]) > 60)
     );
     assert!(

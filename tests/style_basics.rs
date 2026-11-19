@@ -120,7 +120,7 @@ mod corners_tests {
     #[test]
     fn test_corners_clone_and_copy() {
         let corners = Corners::new(1.0, 2.0, 3.0, 4.0);
-        let cloned = corners.clone();
+        let cloned = corners;
         let copied = corners;
         assert_eq!(corners, cloned);
         assert_eq!(corners, copied);
@@ -181,7 +181,7 @@ mod border_style_tests {
     #[test]
     fn test_border_style_clone_and_copy() {
         let border = BorderStyle::new(2.0, Color::RED).with_radius(5.0);
-        let cloned = border.clone();
+        let cloned = border;
         let copied = border;
         assert_eq!(border, cloned);
         assert_eq!(border, copied);
@@ -261,7 +261,7 @@ mod background_tests {
     #[test]
     fn test_background_clone_and_copy() {
         let bg = Background::solid(Color::RED);
-        let cloned = bg.clone();
+        let cloned = bg;
         let copied = bg;
         assert_eq!(bg, cloned);
         assert_eq!(bg, copied);
@@ -313,7 +313,7 @@ mod shadow_tests {
     #[test]
     fn test_shadow_clone_and_copy() {
         let shadow = Shadow::new(1.0, 2.0, 3.0, Color::RED);
-        let cloned = shadow.clone();
+        let cloned = shadow;
         let copied = shadow;
         assert_eq!(shadow, cloned);
         assert_eq!(shadow, copied);
@@ -364,7 +364,7 @@ mod display_tests {
     #[test]
     fn test_display_clone_and_copy() {
         let display = Display::Block;
-        let cloned = display.clone();
+        let cloned = display;
         let copied = display;
         assert_eq!(display, cloned);
         assert_eq!(display, copied);
@@ -402,7 +402,7 @@ mod flex_direction_tests {
         ];
 
         for direction in test_cases {
-            let cloned = direction.clone();
+            let cloned = direction;
             assert_eq!(direction, cloned);
         }
     }
@@ -441,7 +441,7 @@ mod justify_content_tests {
         ];
 
         for justify in test_cases {
-            let cloned = justify.clone();
+            let cloned = justify;
             assert_eq!(justify, cloned);
         }
     }
@@ -478,7 +478,7 @@ mod align_items_tests {
         ];
 
         for align in test_cases {
-            let cloned = align.clone();
+            let cloned = align;
             assert_eq!(align, cloned);
         }
     }
@@ -509,7 +509,7 @@ mod position_tests {
         let test_cases = [Position::Relative, Position::Absolute];
 
         for position in test_cases {
-            let cloned = position.clone();
+            let cloned = position;
             assert_eq!(position, cloned);
         }
     }
@@ -540,7 +540,7 @@ mod overflow_tests {
         let test_cases = [Overflow::Visible, Overflow::Hidden, Overflow::Scroll];
 
         for overflow in test_cases {
-            let cloned = overflow.clone();
+            let cloned = overflow;
             assert_eq!(overflow, cloned);
         }
     }

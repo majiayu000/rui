@@ -102,8 +102,9 @@ impl BorderStyle {
 }
 
 /// Background fill for elements
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum Background {
+    #[default]
     None,
     Solid(Color),
     LinearGradient {
@@ -137,12 +138,6 @@ impl Background {
             inner: inner.into(),
             outer: outer.into(),
         }
-    }
-}
-
-impl Default for Background {
-    fn default() -> Self {
-        Self::None
     }
 }
 

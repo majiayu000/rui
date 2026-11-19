@@ -76,6 +76,10 @@ All notable project changes should be recorded here.
 
 ### Performance
 
+- The `image` dependency leaves out its `avif` feature, which only adds an AVIF
+  encoder (`ravif`/`rav1e`) RUI never calls; every format RUI could decode
+  before still decodes. A release build of the library compiles 27 fewer
+  crates.
 - System fonts are now parsed once per process and text measurement metrics
   survive across frames, instead of both being rebuilt every frame.
 - A background an ancestor paints again because something inside it changed no

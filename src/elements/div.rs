@@ -633,11 +633,11 @@ impl Element for Div {
             let child_bounds = cx.child_bounds(node).unwrap_or(cx.bounds());
             let mut child_cx = cx.with_bounds(child_bounds);
 
-            if let Some(focused) = focused {
-                if child.id() == Some(focused) {
-                    handled = child.handle_scroll_event(&mut child_cx, event);
-                    break;
-                }
+            if let Some(focused) = focused
+                && child.id() == Some(focused)
+            {
+                handled = child.handle_scroll_event(&mut child_cx, event);
+                break;
             }
 
             if child.handle_scroll_event(&mut child_cx, event) {

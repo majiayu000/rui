@@ -483,12 +483,12 @@ impl Element for Table {
             width: self
                 .style
                 .width
-                .map(|w| Dimension::Length(w))
+                .map(Dimension::Length)
                 .unwrap_or(Dimension::Length(total_width)),
             height: self
                 .style
                 .height
-                .map(|h| Dimension::Length(h))
+                .map(Dimension::Length)
                 .unwrap_or(Dimension::Length(total_height)),
         };
 

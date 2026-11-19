@@ -244,9 +244,7 @@ impl TextArea {
         if !self.state.focused {
             return None;
         }
-        let Some(layout) = self.current_text_layout() else {
-            return None;
-        };
+        let layout = self.current_text_layout()?;
         let style = TextEditPaintStyle::new(
             TEXT_AREA_CARET_WIDTH,
             Color::hex(0x6366f1).to_rgba(),
