@@ -296,6 +296,10 @@ pub enum TextInputCommand {
         replacement_range: Utf16TextRange,
     },
     SetCompositionSelection(Utf16TextRange),
+    /// Select in the text the element exposes to accessibility (its masked
+    /// text for a password field), as a screen reader asks. Selecting is
+    /// allowed in a read-only field.
+    SetAccessibilitySelection(TextSelection),
     CancelComposition,
 }
 
@@ -314,7 +318,10 @@ impl TextInputCommand {
             Self::CommitComposition(text) | Self::CommitCompositionReplacing { text, .. } => {
                 Some(TextInputEvent::CommitComposition(text))
             }
-            Self::SetCompositionSelection(_) | Self::Undo | Self::Redo => None,
+            Self::SetCompositionSelection(_)
+            | Self::SetAccessibilitySelection(_)
+            | Self::Undo
+            | Self::Redo => None,
             Self::CancelComposition => Some(TextInputEvent::CancelComposition),
         }
     }

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Reads the accessibility tree of examples/interaction_acceptance back over
-# AT-SPI under a headless sway, the Wayland twin of scripts/linux_atspi_tree.sh:
+# Reads the accessibility trees of examples/interaction_acceptance and
+# examples/controls back over AT-SPI under a headless sway, the Wayland twin of scripts/linux_atspi_tree.sh:
 # the same checks, run by scripts/atspi_tree.py.
 #
 # Run in a D-Bus session, after building the example with the winit feature:
-#   cargo build --no-default-features --features winit --example interaction_acceptance
+#   cargo build --no-default-features --features winit --example interaction_acceptance --example controls
 #   dbus-run-session -- scripts/wayland_atspi_tree.sh
 # Needs sway, wtype, jq, at-spi2-core, python3-gi, gir1.2-atspi-2.0, gdbus and a
 # Vulkan driver (Mesa lavapipe in CI).
@@ -34,21 +34,31 @@ set_enabled() {
     --method org.freedesktop.DBus.Properties.Set org.a11y.Status IsEnabled "<$1>"
 }
 
-# Start the accessibility bus with no assistive technology running.
-set_enabled false
-RUST_LOG=rui=info "$EXAMPLES/interaction_acceptance" 2>"$OUT/interaction_acceptance.log" &
-app=$!
+app=""
 trap 'kill "$app" "$keyboard_pid" "$sway_pid" 2>/dev/null || true' EXIT
-for _ in $(seq 100); do
-  swaymsg -t get_tree | jq -e --argjson pid "$app" 'any(.. | objects; .pid? == $pid)' >/dev/null && break
-  sleep 0.1
-done
-# sway focuses a new window, and AT-SPI reports an element focused only inside
-# the focused window; say so explicitly rather than rely on it.
-swaymsg "[pid=$app] focus"
-swaymsg -t get_tree | jq -e --argjson pid "$app" 'any(.. | objects; .pid? == $pid and .focused)'
-# Now say one started, as a screen reader does: AccessKit joins the bus when
-# this changes.
-set_enabled true
 
-python3 -u "$(dirname "$0")/atspi_tree.py" "RUI Interaction Acceptance" | tee "$OUT/tree.txt"
+# Start example $1, whose window is titled $2, and check it.
+read_example() {
+  # Start the accessibility bus with no assistive technology running.
+  set_enabled false
+  RUST_LOG=rui=info "$EXAMPLES/$1" 2>"$OUT/$1.log" &
+  app=$!
+  for _ in $(seq 100); do
+    swaymsg -t get_tree | jq -e --argjson pid "$app" 'any(.. | objects; .pid? == $pid)' >/dev/null && break
+    sleep 0.1
+  done
+  # sway focuses a new window, and AT-SPI reports an element focused only
+  # inside the focused window; say so explicitly rather than rely on it.
+  swaymsg "[pid=$app] focus"
+  swaymsg -t get_tree | jq -e --argjson pid "$app" 'any(.. | objects; .pid? == $pid and .focused)'
+  # Now say one started, as a screen reader does: AccessKit joins the bus
+  # when this changes.
+  set_enabled true
+
+  python3 -u "$(dirname "$0")/atspi_tree.py" "$2" "$1" | tee "$OUT/$1-tree.txt"
+  kill "$app"
+  wait "$app" || true
+}
+
+read_example interaction_acceptance "RUI Interaction Acceptance"
+read_example controls "RUI Application"

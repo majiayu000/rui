@@ -5,19 +5,20 @@
 //! NSAccessibility on macOS. Nothing is built until an assistive technology
 //! asks for the tree, so a window no screen reader reads pays nothing.
 
-use super::accessibility_tree::{request_for_action, tree_update};
+use super::accessibility_tree::{TextGeometry, request_for_action, tree_update};
 use crate::core::ElementId;
-use crate::core::accessibility::AccessibilityTree;
+use crate::core::accessibility::{AccessibilityNode, AccessibilityRole, AccessibilityTree};
 use crate::core::presenter::Presenter;
 use crate::elements::element::Element;
 use crate::platform::accessibility_request::AccessibilityRequest;
 use accesskit::TreeUpdate;
 use accesskit_winit::WindowEvent as AccessKitEvent;
 
-/// What the platform holds: the tree, and the scale and window title it was
-/// published with.
+/// What the platform holds: the tree, the text layouts, and the scale and
+/// window title it was published with.
 struct Published {
     tree: AccessibilityTree,
+    text: TextGeometry,
     scale_factor: f64,
     title: String,
 }
@@ -63,20 +64,22 @@ impl WindowAccessibility {
                 self.published = None;
                 true
             }
-            AccessKitEvent::ActionRequested(request) => match request_for_action(&request) {
-                Some(request) => {
-                    self.requests.push(request);
-                    true
+            AccessKitEvent::ActionRequested(request) => {
+                match request_for_action(&request, self.published_tree()) {
+                    Some(request) => {
+                        self.requests.push(request);
+                        true
+                    }
+                    None => {
+                        log::warn!(
+                            "ignored winit accessibility action {:?} for node {:?}",
+                            request.action,
+                            request.target_node
+                        );
+                        false
+                    }
                 }
-                None => {
-                    log::warn!(
-                        "ignored winit accessibility action {:?} for node {:?}",
-                        request.action,
-                        request.target_node
-                    );
-                    false
-                }
-            },
+            }
             AccessKitEvent::AccessibilityDeactivated => {
                 self.active = false;
                 self.published = None;
@@ -126,7 +129,8 @@ impl WindowAccessibility {
                 return;
             }
         };
-        if let Some(update) = self.next_update(tree, title, scale_factor)
+        let text = text_geometry(presenter, &tree);
+        if let Some(update) = self.next_update(tree, text, title, scale_factor)
             && let Some(adapter) = &mut self.adapter
         {
             adapter.update_if_active(|| update);
@@ -139,23 +143,56 @@ impl WindowAccessibility {
     pub(super) fn next_update(
         &mut self,
         tree: AccessibilityTree,
+        text: TextGeometry,
         title: &str,
         scale_factor: f64,
     ) -> Option<TreeUpdate> {
         let unchanged = self.published.as_ref().is_some_and(|published| {
             published.tree == tree
+                && published.text == text
                 && published.scale_factor == scale_factor
                 && published.title == title
         });
         if !self.active || unchanged {
             return None;
         }
-        let update = tree_update(&tree, title, scale_factor);
+        let update = tree_update(&tree, &text, title, scale_factor);
         self.published = Some(Published {
             tree,
+            text,
             scale_factor,
             title: title.to_string(),
         });
         Some(update)
     }
+}
+
+/// The layouts of `tree`'s text inputs that have one, which only the
+/// presenter's elements hold.
+pub(super) fn text_geometry<E: Element>(
+    presenter: &Presenter<E>,
+    tree: &AccessibilityTree,
+) -> TextGeometry {
+    fn collect<E: Element>(
+        presenter: &Presenter<E>,
+        node: &AccessibilityNode,
+        text: &mut TextGeometry,
+    ) {
+        if node.a11y_role() == AccessibilityRole::TextInput
+            && let Some(geometry) = presenter
+                .root()
+                .text_input_snapshot(node.a11y_id())
+                .and_then(|snapshot| snapshot.geometry().cloned())
+        {
+            text.insert(node.a11y_id(), geometry);
+        }
+        for child in node.a11y_children() {
+            collect(presenter, child, text);
+        }
+    }
+    let mut text = TextGeometry::new();
+    for root in tree.roots() {
+        collect(presenter, root, &mut text);
+    }
+    text
 }

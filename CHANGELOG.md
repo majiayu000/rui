@@ -117,6 +117,16 @@ All notable project changes should be recorded here.
   the macOS runner uses. The tree is built only while an assistive technology
   reads it. Not yet: announcements of action feedback, and text editing beyond
   replacing the value (#344).
+- A screen reader can now select text in a winit window's text inputs (AT-SPI
+  `set_selection` / `set_caret_offset`, UI Automation `TextPatternRange.Select`),
+  including read-only ones, replace the selection (AccessKit
+  `ReplaceSelectedText`), and set a slider or splitter to a number (AT-SPI
+  `Value`, UI Automation `RangeValue`). The focused input's text runs carry
+  each character's position and width from its layout, so the platform can
+  report character bounds. Sliders and splitters now offer
+  `AccessibilityAction::SetValue`, also on macOS.
+  **Breaking:** `AccessibilityRequest` (and `MacAccessibilityRequest`) has the
+  new variants `SetTextSelection` and `ReplaceSelectedText` (#344).
 - CI reads the winit runner's accessibility tree back over AT-SPI under
   Wayland (a headless sway) as well as X11, with the same checks
   (`scripts/wayland_atspi_tree.sh`). AT-SPI goes over D-Bus, so the tree,

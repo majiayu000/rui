@@ -21,7 +21,9 @@ impl NativeImeState {
         focused: Option<ElementId>,
     ) -> Option<ElementId> {
         match event {
-            TextInputCommand::Undo | TextInputCommand::Redo => focused,
+            TextInputCommand::Undo
+            | TextInputCommand::Redo
+            | TextInputCommand::SetAccessibilitySelection(_) => focused,
             TextInputCommand::InsertText(_) | TextInputCommand::InsertTextReplacing { .. } => {
                 focused
             }

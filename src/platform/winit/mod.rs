@@ -11,6 +11,8 @@
 
 mod accessibility;
 #[cfg(test)]
+mod accessibility_editing_tests;
+#[cfg(test)]
 mod accessibility_tests;
 mod accessibility_text;
 mod accessibility_tree;

@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""Read examples/interaction_acceptance back over AT-SPI and drive it.
+"""Read an example's accessibility tree back over AT-SPI and drive it.
 
-Finds the window titled argv[1] the way a screen reader does, prints its
-accessibility tree, checks the controls' roles, names, states and text, then
-focuses the Filter field, sets its text and presses Save and Cancel through
-AT-SPI, checking each reached the app. Exits non-zero on the first failure.
-Run by scripts/linux_atspi_tree.sh.
+Finds the window titled argv[1] the way a screen reader does and prints its
+accessibility tree. For examples/interaction_acceptance (argv[2], the
+default) it checks the controls' roles, names, states and text, focuses the
+Filter field, sets its text, selects in it, moves its caret, reads its
+characters' extents and presses Save and Cancel through AT-SPI, checking each
+reached the app. For examples/controls it sets the Volume slider to a number.
+Exits non-zero on the first failure. Run by scripts/linux_atspi_tree.sh.
 """
 
 import sys
@@ -111,11 +113,94 @@ def check(condition, message):
 
 def main():
     title = sys.argv[1]
+    example = sys.argv[2] if len(sys.argv) > 2 else "interaction_acceptance"
     window = wait_for(f"window {title!r}", lambda: find_window(title))
+    check_example = {
+        "interaction_acceptance": check_interaction_acceptance,
+        "controls": check_controls,
+    }[example]
+    check_example(window)
+
+
+def print_tree(window, role, name):
     # The first tree arrives with the first frame after the bus asks for it.
-    wait_for("the Save button", lambda: find_node(window, "push button", "Save"))
+    wait_for(f"the {name} {role}", lambda: find_node(window, role, name))
     for depth, node in walk(window):
         print("  " * depth + describe(node))
+
+
+def check_controls(window):
+    """examples/controls: set the Volume slider to a number."""
+    print_tree(window, "slider", "Volume")
+    volume = find_node(window, "slider", "Volume")
+    value = volume.get_value_iface()
+    check(Atspi.Value.get_current_value(value) == 40.0, "Volume starts at 40")
+    Atspi.Value.set_current_value(value, 75.0)
+    wait_for("the slider to move", lambda: find_node(window, "label", "Volume: 75"))
+    volume = find_node(window, "slider", "Volume")
+    check(
+        Atspi.Value.get_current_value(volume.get_value_iface()) == 75.0,
+        "setting the value moved the Volume slider to 75",
+    )
+
+
+def selection(window, name):
+    node = find_node(window, "entry", name)
+    text = node.get_text_iface()
+    if Atspi.Text.get_n_selections(text) != 1:
+        return None
+    selected = Atspi.Text.get_selection(text, 0)
+    return (selected.start_offset, selected.end_offset)
+
+
+def check_text_editing(window):
+    """Select, move the caret and read where each character is, in the
+    focused Filter field holding "zzz"."""
+    field = find_node(window, "entry", "Filter")
+    Atspi.Text.set_selection(field.get_text_iface(), 0, 1, 3)
+    wait_for("the selection", lambda: selection(window, "Filter") == (1, 3) or None)
+    field = find_node(window, "entry", "Filter")
+    text = field.get_text_iface()
+    check(
+        Atspi.Text.get_text(text, 1, 3) == "zz",
+        "set selection selected characters 1-3 of Filter",
+    )
+
+    Atspi.Text.set_caret_offset(text, 2)
+    wait_for(
+        "the caret to move",
+        lambda: Atspi.Text.get_caret_offset(
+            find_node(window, "entry", "Filter").get_text_iface()
+        )
+        == 2
+        or None,
+    )
+    check(selection(window, "Filter") is None, "moving the caret cleared the selection")
+
+    text = find_node(window, "entry", "Filter").get_text_iface()
+    window_coords = Atspi.CoordType.WINDOW
+    boxes = [Atspi.Text.get_character_extents(text, i, window_coords) for i in range(3)]
+    for i, box in enumerate(boxes):
+        print(f"character {i}: {box.x},{box.y} {box.width}x{box.height}")
+    check(all(box.width > 0 and box.height > 0 for box in boxes), "each character has a size")
+    check(
+        all(left.x + left.width <= right.x + 1 for left, right in zip(boxes, boxes[1:])),
+        "the characters go left to right",
+    )
+    field_box = Atspi.Component.get_extents(
+        find_node(window, "entry", "Filter").get_component_iface(), window_coords
+    )
+    check(
+        all(
+            field_box.x <= box.x and box.x + box.width <= field_box.x + field_box.width
+            for box in boxes
+        ),
+        "the characters lie inside the field",
+    )
+
+
+def check_interaction_acceptance(window):
+    print_tree(window, "push button", "Save")
 
     check(window.get_role_name() == "frame", "the window is a frame")
     heading = find_node(window, "label", "RUI interaction acceptance")
@@ -156,6 +241,7 @@ def main():
         Atspi.Text.get_text(field.get_text_iface(), 0, -1) == "zzz",
         "set text reached the Filter field",
     )
+    check_text_editing(window)
 
     Atspi.Action.do_action(save.get_action_iface(), 0)
     wait_for("the confirm dialog", lambda: find_node(window, "dialog", "Confirm save"))
