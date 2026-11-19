@@ -1,6 +1,6 @@
 [package]
 name = "rui"
-version = "0.2.5"
+version = "0.3.0-rc.1"
 edition = "2024"
 rust-version = "1.88"
 description = "A Rust UI framework for native macOS apps with Metal rendering and declarative components"
