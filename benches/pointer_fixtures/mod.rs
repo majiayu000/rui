@@ -210,6 +210,7 @@ impl Fixture {
                 vec![
                     press(PointerEventKind::Down, inside),
                     moved(on_button(ROW, PAD.1)),
+                    moved(outside_window()),
                     moved(on_button(ROW + 2, PAD.1)),
                     press(PointerEventKind::Up, on_button(ROW + 2, PAD.1)),
                 ]
@@ -279,26 +280,18 @@ impl Fixture {
                 );
             }
             Self::CaptureDrag => {
-                let kinds: Vec<PointerEventKind> = seen
-                    .probe
-                    .canvas_events
-                    .take()
-                    .iter()
-                    .map(|(kind, position)| {
-                        if *kind != PointerEventKind::Down {
-                            assert!(
-                                position.y > PAD.1,
-                                "{name}: {kind:?} at {position:?} is outside the canvas"
-                            );
-                        }
-                        *kind
-                    })
-                    .collect();
+                let events = seen.probe.canvas_events.take();
                 use PointerEventKind::{Down, Move, Up};
                 assert_eq!(
-                    kinds,
-                    [Down, Move, Move, Up],
-                    "{name}: the canvas keeps the pointer until the release"
+                    events,
+                    [
+                        (Down, Point::new(PAD.0 / 2.0, PAD.1 / 2.0)),
+                        (Move, on_button(ROW, PAD.1)),
+                        (Move, outside_window()),
+                        (Move, on_button(ROW + 2, PAD.1)),
+                        (Up, on_button(ROW + 2, PAD.1)),
+                    ],
+                    "{name}: the canvas keeps the pointer outside the window until release"
                 );
                 assert_eq!(
                     hit(on_button(ROW + 2, PAD.1)),
@@ -336,6 +329,10 @@ impl Fixture {
             }
         }
     }
+}
+
+fn outside_window() -> Point {
+    Point::new(VIEWPORT.width + 32.0, VIEWPORT.height + 32.0)
 }
 
 fn moved(position: Point) -> PointerEvent {

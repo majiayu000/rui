@@ -31,7 +31,7 @@ fn text(content: &str, x: f32, color: Rgba) -> Primitive {
 /// above `threshold`, in device pixels.
 fn lit_box(pixels: &[u8], width: usize, threshold: u8) -> Option<(usize, usize, usize, usize)> {
     let mut lit = None::<(usize, usize, usize, usize)>;
-    for (index, pixel) in pixels.chunks_exact(4).enumerate() {
+    for (index, pixel) in pixels.as_chunks::<4>().0.iter().enumerate() {
         if pixel[1] <= threshold {
             continue;
         }
@@ -105,10 +105,17 @@ fn text_is_rasterized_at_device_scale() {
     // pixels per solid one before the atlas); glyphs drawn at device scale are
     // mostly solid.
     let partial = two
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .filter(|pixel| pixel[1] > 60 && pixel[1] < 200)
         .count();
-    let solid = two.chunks_exact(4).filter(|pixel| pixel[1] >= 200).count();
+    let solid = two
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .filter(|pixel| pixel[1] >= 200)
+        .count();
     assert!(
         solid > 0 && partial < solid,
         "{partial} partial, {solid} solid"
@@ -206,7 +213,7 @@ fn evicted_atlas_pages_draw_what_a_fresh_atlas_draws() {
 /// Device pixels whose channels differ: colored, which white text on black is not.
 fn colored_box(pixels: &[u8], width: usize) -> Option<(usize, usize, usize, usize)> {
     let mut found = None::<(usize, usize, usize, usize)>;
-    for (index, pixel) in pixels.chunks_exact(4).enumerate() {
+    for (index, pixel) in pixels.as_chunks::<4>().0.iter().enumerate() {
         let (low, high) = (pixel[..3].iter().min(), pixel[..3].iter().max());
         if high.zip(low).is_some_and(|(high, low)| high - low > 80) {
             let (x, y) = (index % width, index / width);
@@ -268,7 +275,9 @@ fn emoji_draw_in_color_beside_text_in_two_draws() {
         .expect("capture");
     let brightest = |pixels: &[u8]| {
         pixels
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|pixel| u32::from(pixel[0]) + u32::from(pixel[1]) + u32::from(pixel[2]))
             .max()
             .unwrap_or(0)

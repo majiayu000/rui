@@ -29,6 +29,8 @@ use crate::renderer::text::BaseDirection;
 use crate::renderer::text::TextMeasureCache;
 use taffy::prelude::*;
 
+type TextCallback = Box<dyn Fn(&str)>;
+
 const INPUT_HORIZONTAL_PADDING: f32 = 12.0;
 const INPUT_CARET_WIDTH: f32 = 1.5;
 const INPUT_MARKED_UNDERLINE_HEIGHT: f32 = 2.0;
@@ -56,8 +58,8 @@ pub struct Input {
     value_supplied: bool,
     width: Option<f32>,
     height: Option<f32>,
-    on_change: Option<Box<dyn Fn(&str)>>,
-    on_submit: Option<Box<dyn Fn(&str)>>,
+    on_change: Option<TextCallback>,
+    on_submit: Option<TextCallback>,
     on_cancel: Option<Box<dyn Fn()>>,
     on_focus: Option<Box<dyn Fn()>>,
     on_blur: Option<Box<dyn Fn()>>,
@@ -552,10 +554,8 @@ impl Element for Input {
             left: LengthPercentage::Length(12.0),
         };
 
-        let node = cx
-            .new_leaf(style)
-            .expect("Failed to create input layout node");
-        node
+        cx.new_leaf(style)
+            .expect("Failed to create input layout node")
     }
 
     fn refresh_text_geometry(&mut self, text_measurer: &mut TextMeasureCache) {
@@ -764,11 +764,11 @@ impl Element for Input {
                     .with_text_selection(AccessibilityTextRange::new(range.start(), range.end()));
             }
         }
-        if let Some(range) = self.state.composition_range {
-            if let Some(range) = self.display_range_for_value_range(range) {
-                node = node
-                    .with_text_composition(AccessibilityTextRange::new(range.start(), range.end()));
-            }
+        if let Some(range) = self.state.composition_range
+            && let Some(range) = self.display_range_for_value_range(range)
+        {
+            node =
+                node.with_text_composition(AccessibilityTextRange::new(range.start(), range.end()));
         }
 
         Ok(Some(node))

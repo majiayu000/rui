@@ -283,6 +283,7 @@ impl Image {
     }
 
     /// Calculate the destination bounds based on fit mode
+    #[cfg(test)]
     fn calculate_dest_bounds(&self, container: Bounds, image_size: Size) -> Bounds {
         fit_bounds(container, image_size, self.fit)
     }

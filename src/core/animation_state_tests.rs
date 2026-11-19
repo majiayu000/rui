@@ -10,7 +10,7 @@ use std::time::Duration;
 
 #[test]
 fn test_animation_state_variants() {
-    let states = vec![
+    let states = [
         AnimationState::Pending,
         AnimationState::Running,
         AnimationState::Paused,
@@ -32,7 +32,7 @@ fn test_animation_state_variants() {
 #[test]
 fn test_animation_state_clone_copy() {
     let state = AnimationState::Running;
-    let cloned = state.clone();
+    let cloned = state;
     let copied = state;
 
     assert_eq!(state, cloned);
@@ -541,7 +541,7 @@ fn test_transition_property_variants() {
 #[test]
 fn test_transition_property_clone_copy() {
     let prop = TransitionProperty::Opacity;
-    let cloned = prop.clone();
+    let cloned = prop;
     let copied = prop;
 
     assert_eq!(prop, cloned);
@@ -712,8 +712,7 @@ fn test_animation_with_all_easing_functions() {
     ];
 
     for easing in easings {
-        let mut anim =
-            Animation::new(0.0_f32, 100.0_f32, Duration::from_millis(20)).easing(easing.clone());
+        let mut anim = Animation::new(0.0_f32, 100.0_f32, Duration::from_millis(20)).easing(easing);
 
         anim.start();
         thread::sleep(Duration::from_millis(30));

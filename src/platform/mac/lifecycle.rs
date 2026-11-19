@@ -47,7 +47,7 @@ impl MacLifecycleEventQueue {
     }
 
     fn drain(&mut self) -> Vec<MacLifecycleEvent> {
-        self.events.drain(..).collect()
+        std::mem::take(&mut self.events)
     }
 }
 

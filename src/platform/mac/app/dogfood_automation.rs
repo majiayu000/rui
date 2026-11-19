@@ -21,9 +21,7 @@ pub(super) struct NativeDogfoodAutomation {
 
 impl NativeDogfoodAutomation {
     pub(super) fn load_from_environment() -> Option<Self> {
-        if std::env::var_os("RUI_NATIVE_DOGFOOD_AUTOMATION").is_none() {
-            return None;
-        }
+        std::env::var_os("RUI_NATIVE_DOGFOOD_AUTOMATION")?;
 
         let text = std::env::var("RUI_NATIVE_DOGFOOD_TEXT")
             .unwrap_or_else(|_| String::from("rui-native-dogfood"));
@@ -49,7 +47,8 @@ impl NativeDogfoodAutomation {
                 .visible_bounds
                 .center()
         };
-        let focused_element = match self.phase {
+
+        match self.phase {
             NativeDogfoodAutomationPhase::Warmup => {
                 self.phase = NativeDogfoodAutomationPhase::Interact;
                 request_automation_redraw(window);
@@ -97,8 +96,7 @@ impl NativeDogfoodAutomation {
                 Some(NATIVE_DOGFOOD_INPUT_ID)
             }
             NativeDogfoodAutomationPhase::Done => None,
-        };
-        focused_element
+        }
     }
 }
 

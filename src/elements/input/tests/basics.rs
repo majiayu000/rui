@@ -1,3 +1,5 @@
+#![allow(clippy::field_reassign_with_default)]
+
 use super::support::*;
 
 // ==================== InputType Enum Tests ====================
@@ -43,7 +45,7 @@ fn test_input_type_inequality() {
 #[test]
 fn test_input_type_clone() {
     let input_type = InputType::Password;
-    let cloned = input_type.clone();
+    let cloned = input_type;
     assert_eq!(input_type, cloned);
 }
 

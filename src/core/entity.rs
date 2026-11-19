@@ -92,10 +92,7 @@ impl<T> Entity<T> {
 
 impl<T> Clone for Entity<T> {
     fn clone(&self) -> Self {
-        Self {
-            id: self.id,
-            _marker: std::marker::PhantomData,
-        }
+        *self
     }
 }
 

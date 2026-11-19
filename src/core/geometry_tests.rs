@@ -132,7 +132,7 @@ mod point_tests {
     fn test_point_clone_and_copy() {
         let p1 = Point::new(1.0, 2.0);
         let p2 = p1;
-        let p3 = p1.clone();
+        let p3 = p1;
         assert_eq!(p1, p2);
         assert_eq!(p1, p3);
     }
@@ -275,7 +275,7 @@ mod size_tests {
     fn test_size_clone_and_copy() {
         let s1 = Size::new(10.0, 20.0);
         let s2 = s1;
-        let s3 = s1.clone();
+        let s3 = s1;
         assert_eq!(s1, s2);
         assert_eq!(s1, s3);
     }
@@ -537,7 +537,7 @@ mod rect_tests {
     fn test_rect_clone_and_copy() {
         let r1 = Rect::from_xywh(10.0, 20.0, 30.0, 40.0);
         let r2 = r1;
-        let r3 = r1.clone();
+        let r3 = r1;
         assert_eq!(r1, r2);
         assert_eq!(r1, r3);
     }
@@ -705,7 +705,7 @@ mod edges_tests {
     fn test_edges_clone_and_copy() {
         let e1 = Edges::new(1.0, 2.0, 3.0, 4.0);
         let e2 = e1;
-        let e3 = e1.clone();
+        let e3 = e1;
         assert_eq!(e1, e2);
         assert_eq!(e1, e3);
     }
