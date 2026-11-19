@@ -25,6 +25,8 @@ use crate::renderer::text::BaseDirection;
 use crate::renderer::text::TextMeasureCache;
 use taffy::prelude::*;
 
+type TextCallback = Box<dyn Fn(&str)>;
+
 const TEXT_AREA_HORIZONTAL_PADDING: f32 = 12.0;
 const TEXT_AREA_VERTICAL_PADDING: f32 = 10.0;
 const TEXT_AREA_LINE_HEIGHT: f32 = 20.0;
@@ -56,7 +58,7 @@ pub struct TextArea {
     value_supplied: bool,
     width: Option<f32>,
     height: f32,
-    on_change: Option<Box<dyn Fn(&str)>>,
+    on_change: Option<TextCallback>,
     on_focus: Option<Box<dyn Fn()>>,
     on_blur: Option<Box<dyn Fn()>>,
     caret_bounds: Option<Bounds>,
@@ -495,10 +497,8 @@ impl Element for TextArea {
             left: LengthPercentage::Length(TEXT_AREA_HORIZONTAL_PADDING),
         };
 
-        let node = cx
-            .new_leaf(style)
-            .expect("Failed to create text area layout node");
-        node
+        cx.new_leaf(style)
+            .expect("Failed to create text area layout node")
     }
 
     fn refresh_text_geometry(&mut self, text_measurer: &mut TextMeasureCache) {

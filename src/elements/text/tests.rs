@@ -35,7 +35,7 @@ fn test_text_align_equality() {
 #[test]
 fn test_text_align_clone() {
     let align = TextAlign::Center;
-    let cloned = align.clone();
+    let cloned = align;
     assert_eq!(align, cloned);
 }
 
@@ -88,7 +88,7 @@ fn test_font_weight_equality() {
 #[test]
 fn test_font_weight_clone() {
     let weight = FontWeight::Bold;
-    let cloned = weight.clone();
+    let cloned = weight;
     assert_eq!(weight, cloned);
 }
 

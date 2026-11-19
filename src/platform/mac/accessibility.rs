@@ -504,6 +504,7 @@ impl AppKitAccessibilityHost {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn build_node(
         node: &AccessibilityNode,
         parent: &AnyObject,

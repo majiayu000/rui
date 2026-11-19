@@ -65,6 +65,7 @@ impl Weekday {
     }
 
     /// The day `offset` days after this one.
+    #[allow(clippy::should_implement_trait)]
     pub fn add(self, offset: i64) -> Self {
         Self::from_index(i64::from(self.index()) + offset)
     }

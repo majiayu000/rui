@@ -59,11 +59,11 @@ jobs:
         run: cargo test 2>&1 | tee ci-results/test.log
 
       - name: cargo clippy
-        run: cargo clippy --all-targets 2>&1 | tee ci-results/clippy.log
+        run: cargo clippy --all-targets -- -D warnings 2>&1 | tee ci-results/clippy.log
 
       - name: wgpu backend against Metal
         run: |
-          cargo clippy --all-targets --features wgpu
+          cargo clippy --all-targets --features wgpu -- -D warnings
           cargo test --features wgpu --lib renderer::wgpu
 
       - name: Performance gate

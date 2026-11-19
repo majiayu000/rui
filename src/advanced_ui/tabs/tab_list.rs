@@ -8,7 +8,7 @@ use crate::core::accessibility::{
 };
 use crate::core::action::{ActionId, ActionOutcome, StandardAction};
 use crate::core::color::Color;
-use crate::core::event::{KeyCode, KeyEvent};
+use crate::core::event::{KeyCode, KeyEvent, Modifiers};
 use crate::core::geometry::{Bounds, Edges, Point};
 use crate::core::style::{Corners, Style};
 use crate::elements::element::StableId;
@@ -380,7 +380,7 @@ impl Element for TabList {
         if !self.state.can_activate() || !self.handles_keyboard(cx) {
             return false;
         }
-        if !event.modifiers.is_empty() {
+        if event.modifiers != Modifiers::none() {
             return false;
         }
 
@@ -504,14 +504,4 @@ fn paint_tab_list_rule(cx: &mut PaintContext, bounds: Bounds, invalid: bool, the
         },
         corner_radii: Corners::ZERO,
     });
-}
-
-trait ModifiersExt {
-    fn is_empty(self) -> bool;
-}
-
-impl ModifiersExt for crate::core::event::Modifiers {
-    fn is_empty(self) -> bool {
-        !self.shift && !self.ctrl && !self.alt && !self.meta
-    }
 }

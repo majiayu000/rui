@@ -28,13 +28,7 @@ const BOLD: &str = "\x1b[1m";
 const RESET: &str = "\x1b[0m";
 const CLEAR_LINE: &str = "\x1b[2K\r";
 
-// Unicode 框线字符
-const BOX_TL: &str = "╭";
-const BOX_TR: &str = "╮";
-const BOX_BL: &str = "╰";
-const BOX_BR: &str = "╯";
-const BOX_H: &str = "─";
-const BOX_V: &str = "│";
+// Unicode 符号
 const BULLET: &str = "⏺";
 const ARROW: &str = "⎿";
 
@@ -88,7 +82,6 @@ struct Tool {
 #[derive(Deserialize, Debug)]
 struct ChatResponse {
     content: Vec<ResponseBlock>,
-    stop_reason: Option<String>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -149,7 +142,7 @@ fn print_banner() {
 }
 
 fn print_tool_call(name: &str, input: &Value) {
-    let input_str = if let Some(obj) = input.as_object() {
+    let _input_str = if let Some(obj) = input.as_object() {
         obj.iter()
             .map(|(k, v)| format!("{}={}", k, v))
             .collect::<Vec<_>>()
@@ -164,7 +157,7 @@ fn print_tool_call(name: &str, input: &Value) {
 
 fn print_tool_result(result: &str) {
     let lines: Vec<&str> = result.lines().take(5).collect();
-    let preview = lines.join("\n  {}  ");
+    let _preview = lines.join("\n  {}  ");
     println!("  {}{} {}{}", MAGENTA, ARROW, DIM, RESET);
 
     for line in result.lines().take(3) {
@@ -343,7 +336,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             match result {
                 Ok(response) => {
                     let mut tool_uses = Vec::new();
-                    let mut has_text = false;
 
                     // 处理响应
                     for block in &response.content {
@@ -355,7 +347,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 if !text.is_empty() {
                                     println!();
                                     println!("{}", text);
-                                    has_text = true;
                                 }
                             }
                             ResponseBlock::ToolUse { id, name, input } => {

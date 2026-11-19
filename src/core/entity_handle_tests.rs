@@ -38,7 +38,7 @@ mod entity_clone_copy {
         let id = store.insert(Counter { value: 42 });
 
         let entity: Entity<Counter> = Entity::new(id);
-        let cloned = entity.clone();
+        let cloned = entity;
 
         assert_eq!(entity, cloned);
         assert_eq!(entity.id(), cloned.id());
@@ -61,7 +61,7 @@ mod entity_clone_copy {
         let id = store.insert(Counter { value: 42 });
 
         let entity: Entity<Counter> = Entity::new(id);
-        let _cloned = entity.clone();
+        let _cloned = entity;
 
         // Both still work independently
         assert_eq!(entity.id(), id);
@@ -375,7 +375,10 @@ mod edge_cases {
         let id = store.insert(large);
 
         assert!(store.contains(id));
-        assert!(store.get::<LargeStruct>(id).is_some());
+        assert_eq!(
+            store.get::<LargeStruct>(id).map(|l| l.data.len()),
+            Some(1024)
+        );
     }
 
     #[test]

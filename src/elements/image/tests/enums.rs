@@ -40,7 +40,7 @@ fn test_image_fit_equality() {
 #[test]
 fn test_image_fit_clone() {
     let fit = ImageFit::Cover;
-    let cloned = fit.clone();
+    let cloned = fit;
     assert_eq!(fit, cloned);
 }
 
