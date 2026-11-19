@@ -91,6 +91,7 @@ fn label(bounds: Bounds, content: String, font_size: f32, color: Rgba) -> Primit
         font_size,
         font_weight: 400,
         font_family: None,
+        font_features: Default::default(),
         line_height: 1.2,
         align: TextAlign::Left,
         direction: BaseDirection::Auto,

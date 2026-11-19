@@ -329,6 +329,7 @@ impl Text {
             font_size: self.font_size,
             font_weight: self.font_weight.to_value(),
             font_family: self.font_family.clone(),
+            font_features: Default::default(),
             line_height: self.line_height,
             align: self.align,
             direction,

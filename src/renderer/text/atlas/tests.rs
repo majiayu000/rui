@@ -116,6 +116,7 @@ fn strings_drawn_last_frame_survive_shape_eviction() {
             font_family: None,
             line_height: 1.2,
             direction: BaseDirection::Auto,
+            font_features: Vec::new(),
             text: None,
             last_used: cache.frame,
         };

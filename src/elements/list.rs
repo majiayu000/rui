@@ -482,6 +482,7 @@ impl Element for List {
                     font_size: self.marker_font_size,
                     font_weight: FontWeight::Regular.to_value(),
                     font_family: None,
+                    font_features: Default::default(),
                     line_height: 1.4,
                     align: TextAlign::Right,
                     direction: BaseDirection::Auto,

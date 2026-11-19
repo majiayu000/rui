@@ -61,6 +61,7 @@ fn representative_scene() -> Scene {
         font_size: 12.0,
         font_weight: 700,
         font_family: None,
+        font_features: Default::default(),
         line_height: 1.1,
         align: TextAlign::Center,
         direction: BaseDirection::Auto,

@@ -47,6 +47,7 @@ pub(super) fn terminal_rows(turn: usize) -> impl Element {
                 font_size: FONT_SIZE,
                 font_weight: 400,
                 font_family: Some(family.clone()),
+                font_features: Default::default(),
                 line_height: LINE_HEIGHT,
                 align: TextAlign::Left,
                 direction: BaseDirection::Auto,

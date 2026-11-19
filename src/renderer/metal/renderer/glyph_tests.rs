@@ -79,6 +79,7 @@ fn editing_one_cell_of_a_row_text_reshapes_that_row() {
                 font_size: FONT_SIZE,
                 font_weight: 400,
                 font_family: Some("SF Mono".into()),
+                font_features: Default::default(),
                 line_height: 1.0,
                 align: TextAlign::Left,
                 direction: BaseDirection::Auto,

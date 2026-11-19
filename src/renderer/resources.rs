@@ -2,7 +2,7 @@
 
 use crate::core::geometry::Size;
 use crate::renderer::primitives::PrimitiveKind;
-use crate::renderer::text::BaseDirection;
+use crate::renderer::text::{BaseDirection, FontFeature};
 use crate::{DecodedImage, ImageSource};
 use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
@@ -737,6 +737,7 @@ pub struct GlyphResourceKey {
     family: Option<String>,
     line_height_bits: u32,
     direction: BaseDirection,
+    font_features: Vec<FontFeature>,
 }
 
 impl GlyphResourceKey {
@@ -754,11 +755,21 @@ impl GlyphResourceKey {
             family: family.map(str::to_string),
             line_height_bits: line_height.to_bits(),
             direction: BaseDirection::Auto,
+            font_features: Vec::new(),
         }
     }
 
     /// The key of the same text laid out at the paragraph level `direction` gives.
     pub fn with_direction(self, direction: BaseDirection) -> Self {
         Self { direction, ..self }
+    }
+
+    /// The key of the same text shaped with `font_features`.
+    pub fn with_font_features(self, font_features: &[FontFeature]) -> Self {
+        let font_features = font_features.to_vec();
+        Self {
+            font_features,
+            ..self
+        }
     }
 }

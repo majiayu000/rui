@@ -170,6 +170,7 @@ impl Profiler {
                 font_size: FONT_SIZE,
                 font_weight: 400,
                 font_family: Some(std::sync::Arc::from(FONT_FAMILY)),
+                font_features: Default::default(),
                 line_height: LINE_HEIGHT,
                 align: TextAlign::Left,
                 direction: BaseDirection::Auto,

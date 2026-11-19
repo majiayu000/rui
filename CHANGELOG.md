@@ -6,6 +6,14 @@ All notable project changes should be recorded here.
 
 ### Rendering
 
+- Text can be shaped with OpenType feature settings:
+  `TextRequest::with_font_features(&[FontFeature])` and the new
+  `font_features: FontFeatures` field of `Primitive::Text`.
+  `FontFeatures::no_ligatures()` turns `calt` and `liga` off, so JetBrains Mono
+  draws `->` as `-` and `>`. The measure, wrap, glyph and raster caches and each
+  face's shaping plans key on the list (#329).
+  **Breaking:** `TextRequest` and `Primitive::Text` built with a struct literal
+  need the new field (`font_features: &[]` / `Default::default()`).
 - `rui::renderer::text::register_font(bytes)` and `register_font_file(path)`
   add the faces of a font file or collection, and text naming their family uses
   them. A family outside the built-in table is looked up among the installed

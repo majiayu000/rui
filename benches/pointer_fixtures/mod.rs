@@ -417,6 +417,7 @@ fn grid(probe: &Rc<Probe>, cached: bool) -> Canvas {
                 font_size: 12.0,
                 font_weight: 400,
                 font_family: Some("SF Mono".into()),
+                font_features: Default::default(),
                 line_height: 1.0,
                 align: TextAlign::Left,
                 direction: BaseDirection::Auto,

@@ -452,6 +452,11 @@ let families = register_font(include_bytes!("JetBrainsMono-Regular.ttf").as_slic
 text("fn main() {}").font("JetBrains Mono")
 ```
 
+OpenType features are set on a `Primitive::Text` (for example from a `canvas`)
+with `font_features: FontFeatures::no_ligatures()`, or on a `TextRequest` with
+`.with_font_features(&[FontFeature::new(*b"calt", 0)])`; text elements do not
+set them yet.
+
 ---
 
 ### Markdown

@@ -569,6 +569,7 @@ fn paint_text(
         font_size,
         font_weight: theme.typography.label_weight,
         font_family: None,
+        font_features: Default::default(),
         line_height: theme.typography.line_height,
         align,
         direction: BaseDirection::Auto,

@@ -347,6 +347,7 @@ impl Element for SegmentedControl {
                     self.theme.typography.label_weight
                 },
                 font_family: None,
+                font_features: Default::default(),
                 line_height: self.theme.typography.line_height,
                 align: crate::elements::text::TextAlign::Center,
                 direction: BaseDirection::Auto,
