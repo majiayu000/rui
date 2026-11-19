@@ -115,6 +115,12 @@ All notable project changes should be recorded here.
   the macOS runner uses. The tree is built only while an assistive technology
   reads it. Not yet: announcements of action feedback, and text editing beyond
   replacing the value (#344).
+- CI reads the winit runner's accessibility tree back over AT-SPI under
+  Wayland (a headless sway) as well as X11, with the same checks
+  (`scripts/wayland_atspi_tree.sh`). AT-SPI goes over D-Bus, so the tree,
+  focus and actions work the same; positions are reported relative to the
+  window, since a Wayland client cannot learn where its window is on screen
+  (#344).
 - The winit runner (Linux and Windows) copies, cuts and pastes through the
   system clipboard via arboard, X11 or Wayland on Linux, instead of an
   in-memory clipboard only the app could see. Without a system clipboard it
