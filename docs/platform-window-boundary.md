@@ -27,7 +27,7 @@ code opens with `AppContext::open_window`; the winit window reports the
 
 ## Current Scope
 
-macOS is the only active runtime backend. Its AppKit window wrapper owns the
+AppKit and Metal are the default macOS runtime. Its window wrapper owns the
 native window and Metal layer, and the app loop translates native events inside
 `src/platform/mac` into backend-neutral `PlatformWindowEvent` values. Clipboard
 support is wired to the AppKit general pasteboard and is reported as a native
@@ -44,17 +44,19 @@ mark redraw work by source, while explicit element/runtime redraw requests post 
 coalesced platform redraw event so repeated requests wake the loop once without
 dropping the final paint.
 
-Non-macOS platforms intentionally use explicit unsupported errors until a real
-backend is implemented and covered by the shared platform contract tests.
+The experimental winit runner supports Windows and Linux with wgpu. CI tests
+window pixels and input on Windows, X11 and Wayland. The runner also handles
+system text clipboard access and multiple windows. Unsupported operations return
+an explicit error where exposed through `PlatformWindow`.
 
 ## Backend Readiness Matrix
 
 | Backend | Current status | Required before supported |
 | --- | --- | --- |
-| macOS/AppKit + Metal | Active default runtime backend | Keep lifecycle, input, DPI, resize, focus, clipboard, renderer attachment, redraw, and unsupported multi-window tests green. |
+| macOS/AppKit + Metal | Active default runtime backend | Keep lifecycle, input, DPI, resize, focus, clipboard, renderer attachment, redraw, and multi-window tests green. |
 | Headless | Active deterministic test backend | Keep layout, input dispatch, accessibility extraction, snapshots, frame recording, and explicit missing-capture errors green. |
-| Windows | Unsupported | Add a native lifecycle loop, input mapping, DPI/resize/focus events, clipboard integration, renderer attachment, unsupported error coverage, and shared platform tests. |
-| Linux | Unsupported | Add a native lifecycle loop, input mapping, DPI/resize/focus events, clipboard integration, renderer attachment, unsupported error coverage, and shared platform tests. |
+| Windows/winit + wgpu | Experimental | Exercise desktop interactions, including IME, menus and file drops. |
+| Linux/winit + wgpu | Experimental on X11 and Wayland | Exercise desktop interactions on both display servers, including IME, menus and file drops. |
 | Web/WASM | Unsupported | Add browser lifecycle integration, pointer/key/text input mapping, resize/focus events, clipboard policy, renderer target attachment, unsupported error coverage, and shared platform tests. |
 
 Unsupported backends must stay explicit. `UnsupportedPlatformWindow` is valid

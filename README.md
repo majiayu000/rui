@@ -42,10 +42,10 @@ Add this repository as a Git dependency in `Cargo.toml`:
 
 ```toml
 [dependencies]
-rui = { git = "https://github.com/majiayu000/rui", rev = "1311a1d6b98a601de603d215ebc1d21f408fd7a3" }
+rui = { git = "https://github.com/majiayu000/rui", rev = "58a788414b4e1e69b52b647bf8f71533beef0a07" }
 ```
 
-This pins the source baseline checked by both installation guides, including the listener and native input changes; it is not a new release. This is `majiayu000/rui`. The [separate `audulus/rui` project](https://github.com/audulus/rui) also uses the name `rui`; installing `rui` from crates.io does not select this repository. Use the Git URL above for the API shown here.
+Both installation guides pin the same Git revision. The [`rui` package on crates.io](https://crates.io/crates/rui) belongs to [`audulus/rui`](https://github.com/audulus/rui). Use the Git dependency above for this project.
 
 Replace `src/main.rs` with:
 
@@ -304,11 +304,8 @@ Color::hsla(180.0, 0.5, 0.5, 0.8)
 
 ## Release Status
 
-- The manifest still says `0.2.5`; that number alone does not identify the current source snapshot.
-- The `v0.2.5` tag predates the native IME and font-cache changes listed under Unreleased. Use the pinned Git revision above for those APIs, not the old tag.
-- Local changes on top of that revision are review candidates until committed and published; this README does not announce a new release.
-- The crates.io package named `rui` belongs to the separate `audulus/rui` project. Install this project from its Git URL and pin the intended commit.
-- Release history and unreleased launch-readiness changes are tracked in [CHANGELOG.md](CHANGELOG.md).
+- The latest published version is listed in [GitHub Releases](https://github.com/majiayu000/rui/releases).
+- The quick start pins a newer source revision that includes the listener, native input and font changes. See [CHANGELOG.md](CHANGELOG.md) for the status of those changes.
 
 ## Running Examples
 
