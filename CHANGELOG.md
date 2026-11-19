@@ -6,6 +6,23 @@ All notable project changes should be recorded here.
 
 ### Rendering
 
+- **Breaking:** `font_size` is the em size, as in CSS, Core Text and GPUI. It
+  was the ascent-to-descent height, which is 1.0 to 1.4 em depending on the font,
+  so the same number drew text up to 29% smaller than other toolkits and changed
+  size when the font changed. Text now draws larger at the same `font_size`
+  (SF Mono at 18 advances `0` by 11.13 px, was 9.45). The factor is the font's
+  ascent-to-descent height in ems: 1.0 for Helvetica, 1.12 for Arial (the macOS
+  default), 1.18 for SF Mono, 1.16 for DejaVu Sans, about 1.33 for Segoe UI (the
+  Windows default) and 1.36 for Noto Sans. To keep an old look, divide the old
+  size by it and multiply the line height by it, since the line box is
+  `font_size * line_height`. `TextArea` has no font size setter and draws at a
+  fixed 14, so its text grows (#327).
+- Underlines and strikethroughs of styled text are placed from the baseline
+  each span is drawn on, so they no longer touch the glyphs at the em size.
+  `RichPiece` gains a `baseline` field.
+- `table()` measures its cells' text for automatic column widths instead of
+  guessing from the byte count, so bold headers no longer run past the column
+  border.
 - **Breaking:** `Primitive::Path` takes `vertices: Arc<[PathVertex]>` and an
   `offset: Point` added to each vertex. Keep the `Arc` and paint clones of it
   while the shape stays the same: the renderer keeps a path's edges and its atlas

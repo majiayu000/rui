@@ -17,6 +17,7 @@ use super::{TextError, TextMeasureCache, TextMetrics, TextRequest, font_io_text_
 use crate::renderer::resources::{
     RendererResourceError, RendererResourceKind, RendererResourceStats,
 };
+use crate::renderer::text_face_size::face_size;
 use color::color_bitmap;
 pub use placed::GlyphSprite;
 use placed::PlacedText;
@@ -286,7 +287,7 @@ pub struct PlacedGlyph {
     pub x: f32,
     /// Baseline, measured down from the top of the line box.
     pub baseline_y: f32,
-    /// Font size over the text's: 1, or what gives a fallback face the text's em.
+    /// The face's rusttype height per pixel of em: its ascent to descent in ems.
     pub font_scale: f32,
 }
 
@@ -524,10 +525,9 @@ impl TextGlyphCache {
 
         let text = (!metrics.ink_bounds.is_empty()).then(|| {
             let fonts = self.measurer.fonts.as_slice();
-            let scale = Scale::uniform(request.font_size);
+            let scale = Scale::uniform(face_size(fonts, primary_index, request.font_size));
             let v_metrics = fonts[primary_index].font().v_metrics(scale);
-            let glyphs =
-                placed::place_glyphs(fonts, primary_index, &parts.glyphs, v_metrics.ascent);
+            let glyphs = placed::place_glyphs(fonts, &parts.glyphs, v_metrics.ascent);
             Arc::new(ShapedText {
                 metrics,
                 glyphs,

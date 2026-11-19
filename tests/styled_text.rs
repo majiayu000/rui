@@ -258,3 +258,78 @@ fn shared_spans_must_follow_each_other() {
 fn a_range_span_needs_shared_text() {
     styled_text([span_range(0..2)]);
 }
+
+/// Underlines and strikethroughs hang off the baseline the text is drawn on:
+/// placed from the middle of the line box, they ran into the glyphs once
+/// `font_size` became the em (#340).
+#[cfg(target_os = "macos")]
+#[test]
+fn decorations_sit_at_a_fixed_distance_from_the_baseline() {
+    use rui::renderer::text::{TextGlyphCache, TextRequest};
+
+    let mut glyphs = TextGlyphCache::new();
+    for (family, size, line_height) in [
+        ("Arial", 14.0, 1.2),
+        ("Arial", 28.0, 1.2),
+        ("SF Mono", 14.0, 1.4),
+        ("SF Mono", 28.0, 1.2),
+    ] {
+        for strike in [false, true] {
+            let piece = span("nmxz")
+                .font(family)
+                .size(size)
+                .line_height(line_height);
+            let piece = if strike {
+                piece.strikethrough()
+            } else {
+                piece.underline()
+            };
+            let mut root = div().child(styled_text([piece]));
+            let mut taffy = TaffyTree::<ElementId>::new();
+            let mut measurer = TextMeasureCache::new();
+            let bounds = FramePipeline::layout_root_with_text_measurer(
+                &mut root,
+                &mut taffy,
+                &mut measurer,
+                Size::new(400.0, 200.0),
+            )
+            .expect("layout");
+            let mut scene = Scene::new();
+            FramePipeline::paint_root(&mut root, &taffy, &mut scene, bounds);
+
+            let mut text = None;
+            let mut line = None;
+            for primitive in scene.primitives() {
+                match primitive {
+                    Primitive::Text {
+                        bounds, content, ..
+                    } => text = Some((*bounds, content.to_string())),
+                    Primitive::Quad { bounds, .. } => line = Some(*bounds),
+                    _ => {}
+                }
+            }
+            let (text, content) = text.expect("text");
+            let line = line.expect("decoration");
+            // Where the renderer puts the baseline: the font's ascent to
+            // descent centered in the text's bounds.
+            let shaped = glyphs
+                .shape(TextRequest::new(
+                    &content,
+                    size,
+                    400,
+                    Some(family),
+                    line_height,
+                ))
+                .expect("shape")
+                .expect("glyphs");
+            let font_height = shaped.ascent - shaped.descent;
+            let baseline = text.y() + (text.height() - font_height) * 0.5 + shaped.ascent;
+            let center = (line.y() + line.height() * 0.5 - baseline) / size;
+            let want = if strike { -0.28 } else { 0.12 };
+            assert!(
+                (center - want).abs() < 0.01,
+                "{family} {size}px lh {line_height}: center {center} em from the baseline"
+            );
+        }
+    }
+}

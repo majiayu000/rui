@@ -87,6 +87,14 @@ impl<'a> PaintContext<'a> {
         }
     }
 
+    /// Leave out subtrees that nothing in `viewport` can show, as a frame's
+    /// paint does. Without replay, only the hit pass before input sets it:
+    /// what is left out registers no hit region (#246).
+    pub(crate) fn with_viewport(mut self, viewport: Bounds) -> Self {
+        self.viewport = Some(viewport);
+        self
+    }
+
     pub fn with_focus(mut self, focused: Option<ElementId>) -> Self {
         self.focused = focused;
         self

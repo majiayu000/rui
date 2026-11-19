@@ -13,31 +13,29 @@
 //! committed checksum. Different GPUs antialias differently, so that is for local
 //! runs before and after a renderer change, not for CI.
 mod perf_budgets;
+mod perf_churn;
 mod perf_icons;
 mod perf_images;
+mod perf_pointer;
 mod perf_text;
 
 use perf_budgets::{CaseBudget, load_budgets};
+use perf_churn::Churn;
 use perf_icons::IconGrid;
 use perf_images::ImageGrid;
 use perf_text::paragraphs;
 use rui::core::entity::Entity;
-use rui::core::event::MouseButton;
 use rui::core::frame_pipeline::FramePipeline;
-use rui::elements::element::{Element, LayoutNodes, PointerEvent, PointerEventKind, reconcile};
+use rui::elements::element::{Element, LayoutNodes, reconcile};
 use rui::elements::view;
 use rui::elements::{VirtualListHandle, span, styled_text, virtual_list};
 use rui::renderer::Scene;
 use rui::renderer::metal::{MetalRenderer, RetainedTarget};
 use rui::renderer::text::TextMeasureCache;
-use rui::{
-    AppContext, Color, Div, ElementId, Point, Presenter, Size, View, ViewContext, div, text,
-};
+use rui::{AppContext, Color, Div, ElementId, Size, View, ViewContext, div, text};
 use std::alloc::{GlobalAlloc, Layout, System};
-use std::cell::RefCell;
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::BTreeMap;
 use std::process::ExitCode;
-use std::rc::Rc;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use taffy::prelude::TaffyTree;
 
@@ -179,71 +177,6 @@ fn code_line(index: usize) -> Div {
         ]))
 }
 
-/// Row views with their label entities, oldest first.
-type ChurnRows = Rc<RefCell<VecDeque<(Entity<ListRow>, Entity<String>)>>>;
-
-/// A list of row views whose oldest rows are replaced by new ones each frame.
-struct Churn {
-    rows: ChurnRows,
-    made: usize,
-    root: Div,
-    surfaces: Surfaces,
-}
-
-impl Churn {
-    fn new(context: &mut AppContext) -> Self {
-        let mut churn = Self {
-            rows: Rc::default(),
-            made: 0,
-            root: div(),
-            surfaces: Surfaces::new(),
-        };
-        for _ in 0..CHURN_ROWS {
-            churn.push_row(context);
-        }
-        churn
-    }
-
-    fn push_row(&mut self, context: &mut AppContext) {
-        // Labels repeat, so the text caches stay warm and the same size.
-        let label = context.create(format!("row {}", self.made % CHURN_ROWS));
-        let row = context.new_view(ListRow {
-            index: self.made,
-            label,
-        });
-        self.rows.borrow_mut().push_back((row, label));
-        self.made += 1;
-    }
-
-    fn frame(&mut self, context: &mut AppContext, measurer: &mut TextMeasureCache) {
-        for _ in 0..CHURN_PER_FRAME {
-            let (_, label) = self.rows.borrow_mut().pop_front().expect("a row");
-            // The view goes once no tree places it; its label is ours to release.
-            context.release(label);
-            self.push_row(context);
-        }
-        context.request_rebuild();
-        let rows = Rc::clone(&self.rows);
-        let mut build = move |_: &mut AppContext| {
-            div()
-                .w_full()
-                .flex_col()
-                .children(rows.borrow().iter().map(|(row, _)| view(*row)))
-        };
-        FramePipeline::build_frame_retained(
-            context,
-            &mut self.root,
-            &mut build,
-            &mut self.surfaces.taffy,
-            &mut self.surfaces.nodes,
-            &mut self.surfaces.scene,
-            measurer,
-            Size::new(VIEWPORT.0, VIEWPORT.1),
-        )
-        .expect("churn frame");
-    }
-}
-
 fn list(rows: usize, selected: usize) -> Div {
     div()
         .w_full()
@@ -380,7 +313,7 @@ fn main() -> ExitCode {
         }
     };
     let mut measurer = TextMeasureCache::new();
-    let mut costs: BTreeMap<&str, Cost> = BTreeMap::new();
+    let mut costs: BTreeMap<&'static str, Cost> = BTreeMap::new();
 
     // A 2000-row column; each frame selects another row, as a click would.
     let mut rebuilt = Rebuilt::new();
@@ -496,24 +429,8 @@ fn main() -> ExitCode {
         ));
     }
 
-    // A pointer move over the long list, whose rows have no handlers.
-    let viewport = Size::new(VIEWPORT.0, VIEWPORT.1);
-    let mut presenter = Presenter::with_root(viewport, list(2_000, 0));
-    for _ in 0..2 {
-        presenter.layout(viewport).expect("layout");
-        presenter.paint();
-    }
-    costs.insert(
-        "list.pointer_move",
-        measure(|round| {
-            presenter.dispatch_pointer_event(&PointerEvent {
-                kind: PointerEventKind::Move,
-                position: Point::new(200.0, 10.0 + round as f32 * 13.0),
-                button: None::<MouseButton>,
-            });
-        }),
-    );
-    drop(presenter);
+    // Pointer moves over the long list, whose rows have no handlers.
+    perf_pointer::measure_pointer_moves(&mut costs);
 
     // One row's text changes per frame. #173's target is under 10% of a full
     // frame: the same list laid out from an empty layout tree, with warm caches.

@@ -516,7 +516,7 @@ fn input_pointer_hit_testing_uses_shaped_cluster_advances() {
     use crate::renderer::text::{TextMeasureCache, TextRequest};
 
     let id = ElementId::new();
-    let mut inp = Input::new().id(id).value("Wi");
+    let mut inp = Input::new().id(id).value("Wi").w(200.0);
     let (taffy, bounds) = layout_input(&mut inp, Size::new(240.0, 56.0));
     let mut cache = TextMeasureCache::new();
     let plan = cache

@@ -417,14 +417,18 @@ pub(crate) fn rasterize_with_plan(
     let mut pixels = vec![0u8; (width * height * 4) as usize];
     let baseline = fonts[primary_index]
         .font()
-        .v_metrics(Scale::uniform(request.font_size))
+        .v_metrics(Scale::uniform(face_size(
+            fonts,
+            primary_index,
+            request.font_size,
+        )))
         .ascent;
 
     for shaped in plan.glyphs() {
         let Some(font) = fonts.get(shaped.font_index) else {
             continue;
         };
-        let size = face_size(fonts, primary_index, shaped.font_index, request.font_size);
+        let size = face_size(fonts, shaped.font_index, request.font_size);
         let glyph = font
             .font()
             .glyph(GlyphId(shaped.glyph_id))
@@ -565,15 +569,14 @@ fn shape_run(
 ) -> RunShapeResult {
     let font = &fonts[clusters[0].font_index];
     // Every face sits on the requested face's baseline.
-    let size = face_size(
-        fonts,
-        primary_index,
-        clusters[0].font_index,
-        request.font_size,
-    );
+    let size = face_size(fonts, clusters[0].font_index, request.font_size);
     let baseline = fonts[primary_index]
         .font()
-        .v_metrics(Scale::uniform(request.font_size))
+        .v_metrics(Scale::uniform(face_size(
+            fonts,
+            primary_index,
+            request.font_size,
+        )))
         .ascent;
     let glyphs = shape_run_glyphs(
         font,
