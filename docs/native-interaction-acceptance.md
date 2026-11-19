@@ -37,7 +37,7 @@ Actual native input verified forward/reverse focus, wraparound, skipping disable
 and hidden controls, cancel, save, revert, and Chinese/emoji paste and save.
 IME candidate composition and VoiceOver speech were not verified.
 
-## Multi-window focus isolation (manual check pending)
+## Multi-window focus isolation
 
 Activate Open independent editor to create a second editor with its own state.
 The two editors intentionally reuse element IDs, as normal instances of a view do.
@@ -52,11 +52,41 @@ The two editors intentionally reuse element IDs, as normal instances of a view d
    accept text, Tab/Shift-Tab and Save/Confirm without changing its own saved data
    unexpectedly. Repeat with the other window closed first.
 
+A window that loses key status shows no focused element, then focuses again
+what it had when it becomes key. Focus is not given back when app code moved or
+cleared it meanwhile, or the element was removed, disabled or is behind a modal
+that opened.
+
 `cargo test --test multi_window` exercises shared-AppContext keyboard traversal,
-text ownership, Enter activation and continued editing after window close.
-These headless assertions do not verify AppKit key-window switching, native IME
-candidate composition or VoiceOver speech. This new manual sequence has not yet
-been run on the native example.
+text ownership, Enter activation, key-window switching
+(`HeadlessApp::make_key_window`) and continued editing after window close;
+`cargo test --test focus` covers a single window losing and regaining key
+status. These headless assertions do not verify native IME candidate
+composition or VoiceOver speech.
+
+### Observed on 2026-11-19
+
+A driver built from this example (the Editor verbatim) was launched as an app
+bundle through LaunchServices so AppKit made it active. It switched key status
+with `makeKeyAndOrderFront:` (the window server reported `isKeyWindow` true for
+each switch), posted key `NSEvent`s to the key window and read each window's
+focused node from its NSAccessibility tree. With the fix all 16 checks passed:
+
+- Six Tabs wrapped from Open independent editor to Filter; Shift-Tab wrapped
+  back, then reached Revert draft.
+- Enter on Open independent editor opened the second editor as key; returning
+  to the first window focused Open independent editor again.
+- Steps 1 and 2: Draft focused in the first window, Save in the second. The
+  inactive window exposed no focused element each time. Switching back focused
+  Draft and typing went into it; switching to the second window focused Save,
+  and Enter opened only that window's confirmation. Confirm saved only its draft.
+- Step 3: closing the second window with its Draft focused left the first
+  window's Draft focused; it took text and Tab.
+
+The same driver on the previous main (a646536) failed 8 checks: after every
+switch back nothing was focused, so Enter on Save did nothing and Tab started
+over from Filter. Typed letters still reached the first window's Draft while
+nothing owned focus.
 
 ## Focused button Space activation
 
