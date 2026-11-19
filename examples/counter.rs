@@ -57,5 +57,6 @@ impl View for CounterView {
 }
 
 fn main() {
+    env_logger::init();
     App::new().run_view(CounterView::default());
 }

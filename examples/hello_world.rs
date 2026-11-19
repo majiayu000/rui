@@ -6,6 +6,7 @@
 use rui::prelude::*;
 
 fn main() {
+    env_logger::init();
     // Create and run the application
     App::new().run(|_cx| {
         // Root container - full window with dark background

@@ -224,6 +224,7 @@ fn click_first_button(_title: &str) {
 }
 
 fn main() {
+    env_logger::init();
     let stats = SharedStats::default();
     STATS.with(|registered| *registered.borrow_mut() = Some(Rc::clone(&stats)));
     App::new().run_view_with_options(
