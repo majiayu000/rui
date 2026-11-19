@@ -16,6 +16,7 @@ mod accessibility_tree;
 mod clipboard;
 mod input;
 mod open_windows;
+mod prompts;
 mod window;
 
 pub(crate) use window::{WinitWindowDriver, WinitWindowParts, winit_window};
@@ -25,6 +26,8 @@ use crate::core::window::{WindowId, WindowOptions};
 use crate::elements::element::Element;
 use clipboard::WindowClipboard;
 use open_windows::OpenWindows;
+use std::cell::Cell;
+use std::rc::Rc;
 use std::sync::Mutex;
 use std::time::Instant;
 use winit::application::ApplicationHandler;
@@ -89,6 +92,7 @@ where
         accessibility_proxy,
         main: Some((main_window, options, main)),
         windows: OpenWindows::default(),
+        showing_path_prompts: Rc::default(),
         next_tick: None,
     };
     if let Err(err) = event_loop.run_app(&mut runner) {
@@ -106,6 +110,7 @@ struct Runner {
     /// The main window until the event loop can create it.
     main: Option<(WindowId, WindowOptions, MainContent)>,
     windows: OpenWindows,
+    showing_path_prompts: Rc<Cell<bool>>,
     /// When the next animation frame is due, while an animation asks for one.
     next_tick: Option<Instant>,
 }
@@ -190,6 +195,7 @@ impl ApplicationHandler<UserEvent> for Runner {
             let deadline = now + self.context.idle_budget();
             self.context.run_idle_tasks(|| Instant::now() < deadline);
         }
+        prompts::run_path_prompts(&mut self.context, &self.showing_path_prompts);
         let control_flow = if self.context.animation_frame_requested() {
             ControlFlow::WaitUntil(*self.next_tick.get_or_insert(now))
         } else {
