@@ -28,7 +28,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 use taffy::prelude::TaffyTree;
 
-const CASES: [&str; 17] = [
+const CASES: [&str; 19] = [
     "startup",
     "list_full",
     "list_full_rows",
@@ -46,11 +46,16 @@ const CASES: [&str; 17] = [
     "paths",
     "paths_icons",
     "terminal_rows",
+    "workbench_pane",
+    "workbench_full",
 ];
 mod compare_editor;
 mod compare_grid;
 mod compare_paths;
 mod compare_terminal;
+mod compare_workbench;
+#[path = "../benchmarks/gpui_compare/workbench_data.rs"]
+mod workbench_data;
 use compare_editor::{
     CURSOR_ROW, CodeLine, EDITOR_LINE_HEIGHT, EDITOR_TOP, code_view, document, edit_line,
     scrolled_top,
@@ -642,10 +647,12 @@ fn run(case: &str) -> Result<(), Box<dyn std::error::Error>> {
         "terminal_rows" => {
             let mut harness = Harness::new()?;
             measure(case, &mut harness, |harness, turn| {
-                harness.frame(compare_terminal::terminal_rows(turn), viewport)
+                harness.frame(compare_terminal::terminal_rows(turn, VIEWPORT.0), viewport)
             })?;
             harness.save_png_if_asked(case, viewport)?;
         }
+        "workbench_pane" => compare_workbench::run(case, false)?,
+        "workbench_full" => compare_workbench::run(case, true)?,
         _ => return Err(format!("unknown case {case}; cases: {}", CASES.join(" ")).into()),
     }
     Ok(())

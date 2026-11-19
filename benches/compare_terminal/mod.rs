@@ -12,48 +12,40 @@ use rui::renderer::text::BaseDirection;
 use rui::{Bounds, Color, SharedStr};
 use std::sync::Arc;
 
-const ROWS: usize = 45;
-const CHANGED_ROWS: usize = 20;
-const LINE_HEIGHT: f32 = 20.0;
-const FONT_SIZE: f32 = 13.0;
-const FONT: &str = "SF Mono";
-const WIDTH: f32 = 1440.0;
-const HEX: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+use crate::workbench_data::{
+    FONT_SIZE, PANE_BG, ROW_HEIGHT, TEXT_COLOR, VISIBLE_ROWS, terminal_text,
+};
 
-fn row_text(row: usize, turn: usize) -> String {
-    if row < CHANGED_ROWS {
-        format!("{turn:08} row {row:02} {}", &HEX[..60])
-    } else {
-        format!("static   row {row:02} {}", &HEX[..60])
-    }
-}
+const FONT: &str = "SF Mono";
 
 /// The screen at frame `turn`.
-pub(super) fn terminal_rows(turn: usize) -> impl Element {
-    let rows: Vec<SharedStr> = (0..ROWS).map(|row| row_text(row, turn).into()).collect();
+pub(super) fn terminal_rows(turn: usize, width: f32) -> impl Element {
+    let rows: Vec<SharedStr> = (0..VISIBLE_ROWS)
+        .map(|row| terminal_text(row, turn).into())
+        .collect();
     let family: Arc<str> = Arc::from(FONT);
     canvas(move |bounds, painter| {
-        painter.fill(bounds, Color::hex(0x1e1e1e));
+        painter.fill(bounds, Color::hex(PANE_BG));
         for (index, text) in rows.iter().enumerate() {
             painter.paint(Primitive::Text {
                 bounds: Bounds::from_xywh(
                     bounds.x(),
-                    bounds.y() + index as f32 * LINE_HEIGHT,
+                    bounds.y() + index as f32 * ROW_HEIGHT,
                     bounds.width(),
-                    LINE_HEIGHT,
+                    ROW_HEIGHT,
                 ),
                 content: text.clone(),
-                color: Color::hex(0xd4d4d4).to_rgba(),
+                color: Color::hex(TEXT_COLOR).to_rgba(),
                 font_size: FONT_SIZE,
                 font_weight: 400,
                 font_family: Some(family.clone()),
                 font_features: Default::default(),
-                line_height: LINE_HEIGHT,
+                line_height: ROW_HEIGHT,
                 align: TextAlign::Left,
                 direction: BaseDirection::Auto,
             });
         }
     })
-    .w(WIDTH)
-    .h(ROWS as f32 * LINE_HEIGHT)
+    .w(width)
+    .h(VISIBLE_ROWS as f32 * ROW_HEIGHT)
 }

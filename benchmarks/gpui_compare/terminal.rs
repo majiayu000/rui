@@ -8,46 +8,40 @@ use gpui::{
     Window, canvas, fill, font, point, px, rgb,
 };
 
-const ROWS: usize = 45;
-const CHANGED_ROWS: usize = 20;
-const LINE_HEIGHT: f32 = 20.;
-const FONT_SIZE: f32 = 13.;
-const WIDTH: f32 = 1440.;
-const HEX: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-
-fn row_text(row: usize, turn: usize) -> String {
-    if row < CHANGED_ROWS {
-        format!("{turn:08} row {row:02} {}", &HEX[..60])
-    } else {
-        format!("static   row {row:02} {}", &HEX[..60])
-    }
-}
+use super::workbench_data::{
+    FONT_SIZE, PANE_BG, ROW_HEIGHT, TEXT_COLOR, VISIBLE_ROWS, WIDTH, terminal_text,
+};
 
 pub(crate) struct Terminal {
     pub(crate) turn: usize,
+    width: f32,
 }
 
 impl Terminal {
     pub(crate) fn new(cx: &mut Context<Self>) -> Self {
+        Self::with_width(cx, WIDTH)
+    }
+
+    pub(crate) fn with_width(cx: &mut Context<Self>, width: f32) -> Self {
         super::load_sf_mono(cx.text_system());
-        Self { turn: 0 }
+        Self { turn: 0, width }
     }
 }
 
 impl Render for Terminal {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        let rows: Vec<SharedString> = (0..ROWS)
-            .map(|row| row_text(row, self.turn).into())
+        let rows: Vec<SharedString> = (0..VISIBLE_ROWS)
+            .map(|row| terminal_text(row, self.turn).into())
             .collect();
         canvas(
             |_, _, _| {},
             move |bounds, _, window, cx| {
-                window.paint_quad(fill(bounds, rgb(0x1e1e1e)));
+                window.paint_quad(fill(bounds, rgb(PANE_BG)));
                 for (index, text) in rows.iter().enumerate() {
                     let run = TextRun {
                         len: text.len(),
                         font: font(super::EDITOR_FONT),
-                        color: rgb(0xd4d4d4).into(),
+                        color: rgb(TEXT_COLOR).into(),
                         background_color: None,
                         underline: None,
                         strikethrough: None,
@@ -58,15 +52,15 @@ impl Render for Terminal {
                             .shape_line(text.clone(), px(FONT_SIZE), &[run], None);
                     let origin = point(
                         bounds.origin.x,
-                        bounds.origin.y + px(index as f32 * LINE_HEIGHT),
+                        bounds.origin.y + px(index as f32 * ROW_HEIGHT),
                     );
-                    line.paint(origin, px(LINE_HEIGHT), TextAlign::Left, None, window, cx)
+                    line.paint(origin, px(ROW_HEIGHT), TextAlign::Left, None, window, cx)
                         .expect("paint a terminal row");
                 }
             },
         )
-        .w(px(WIDTH))
-        .h(px(ROWS as f32 * LINE_HEIGHT))
+        .w(px(self.width))
+        .h(px(VISIBLE_ROWS as f32 * ROW_HEIGHT))
     }
 }
 

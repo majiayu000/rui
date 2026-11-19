@@ -21,14 +21,21 @@ pub(crate) static FRAMES_WITH_GLYPHS: AtomicUsize = AtomicUsize::new(0);
 pub(crate) struct CountingRenderer {
     inner: Box<dyn PlatformHeadlessRenderer>,
     redraws: usize,
+    workbench_case: Option<&'static str>,
+    first_terminal: Option<u64>,
 }
 
 impl CountingRenderer {
-    pub(crate) fn new(inner: Box<dyn PlatformHeadlessRenderer>) -> Self {
-        Self {
+    pub(crate) fn wrap(
+        inner: Box<dyn PlatformHeadlessRenderer>,
+        case: &'static str,
+    ) -> Box<dyn PlatformHeadlessRenderer> {
+        Box::new(Self {
             inner,
             redraws: crate::gpu_time::redraws(),
-        }
+            workbench_case: case.starts_with("workbench_").then_some(case),
+            first_terminal: None,
+        })
     }
 
     fn count(scene: &Scene) {
@@ -68,6 +75,18 @@ impl PlatformHeadlessRenderer for CountingRenderer {
         scene: &Scene,
         size: gpui::Size<DevicePixels>,
     ) -> anyhow::Result<()> {
+        if let (Some(case), Some(frame)) = (self.workbench_case, crate::gpu_time::sample_frame()) {
+            let last = crate::gpu_time::WARMUP_FRAMES + crate::gpu_time::sample_count() - 1;
+            if frame == 0 {
+                self.first_terminal = Some(crate::workbench::inspect_scene(case, scene, size));
+            } else if frame == last {
+                let initial = self
+                    .first_terminal
+                    .expect("initial terminal scene was submitted");
+                let terminal = crate::workbench::inspect_scene(case, scene, size);
+                assert_ne!(initial, terminal, "terminal glyphs advance");
+            }
+        }
         Self::count(scene);
         self.inner.render_scene(scene, size)?;
         if let Some(frame) = crate::gpu_time::sample_frame().filter(|_| self.redraws > 0) {

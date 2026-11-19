@@ -18,8 +18,7 @@
 //!   gutter of line numbers, per-token colors as `StyledText` highlights in SF Mono (loaded from RUI's file),
 //!   the cursor's line highlighted. It scrolls one line per frame, or one character
 //!   of the cursor's line changes per frame.
-//! - `terminal_rows`: one `canvas` paints 45 rows of SF Mono, one shaped line per row;
-//!   20 rows get new text each frame. In `terminal.rs`.
+//! - `terminal_rows`: 45 SF Mono lines on a canvas, with 20 rows updated per frame.
 //!
 //! The benches are registered as `#[gpui::bench(fps = 120)]` registers them, but with
 //! the headless renderer wrapped by [`CountingRenderer`], which counts draw calls.
@@ -33,9 +32,9 @@ use std::time::{Duration, Instant};
 
 use gpui::{
     AnyView, AppContext as _, BenchAppContext, Bounds, Context, Entity, HighlightStyle,
-    IntoElement, ParentElement, PlatformHeadlessRenderer, Render, ScrollStrategy, SharedString,
-    Styled, StyledText, UniformListScrollHandle, Window, canvas, div, fill, point, px, relative,
-    rgb, size, uniform_list,
+    IntoElement, ParentElement, Render, ScrollStrategy, SharedString, Styled, StyledText,
+    UniformListScrollHandle, Window, canvas, div, fill, point, px, relative, rgb, size,
+    uniform_list,
 };
 
 const LIST_ROWS: usize = 2_000;
@@ -659,8 +658,11 @@ fn editor_edit(cx: &mut BenchAppContext, sample_gpu: bool) {
 mod fonts;
 mod gpu_time;
 mod terminal;
+mod workbench;
+mod workbench_data;
 use fonts::load_sf_mono;
 use terminal::terminal_rows;
+use workbench::{workbench_full, workbench_pane};
 
 mod counting_renderer;
 use counting_renderer::{CountingRenderer, FRAMES_WITH_GLYPHS, SCENES, take_draws};
@@ -679,10 +681,9 @@ fn counted(
     FRAMES_WITH_GLYPHS.store(0, Ordering::Relaxed);
     let platform = || {
         gpui::bench_platform(
-            Some(Box::new(|| {
-                Ok(gpui_platform::current_headless_renderer()?.map(|renderer| {
-                    Box::new(CountingRenderer::new(renderer)) as Box<dyn PlatformHeadlessRenderer>
-                }))
+            Some(Box::new(move || {
+                Ok(gpui_platform::current_headless_renderer()?
+                    .map(|renderer| CountingRenderer::wrap(renderer, name)))
             })),
             gpui_platform::bench_text_system(),
         )
@@ -780,6 +781,7 @@ counted_benches!(
     bench_editor_scroll => editor_scroll,
     bench_editor_edit => editor_edit,
     bench_terminal_rows => terminal_rows,
+    bench_workbench_pane => workbench_pane, bench_workbench_full => workbench_full,
 );
 
 gpui::bench_group!(
@@ -790,6 +792,7 @@ gpui::bench_group!(
         .sample_size(20);
     targets = bench_startup, bench_list_full, bench_list_full_one_row, bench_list_virtual_1k,
         bench_list_virtual_100k, bench_text_paragraphs, bench_quad_grid, bench_resize_full,
-        bench_resize_virtual, bench_editor_scroll, bench_editor_edit, bench_terminal_rows
+        bench_resize_virtual, bench_editor_scroll, bench_editor_edit, bench_terminal_rows,
+        bench_workbench_pane, bench_workbench_full
 );
 gpui::bench_main!(benches);
