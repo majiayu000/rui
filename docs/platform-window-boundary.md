@@ -20,10 +20,10 @@ features:
 
 Unsupported features must return `PlatformWindowError::Unsupported`; a backend
 must not report success by dropping the operation or returning placeholder data.
-Multi-window support is not part of the required backend set yet. Until RUI can
-create, route events for, and render multiple native windows end to end,
-attempting to open a second window returns `PlatformWindowError::Unsupported`
-with the `multi-window` feature.
+Multi-window support is not part of the required backend set. The macOS runner
+and the winit runner both create, route events for and render the windows app
+code opens with `AppContext::open_window`; the winit window reports the
+`multi-window` feature.
 
 ## Current Scope
 

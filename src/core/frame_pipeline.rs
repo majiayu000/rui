@@ -94,8 +94,7 @@ impl FramePipeline {
             }
         }
         if full {
-            let (mut next, reads) = context.recording_reads(|context| build_root(context));
-            context.frame.root_reads = reads.into_iter().collect();
+            let mut next = Self::build_recording_reads(context, build_root);
             // Unchanged parts of the previous tree are kept, with their layout
             // and paint; see `reconcile`.
             if !reconcile(&mut next, root) {
@@ -113,8 +112,43 @@ impl FramePipeline {
                 }
             }
         }
-        // Views new to the tree render, and so do the ones notified.
-        refresh_views(root, context, &dirty);
+        Self::render_views(root, context, &dirty);
+    }
+
+    /// Build a window's first tree and render the views it places, as a full
+    /// [`Self::rebuild_if_needed`] does. The window's first frame then lays it
+    /// out without building the root again, unless something asks for a
+    /// rebuild before that frame.
+    pub(crate) fn build_first_tree<E, F>(context: &mut AppContext, build_root: &mut F) -> E
+    where
+        E: Element,
+        F: FnMut(&mut AppContext) -> E,
+    {
+        // The new tree shows everything notified so far, and is the full
+        // build a new window's frame state asks for.
+        context.frame.needs_rebuild = false;
+        context.frame.explicit_rebuild = false;
+        context.frame.pending_updates.clear();
+        let mut root = Self::build_recording_reads(context, build_root);
+        Self::render_views(&mut root, context, &HashSet::new());
+        context.frame.dirty = true;
+        root
+    }
+
+    /// Build the root, keeping the entities it read as the window's root reads.
+    fn build_recording_reads<E, F>(context: &mut AppContext, build_root: &mut F) -> E
+    where
+        F: FnMut(&mut AppContext) -> E,
+    {
+        let (root, reads) = context.recording_reads(|context| build_root(context));
+        context.frame.root_reads = reads.into_iter().collect();
+        root
+    }
+
+    /// Render the views new to `root` and the ones in `dirty`, then release
+    /// the views no tree places any more.
+    fn render_views<E: Element>(root: &mut E, context: &mut AppContext, dirty: &HashSet<EntityId>) {
+        refresh_views(root, context, dirty);
         context.release_unplaced_views();
         // Notifications this frame handled no longer ask for another.
         let frame = &mut context.frame;
