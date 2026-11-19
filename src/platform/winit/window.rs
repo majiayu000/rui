@@ -1,5 +1,7 @@
 //! One winit window: its presenter, wgpu surface and frame.
 
+use super::UserEvent;
+use super::accessibility::WindowAccessibility;
 use super::clipboard::WindowClipboard;
 use super::ime::ImeSession;
 use super::input::{InputState, file_drop_position};
@@ -15,6 +17,9 @@ use crate::core::presenter::Presenter;
 use crate::core::text_editing::TextInputCommand;
 use crate::core::window::{WindowId, WindowOptions};
 use crate::elements::element::{Element, PointerEventKind};
+use crate::platform::accessibility_request::{
+    AccessibilityRequest, dispatch_accessibility_request,
+};
 use crate::platform::frame_driver::{
     OrderedInputEvent, append_input_event, dispatch_key, mark_deferred_frame_for_retry,
     mark_platform_event_redraw, schedule_platform_redraw,
@@ -32,7 +37,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use winit::dpi::{LogicalPosition, LogicalSize};
 use winit::event::{Ime, WindowEvent};
-use winit::event_loop::ActiveEventLoop;
+use winit::event_loop::{ActiveEventLoop, EventLoopProxy};
 use winit::window::CursorIcon;
 
 pub(super) const PLATFORM: &str = "winit";
@@ -44,6 +49,9 @@ pub(super) struct WinitWindow {
     cursor: Cell<Cursor>,
     ime: Cell<ImeSession>,
     clipboard: WindowClipboard,
+    /// The title last set, which names the window to screen readers. winit
+    /// cannot read it back on X11.
+    title: String,
 }
 
 impl WinitWindow {
@@ -139,6 +147,7 @@ impl PlatformWindow for WinitWindow {
 
     fn set_title(&mut self, title: &str) -> Result<(), PlatformWindowError> {
         self.window.set_title(title);
+        self.title = title.to_string();
         Ok(())
     }
 
@@ -167,6 +176,8 @@ pub(crate) trait WinitWindowDriver {
     fn winit_id(&self) -> winit::window::WindowId;
     /// Queue `event` for the next frame.
     fn push_event(&mut self, event: &WindowEvent);
+    /// Take a screen reader's request for the tree or an action.
+    fn accessibility_event(&mut self, event: accesskit_winit::WindowEvent);
     /// Handle the queued events and draw if there is work. `context` has this
     /// window active. Returns whether the window asked to close.
     fn run_iteration(&mut self, context: &mut AppContext) -> bool;
@@ -180,6 +191,8 @@ pub(crate) struct WinitWindowParts {
     renderer: WgpuRenderer,
     surface: WindowSurface,
     clipboard: WindowClipboard,
+    accessibility: WindowAccessibility,
+    title: String,
     input: InputState,
     viewport_size: Size,
     /// The refresh interval of the window's monitor, when it reports one.
@@ -194,12 +207,20 @@ impl WinitWindowParts {
         id: WindowId,
         options: &WindowOptions,
         clipboard: WindowClipboard,
+        accessibility_proxy: EventLoopProxy<UserEvent>,
     ) -> Result<Self, PlatformWindowError> {
+        // AccessKit's adapter must exist before the window is first shown.
         let window = Arc::new(
             event_loop
-                .create_window(window_attributes(options))
+                .create_window(window_attributes(options).with_visible(false))
                 .map_err(backend_error)?,
         );
+        let adapter = accesskit_winit::Adapter::with_event_loop_proxy(
+            event_loop,
+            &window,
+            accessibility_proxy,
+        );
+        window.set_visible(true);
         let surface = instance
             .create_surface(Arc::clone(&window))
             .map_err(backend_error)?;
@@ -226,6 +247,8 @@ impl WinitWindowParts {
             id,
             window,
             clipboard,
+            accessibility: WindowAccessibility::new(Some(adapter)),
+            title: options.title.clone(),
             renderer,
             surface,
             input,
@@ -261,6 +284,7 @@ where
         window: WinitWindow {
             window: parts.window,
             cursor: Cell::new(Cursor::Default),
+            title: parts.title,
             ime: Cell::new(ImeSession::Inactive),
             clipboard: parts.clipboard,
         },
@@ -269,6 +293,7 @@ where
         retained: RetainedTarget::new(),
         presenter,
         build_root,
+        accessibility: parts.accessibility,
         input: parts.input,
         last_viewport_size: parts.viewport_size,
         events: Vec::new(),
@@ -306,6 +331,7 @@ struct WindowDriver<F, E> {
     retained: RetainedTarget,
     presenter: Presenter<E>,
     build_root: F,
+    accessibility: WindowAccessibility,
     input: InputState,
     last_viewport_size: Size,
     events: Vec<QueuedEvent>,
@@ -327,6 +353,8 @@ where
     }
 
     fn push_event(&mut self, event: &WindowEvent) {
+        self.accessibility
+            .process_window_event(&self.window.window, event);
         if let WindowEvent::DroppedFile(path) = event {
             if let Some(drop) = &mut self.file_drop {
                 drop.paths.push(path.clone());
@@ -350,7 +378,17 @@ where
         }
     }
 
+    fn accessibility_event(&mut self, event: accesskit_winit::WindowEvent) {
+        if self.accessibility.handle_event(event) {
+            self.window.window.request_redraw();
+        }
+    }
+
     fn run_iteration(&mut self, context: &mut AppContext) -> bool {
+        if self.accessibility.has_requests() {
+            context.mark_redraw_from(RedrawSource::PlatformInput);
+        }
+        let accessibility_requests = self.accessibility.take_requests();
         if let Some(drop) = self.file_drop.take() {
             self.events.push(QueuedEvent::FileDrop(drop));
         }
@@ -402,6 +440,7 @@ where
             retained,
             presenter,
             build_root,
+            accessibility,
             ..
         } = self;
         let outcome = FramePipeline::run_frame(
@@ -418,6 +457,13 @@ where
                     viewport_changed.then_some(viewport_size),
                     close_requested,
                     &ordered,
+                );
+                dispatch_accessibility_requests(
+                    presenter,
+                    context,
+                    window,
+                    &accessibility_requests,
+                    accessibility.published_tree(),
                 );
                 Ok(())
             },
@@ -436,7 +482,7 @@ where
                 })
             },
         );
-        match outcome {
+        let frame_ran = match outcome {
             Ok(Some(outcome)) => {
                 self.last_viewport_size = viewport_size;
                 if self.window.sync_ime(&mut self.presenter) {
@@ -445,9 +491,17 @@ where
                 if mark_deferred_frame_for_retry(context, outcome.presented) {
                     self.window.window.request_redraw();
                 }
+                true
             }
-            Ok(None) => {}
+            Ok(None) => false,
             Err(err) => panic!("frame failed: {err}"),
+        };
+        if self.accessibility.is_reading() && (frame_ran || self.accessibility.needs_tree()) {
+            self.accessibility.publish(
+                &self.presenter,
+                &self.window.title,
+                self.input.scale_factor,
+            );
         }
         close_requested
     }
@@ -482,6 +536,24 @@ fn window_attributes(options: &WindowOptions) -> winit::window::WindowAttributes
         attributes = attributes.with_max_inner_size(size(max_size));
     }
     attributes
+}
+
+/// Dispatch the screen reader requests that arrived since the last frame,
+/// checked against the tree the platform holds.
+fn dispatch_accessibility_requests<E: Element>(
+    presenter: &mut Presenter<E>,
+    context: &mut AppContext,
+    window: &WinitWindow,
+    requests: &[(ElementId, AccessibilityRequest)],
+    published: Option<&crate::core::accessibility::AccessibilityTree>,
+) {
+    for (id, request) in requests {
+        let (handled, redraw_requested) =
+            dispatch_accessibility_request(presenter, *id, request, published, PLATFORM);
+        if handled || redraw_requested {
+            schedule_platform_redraw(window, context, RedrawSource::PlatformInput);
+        }
+    }
 }
 
 /// The `DispatchEvents` stage for a winit window.

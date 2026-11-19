@@ -4,10 +4,16 @@
 //! It drives the shared frame pipeline for the main window and for each window
 //! app code opens with [`AppContext::open_window`], every one with its own
 //! presenter, surface and renderer, and copy, cut and paste go through the
-//! system clipboard (arboard). IME composition goes to the focused text field.
-//! File drops arrive on X11 and Windows. App commands can use an in-window
-//! menu. The native accessibility bridge and system menu bar use AppKit.
+//! system clipboard (arboard). Each window publishes its own accessibility
+//! tree through AccessKit and takes screen reader actions back. IME
+//! composition goes to the focused text field. File drops arrive on X11
+//! and Windows. App commands can use an in-window menu.
 
+mod accessibility;
+#[cfg(test)]
+mod accessibility_tests;
+mod accessibility_text;
+mod accessibility_tree;
 mod clipboard;
 mod ime;
 mod input;
@@ -25,10 +31,21 @@ use std::sync::Mutex;
 use std::time::Instant;
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
-use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 
-/// Wakes the event loop for app handle updates posted from other threads.
-struct Wake;
+/// What other threads post to the event loop.
+enum UserEvent {
+    /// Wakes the event loop for app handle updates.
+    Wake,
+    /// A screen reader asked a window for its tree or an action.
+    Accessibility(accesskit_winit::Event),
+}
+
+impl From<accesskit_winit::Event> for UserEvent {
+    fn from(event: accesskit_winit::Event) -> Self {
+        Self::Accessibility(event)
+    }
+}
 
 /// Builds the main window's first tree once its winit window exists.
 type MainContent = Box<dyn FnOnce(&mut AppContext, WinitWindowParts) -> Box<dyn WinitWindowDriver>>;
@@ -48,14 +65,15 @@ where
         Some(window) => window,
         None => context.register_window(options.clone()),
     };
-    let event_loop = match EventLoop::<Wake>::with_user_event().build() {
+    let event_loop = match EventLoop::<UserEvent>::with_user_event().build() {
         Ok(event_loop) => event_loop,
         Err(err) => panic!("failed to create the winit event loop: {err}"),
     };
+    let accessibility_proxy = event_loop.create_proxy();
     let proxy = Mutex::new(event_loop.create_proxy());
     context.update_queue().set_waker(move || {
         let sent = match proxy.lock() {
-            Ok(proxy) => proxy.send_event(Wake).is_ok(),
+            Ok(proxy) => proxy.send_event(UserEvent::Wake).is_ok(),
             Err(_) => false,
         };
         if !sent {
@@ -70,6 +88,7 @@ where
         context,
         instance: wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle()),
         clipboard,
+        accessibility_proxy,
         main: Some((main_window, options, main)),
         windows: OpenWindows::default(),
         next_tick: None,
@@ -84,6 +103,8 @@ struct Runner {
     instance: wgpu::Instance,
     /// The system clipboard, for the windows' `PlatformWindow` methods.
     clipboard: WindowClipboard,
+    /// Hands each window's AccessKit adapter a way back to the event loop.
+    accessibility_proxy: EventLoopProxy<UserEvent>,
     /// The main window until the event loop can create it.
     main: Option<(WindowId, WindowOptions, MainContent)>,
     windows: OpenWindows,
@@ -102,7 +123,7 @@ impl Runner {
     }
 }
 
-impl ApplicationHandler<Wake> for Runner {
+impl ApplicationHandler<UserEvent> for Runner {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         let Some((id, options, main)) = self.main.take() else {
             return;
@@ -114,13 +135,19 @@ impl ApplicationHandler<Wake> for Runner {
             id,
             &options,
             self.clipboard.clone(),
+            self.accessibility_proxy.clone(),
         ) {
             Ok(parts) => self.windows.push(main(&mut self.context, parts)),
             Err(err) => panic!("failed to open the main window: {err}"),
         }
     }
 
-    fn user_event(&mut self, _event_loop: &ActiveEventLoop, _event: Wake) {}
+    fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: UserEvent) {
+        if let UserEvent::Accessibility(event) = event {
+            self.windows
+                .accessibility_event(event.window_id, event.window_event);
+        }
+    }
 
     fn window_event(
         &mut self,
@@ -136,6 +163,7 @@ impl ApplicationHandler<Wake> for Runner {
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         let instance = &self.instance;
         let clipboard = &self.clipboard;
+        let accessibility_proxy = &self.accessibility_proxy;
         self.windows
             .open_pending(&mut self.context, |context, pending| {
                 let parts = WinitWindowParts::create(
@@ -144,6 +172,7 @@ impl ApplicationHandler<Wake> for Runner {
                     pending.id,
                     &pending.options,
                     clipboard.clone(),
+                    accessibility_proxy.clone(),
                 )?;
                 Ok(pending.content.into_winit(context, parts))
             });

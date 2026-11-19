@@ -85,6 +85,10 @@ All notable project changes should be recorded here.
 
 ### Runtime
 
+- The library builds again with `--no-default-features` (no Metal, no wgpu),
+  so the update-path tests `docs/getting-started.md` gives run again; since
+  `Primitive::Picture` the `picture` module was left out of that build while
+  the plan and primitives still used it. CI now runs that command.
 - An entity one view's listener updates shows in the other views that read it
   on the next frame, parent to child and child to parent, instead of one frame
   later; child views' queued listener updates run before the frame works out
@@ -94,6 +98,15 @@ All notable project changes should be recorded here.
   each gets its own presenter, surface and renderer, events go to the window
   winit names, and closing one leaves the others running. Its window reports
   the `multi-window` feature.
+- The winit runner (Linux and Windows) publishes each window's accessibility
+  tree through AccessKit: UI Automation on Windows, AT-SPI on Linux. It is the
+  tree `Presenter::accessibility_tree` builds for the macOS runner, with roles,
+  names, values, checked and selected state, ranges, bounds and focus, and a
+  text input's value as text runs with its caret. Press, focus, set value,
+  increment, decrement and scroll requests come back through the same dispatch
+  the macOS runner uses. The tree is built only while an assistive technology
+  reads it. Not yet: announcements of action feedback, and text editing beyond
+  replacing the value (#344).
 - The winit runner (Linux and Windows) copies, cuts and pastes through the
   system clipboard via arboard, X11 or Wayland on Linux, instead of an
   in-memory clipboard only the app could see. Without a system clipboard it
