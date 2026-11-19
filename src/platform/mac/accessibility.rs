@@ -48,14 +48,7 @@ pub struct MacAccessibilityActionRequest {
 }
 
 /// Request payload carried by [`MacAccessibilityActionRequest`].
-#[derive(Debug, Clone, PartialEq)]
-pub enum MacAccessibilityRequest {
-    Action {
-        action: AccessibilityAction,
-        value: Option<String>,
-    },
-    Focus(bool),
-}
+pub use crate::platform::accessibility_request::AccessibilityRequest as MacAccessibilityRequest;
 
 struct MacAccessibilityElementIvars {
     id: ElementId,

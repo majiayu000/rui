@@ -60,6 +60,21 @@ impl OpenWindows {
         }
     }
 
+    /// Hand an AccessKit event to the window `id` names.
+    pub(super) fn accessibility_event(
+        &mut self,
+        id: winit::window::WindowId,
+        event: accesskit_winit::WindowEvent,
+    ) {
+        if let Some(window) = self
+            .windows
+            .iter_mut()
+            .find(|window| window.winit_id() == id)
+        {
+            window.accessibility_event(event);
+        }
+    }
+
     /// Run the frame of every open window, or only of `only`, each with its
     /// frame state active. Then close the windows that asked to and drop every
     /// window that closed, including those app code closed.
@@ -125,6 +140,8 @@ mod tests {
             self.events += 1;
             self.close_requested |= matches!(event, WindowEvent::CloseRequested);
         }
+
+        fn accessibility_event(&mut self, _event: accesskit_winit::WindowEvent) {}
 
         fn run_iteration(&mut self, context: &mut AppContext) -> bool {
             self.frames.borrow_mut().push(Frame {
