@@ -13,6 +13,9 @@ mod accessibility;
 mod accessibility_announce;
 #[cfg(test)]
 mod accessibility_announce_tests;
+mod accessibility_diff;
+#[cfg(test)]
+mod accessibility_diff_tests;
 #[cfg(test)]
 mod accessibility_editing_tests;
 #[cfg(test)]

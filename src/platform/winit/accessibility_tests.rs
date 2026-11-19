@@ -3,6 +3,7 @@
 //! the requests that come back.
 
 use super::accessibility::WindowAccessibility;
+use super::accessibility_diff_tests::apply;
 use super::accessibility_tree::{TextGeometry, WINDOW_NODE, request_for_action, tree_update};
 use crate::advanced_ui::{Button, Checkbox};
 use crate::core::ElementId;
@@ -288,16 +289,22 @@ fn a_tree_is_published_only_while_read_and_only_when_it_changed() {
     assert!(accessibility.needs_tree());
     let first = publish(&mut accessibility, &presenter, 1.0).expect("the initial tree");
     assert!(first.tree.is_some(), "the first update names the root");
+    let mut held = None;
+    apply(&mut held, first);
     assert!(publish(&mut accessibility, &presenter, 1.0).is_none());
-    assert!(
-        publish(&mut accessibility, &presenter, 2.0).is_some(),
-        "a new scale moves every node"
+    let scaled = publish(&mut accessibility, &presenter, 2.0).expect("a new scale");
+    assert_eq!(
+        scaled.nodes.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+        [WINDOW_NODE],
+        "the window's scale moves every node"
     );
+    apply(&mut held, scaled);
 
     presenter.set_focused_element(Some(FILTER));
     let focused = publish(&mut accessibility, &presenter, 2.0).expect("focus changed the tree");
     assert_eq!(focused.focus, NodeId(FILTER.0));
-    let tree = read_back(focused);
+    apply(&mut held, focused);
+    let tree = held.expect("the platform holds a tree");
     let filter = tree.state().focus().expect("an element has focus");
     assert_eq!(filter.locate().0, NodeId(FILTER.0));
     assert!(filter.is_focused());

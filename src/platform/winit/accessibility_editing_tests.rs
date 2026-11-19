@@ -4,6 +4,8 @@
 //! adapter sends it, built from the tree read back.
 
 use super::accessibility::{WindowAccessibility, text_geometry};
+use super::accessibility_diff_tests::{apply, describe};
+use super::accessibility_tree::tree_update;
 use crate::advanced_ui::Slider;
 use crate::core::ElementId;
 use crate::core::accessibility::AccessibilityTextRange;
@@ -68,27 +70,36 @@ fn frame(presenter: &mut Presenter<Div>) {
 
 struct Reader {
     accessibility: WindowAccessibility,
+    held: Option<accesskit_consumer::Tree>,
 }
 
 impl Reader {
     fn new() -> Self {
         let mut accessibility = WindowAccessibility::new(None);
         assert!(accessibility.handle_event(AccessKitEvent::InitialTreeRequested));
-        Self { accessibility }
+        Self {
+            accessibility,
+            held: None,
+        }
     }
 
     /// Publish the presenter's tree, with its text layouts, and read back
-    /// what the platform holds after it.
+    /// what the platform holds after it, checking the incremental update
+    /// left it the same as the whole tree would.
     fn read(&mut self, presenter: &Presenter<Div>) -> accesskit_consumer::Tree {
         let tree = presenter
             .accessibility_tree()
             .expect("accessibility tree should build");
         let text = text_geometry(presenter, &tree);
+        let whole = accesskit_consumer::Tree::new(tree_update(&tree, &text, "Editing", 1.0), true);
         let update: TreeUpdate = self
             .accessibility
             .next_update(tree, text, "Editing", 1.0)
             .expect("the tree changed");
-        accesskit_consumer::Tree::new(update, true)
+        apply(&mut self.held, update);
+        let held = self.held.as_ref().expect("the platform holds a tree");
+        assert_eq!(describe(held), describe(&whole));
+        whole
     }
 
     /// Send `request` as the platform would and dispatch it. Returns whether

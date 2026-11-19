@@ -6,6 +6,7 @@
 //! asks for the tree, so a window no screen reader reads pays nothing.
 
 use super::accessibility_announce::{Announcement, Announcer, add_announcement};
+use super::accessibility_diff::{HeldNodes, changes};
 use super::accessibility_tree::{TextGeometry, request_for_action, tree_update};
 use crate::core::ElementId;
 use crate::core::accessibility::{
@@ -25,6 +26,9 @@ struct Published {
     scale_factor: f64,
     title: String,
     announcement: Option<Announcement>,
+    /// The AccessKit nodes the platform holds, which the next update is
+    /// a diff against.
+    nodes: HeldNodes,
 }
 
 pub(super) struct WindowAccessibility {
@@ -164,8 +168,9 @@ impl WindowAccessibility {
     }
 
     /// The update that brings the platform to `tree`, or None when no
-    /// assistive technology is reading or it already holds the tree. Every
-    /// update carries the whole tree.
+    /// assistive technology is reading or it already holds the tree. The
+    /// first update carries the whole tree, later ones only the nodes that
+    /// changed.
     pub(super) fn next_update(
         &mut self,
         tree: AccessibilityTree,
@@ -183,17 +188,19 @@ impl WindowAccessibility {
         if !self.active || unchanged {
             return None;
         }
-        let mut update = tree_update(&tree, &text, title, scale_factor);
+        let mut full = tree_update(&tree, &text, title, scale_factor);
         let announcement = self.announcer.current().cloned();
         if let Some(announcement) = &announcement {
-            add_announcement(&mut update, announcement);
+            add_announcement(&mut full, announcement);
         }
+        let (update, nodes) = changes(full, self.published.as_ref().map(|held| &held.nodes));
         self.published = Some(Published {
             tree,
             text,
             scale_factor,
             title: title.to_string(),
             announcement,
+            nodes,
         });
         Some(update)
     }
