@@ -80,6 +80,9 @@ pub struct RichPiece {
     pub top: f32,
     /// Height of the piece's own line box: its font size times its line height.
     pub height: f32,
+    /// Baseline below the top of the piece's own line box, where a text
+    /// primitive of that box draws it.
+    pub baseline: f32,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -451,6 +454,7 @@ impl TextMeasureCache {
                 width: layout.width(start, stop),
                 top: 0.0,
                 height: 0.0,
+                baseline: 0.0,
             });
             start = stop;
         }
@@ -475,6 +479,7 @@ impl TextMeasureCache {
                 width: ellipsis_width,
                 top: 0.0,
                 height: 0.0,
+                baseline: 0.0,
             });
             width += ellipsis_width;
         }
@@ -491,6 +496,7 @@ impl TextMeasureCache {
                 self.own_baseline(&spans[piece.span], primaries[piece.span]);
             piece.top = line_box.baseline - own_baseline;
             piece.height = own_height;
+            piece.baseline = own_baseline;
         }
         RichLine {
             pieces,

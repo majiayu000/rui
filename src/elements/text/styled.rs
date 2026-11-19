@@ -26,6 +26,12 @@ use taffy::prelude::*;
 
 static ELLIPSIS: LazyLock<Arc<str>> = LazyLock::new(|| Arc::from("\u{2026}"));
 
+/// Center of an underline below the baseline, in em.
+const UNDERLINE_EM: f32 = 0.12;
+/// Center of a strikethrough below the baseline, in em: about the middle of
+/// the x-height.
+const STRIKETHROUGH_EM: f32 = -0.28;
+
 /// Called with the target of a clicked link span, shared by the paragraphs
 /// of a document.
 pub type LinkHandler = Rc<dyn Fn(&str)>;
@@ -100,6 +106,7 @@ impl TextSpan {
         self
     }
 
+    /// The font size: the em, in logical pixels.
     pub fn size(mut self, size: f32) -> Self {
         self.refinement.font_size = Some(size);
         self
@@ -635,15 +642,15 @@ impl Element for StyledText {
             if !decoration.underline && !decoration.strikethrough {
                 return;
             }
-            // The line box centers the font's em: the baseline sits about
-            // 0.3 em below its middle, the x-height's middle 0.25 em above it.
-            let middle = y + piece.top + piece.height * 0.5;
+            // Offsets from the baseline the text primitive draws, in em: close to
+            // the underline and strikeout positions Arial and SF Mono store.
+            let baseline = y + piece.top + piece.baseline;
             let thickness = (font_size / 14.0).max(1.0);
             let line = |offset: f32| {
                 fill(
                     Bounds::from_xywh(
                         x + piece.x,
-                        middle + offset * font_size - thickness * 0.5,
+                        baseline + offset * font_size - thickness * 0.5,
                         piece.width,
                         thickness,
                     ),
@@ -651,10 +658,10 @@ impl Element for StyledText {
                 )
             };
             if decoration.underline {
-                cx.paint(line(0.42));
+                cx.paint(line(UNDERLINE_EM));
             }
             if decoration.strikethrough {
-                cx.paint(line(0.05));
+                cx.paint(line(STRIKETHROUGH_EM));
             }
         });
     }
