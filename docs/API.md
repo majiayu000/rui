@@ -424,7 +424,7 @@ text("Hello, World!")
 | `.align(TextAlign)` | Text alignment |
 | `.line_height(value)` | Line height multiplier |
 | `.font_weight(weight)` | Numeric weight (100-900) |
-| `.font_family(name)` | Font family name |
+| `.font_family(name)` | Font family name; one with no loaded face draws in the default family and is listed in `renderer.diagnostics().unknown_font_families` |
 
 #### TextAlign
 

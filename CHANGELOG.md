@@ -6,6 +6,12 @@ All notable project changes should be recorded here.
 
 ### Rendering
 
+- A font family with no loaded face draws in the default family (same weight
+  and slant) instead of failing the frame with `RenderFailed` or panicking in
+  layout. It is logged once and listed in the new
+  `RendererDiagnostics::unknown_font_families` (#326).
+  **Breaking:** code that builds `RendererDiagnostics` with a struct literal
+  must add the field; `TextError::UnsupportedFontFamily` is no longer returned.
 - **Breaking:** `font_size` is the em size, as in CSS, Core Text and GPUI. It
   was the ascent-to-descent height, which is 1.0 to 1.4 em depending on the font,
   so the same number drew text up to 29% smaller than other toolkits and changed

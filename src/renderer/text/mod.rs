@@ -41,6 +41,8 @@ pub const TEXT_BOUNDS_TOLERANCE: f32 = 1.0;
 #[derive(Debug, Clone, PartialEq)]
 pub enum TextError {
     MissingFont,
+    /// No longer returned: a family with no loaded face draws in the default
+    /// family and is listed in [`TextMeasureCache::unknown_font_families`].
     UnsupportedFontFamily(String),
     /// Rich text spans that do not tile their content.
     InvalidSpans(String),
@@ -209,6 +211,8 @@ pub struct TextMeasureCache {
     /// Faces chosen for requested families and weights, so a measurement does
     /// not search the font set again. Emptied whenever the font set changes.
     primary_faces: Vec<(Option<String>, u16, usize)>,
+    /// Requested families with no loaded face, drawn in the default family.
+    unknown_families: Vec<String>,
     metrics: lru::FrameLru<TextMeasureKey, TextMetrics>,
     wraps: wrap::WrapCache,
     rich_wraps: rich::RichCache,
@@ -238,6 +242,7 @@ impl TextMeasureCache {
             font_error: None,
             refreshed_missing_families: HashSet::new(),
             primary_faces: Vec::new(),
+            unknown_families: Vec::new(),
             metrics: lru::FrameLru::new(
                 RETAINED_METRICS_TARGET,
                 RETAINED_METRIC_BYTES_TARGET,
@@ -288,6 +293,12 @@ impl TextMeasureCache {
 
     pub fn stats(&self) -> TextCacheStats {
         self.stats
+    }
+
+    /// Families text asked for that have no loaded face, in the order first
+    /// seen. Their text was measured and drawn in the default family.
+    pub fn unknown_font_families(&self) -> &[String] {
+        &self.unknown_families
     }
 
     /// Number of measurement entries currently retained across frames.
@@ -450,33 +461,39 @@ impl TextMeasureCache {
     }
 
     /// The face of the requested family closest to `font_weight`; no family,
-    /// `system` or `default` mean the first loaded font's family. A family
-    /// ending in `Italic` asks for its italic face.
+    /// `system` or `default` mean the first loaded font's family, and so does
+    /// a family with no loaded face, which is noted once in
+    /// [`Self::unknown_font_families`]. A family ending in `Italic` asks for
+    /// its italic face.
     fn primary_font_index_prepared(
-        &self,
+        &mut self,
         font_family: Option<&str>,
         font_weight: u16,
     ) -> Result<usize, TextError> {
         let (family, italic) = split_italic(font_family.map_or("", str::trim));
+        let default = self.fonts.first().ok_or(TextError::MissingFont)?;
         let family = Some(family)
             .filter(|family| !family.is_empty() && !matches!(*family, "system" | "default"));
-        let family = match family {
-            Some(family) => family,
-            None => self
-                .fonts
-                .first()
-                .ok_or(TextError::MissingFont)?
-                .family
-                .as_str(),
-        };
-        best_face(&self.fonts, family, italic, font_weight)
-            .ok_or_else(|| TextError::UnsupportedFontFamily(family.to_string()))
+        if let Some(family) = family {
+            if let Some(index) = best_face(&self.fonts, family, italic, font_weight) {
+                return Ok(index);
+            }
+            if !self.unknown_families.iter().any(|known| known == family) {
+                log::warn!(
+                    "font family {family:?} has no loaded face; drawing it in {:?}",
+                    default.family
+                );
+                self.unknown_families.push(family.to_string());
+            }
+        }
+        best_face(&self.fonts, &default.family, italic, font_weight).ok_or(TextError::MissingFont)
     }
 
     fn apply_font_snapshot(&mut self, snapshot: ResourceSnapshot<TextShapingFont>) {
         if snapshot.generation != self.font_generation {
             self.clear_metrics();
             self.refreshed_missing_families.clear();
+            self.unknown_families.clear();
         }
         self.fonts = snapshot.resources;
         self.primary_faces.clear();
