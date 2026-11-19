@@ -129,7 +129,7 @@ try {
 # examples/controls: set the Volume slider to a number.
 $app = Start-Process -FilePath (Join-Path $targetDir "debug/examples/controls.exe") -PassThru
 try {
-    $titled = New-Object System.Windows.Automation.PropertyCondition($AE::NameProperty, "RUI Window")
+    $titled = New-Object System.Windows.Automation.PropertyCondition($AE::NameProperty, "RUI Application")
     $window = Wait-For "the controls window" { $AE::RootElement.FindFirst($Scope::Children, $titled) }
     $volume = Wait-For "the Volume slider" { Find-Node $window $CT::Slider "Volume" }
     $lines = New-Object System.Collections.Generic.List[string]

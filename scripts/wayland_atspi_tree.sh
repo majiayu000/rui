@@ -61,4 +61,4 @@ read_example() {
 }
 
 read_example interaction_acceptance "RUI Interaction Acceptance"
-read_example controls "RUI Window"
+read_example controls "RUI Application"
