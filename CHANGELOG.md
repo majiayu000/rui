@@ -127,6 +127,12 @@ All notable project changes should be recorded here.
   `AccessibilityAction::SetValue`, also on macOS.
   **Breaking:** `AccessibilityRequest` (and `MacAccessibilityRequest`) has the
   new variants `SetTextSelection` and `ReplaceSelectedText` (#344).
+- The winit runner announces action feedback, as the macOS runner does with
+  `AccessibilityAnnouncementKind::ActionFeedback`: what an element says after
+  an action ("Save activated", "Notify checked") becomes a polite live label
+  under the window, added afresh for each message, so AT-SPI sends
+  `object:announcement` and UI Automation `LiveRegionChanged`. Focus changes
+  are not announced: the tree's focus already carries them (#344).
 - CI reads the winit runner's accessibility tree back over AT-SPI under
   Wayland (a headless sway) as well as X11, with the same checks
   (`scripts/wayland_atspi_tree.sh`). AT-SPI goes over D-Bus, so the tree,

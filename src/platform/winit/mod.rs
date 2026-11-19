@@ -10,6 +10,9 @@
 //! and Windows. App commands can use an in-window menu.
 
 mod accessibility;
+mod accessibility_announce;
+#[cfg(test)]
+mod accessibility_announce_tests;
 #[cfg(test)]
 mod accessibility_editing_tests;
 #[cfg(test)]

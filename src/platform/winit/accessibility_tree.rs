@@ -1,6 +1,7 @@
 //! The presenter's accessibility tree as AccessKit nodes, and AccessKit
 //! action requests as the requests every runner dispatches.
 
+use super::accessibility_announce::ANNOUNCERS;
 use super::accessibility_text::{offset, text_runs};
 use crate::core::ElementId;
 use crate::core::accessibility::{
@@ -34,7 +35,7 @@ pub(super) fn tree_update(
 ) -> TreeUpdate {
     let mut builder = Builder {
         nodes: Vec::new(),
-        seen: HashSet::from([WINDOW_NODE]),
+        seen: HashSet::from([WINDOW_NODE, ANNOUNCERS[0], ANNOUNCERS[1]]),
         focus: None,
         text,
     };
