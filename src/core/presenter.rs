@@ -513,17 +513,17 @@ where
         // still follows dispatch so hover/pressed feedback appears this frame.
         let mut overlays = None;
         let hit_target = if self.scene_dirty {
-            // Use a transient scene without replay: advancing the render scene
-            // here would break its previous-frame/damage chain, and replay would
-            // consume retained primitives before the real paint pass. Like that
-            // paint, it leaves out what the window cannot show.
+            // Keep the render scene and its retained state for the actual paint.
             let mut hits = Scene::new();
             let window = self.window_bounds();
             self.root.paint(
-                &mut PaintContext::without_replay(&mut hits, self.root_bounds, &self.taffy)
-                    .with_focus(self.focused_element)
-                    .with_window(window)
-                    .with_viewport(window),
+                &mut PaintContext::for_hit_collection(
+                    &mut hits,
+                    self.root_bounds,
+                    &self.taffy,
+                    window,
+                )
+                .with_focus(self.focused_element),
             );
             hits.finish();
             overlays = Some(hits.overlay_stack());
