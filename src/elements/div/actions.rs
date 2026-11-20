@@ -7,9 +7,12 @@ pub(super) type ActionHandlers = Vec<(ActionId, Box<dyn Fn()>)>;
 
 impl Div {
     /// Run `handler` when `action` reaches this div and nothing inside it
-    /// handled it first. An action goes to the focused element and the divs
-    /// around it first, then to the rest of the tree, then to the app's
-    /// handlers. Bind a key to the action with [`crate::AppContext::keymap_mut`].
+    /// handled it first. A div offers an action to the child the focused
+    /// element is in, then to its other children from the last to the first,
+    /// and runs its own handler when none of them handled it. So the focused
+    /// element comes first, and a div beside it handles an action before a
+    /// div around them both. The app's handlers come after the tree. Bind a
+    /// key to the action with [`crate::AppContext::keymap_mut`].
     ///
     /// With [`crate::ViewContext::listener`] the handler updates its view:
     ///

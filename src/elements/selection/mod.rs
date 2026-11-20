@@ -327,6 +327,16 @@ impl SelectionScope {
         });
     }
 
+    /// Whether the unit `press` selected is still in the scope's text: a
+    /// rebuild while the button is down can take the text it was in away.
+    fn has_origin(&self, press: &Press) -> bool {
+        let in_text = |point: TextPoint| {
+            let leaf = self.state.leaves.get(point.leaf);
+            leaf.is_some_and(|leaf| leaf.content.is_char_boundary(point.offset))
+        };
+        in_text(press.origin.0) && in_text(press.origin.1)
+    }
+
     /// Select from the press's unit to the unit at `at`, keeping both.
     fn extend_press(&mut self, press: Press, at: TextPoint) {
         let (start, end) = self.unit_at(at, press.granularity);
@@ -411,7 +421,9 @@ impl SelectionScope {
             || (event.position.y - press.at.y).abs() > DRAG_THRESHOLD;
         press.dragged |= moved;
         self.state.press = Some(press);
-        if !press.dragged {
+        // Without the text it started in, the drag has nothing to select
+        // from; its release is still not a click.
+        if !press.dragged || !self.has_origin(&press) {
             return;
         }
         if let Some(at) = self.point_at(event.position) {
@@ -491,6 +503,15 @@ impl Element for SelectionScope {
                 if self.over_own_overlay(cx, event.position) {
                     // Its content is not the scope's: leave the selection be,
                     // so a menu opened on it can still copy it.
+                    return self.child.handle_pointer_event(cx, event);
+                }
+                // The owners of light-dismiss overlays see a press before it is
+                // dispatched, as one outside them: the scope it lands in only
+                // passes it on.
+                if cx
+                    .dismiss_target()
+                    .is_some_and(|target| self.contains_id(target))
+                {
                     return self.child.handle_pointer_event(cx, event);
                 }
                 if !inside || !primary {

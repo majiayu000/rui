@@ -298,6 +298,49 @@ fn vertical_splitter_moves_with_up_and_down() {
     assert_eq!(split_value(&session), "140");
 }
 
+/// AppKit names the held button on the moves of a drag. The winit runner
+/// names none, and neither does `pointer_move`.
+#[test]
+fn slider_and_splitter_follow_moves_that_name_no_button() {
+    fn move_to<F: FnMut(&mut AppContext) -> E, E: Element>(
+        session: &mut HeadlessSession<F, E>,
+        x: f32,
+        y: f32,
+    ) {
+        session.pointer_move(Point::new(x, y));
+        session.frame().expect("frame after move");
+    }
+
+    let mut session =
+        mount_view(Size::new(300.0, 100.0), SliderView { value: 0.0 }).expect("mount");
+    assert!(session.pointer_down(Point::new(108.0, 18.0)));
+    move_to(&mut session, 158.0, 30.0);
+    assert_eq!(node(&session, ID).a11y_value(), Some("75"));
+    move_to(&mut session, 178.0, 60.0);
+    assert_eq!(node(&session, ID).a11y_value(), Some("85"));
+    session.pointer_up(Point::new(178.0, 60.0));
+    move_to(&mut session, 8.0, 18.0);
+    assert_eq!(
+        node(&session, ID).a11y_value(),
+        Some("85"),
+        "release ends the drag"
+    );
+
+    let view = SplitView {
+        at: 120.0,
+        axis: SplitAxis::Horizontal,
+    };
+    let mut session = mount_view(Size::new(400.0, 200.0), view).expect("mount");
+    assert!(session.pointer_down(Point::new(123.0, 100.0)));
+    move_to(&mut session, 163.0, 100.0);
+    assert_eq!(split_value(&session), "160");
+    move_to(&mut session, 203.0, 100.0);
+    assert_eq!(split_value(&session), "200");
+    session.pointer_up(Point::new(203.0, 100.0));
+    move_to(&mut session, 243.0, 100.0);
+    assert_eq!(split_value(&session), "200", "release ends the drag");
+}
+
 #[test]
 fn controls_example_renders_and_tab_reaches_every_control() {
     let mut session =

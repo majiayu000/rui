@@ -71,6 +71,10 @@ jobs:
           cargo clippy --all-targets --features wgpu -- -D warnings
           cargo test --features wgpu --lib renderer::wgpu
 
+      - name: Update-path tests without a rendering backend
+        # The command docs/getting-started.md gives: neither Metal nor wgpu is compiled.
+        run: cargo test --no-default-features --test view_listener --test listener_workflow --test view_updates
+
       - name: Performance gate
         run: cargo bench --bench perf_gate 2>&1 | tee ci-results/perf-gate.log
 

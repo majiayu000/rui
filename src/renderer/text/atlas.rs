@@ -71,19 +71,19 @@ struct AtlasPage {
     next_y: u32,
     /// The last frame that drew from this page.
     last_used: u64,
-    /// Times this page was emptied; slots from before are gone.
+    /// Moves each time this page is emptied; slots from before are gone.
     generation: u64,
 }
 
 impl AtlasPage {
-    fn new(width: u32, height: u32) -> Self {
+    fn new(width: u32, height: u32, generation: u64) -> Self {
         Self {
             width,
             height,
             shelves: Vec::new(),
             next_y: 0,
             last_used: 0,
-            generation: 0,
+            generation,
         }
     }
 
@@ -143,6 +143,8 @@ pub struct GlyphAtlas {
     pages: Vec<AtlasPage>,
     /// Pages emptied since the renderer last took them.
     cleared: Vec<usize>,
+    /// The generation of a new page: past every page [`Self::clear`] dropped.
+    first_generation: u64,
     pressure_events: usize,
 }
 
@@ -159,12 +161,13 @@ impl GlyphAtlas {
             bytes_per_pixel,
             pages: Vec::new(),
             cleared: Vec::new(),
+            first_generation: 0,
             pressure_events: 0,
         }
     }
 
-    /// How many times `page` was emptied; a slot placed in an earlier
-    /// generation no longer holds what was put there.
+    /// Moves whenever `page` is emptied or replaced; a slot placed in an
+    /// earlier generation no longer holds what was put there.
     pub fn page_generation(&self, page: usize) -> Option<u64> {
         self.pages.get(page).map(|page| page.generation)
     }
@@ -237,7 +240,7 @@ impl GlyphAtlas {
             });
         }
 
-        let mut atlas_page = AtlasPage::new(page_width, page_height);
+        let mut atlas_page = AtlasPage::new(page_width, page_height, self.first_generation);
         let rect = atlas_page.allocate(width, height).ok_or_else(|| {
             RendererResourceError::invalid(
                 RendererResourceKind::Glyph,
@@ -274,6 +277,10 @@ impl GlyphAtlas {
     }
 
     fn clear(&mut self) {
+        // Pages added from here start past every generation there was, so a
+        // slot placed before is not taken for one in the page at its index.
+        let next = self.pages.iter().map(|page| page.generation + 1).max();
+        self.first_generation = next.unwrap_or(self.first_generation);
         self.pages.clear();
         self.cleared.clear();
     }
@@ -773,6 +780,13 @@ impl TextGlyphCache {
             self.epoch += 1;
             self.font_generation = self.measurer.font_generation;
         }
+    }
+
+    /// Leaves the cache behind the font set, as a font loading does: the next
+    /// text shaped empties it.
+    #[cfg(test)]
+    pub(crate) fn fonts_changed(&mut self) {
+        self.font_generation = self.font_generation.wrapping_add(1);
     }
 }
 

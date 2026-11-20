@@ -6,7 +6,7 @@ use rui::core::accessibility::{AccessibilityNode, AccessibilityRole, Accessibili
 use rui::core::event::{KeyCode, KeyEvent, Modifiers};
 use rui::core::{AppContext, ElementId, Point, Size, View, ViewContext};
 use rui::elements::Element;
-use rui::testing::{HeadlessSession, mount_view};
+use rui::testing::{HeadlessSession, mount, mount_view};
 use std::cell::Cell;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -186,6 +186,41 @@ fn toast_closes_after_its_duration_but_not_while_hovered() {
     assert!(session.timed_frame().expect("timed frame").is_some());
     assert!(toaster.toasts().is_empty());
     assert!(tree_has_no_status(&session));
+}
+
+#[test]
+fn toast_shown_after_a_hovered_one_was_closed_closes_on_time() {
+    let (mut session, toaster, _) =
+        toast_session(|| Toast::info("Synced").duration(Duration::from_millis(60)));
+    toaster.show(Toast::info("Pinned").persistent());
+    session.frame().expect("frame that shows the toast");
+    let close = find_label(tree(&session).roots(), "Dismiss Pinned")
+        .and_then(AccessibilityNode::a11y_bounds)
+        .expect("close button")
+        .center();
+    session.pointer_move(close);
+    session.frame().expect("frame after hover");
+    assert!(toaster.is_paused());
+
+    click(&mut session, close.x, close.y);
+    assert!(toaster.toasts().is_empty());
+    assert!(
+        !toaster.is_paused(),
+        "no toast is left for the pointer to be over"
+    );
+    session.pointer_move(Point::new(10.0, 300.0));
+
+    // The next toast comes from the keyboard, with the pointer at rest.
+    session.request_focus(Some(SAVE_ID));
+    press(&mut session, KeyCode::Enter);
+    assert_eq!(toaster.toasts().len(), 1);
+    assert!(
+        session.next_frame_deadline().is_some(),
+        "the new toast's timer runs"
+    );
+    std::thread::sleep(Duration::from_millis(120));
+    assert!(session.timed_frame().expect("timed frame").is_some());
+    assert!(toaster.toasts().is_empty());
 }
 
 #[test]
@@ -421,4 +456,27 @@ fn date_picker_pointer_pages_months_and_picks_a_day() {
     session.pointer_down(Point::new(380.0, 380.0));
     session.frame().expect("frame after press outside");
     assert!(picker(&session).a11y_children().is_empty());
+}
+
+#[test]
+fn date_picker_month_button_turns_from_the_month_shown_with_focus_on_a_day() {
+    let mut session = mount(Size::new(400.0, 400.0), |_| {
+        ui::date_picker("Due date", Some(date(2026, 12, 15))).id(PICKER_ID)
+    })
+    .expect("mount");
+    click(&mut session, 10.0, 18.0);
+    let grid = picker(&session).a11y_children()[0].clone();
+    assert_eq!(grid.a11y_label(), Some("December 2026"));
+    // Assistive technology puts focus on a day of the month before, which
+    // December's calendar starts with.
+    let day = find_label(grid.a11y_children(), "Monday, November 30, 2026").expect("a cell");
+    session.request_focus(Some(day.a11y_id()));
+    session.frame().expect("frame after focus");
+
+    click(&mut session, 190.0, 62.0);
+    assert_eq!(
+        picker(&session).a11y_children()[0].a11y_label(),
+        Some("January 2027")
+    );
+    assert_eq!(session.focused_element(), Some(PICKER_ID));
 }

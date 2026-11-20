@@ -158,7 +158,7 @@ impl CalendarDate {
     }
 
     /// Days since 1970-01-01.
-    fn to_days(self) -> i64 {
+    pub(super) fn to_days(self) -> i64 {
         let year = i64::from(self.year) - i64::from(self.month <= 2);
         let era = year.div_euclid(400);
         let year_of_era = year - era * 400;

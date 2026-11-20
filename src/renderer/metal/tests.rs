@@ -499,3 +499,67 @@ fn kept_paths_drawn_from_the_arena_match_a_fresh_renderer() {
         assert!(pixels == expected, "frame {index} differs from a fresh one");
     }
 }
+
+#[test]
+fn a_path_kept_in_the_atlas_is_drawn_after_the_fonts_change() {
+    use std::sync::Arc;
+    let new_renderer = || match MetalRenderer::new() {
+        Ok(renderer) => Some(renderer),
+        Err(RendererError::BackendUnavailable(_)) => None,
+        Err(err) => panic!("metal renderer should initialize: {err}"),
+    };
+    let Some(mut renderer) = new_renderer() else {
+        return;
+    };
+    // A square on whole pixels, which tiles and the atlas cover alike, drawn
+    // after text so the text's glyphs are in the atlas first.
+    let square: Arc<[PathVertex]> = [(8.0, 32.0), (32.0, 32.0), (32.0, 56.0), (8.0, 56.0)]
+        .iter()
+        .map(|&(x, y)| PathVertex::new(x, y))
+        .collect();
+    let scene = |content: &str| {
+        let mut scene = Scene::new();
+        scene.insert(Primitive::Text {
+            bounds: Bounds::from_xywh(4.0, 4.0, 88.0, 20.0),
+            content: content.to_string().into(),
+            color: Rgba::new(1.0, 1.0, 1.0, 1.0),
+            font_size: 16.0,
+            font_weight: 400,
+            font_family: None,
+            font_features: Default::default(),
+            line_height: 1.2,
+            align: TextAlign::Left,
+            direction: BaseDirection::Auto,
+        });
+        scene.insert(Primitive::Path {
+            vertices: Arc::clone(&square),
+            offset: Default::default(),
+            color: Rgba::new(1.0, 0.0, 0.0, 1.0),
+            stroke_width: None,
+        });
+        scene
+    };
+    let viewport = Size::new(96.0, 64.0);
+    let draw = |renderer: &mut MetalRenderer, content: &str, frame: &str| {
+        let scene = scene(content);
+        let pixels = renderer
+            .capture_frame_pixels_at_scale(&scene, viewport, 1.0)
+            .expect("capture");
+        let expected = new_renderer()
+            .expect("available")
+            .capture_frame_pixels_at_scale(&scene, viewport, 1.0)
+            .expect("capture");
+        assert!(pixels == expected, "{frame} differs from a fresh renderer");
+    };
+    for frame in ["first frame", "kept frame", "atlas frame"] {
+        draw(&mut renderer, "Wg", frame);
+    }
+    assert_eq!(renderer.placed_path_sprites(), 1, "drawn from the atlas");
+
+    // The next text drawn empties the atlas, and the glyphs of the frames
+    // after it are placed where the square was.
+    renderer.fonts_changed();
+    draw(&mut renderer, "Wg", "the frame the atlas was emptied in");
+    draw(&mut renderer, "Aj(Wg|", "the frame after");
+    draw(&mut renderer, "Aj(Wg|", "a later frame");
+}

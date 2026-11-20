@@ -7,7 +7,7 @@ use rui::core::event::{Cursor, KeyCode, KeyEvent, Modifiers};
 use rui::core::geometry::Bounds;
 use rui::core::{Point, Size};
 use rui::elements::element::{Element, PointerEvent, PointerEventKind};
-use rui::elements::{div, selection_scope, text};
+use rui::elements::{SelectionScope, div, selection_scope, text};
 use rui::renderer::Primitive;
 use rui::testing::{HeadlessSession, mount};
 
@@ -350,4 +350,112 @@ fn an_overlay_opened_in_a_scope_is_not_part_of_its_selection() {
     );
     click(&mut session, inside, 1);
     assert_eq!(selection_quads(session.primitives()).len(), highlighted);
+}
+
+/// Selects the text of a scope, opens the popover beside it, and presses the
+/// button in the scope; `place` puts the scope in the window.
+fn press_a_control_beside_an_open_popover<E: Element>(place: fn(SelectionScope) -> E) {
+    use rui::advanced_ui as ui;
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    let (open, dismissed) = (Rc::new(Cell::new(false)), Rc::new(Cell::new(0)));
+    let (is_open, on_dismiss) = (Rc::clone(&open), Rc::clone(&dismissed));
+    let mut session = mount(Size::new(400.0, 300.0), move |_| {
+        let on_dismiss = Rc::clone(&on_dismiss);
+        place(selection_scope(
+            div()
+                .flex_col()
+                .p(8.0)
+                .gap(60.0)
+                .child(text("Selected words"))
+                .child(
+                    ui::popover("Details", ui::button("Anchor"), text("Floating"))
+                        .open(is_open.get())
+                        .on_dismiss(move || on_dismiss.set(on_dismiss.get() + 1)),
+                )
+                .child(ui::button("Done")),
+        ))
+    })
+    .expect("mount");
+    let words = text_bounds(session.primitives(), "Selected words");
+    let from = left_of(&session, "Selected");
+    drag(
+        &mut session,
+        from,
+        Point::new(words.x() + words.width() + 10.0, from.y),
+    );
+    open.set(true);
+    session.app_context_mut().request_rebuild();
+    session.frame().expect("frame that opens the popover");
+    assert_eq!(session.scene().overlays().len(), 1, "the popover is open");
+    assert_eq!(selection_quads(session.primitives()).len(), 1);
+
+    let done = text_bounds(session.primitives(), "Done");
+    click(
+        &mut session,
+        Point::new(done.x() + 2.0, done.y() + done.height() * 0.5),
+        1,
+    );
+    session.frame().expect("frame after the press");
+    assert_eq!(dismissed.get(), 1, "the press closed the popover");
+    assert_eq!(
+        selection_quads(session.primitives()).len(),
+        1,
+        "a press on a control in the scope leaves its selection"
+    );
+}
+
+#[test]
+fn a_press_that_closes_a_popover_in_a_scope_leaves_the_selection() {
+    // The scope as the window's root, and inside a page.
+    press_a_control_beside_an_open_popover(|scope| scope);
+    press_a_control_beside_an_open_popover(|scope| div().child(scope));
+}
+
+#[test]
+fn a_drag_held_while_the_text_it_started_in_goes_away_selects_nothing() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    let shown = Rc::new(Cell::new(3));
+    let count = Rc::clone(&shown);
+    let mut session = mount(Size::new(400.0, 300.0), move |_| {
+        let blocks = ["First block", "Second block", "Third block"];
+        selection_scope(
+            div()
+                .w(400.0)
+                .flex_col()
+                .children(blocks.into_iter().take(count.get()).map(text)),
+        )
+    })
+    .expect("mount");
+    let third = text_bounds(session.primitives(), "Third");
+    let from = left_of(&session, "Third");
+    let to = Point::new(third.x() + third.width() * 0.5, from.y);
+    session.pointer_down(from);
+    session.pointer_move(to);
+    session.frame().expect("frame with the selection");
+    assert_eq!(selection_quads(session.primitives()).len(), 1);
+
+    // The button is still down when the last two blocks are removed.
+    shown.set(1);
+    session.app_context_mut().request_rebuild();
+    session.frame().expect("frame without the blocks");
+    assert!(selection_quads(session.primitives()).is_empty());
+    session.pointer_move(Point::new(to.x + 10.0, to.y));
+    session.pointer_up(Point::new(to.x + 10.0, to.y));
+    session.frame().expect("frame after the release");
+    assert_eq!(copy(&mut session), None);
+    assert!(selection_quads(session.primitives()).is_empty());
+
+    // The next drag selects from where it presses.
+    let first = text_bounds(session.primitives(), "First");
+    let from = left_of(&session, "First");
+    drag(
+        &mut session,
+        from,
+        Point::new(first.x() + first.width() + 10.0, from.y),
+    );
+    assert_eq!(copy(&mut session).as_deref(), Some("First block"));
 }

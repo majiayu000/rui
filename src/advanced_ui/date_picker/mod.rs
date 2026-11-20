@@ -4,6 +4,7 @@
 //! start and end of the week, Enter or Space picks, Escape closes.
 
 mod date;
+mod focus;
 
 pub use date::{CalendarDate, Weekday};
 
@@ -30,7 +31,7 @@ use crate::elements::overlay::{Align, Placement, Side, place_anchored};
 use crate::elements::text::TextAlign;
 use crate::renderer::text::BaseDirection;
 use crate::renderer::{Overlay, Primitive};
-use std::any::TypeId;
+use focus::{day_id, grid_id};
 use std::rc::Rc;
 use taffy::prelude::*;
 
@@ -217,19 +218,23 @@ impl DatePicker {
         }
     }
 
-    /// Move the keyboard cursor to `date`, kept inside the bounds.
-    fn move_to(&mut self, date: CalendarDate, cx: &EventContext) {
+    /// Move the keyboard cursor to `date`, kept inside the bounds, and focus
+    /// to the field, off a day assistive technology put it on: the day the
+    /// keys then move from and pick is this one, which is read out.
+    fn move_to(&mut self, date: CalendarDate, cx: &mut EventContext) {
         let date = self.clamp(date);
-        if self.active != Some(date) {
+        if self.current_day(cx) != Some(date) {
             self.active = Some(date);
+            cx.request_focus(Some(self.id.get()));
             cx.announce_accessibility_action(self.id.get(), date.long_label());
             cx.request_redraw();
         }
     }
 
-    fn move_by(&mut self, step: impl FnOnce(CalendarDate) -> CalendarDate, cx: &EventContext) {
-        match self.active {
-            Some(active) => self.move_to(step(active), cx),
+    /// Step from the day focus is on, or open the calendar.
+    fn move_by(&mut self, step: impl FnOnce(CalendarDate) -> CalendarDate, cx: &mut EventContext) {
+        match self.current_day(cx) {
+            Some(day) => self.move_to(step(day), cx),
             None => self.open(cx),
         }
     }
@@ -251,11 +256,12 @@ impl DatePicker {
         true
     }
 
-    /// Enter and Space: open the calendar, or pick its active day.
+    /// Enter and Space: open the calendar, or pick the day focus is on, which
+    /// is its active day unless assistive technology put focus on another.
     fn activate(&mut self, cx: &mut EventContext) {
-        match self.active {
-            Some(active) => {
-                self.pick(active, cx);
+        match self.current_day(cx) {
+            Some(day) => {
+                self.pick(day, cx);
             }
             None => self.open(cx),
         }
@@ -296,16 +302,15 @@ impl DatePicker {
         }
     }
 
-    fn has_focus(&self, cx: &EventContext) -> bool {
-        cx.is_focused(Some(self.id.get()))
-    }
-
     fn handle_calendar_press(
         &mut self,
         calendar: &Calendar,
         position: Point,
         cx: &mut EventContext,
     ) {
+        // To the field first: the month turns from the one shown, not from
+        // a day assistive technology put focus on.
+        cx.request_focus(Some(self.id.get()));
         if calendar.previous().contains(position) {
             self.move_by(|date| date.add_months(-1), cx);
         } else if calendar.next().contains(position) {
@@ -313,7 +318,6 @@ impl DatePicker {
         } else if let Some(date) = calendar.day_at(position) {
             self.pick(date, cx);
         }
-        cx.request_focus(Some(self.id.get()));
     }
 
     fn paint_trigger(&self, cx: &mut PaintContext, trigger: Bounds) {
@@ -457,7 +461,7 @@ impl DatePicker {
         let calendar = self.calendar(Bounds::default(), Bounds::default());
         let title = format!("{} {}", calendar.month.month_name(), calendar.month.year());
         let mut grid = AccessibilityNode::label_required(
-            ElementId::derived(self.id.get(), 0, TypeId::of::<Calendar>()),
+            grid_id(self.id.get()),
             AccessibilityRole::Grid,
             title,
         )?
@@ -466,7 +470,7 @@ impl DatePicker {
             let date = calendar.day(index);
             let selectable = self.is_selectable(date);
             let mut cell = AccessibilityNode::label_required(
-                ElementId::derived(self.id.get(), index as u64 + 1, TypeId::of::<Calendar>()),
+                day_id(self.id.get(), date),
                 AccessibilityRole::GridCell,
                 date.long_label(),
             )?
@@ -754,10 +758,19 @@ impl Element for DatePicker {
                 self.move_by(|date| date.add_days(7), cx)
             }
             ActionId::Standard(StandardAction::Activate) => self.activate(cx),
-            ActionId::Standard(StandardAction::Cancel) if self.active.is_some() => self.close(cx),
+            ActionId::Standard(StandardAction::Cancel) if self.active.is_some() => {
+                self.close(cx);
+                // Off a day of the calendar that went away.
+                cx.request_focus(Some(self.id.get()));
+            }
             _ => return ActionOutcome::Ignored,
         }
         ActionOutcome::handled("advanced_ui.date_picker")
+    }
+
+    fn contains_id(&self, id: ElementId) -> bool {
+        let calendar = self.active.is_some() && id == grid_id(self.id.get());
+        id == self.id.get() || calendar || self.day_of(id).is_some()
     }
 }
 

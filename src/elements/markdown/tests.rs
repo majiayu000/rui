@@ -156,3 +156,102 @@ fn reference_definitions_force_a_full_parse() {
     let previous = parse("[a][r]\n\nmore");
     assert!(super::parse::extend(&previous, "[a][r]\n\nmore\n\n[r]: /x").is_none());
 }
+
+#[test]
+fn streaming_an_indented_paragraph_an_image_splits_matches_a_full_parse() {
+    // The blocks an image splits a paragraph into all start past its indent.
+    assert_streams_like_full_parse("intro\n\n   see ![cat](missing.png) and more\n\nend");
+    assert_streams_like_full_parse("  continued\ntext ![i](u) more");
+}
+
+#[test]
+fn streaming_an_item_after_a_blank_line_matches_a_full_parse() {
+    // "1" is a paragraph of its own until its "." makes it the list's next item.
+    assert_streams_like_full_parse("1. first\n\n1. second\n\n1. third");
+}
+
+#[test]
+fn streaming_a_lazy_line_after_a_loose_list_matches_a_full_parse() {
+    // "---" is a rule until its "|" makes it a lazy line of the nested item,
+    // in a list with a blank line inside and none at its end.
+    assert_streams_like_full_parse("- item\npara *two\n\n  - nested\n---|");
+}
+
+/// How deep the quotes and lists of `blocks` nest.
+fn nesting(blocks: &[Block]) -> usize {
+    let inside = |block: &Block| match block {
+        Block::Quote(blocks) => 1 + nesting(blocks),
+        Block::List { items, .. } => {
+            let items = items.iter().map(|item| nesting(&item.blocks));
+            1 + items.max().unwrap_or(0)
+        }
+        _ => 0,
+    };
+    blocks.iter().map(inside).max().unwrap_or(0)
+}
+
+#[test]
+fn quotes_and_lists_nest_no_deeper_than_the_limit() {
+    use super::parse::MAX_NESTING;
+
+    for marker in [">", "- ", "1. ", "> - "] {
+        let parsed = blocks(&format!("{}deep", marker.repeat(2000)));
+        assert_eq!(nesting(&parsed), MAX_NESTING, "{marker:?}");
+    }
+    // At the limit and one past it, the text is in the deepest quote kept.
+    for levels in [MAX_NESTING, MAX_NESTING + 1] {
+        let parsed = blocks(&format!("{} deep", ">".repeat(levels)));
+        let mut inside = parsed.as_slice();
+        for level in 0..MAX_NESTING {
+            let [Block::Quote(blocks)] = inside else {
+                panic!("a quote at level {level} of {levels}: {inside:?}");
+            };
+            inside = blocks;
+        }
+        assert_eq!(inside.iter().map(plain).collect::<Vec<_>>(), ["deep"]);
+    }
+}
+
+#[test]
+fn a_list_nested_past_the_limit_keeps_its_text_in_the_last_item_kept() {
+    use super::parse::MAX_NESTING;
+
+    // One item a level, each holding the list of the next, three past the
+    // limit, and a quote and a task in the deepest.
+    let levels = MAX_NESTING + 3;
+    let mut source: String = (0..levels)
+        .map(|level| format!("{}- item {level}\n", "  ".repeat(level)))
+        .collect();
+    source += &format!("{0}- [x] task\n{0}- > quoted\n", "  ".repeat(levels));
+    source += "- after\n";
+    let parsed = blocks(&source);
+    assert_eq!(nesting(&parsed), MAX_NESTING);
+
+    let [Block::List { items: top, .. }] = parsed.as_slice() else {
+        panic!("one list: {parsed:?}");
+    };
+    assert_eq!(top.len(), 2, "the list goes on after what was nested");
+    assert_eq!(plain(&top[1].blocks[0]), "after");
+    let mut item = &top[0];
+    for level in 0..MAX_NESTING - 1 {
+        assert_eq!(plain(&item.blocks[0]), format!("item {level}"));
+        let [_, Block::List { items, .. }] = item.blocks.as_slice() else {
+            panic!("level {level} holds a list: {:?}", item.blocks);
+        };
+        item = &items[0];
+    }
+    assert_eq!(item.task, None, "a task nested deeper is not this item's");
+    let kept: Vec<_> = item.blocks.iter().map(plain).collect();
+    let last = MAX_NESTING - 1;
+    assert_eq!(
+        kept,
+        [
+            format!("item {last}"),
+            format!("item {}", last + 1),
+            format!("item {}", last + 2),
+            format!("item {}", last + 3),
+            "task".to_string(),
+            "quoted".to_string(),
+        ]
+    );
+}

@@ -677,4 +677,6 @@ mod tests {
 }
 
 #[cfg(test)]
+mod date_picker_tests;
+#[cfg(test)]
 mod dialog_set_value_tests;

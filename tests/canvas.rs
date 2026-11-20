@@ -1,9 +1,10 @@
-use rui::core::color::Color;
+use rui::core::color::{Color, Rgba};
 use rui::core::event::MouseButton;
+use rui::core::geometry::Edges;
 use rui::core::{Bounds, ElementId, Point, Presenter, Size};
 use rui::elements::element::{PointerEvent, PointerEventKind};
 use rui::elements::{Canvas, Div, Painter, canvas, div};
-use rui::renderer::Primitive;
+use rui::renderer::{Picture, Primitive};
 use rui::testing::mount;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -114,6 +115,70 @@ fn rejects_raw_clip_primitives() {
             });
         }))
     });
+}
+
+/// The quads `primitives` draw, those of a picture moved by its offset.
+fn drawn_quads(primitives: &[Primitive]) -> Vec<Bounds> {
+    let mut drawn = Vec::new();
+    for primitive in primitives {
+        match primitive {
+            Primitive::Quad { bounds, .. } => drawn.push(*bounds),
+            Primitive::Picture { picture, offset } => {
+                drawn.extend(drawn_quads(picture.primitives()).into_iter().map(|quad| {
+                    Bounds::from_xywh(
+                        quad.x() + offset.x,
+                        quad.y() + offset.y,
+                        quad.width(),
+                        quad.height(),
+                    )
+                }));
+            }
+            _ => {}
+        }
+    }
+    drawn
+}
+
+#[test]
+fn a_cached_canvas_draws_the_pictures_its_closure_paints() {
+    // A marker recorded once and stamped along a chart.
+    let marker = Picture::new(vec![Primitive::Quad {
+        bounds: Bounds::from_xywh(1.0, 2.0, 4.0, 4.0),
+        background: Color::WHITE.to_rgba(),
+        border_color: Rgba::TRANSPARENT,
+        border_widths: Edges::ZERO,
+        corner_radii: Default::default(),
+    }]);
+    let stamped = |key: Option<u32>| {
+        let marker = marker.clone();
+        let session = mount(Size::new(400.0, 300.0), move |_| {
+            let marker = marker.clone();
+            let chart = canvas(move |bounds, painter| {
+                painter.fill(bounds, Color::BLACK);
+                for column in 0..2 {
+                    painter.paint(Primitive::Picture {
+                        picture: marker.clone(),
+                        offset: Point::new(bounds.x() + column as f32 * 10.0, bounds.y()),
+                    });
+                }
+            });
+            framed(match key {
+                Some(key) => chart.cache_key(key),
+                None => chart,
+            })
+        })
+        .expect("mount");
+        drawn_quads(session.primitives())
+    };
+
+    let drawn = vec![
+        Bounds::from_xywh(PADDING, PADDING, 100.0, 50.0),
+        Bounds::from_xywh(21.0, 22.0, 4.0, 4.0),
+        Bounds::from_xywh(31.0, 22.0, 4.0, 4.0),
+    ];
+    assert_eq!(stamped(None), drawn);
+    // Recorded into the picture of the canvas, which holds no other picture.
+    assert_eq!(stamped(Some(1)), drawn);
 }
 
 #[test]

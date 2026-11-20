@@ -432,7 +432,9 @@ impl Element for Splitter {
         let divider = self.divider_bounds(bounds);
         let on_divider = cx.with_bounds(divider).contains_pointer(event.position);
         match event.kind {
-            PointerEventKind::Move if self.dragging && event.button == Some(MouseButton::Left) => {
+            // A drag lasts from the press to the release. Only AppKit names
+            // the held button on the moves between them.
+            PointerEventKind::Move if self.dragging => {
                 cx.set_cursor(self.cursor());
                 let at = self.along(event.position) - self.start(bounds) - self.grab;
                 return self.set_position(at, cx);
@@ -452,7 +454,6 @@ impl Element for Splitter {
                 return true;
             }
             PointerEventKind::Move => {
-                self.dragging = false;
                 let hovered = on_divider && !self.disabled;
                 if hovered != self.hovered {
                     self.hovered = hovered;

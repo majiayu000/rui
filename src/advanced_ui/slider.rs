@@ -289,11 +289,12 @@ impl Element for Slider {
         let inside = cx.contains_pointer(event.position);
         match event.kind {
             PointerEventKind::Move => {
-                if self.dragging && event.button == Some(MouseButton::Left) {
+                // A drag lasts from the press to the release. Only AppKit
+                // names the held button on the moves between them.
+                if self.dragging {
                     let value = self.value_at(cx.bounds(), event.position.x);
                     return self.set_value(value, cx);
                 }
-                self.dragging = false;
                 self.state.update_hover_inside(inside, cx);
                 false
             }

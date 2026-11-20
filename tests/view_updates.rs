@@ -6,11 +6,12 @@ use rui::core::action::ActionId;
 use rui::core::entity::Entity;
 use rui::core::event::{KeyCode, KeyEvent, Modifiers};
 use rui::core::{ElementId, Point, Size, View, ViewContext};
-use rui::testing::{HeadlessViewSession, mount_view};
-use std::cell::Cell;
+use rui::testing::{HeadlessViewSession, mount, mount_view};
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 const BUTTON: ElementId = ElementId(44_001);
+const PANEL_FIELD: ElementId = ElementId(44_002);
 
 /// Clicking fetches off the UI thread and stores the reply in the view itself.
 #[derive(Default)]
@@ -266,4 +267,54 @@ fn a_child_listener_update_shows_in_the_parent_on_the_next_frame() {
         2,
         "the child rendered once more, for the click"
     );
+}
+
+/// A window and two panels in it that all handle "close", with a field
+/// outside the panels and one in the first.
+fn panels(ran: &Rc<RefCell<Vec<&'static str>>>) -> rui::Div {
+    let close = |name: &'static str| {
+        let ran = Rc::clone(ran);
+        move || ran.borrow_mut().push(name)
+    };
+    let action = || ActionId::custom("close");
+    rui::div()
+        .on_action(action(), close("window"))
+        .child(Button::new("Title").id(BUTTON))
+        .child(
+            rui::div()
+                .on_action(action(), close("first panel"))
+                .child(Button::new("Name").id(PANEL_FIELD)),
+        )
+        .child(
+            rui::div()
+                .on_action(action(), close("second panel"))
+                .child(rui::text("Details")),
+        )
+}
+
+#[test]
+fn an_action_reaches_what_a_div_holds_before_the_div() {
+    let ran = Rc::new(RefCell::new(Vec::new()));
+    let tree = Rc::clone(&ran);
+    let mut session = mount(Size::new(200.0, 120.0), move |_| panels(&tree)).expect("mount");
+    let command = Modifiers::meta();
+    session
+        .app_context_mut()
+        .keymap_mut()
+        .bind(KeyCode::W, command, ActionId::custom("close"))
+        .expect("bind");
+    let mut close_from = |focused| {
+        session.request_focus(focused);
+        session.frame().expect("frame after the focus change");
+        assert_eq!(session.focused_element(), focused);
+        assert!(session.dispatch_key_event(&KeyEvent::new(KeyCode::W, command)));
+        std::mem::take(&mut *ran.borrow_mut())
+    };
+
+    // The div the focused element is in comes before the one after it.
+    assert_eq!(close_from(Some(PANEL_FIELD)), ["first panel"]);
+    // The window's handler waits for both panels, though only it is around
+    // the focused element: the last child is asked first.
+    assert_eq!(close_from(Some(BUTTON)), ["second panel"]);
+    assert_eq!(close_from(None), ["second panel"]);
 }

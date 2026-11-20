@@ -231,6 +231,9 @@ impl ToasterState {
     }
 
     fn set_paused(&mut self, paused: bool, now: Instant) {
+        // A card the tree still holds can be under the pointer after its
+        // toast closed.
+        let paused = paused && !self.entries.is_empty();
         if self.paused == paused {
             return;
         }
@@ -240,6 +243,14 @@ impl ToasterState {
                 *remaining = remaining.saturating_sub(now.saturating_duration_since(entry.since));
             }
             entry.since = now;
+        }
+    }
+
+    /// End the pause once no toast is left: the pointer is over none, and
+    /// no move tells the stack so while it is empty.
+    fn resume_if_empty(&mut self) {
+        if self.entries.is_empty() {
+            self.paused = false;
         }
     }
 }
@@ -319,6 +330,7 @@ impl Toaster {
         let mut state = self.state.borrow_mut();
         let before = state.entries.len();
         state.entries.retain(|entry| entry.id != id);
+        state.resume_if_empty();
         let dismissed = state.entries.len() != before;
         if dismissed {
             state.notify();
@@ -330,6 +342,7 @@ impl Toaster {
         let mut state = self.state.borrow_mut();
         if !state.entries.is_empty() {
             state.entries.clear();
+            state.resume_if_empty();
             state.notify();
         }
     }
@@ -658,6 +671,8 @@ impl Element for ToastStack {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::geometry::Size;
+    use crate::core::presenter::Presenter;
 
     fn entry(state: &mut ToasterState, duration: Option<Duration>, since: Instant) {
         let id = ToastId(state.next_id);
@@ -696,6 +711,38 @@ mod tests {
         state.set_paused(false, start + Duration::from_secs(60));
         assert!(!state.expire(start + Duration::from_millis(60_900)));
         assert!(state.expire(start + Duration::from_secs(61)));
+    }
+
+    #[test]
+    fn closing_the_last_toast_ends_the_pause() {
+        let toaster = Toaster::new();
+        let first = toaster.show(Toast::new("one"));
+        toaster.show(Toast::new("two"));
+        let viewport = Size::new(480.0, 320.0);
+        let page = container()
+            .w_full()
+            .h_full()
+            .child(ToastStack::new(toaster.clone()));
+        let mut presenter = Presenter::with_root(viewport, page);
+        presenter.layout(viewport).expect("layout");
+        presenter.paint();
+        let stack = presenter.scene().overlays()[0].bounds;
+        let over_a_card = PointerEvent {
+            kind: PointerEventKind::Move,
+            position: Point::new(stack.x() + 8.0, stack.y() + 8.0),
+            button: None,
+        };
+        presenter.dispatch_pointer_event(&over_a_card);
+        assert!(toaster.is_paused());
+
+        assert!(toaster.dismiss(first));
+        assert!(toaster.is_paused(), "the pointer may be over the other");
+        toaster.dismiss_all();
+        assert!(!toaster.is_paused());
+        // The tree holds the cards until the view renders again, and the
+        // pointer moves on over them in the frame of the click that closed one.
+        presenter.dispatch_pointer_event(&over_a_card);
+        assert!(!toaster.is_paused());
     }
 
     #[test]
