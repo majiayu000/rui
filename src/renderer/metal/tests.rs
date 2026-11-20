@@ -526,6 +526,7 @@ fn a_path_kept_in_the_atlas_is_drawn_after_the_fonts_change() {
             font_size: 16.0,
             font_weight: 400,
             font_family: None,
+            font_features: Default::default(),
             line_height: 1.2,
             align: TextAlign::Left,
             direction: BaseDirection::Auto,
