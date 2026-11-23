@@ -12,7 +12,6 @@
 use super::{TextMeasureCache, TextRequest};
 use crate::renderer::system_fonts::system_font_generation;
 use crate::renderer::text_face_size::face_size;
-use rusttype::Scale;
 use std::collections::HashMap;
 
 /// The em characters are shaped at to read their advance; advances scale
@@ -115,10 +114,7 @@ impl GlyphResolver {
             .ok()?;
         self.forget_old_fonts();
         let fonts = self.measurer.fonts.as_slice();
-        let metrics = fonts[face]
-            .font()
-            .v_metrics(Scale::uniform(face_size(fonts, face, font_size)));
-        Some((metrics.ascent, metrics.descent))
+        Some(fonts[face].ascent_descent(face_size(fonts, face, font_size)))
     }
 
     fn forget_old_fonts(&mut self) {

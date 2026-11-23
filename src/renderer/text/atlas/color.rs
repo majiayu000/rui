@@ -2,6 +2,8 @@
 
 use super::TextError;
 use crate::renderer::resources::{RendererResourceError, RendererResourceKind};
+use skrifa::GlyphId;
+use skrifa::font::glyph::bitmap::{Origin, Pixels};
 
 /// The bitmap of `glyph_id` at `device_font_size`, for fonts whose glyphs are
 /// images (`sbix`, `CBDT`): its offset from the pen position
@@ -15,17 +17,20 @@ pub(super) fn color_bitmap(
     glyph_id: u16,
     device_font_size: f32,
 ) -> Result<Option<(i32, i32, u32, u32, Vec<u8>)>, TextError> {
-    use rustybuzz::ttf_parser::RasterImageFormat;
-    // Font sizes here are rusttype's: the height from descent to ascent, as
-    // outlines and shaping use them. Strikes are chosen by pixels per em.
-    let unscaled = font.font().v_metrics_unscaled();
-    let height_units = unscaled.ascent - unscaled.descent;
-    if height_units <= 0.0 {
+    // Font sizes here are the height from descent to ascent, as outlines and
+    // shaping use them. Strikes are chosen by pixels per em.
+    if font.height_em() <= 0.0 {
         return Ok(None);
     }
-    let em = device_font_size * f32::from(font.font().units_per_em()) / height_units;
+    let em = font.scale_for_pixel_height(device_font_size * f32::from(font.units_per_em()));
     let pixels_per_em = em.ceil().clamp(1.0, f32::from(u16::MAX)) as u16;
-    let Some(image) = font.raster_image(glyph_id, pixels_per_em) else {
+    // The strike closest above the size, else the largest.
+    let Some(image) = font
+        .font()
+        .bitmap_strikes()
+        .select(Some(f32::from(pixels_per_em)))
+        .and_then(|strike| strike.get(GlyphId::new(u32::from(glyph_id))))
+    else {
         return Ok(None);
     };
     let invalid = |reason: String| {
@@ -34,16 +39,16 @@ pub(super) fn color_bitmap(
             reason,
         ))
     };
-    if image.format != RasterImageFormat::PNG {
+    let Pixels::Png(data) = image.pixels() else {
         return Err(invalid(format!(
-            "glyph {glyph_id} is a {:?} bitmap; only PNG bitmaps are drawn",
-            image.format
+            "glyph {glyph_id} is an uncompressed {:?} bitmap; only PNG bitmaps are drawn",
+            image.source()
         )));
-    }
-    let decoded = image::load_from_memory_with_format(image.data, image::ImageFormat::Png)
+    };
+    let decoded = image::load_from_memory_with_format(data, image::ImageFormat::Png)
         .map_err(|err| invalid(format!("glyph {glyph_id} bitmap does not decode: {err}")))?
         .to_rgba8();
-    let scale = em / f32::from(image.pixels_per_em.max(1));
+    let scale = em / f32::from(image.ppem().max(1));
     let width = ((decoded.width() as f32 * scale).round() as u32).max(1);
     let height = ((decoded.height() as f32 * scale).round() as u32).max(1);
     let mut premultiplied = decoded;
@@ -68,8 +73,14 @@ pub(super) fn color_bitmap(
             }
         }
     }
-    // The image's bottom left sits `x, y` strike pixels from the origin, y up.
-    let left = (f32::from(image.x) * scale).round() as i32;
-    let top = -((f32::from(image.y) * scale).round() as i32) - height as i32;
+    // The image's bottom left sits `x, y` strike pixels from the origin, y up;
+    // `CBDT` and `EBDT` give its top left.
+    let x = image.inner_x_bearing();
+    let y = match image.origin() {
+        Origin::BottomLeft => image.inner_y_bearing(),
+        Origin::TopLeft => image.inner_y_bearing() - image.height() as i32,
+    };
+    let left = (x as f32 * scale).round() as i32;
+    let top = -((y as f32 * scale).round() as i32) - height as i32;
     Ok(Some((left, top, width, height, scaled.into_raw())))
 }

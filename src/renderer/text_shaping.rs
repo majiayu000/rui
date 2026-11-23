@@ -6,25 +6,22 @@ use crate::renderer::text_classify::{
     classify_direction, classify_script, is_default_ignorable, resolve_text_direction,
 };
 use crate::renderer::text_cluster_position::apply_exact_cluster_positions;
-use crate::renderer::text_default_instance::default_instance_face;
-use crate::renderer::text_face_size::face_size;
+use crate::renderer::text_face_size::{FaceMetrics, face_size};
 use crate::renderer::text_fallback::{RunScript, assign_fonts, script_runs};
-use crate::renderer::text_glyph_box::{GlyphBoxes, InkBounds};
+use crate::renderer::text_glyph_box::{GlyphBoxes, InkBounds, PixelRect, draw_glyph};
 pub use crate::renderer::text_plan::{
     ShapedGlyph, TextCluster, TextDirection, TextRun, TextScript, TextShapeDiagnostic,
     TextShapePlan,
 };
+use glam::Vec2;
 use plans::CachedPlan;
-use rusttype::{Font, GlyphId, Scale, point};
-use rustybuzz::Face;
+use skrifa::GlyphId;
 use std::collections::VecDeque;
 use std::ops::Range;
 use std::sync::{Arc, Mutex};
 use unicode_segmentation::UnicodeSegmentation;
 
-pub(crate) mod backend;
 mod plans;
-use backend::shape_glyphs;
 
 /// The bytes of one font file, shared by every face in it.
 #[derive(Debug)]
@@ -70,24 +67,16 @@ pub(crate) struct TextShapingFont {
     /// OS/2 weight class: 400 regular, 700 bold.
     pub(crate) weight: u16,
     pub(crate) italic: bool,
-    /// Descent to ascent, in ems: what rusttype's font size measures.
+    /// Descent to ascent, in ems: the height faces are scaled by.
     height_em: f32,
-    // Both borrow from `data`. Declared first so they are dropped first, and private
-    // so no `Font<'static>`, `Face<'static>` or glyph outlives the bytes it reads.
-    font: Font<'static>,
-    /// Parsed once: building a face reads the font's layout tables, far more
-    /// work than shaping a short string with it.
-    face: Face<'static>,
+    metrics: FaceMetrics,
+    /// The face's one parsed form, which shaping, metrics, outlines and
+    /// bitmaps all read. It keeps the font's bytes alive.
+    font: skrifa::Font,
     /// Recently used plans, keyed by the buffer properties and feature settings.
-    #[cfg_attr(feature = "fontations", allow(dead_code))]
     plans: Arc<Mutex<VecDeque<CachedPlan>>>,
     boxes: Arc<GlyphBoxes>,
     ascii: AsciiCoverage,
-    #[cfg(feature = "fontations")]
-    pub(crate) fontations: crate::renderer::text_fontations::FontationsFace,
-    /// Owns the bytes `font` and `face` read; never read directly.
-    #[allow(dead_code)]
-    data: Arc<FontBytes>,
 }
 
 impl std::fmt::Debug for TextShapingFont {
@@ -100,38 +89,29 @@ impl std::fmt::Debug for TextShapingFont {
 }
 
 impl TextShapingFont {
-    /// `None` when face `index` of `data` cannot be parsed by both rusttype and
-    /// rustybuzz.
+    /// `None` when face `index` of `data` cannot be parsed or lacks `head` or
+    /// `hhea`.
     pub(crate) fn new(family: impl Into<String>, index: u32, data: Arc<FontBytes>) -> Option<Self> {
-        // SAFETY: the slice points into `data`, whose heap or mapping does not move
-        // while the `Arc` lives. The font and face are stored next to that `Arc`,
-        // dropped before it, and only handed out with their lifetime shortened to
-        // `&self`.
-        let bytes: &'static [u8] = unsafe { std::mem::transmute(data.as_slice()) };
-        let font = Font::try_from_bytes_and_index(bytes, index)?;
-        let face = default_instance_face(bytes, index)?;
-        let unscaled = font.v_metrics_unscaled();
-        let height_em = (unscaled.ascent - unscaled.descent) / f32::from(font.units_per_em());
-        #[cfg(feature = "fontations")]
-        let fontations = crate::renderer::text_fontations::FontationsFace::new(&data, index)?;
+        let blob: Arc<dyn AsRef<[u8]> + Send + Sync> = data;
+        let font = skrifa::Font::new(skrifa::font::Blob::from(blob), index)?;
+        let metrics = FaceMetrics::read(&font)?;
+        let height_em = (f32::from(metrics.ascender) - f32::from(metrics.descender))
+            / f32::from(metrics.units_per_em);
         Some(Self {
-            #[cfg(feature = "fontations")]
-            fontations,
             family: family.into(),
             index,
-            weight: face.weight().to_number(),
-            italic: face.is_italic() || face.is_oblique(),
+            weight: metrics.weight,
+            italic: metrics.italic,
             height_em,
+            metrics,
             font,
-            face,
             plans: Arc::default(),
             boxes: Arc::default(),
             ascii: AsciiCoverage::default(),
-            data,
         })
     }
 
-    pub(crate) fn font(&self) -> &Font<'_> {
+    pub(crate) fn font(&self) -> &skrifa::Font {
         &self.font
     }
 
@@ -139,42 +119,61 @@ impl TextShapingFont {
         self.height_em
     }
 
-    /// The pixel box of glyph `id` at `font_size` drawn at `position`, as
-    /// rusttype's `pixel_bounding_box` gives it, without decoding the outline.
+    pub(crate) fn units_per_em(&self) -> u16 {
+        self.metrics.units_per_em
+    }
+
+    /// Pixels per font unit for a face drawn `height` pixels from descent to
+    /// ascent.
+    pub(crate) fn scale_for_pixel_height(&self, height: f32) -> f32 {
+        height / (f32::from(self.metrics.ascender) - f32::from(self.metrics.descender))
+    }
+
+    /// Ascent above the baseline and descent below it (negative), in pixels,
+    /// at `height`.
+    pub(crate) fn ascent_descent(&self, height: f32) -> (f32, f32) {
+        let scale = self.scale_for_pixel_height(height);
+        (
+            f32::from(self.metrics.ascender) * scale,
+            f32::from(self.metrics.descender) * scale,
+        )
+    }
+
+    /// The advance of glyph `id` in pixels at `height`.
+    pub(crate) fn glyph_advance(&self, id: u16, height: f32) -> f32 {
+        let scale_x = self.scale_for_pixel_height(height) * height / height;
+        self.font
+            .glyph_metrics()
+            .h_advance(GlyphId::new(u32::from(id)))
+            * scale_x
+    }
+
+    /// The glyph `ch` maps to, if any.
+    pub(crate) fn glyph_index(&self, ch: char) -> Option<u16> {
+        let glyph = self.font.charmap().map_unicode(ch)?;
+        u16::try_from(glyph.to_u32()).ok()
+    }
+
+    /// The pixel box of glyph `id` at `font_size` drawn at `position`, from the
+    /// glyph's box in font units without decoding its outline.
     pub(crate) fn pixel_bounds(
         &self,
         id: u16,
         font_size: f32,
-        position: rusttype::Point<f32>,
-    ) -> Option<rusttype::Rect<i32>> {
+        position: Vec2,
+    ) -> Option<PixelRect> {
         self.boxes.pixel_bounds(self, id, font_size, position)
     }
 
-    /// The glyph's bitmap from the strike closest above `pixels_per_em`, for
-    /// bitmap color fonts such as Apple Color Emoji (`sbix`).
-    pub(crate) fn raster_image(
-        &self,
-        glyph_id: u16,
-        pixels_per_em: u16,
-    ) -> Option<rustybuzz::ttf_parser::RasterGlyphImage<'_>> {
-        self.face
-            .glyph_raster_image(rustybuzz::ttf_parser::GlyphId(glyph_id), pixels_per_em)
-    }
-
-    pub(crate) fn face(&self) -> &Face<'_> {
-        &self.face
-    }
-
     pub(crate) fn supports_cluster(&self, cluster: &str) -> bool {
-        let face = self.face();
         if let &[byte] = cluster.as_bytes()
             && byte.is_ascii()
         {
-            return char::from(byte).is_control() || self.ascii.covers(face, byte);
+            return char::from(byte).is_control() || self.ascii.covers(self, byte);
         }
         cluster
             .chars()
-            .all(|ch| ch.is_control() || is_default_ignorable(ch) || face.glyph_index(ch).is_some())
+            .all(|ch| ch.is_control() || is_default_ignorable(ch) || self.glyph_index(ch).is_some())
     }
 }
 
@@ -409,29 +408,19 @@ pub(crate) fn rasterize_with_plan(
     let height = metrics.ink_bounds.height().ceil().max(1.0) as u32;
     let mut pixels = vec![0u8; (width * height * 4) as usize];
     let baseline = fonts[primary_index]
-        .font()
-        .v_metrics(Scale::uniform(face_size(
-            fonts,
-            primary_index,
-            request.font_size,
-        )))
-        .ascent;
+        .ascent_descent(face_size(fonts, primary_index, request.font_size))
+        .0;
 
     for shaped in plan.glyphs() {
         let Some(font) = fonts.get(shaped.font_index) else {
             continue;
         };
         let size = face_size(fonts, shaped.font_index, request.font_size);
-        let glyph = font
-            .font()
-            .glyph(GlyphId(shaped.glyph_id))
-            .scaled(Scale::uniform(size))
-            .positioned(point(shaped.x_offset, baseline + shaped.y_offset));
-
-        if let Some(bb) = glyph.pixel_bounding_box() {
-            glyph.draw(|x, y, v| {
-                let px = x as i32 + bb.min.x - metrics.ink_bounds.x() as i32;
-                let py = y as i32 + bb.min.y - metrics.ink_bounds.y() as i32;
+        let position = Vec2::new(shaped.x_offset, baseline + shaped.y_offset);
+        if let Some(bb) = font.pixel_bounds(shaped.glyph_id, size, position) {
+            draw_glyph(font, shaped.glyph_id, size, position, bb, |x, y, v| {
+                let px = x as i32 + bb.min_x - metrics.ink_bounds.x() as i32;
+                let py = y as i32 + bb.min_y - metrics.ink_bounds.y() as i32;
                 if px < 0 || py < 0 {
                     return;
                 }
@@ -564,13 +553,8 @@ fn shape_run(
     // Every face sits on the requested face's baseline.
     let size = face_size(fonts, clusters[0].font_index, request.font_size);
     let baseline = fonts[primary_index]
-        .font()
-        .v_metrics(Scale::uniform(face_size(
-            fonts,
-            primary_index,
-            request.font_size,
-        )))
-        .ascent;
+        .ascent_descent(face_size(fonts, primary_index, request.font_size))
+        .0;
     let glyphs = shape_run_glyphs(
         (font, request.font_features),
         (size, baseline),
@@ -616,8 +600,8 @@ fn shape_run_glyphs(
     start_x: f32,
     ink_bounds: &mut InkBounds,
 ) -> Vec<GlyphDraft> {
-    let shaped = shape_glyphs(font, features, clusters, script, rtl);
-    let position_scale = font.font().scale_for_pixel_height(size);
+    let shaped = font.shape(features, clusters, script, rtl);
+    let position_scale = font.scale_for_pixel_height(size);
     let mut cursor_x = start_x;
     let mut glyphs = Vec::with_capacity(shaped.len());
     let run_end = clusters.last().map(|cluster| cluster.byte_end).unwrap_or(0);
@@ -633,7 +617,7 @@ fn shape_run_glyphs(
         let y_offset = -(y_offset as f32 * position_scale);
         let advance_width = x_advance as f32 * position_scale;
         let glyph_id = glyph_id as u16;
-        let position = point(x_offset, baseline + y_offset);
+        let position = Vec2::new(x_offset, baseline + y_offset);
         if let Some(bounds) = font.pixel_bounds(glyph_id, size, position) {
             ink_bounds.include(bounds);
         }
@@ -667,10 +651,9 @@ fn distribute_cluster_advances(
         return;
     }
 
-    let scale = Scale::uniform(size);
     let simple_advances = clusters
         .iter()
-        .map(|cluster| simple_cluster_advance(font, scale, cluster.text))
+        .map(|cluster| simple_cluster_advance(font, size, cluster.text))
         .collect::<Vec<_>>();
     let simple_total = simple_advances.iter().sum::<f32>();
     let fallback_advance = if clusters.is_empty() {
@@ -705,17 +688,13 @@ fn distribute_cluster_advances(
     }
 }
 
-fn simple_cluster_advance(font: &TextShapingFont, scale: Scale, cluster: &str) -> f32 {
+/// The advances of `cluster`'s characters' own glyphs (`.notdef` for one the
+/// font lacks) at `size`.
+fn simple_cluster_advance(font: &TextShapingFont, size: f32, cluster: &str) -> f32 {
     cluster
         .chars()
         .filter(|ch| !ch.is_control())
-        .map(|ch| {
-            font.font()
-                .glyph(ch)
-                .scaled(scale)
-                .h_metrics()
-                .advance_width
-        })
+        .map(|ch| font.glyph_advance(font.glyph_index(ch).unwrap_or(0), size))
         .sum()
 }
 

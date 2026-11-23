@@ -293,7 +293,7 @@ machine. The target for a one-row change is allocations proportional to that row
 | Paths | MSAA intermediate texture, encoder switch per batch | atlas sprites / analytic coverage in one encoder |
 | Line layout cache | previous frame only | LRU with generations |
 | Wrap cache | keyed by exact width | keyed by width interval |
-| Font fallback | Core Text, per-platform code | script runs over rustybuzz, one implementation |
+| Font fallback | Core Text, per-platform code | script runs over HarfRust, one implementation |
 | Foreground scheduling | FIFO | priority queue with frame budget |
 | Startup shaders | precompiled metallib (needs Xcode's `metal`) | renderer created off the main thread, in parallel with the first layout (#226); shaders embedded precompiled with or without Xcode, runtime archive cache as fallback |
 

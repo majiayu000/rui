@@ -29,7 +29,6 @@ mod wrap;
 pub use crate::renderer::font_registry::{register_font, register_font_file};
 pub use crate::renderer::text_bidi::BaseDirection;
 pub use features::{FontFeature, FontFeatures};
-pub(crate) use features::rustybuzz_features;
 pub use crate::renderer::text_shaping::{
     TextCluster, TextDirection, TextRun, TextScript, TextShapeDiagnostic, TextShapePlan,
 };
@@ -37,6 +36,7 @@ pub use atlas::{
     ATLAS_PAGE_SIZE, AtlasGlyph, AtlasRect, AtlasSlot, GlyphAtlas, GlyphSprite, GlyphUpload,
     PlacedGlyph, SUBPIXEL_VARIANTS, ShapedText, TextGlyphCache,
 };
+pub(crate) use features::harfrust_features;
 pub use glyph::{FontGlyph, GlyphResolver};
 pub(crate) use hash::FastMap;
 pub use rich::{RichLine, RichPiece, RichPieceText, RichSpan, RichWrapped};

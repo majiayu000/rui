@@ -9,7 +9,7 @@ use crate::renderer::text::TextRequest;
 use crate::renderer::text_face_size::face_size;
 use crate::renderer::text_glyph_box::InkBounds;
 use crate::renderer::text_shaping::{ClusterDraft, GlyphDraft, ShapedRun, TextShapingFont};
-use rusttype::{Scale, point};
+use glam::Vec2;
 use unicode_bidi::{BidiClass, BidiInfo, Direction, Level, bidi_class, get_base_direction};
 
 /// The base direction of the paragraph a piece of text belongs to (UAX #9
@@ -117,18 +117,13 @@ pub(crate) fn ink_of(
     glyphs: &[GlyphDraft],
 ) -> InkBounds {
     let baseline = fonts[primary_index]
-        .font()
-        .v_metrics(Scale::uniform(face_size(
-            fonts,
-            primary_index,
-            request.font_size,
-        )))
-        .ascent;
+        .ascent_descent(face_size(fonts, primary_index, request.font_size))
+        .0;
     let mut ink = InkBounds::empty();
     for glyph in glyphs {
         let font = &fonts[glyph.font_index];
         let size = face_size(fonts, glyph.font_index, request.font_size);
-        let position = point(glyph.x_offset, baseline + glyph.y_offset);
+        let position = Vec2::new(glyph.x_offset, baseline + glyph.y_offset);
         if let Some(bounds) = font.pixel_bounds(glyph.glyph_id, size, position) {
             ink.include(bounds);
         }

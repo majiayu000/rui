@@ -20,9 +20,9 @@ use crate::renderer::resources::{
 use crate::renderer::text_face_size::face_size;
 use color::color_bitmap;
 use coverage::coverage;
+use glam::Vec2;
 pub use placed::GlyphSprite;
 use placed::PlacedText;
-use rusttype::{Scale, point};
 use shaped_entry::{ShapedEntry, shape_hash};
 use std::sync::Arc;
 
@@ -295,7 +295,7 @@ pub struct PlacedGlyph {
     pub x: f32,
     /// Baseline, measured down from the top of the line box.
     pub baseline_y: f32,
-    /// The face's rusttype height per pixel of em: its ascent to descent in ems.
+    /// The face's drawn height per pixel of em: its ascent to descent in ems.
     pub font_scale: f32,
 }
 
@@ -538,14 +538,17 @@ impl TextGlyphCache {
 
         let text = (!metrics.ink_bounds.is_empty()).then(|| {
             let fonts = self.measurer.fonts.as_slice();
-            let scale = Scale::uniform(face_size(fonts, primary_index, request.font_size));
-            let v_metrics = fonts[primary_index].font().v_metrics(scale);
-            let glyphs = placed::place_glyphs(fonts, &parts.glyphs, v_metrics.ascent);
+            let (ascent, descent) = fonts[primary_index].ascent_descent(face_size(
+                fonts,
+                primary_index,
+                request.font_size,
+            ));
+            let glyphs = placed::place_glyphs(fonts, &parts.glyphs, ascent);
             Arc::new(ShapedText {
                 metrics,
                 glyphs,
-                ascent: v_metrics.ascent,
-                descent: v_metrics.descent,
+                ascent,
+                descent,
             })
         });
 
@@ -610,7 +613,7 @@ impl TextGlyphCache {
         {
             return self.insert_glyph(key, true, left, top, width, height, pixels);
         }
-        let position = point(f32::from(subpixel) / f32::from(SUBPIXEL_VARIANTS), 0.0);
+        let position = Vec2::new(f32::from(subpixel) / f32::from(SUBPIXEL_VARIANTS), 0.0);
         let Some((bounds, pixels)) = coverage(font, glyph.glyph_id, device_font_size, position)
         else {
             self.glyphs.insert(key, None);
@@ -620,8 +623,8 @@ impl TextGlyphCache {
         self.insert_glyph(
             key,
             false,
-            bounds.min.x,
-            bounds.min.y,
+            bounds.min_x,
+            bounds.min_y,
             width,
             height,
             pixels,
