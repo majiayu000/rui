@@ -8,7 +8,8 @@
 use crate::renderer::system_fonts::{FontLoadError, read_font_file, reload_system_fonts};
 use crate::renderer::text::TextError;
 use crate::renderer::text_shaping::{FontBytes, TextShapingFont};
-use rustybuzz::ttf_parser::{PlatformId, RawFace, Tag, fonts_in_collection, name, name_id};
+use skrifa::raw::types::NameId;
+use skrifa::raw::{FileRef, FontRef, TableProvider};
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
@@ -224,33 +225,53 @@ fn is_font_file(path: &Path) -> bool {
 
 /// Faces in a font file: one, or a collection's count.
 fn face_count(data: &[u8]) -> Option<u32> {
-    match fonts_in_collection(data) {
-        Some(count) => (1..=MAX_FACES_PER_FILE).contains(&count).then_some(count),
-        None => RawFace::parse(data, 0).is_ok().then_some(1),
+    match FileRef::new(data).ok()? {
+        FileRef::Collection(collection) => {
+            let count = collection.len();
+            (1..=MAX_FACES_PER_FILE).contains(&count).then_some(count)
+        }
+        FileRef::Font(_) => Some(1),
     }
 }
 
 /// Face `index`'s typographic family name, else its family name, in English
 /// when the font has one.
 pub(crate) fn face_family(data: &[u8], index: u32) -> Option<String> {
-    let raw = RawFace::parse(data, index).ok()?;
-    let table = name::Table::parse(raw.table(Tag::from_bytes(b"name"))?)?;
+    const UNICODE: u16 = 0;
+    const MACINTOSH: u16 = 1;
+    const WINDOWS: u16 = 3;
+    let table = FontRef::from_index(data, index).ok()?.name().ok()?;
+    let strings = table.string_data().as_bytes();
     let mut best: Option<((u8, bool), String)> = None;
-    for record in table.names {
-        let rank = match record.name_id {
-            name_id::TYPOGRAPHIC_FAMILY => 0,
-            name_id::FAMILY => 1,
+    for record in table.name_record() {
+        let rank = match record.name_id() {
+            NameId::TYPOGRAPHIC_FAMILY_NAME => 0,
+            NameId::FAMILY_NAME => 1,
             _ => continue,
         };
-        let english = match record.platform_id {
-            PlatformId::Windows => record.language_id == 0x0409,
-            PlatformId::Macintosh => record.language_id == 0,
+        let (platform, language) = (record.platform_id(), record.language_id());
+        let english = match platform {
+            WINDOWS => language == 0x0409,
+            MACINTOSH => language == 0,
             _ => true,
         };
-        let text = if record.is_unicode() {
-            record.to_string()
-        } else if record.platform_id == PlatformId::Macintosh && record.name.is_ascii() {
-            String::from_utf8(record.name.to_vec()).ok()
+        let start = record.string_offset().to_u32() as usize;
+        let Some(bytes) = strings.get(start..start + usize::from(record.length())) else {
+            continue;
+        };
+        // UTF-16 for Unicode and Windows symbol or BMP names; ASCII Mac Roman.
+        let utf16 =
+            platform == UNICODE || (platform == WINDOWS && matches!(record.encoding_id(), 0 | 1));
+        let text = if utf16 {
+            let units: Vec<u16> = bytes
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|pair| u16::from_be_bytes(*pair))
+                .collect();
+            String::from_utf16(&units).ok()
+        } else if platform == MACINTOSH && bytes.is_ascii() {
+            String::from_utf8(bytes.to_vec()).ok()
         } else {
             None
         };

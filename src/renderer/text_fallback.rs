@@ -1,8 +1,8 @@
 //! Splitting text into script runs and choosing a font for each run.
 //!
 //! Each grapheme cluster gets the Unicode script of its first character that has
-//! one; rustybuzz carries the script table and reports it through
-//! [`UnicodeBuffer::guess_segment_properties`]. Characters every script shares
+//! one; HarfRust carries the script table and reports it through
+//! [`Buffer::guess_segment_properties`]. Characters every script shares
 //! (spaces, punctuation, digits) join the run before them, or the run after them
 //! at the start of the text, so a run is only cut where the script changes.
 //! Emoji are a run of their own. Each cluster takes the first font of its run's
@@ -12,7 +12,7 @@
 //! which the plan reports as a missing glyph.
 
 use crate::renderer::text_shaping::{ClusterDraft, TextScript, TextShapingFont, faces_for_weight};
-use rustybuzz::{Direction, Script, UnicodeBuffer, script};
+use harfrust::{Buffer, Direction, Script};
 use std::ops::Range;
 
 /// What a run is shaped as.
@@ -32,7 +32,7 @@ impl RunScript {
     /// ISO 15924 code: the script's own, `Zsye` for emoji, `Zyyy` for common.
     pub(crate) fn tag(self) -> [u8; 4] {
         match self {
-            Self::Script { script, .. } => script.tag().to_bytes(),
+            Self::Script { script, .. } => script.tag().to_be_bytes(),
             Self::Emoji => *b"Zsye",
             Self::Common => *b"Zyyy",
         }
@@ -56,7 +56,7 @@ pub(crate) struct ScriptRun {
     pub(crate) script: RunScript,
 }
 
-fn cluster_script(buffer: &mut UnicodeBuffer, cluster: &ClusterDraft) -> RunScript {
+fn cluster_script(buffer: &mut Buffer, cluster: &ClusterDraft) -> RunScript {
     if cluster.script == TextScript::Emoji {
         return RunScript::Emoji;
     }
@@ -66,7 +66,7 @@ fn cluster_script(buffer: &mut UnicodeBuffer, cluster: &ClusterDraft) -> RunScri
     {
         return if byte.is_ascii_alphabetic() {
             RunScript::Script {
-                script: script::LATIN,
+                script: Script::LATIN,
                 rtl: false,
             }
         } else {
@@ -77,8 +77,8 @@ fn cluster_script(buffer: &mut UnicodeBuffer, cluster: &ClusterDraft) -> RunScri
     buffer.push_str(cluster.text);
     buffer.guess_segment_properties();
     match buffer.script() {
-        script::COMMON | script::INHERITED | script::UNKNOWN => RunScript::Common,
-        script => RunScript::Script {
+        None | Some(Script::COMMON | Script::INHERITED | Script::UNKNOWN) => RunScript::Common,
+        Some(script) => RunScript::Script {
             script,
             rtl: buffer.direction() == Direction::RightToLeft,
         },
@@ -96,7 +96,7 @@ fn joins(cluster: &ClusterDraft, neighbour: RunScript) -> bool {
 
 /// Split `clusters` into maximal runs of one script.
 pub(crate) fn script_runs(clusters: &[ClusterDraft]) -> Vec<ScriptRun> {
-    let mut buffer = UnicodeBuffer::new();
+    let mut buffer = Buffer::new();
     let mut scripts: Vec<RunScript> = clusters
         .iter()
         .map(|cluster| cluster_script(&mut buffer, cluster))
@@ -155,7 +155,7 @@ fn preferred_families(script: RunScript) -> &'static [&'static str] {
     match script {
         RunScript::Emoji => &["Apple Color Emoji", "Noto Color Emoji", "Apple Symbols"],
         RunScript::Common => &[],
-        RunScript::Script { script, .. } => match &script.tag().to_bytes() {
+        RunScript::Script { script, .. } => match &script.tag().to_be_bytes() {
             b"Hani" | b"Hira" | b"Kana" | b"Bopo" | b"Hang" => CJK,
             b"Arab" => &[
                 "SF Arabic",

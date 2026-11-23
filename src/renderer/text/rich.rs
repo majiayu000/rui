@@ -18,7 +18,6 @@ use super::{
 use crate::core::geometry::Size;
 use crate::renderer::text_bidi::{line_levels, visual_order};
 use crate::renderer::text_face_size::face_size;
-use rusttype::Scale;
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
 use std::sync::Arc;
@@ -508,16 +507,11 @@ impl TextMeasureCache {
     /// A style's baseline below the top of its own line box, as a text
     /// primitive places it, and that box's height.
     fn own_baseline(&self, span: &RichSpan, primary: usize) -> (f32, f32) {
-        let v_metrics = self.fonts[primary]
-            .font()
-            .v_metrics(Scale::uniform(face_size(
-                &self.fonts,
-                primary,
-                span.font_size,
-            )));
+        let (ascent, descent) =
+            self.fonts[primary].ascent_descent(face_size(&self.fonts, primary, span.font_size));
         let height = span.font_size * span.line_height;
-        let font_height = v_metrics.ascent - v_metrics.descent;
-        ((height - font_height) * 0.5 + v_metrics.ascent, height)
+        let font_height = ascent - descent;
+        ((height - font_height) * 0.5 + ascent, height)
     }
 
     fn line_box(&self, spans: &[RichSpan], primaries: &[usize], styles: &[usize]) -> LineBox {

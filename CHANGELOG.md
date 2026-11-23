@@ -4,6 +4,21 @@ All notable project changes should be recorded here.
 
 ## Unreleased
 
+### Rendering
+
+- Text is shaped with HarfRust and its glyphs are read through Skrifa, from
+  one parsed font per face, instead of rustybuzz, rusttype and two ttf-parser
+  versions, which are no longer maintained (#369). Glyph ids match, and
+  terminal and paragraph frames draw the same pixels. Some differences remain:
+  - Glyph outlines are placed by `hmtx`'s left side bearing, as HarfBuzz and
+    FreeType place them, so a glyph whose bearing differs from its outline's
+    left edge (Arial Bold's hyphen, Apple Color Emoji's placeholder outlines)
+    moves by that difference. Some composite glyphs' boxes differ by a font
+    unit (SF Arabic, Helvetica).
+  - Helvetica Neue Bold kerns `ff` as HarfBuzz does.
+  - A glyph with an empty embedded bitmap, such as Geneva's space, is drawn as
+    nothing instead of failing as an unsupported bitmap.
+
 ## 0.3.0-rc.1
 
 ### Rendering

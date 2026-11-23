@@ -3,7 +3,7 @@
 //! Font fallback asks whether a font has each cluster it places; for ASCII text
 //! that is one `cmap` binary search per character per shape.
 
-use rustybuzz::Face;
+use crate::renderer::text_shaping::TextShapingFont;
 use std::sync::OnceLock;
 
 /// Bit `c` set when the font maps ASCII `c`, filled on first use.
@@ -11,12 +11,12 @@ use std::sync::OnceLock;
 pub(crate) struct AsciiCoverage(OnceLock<u128>);
 
 impl AsciiCoverage {
-    /// Whether `face`, the font this coverage belongs to, maps `byte`, an
+    /// Whether `font`, the font this coverage belongs to, maps `byte`, an
     /// ASCII character.
-    pub(crate) fn covers(&self, face: &Face<'_>, byte: u8) -> bool {
+    pub(crate) fn covers(&self, font: &TextShapingFont, byte: u8) -> bool {
         let bits = self.0.get_or_init(|| {
             (0..128u8)
-                .filter(|&byte| face.glyph_index(char::from(byte)).is_some())
+                .filter(|&byte| font.glyph_index(char::from(byte)).is_some())
                 .fold(0, |bits, byte| bits | 1 << byte)
         });
         bits & 1 << byte != 0

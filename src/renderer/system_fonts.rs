@@ -516,15 +516,10 @@ fn load_font_faces_with(
             fonts.push(font);
             continue;
         }
-        let rusttype_parses =
-            rusttype::Font::try_from_bytes_and_index(data.as_slice(), index).is_some();
-        let rustybuzz_parses = rustybuzz::Face::from_slice(data.as_slice(), index).is_some();
-        let message = if rusttype_parses || rustybuzz_parses {
-            format!("font face {index} is not supported by both text engines")
-        } else {
-            format!("font face {index} cannot be parsed")
-        };
-        return Err(FontLoadError::invalid_data(path, message));
+        return Err(FontLoadError::invalid_data(
+            path,
+            format!("font face {index} cannot be parsed"),
+        ));
     }
     Ok(())
 }
@@ -723,5 +718,60 @@ mod tests {
             );
             assert_eq!(first.generation, second.generation);
         }
+    }
+
+    /// Memory and work of loading every face of the font set, then shaping a
+    /// short string with each so its layout tables are read. Run alone, in a
+    /// release build: it measures the whole process.
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore = "measures this process"]
+    fn memory_after_loading_the_font_set() {
+        use crate::renderer::text::TextRequest;
+        use crate::renderer::text_shaping::{TextShapingFont, shape_with_fonts};
+
+        unsafe extern "C" {
+            fn proc_pid_rusage(pid: i32, flavor: i32, buffer: *mut u64) -> i32;
+        }
+        // `rusage_info_v4` as words: 8 resident size, 9 phys_footprint, 31 instructions.
+        let usage = || {
+            let mut words = [0u64; 64];
+            // SAFETY: flavor 4 writes a rusage_info_v4, far shorter than 64 words.
+            let status =
+                unsafe { proc_pid_rusage(std::process::id() as i32, 4, words.as_mut_ptr()) };
+            assert_eq!(status, 0);
+            (words[8], words[9], words[31])
+        };
+        let files: Vec<Arc<FontBytes>> = font_candidates()
+            .filter_map(|(_, path)| read_font_file(&path).ok().map(Arc::new))
+            .collect();
+        let before = usage();
+        let started = std::time::Instant::now();
+        let mut fonts = Vec::new();
+        for data in &files {
+            let count = font_face_count("", data.as_slice()).unwrap_or(1);
+            for index in 0..count {
+                if let Some(font) = TextShapingFont::new("face", index, Arc::clone(data)) {
+                    let plan = shape_with_fonts(
+                        std::slice::from_ref(&font),
+                        0,
+                        TextRequest::new("Ag 文", 13.0, 400, None, 1.2),
+                    );
+                    std::hint::black_box(plan);
+                    fonts.push(font);
+                }
+            }
+        }
+        let elapsed = started.elapsed();
+        let after = usage();
+        let mb = |bytes: u64| bytes as f64 / 1_048_576.0;
+        println!(
+            "fontset faces={} instructions_m={:.2} ms={:.2} resident_mb=+{:.1} footprint_mb=+{:.2}",
+            fonts.len(),
+            (after.2 - before.2) as f64 / 1e6,
+            elapsed.as_secs_f64() * 1e3,
+            mb(after.0 - before.0),
+            mb(after.1 - before.1),
+        );
     }
 }

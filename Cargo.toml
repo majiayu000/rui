@@ -33,8 +33,6 @@ winit = [
 ]
 # The `markdown` element, parsed by pulldown-cmark.
 markdown = ["dep:pulldown-cmark"]
-# Issue #369 spike: shape with HarfRust and outline with Skrifa (one read-fonts parse).
-fontations = ["dep:harfrust", "dep:skrifa", "dep:ab_glyph_rasterizer"]
 
 [dependencies]
 # Math and geometry
@@ -86,15 +84,15 @@ log = "0.4"
 image = { version = "0.25", default-features = false, features = [
     "rayon", "bmp", "dds", "exr", "ff", "gif", "hdr", "ico", "jpeg", "png", "pnm", "qoi", "tga", "tiff", "webp",
 ] }
-rusttype = "0.9"
 unicode-segmentation = "1.12"
 unicode-bidi = "0.3.18"
 # Dictionary line breaks for Thai, Lao, Khmer and Myanmar, which put no spaces between words.
 icu_segmenter = { version = "2.4", default-features = false, features = ["compiled_data"] }
-rustybuzz = "0.20.1"
-harfrust = { version = "0.16", optional = true }
-skrifa = { version = "0.50", optional = true }
-ab_glyph_rasterizer = { version = "0.1.10", optional = true }
+# Fonts: one read-fonts model per face (through skrifa), shaped by HarfRust;
+# outlines are rasterized by ab_glyph_rasterizer.
+harfrust = "0.16"
+skrifa = "0.50"
+ab_glyph_rasterizer = "0.1.10"
 pulldown-cmark = { version = "0.13", default-features = false, optional = true }
 
 # build.rs compiles the shaders on the build machine's Metal device.

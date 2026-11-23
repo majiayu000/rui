@@ -202,7 +202,7 @@ stays correct through reconcile, but its cost grows with the size of the tree
 
 ## Renderer
 
-- **Text.** `TextMeasureCache` measures, shapes (rustybuzz, with a shape plan
+- **Text.** `TextMeasureCache` measures, shapes (HarfRust, with a shape plan
   kept per font) and wraps text. It falls back per script run, and keeps results
   in frame-aware LRUs. `TextGlyphCache` rasterizes glyphs once at device scale
   into A8 atlas pages, plus RGBA pages for color emoji. Pages are evicted whole,
