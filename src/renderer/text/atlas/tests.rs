@@ -327,7 +327,7 @@ fn bitmap_emoji_become_color_glyphs() {
     );
     let advance = cache.measurer.fonts[glyph.font_index as usize]
         .font()
-        .glyph(GlyphId(glyph.glyph_id))
+        .glyph(rusttype::GlyphId(glyph.glyph_id))
         .scaled(Scale::uniform(28.0 * glyph.font_scale))
         .h_metrics()
         .advance_width;
@@ -409,4 +409,101 @@ fn placed_sprites_are_reused_until_their_page_is_evicted() {
     let after = cache.sprites(&shaped, 3.0, 28.0, 2.0).expect("sprites");
     assert_eq!(after.len(), 2);
     assert_eq!(cache.take_uploads().len(), 2, "rasterized again");
+}
+
+/// Issue #369 spike: HarfRust and read-fonts outlines against rustybuzz and
+/// rusttype on the `text_complex` words, the terminal rows and the system fallback set.
+#[cfg(feature = "fontations")]
+#[test]
+fn fontations_matches_rustybuzz_and_rusttype() {
+    use crate::renderer::text::atlas::coverage::COVERAGE_DIFFS;
+    use crate::renderer::text_shaping::backend::SHAPE_DIFFS;
+    use std::sync::atomic::Ordering;
+    const WORDS: [&str; 28] = [
+        "layout",
+        "文本布局",
+        "مرحبا",
+        "क्षत्रिय",
+        "ภาษาไทยไม่มีช่องว่าง",
+        "👨\u{200d}👩\u{200d}👧\u{200d}👦",
+        "(العدد 2024)",
+        "glyph",
+        "渲染框架",
+        "بالعالم",
+        "विद्यालय",
+        "สวัสดีครับ",
+        "🇯🇵",
+        "(صفحة 17)",
+        "paragraph",
+        "字形缓存",
+        "النص",
+        "संस्कृत",
+        "การแสดงผลข้อความ",
+        "👍🏽",
+        "(سطر 3)",
+        "wrapping",
+        "段落换行",
+        "العربي",
+        "हिन्दी",
+        "ตัดบรรทัดภาษาไทย",
+        "😀",
+        "(رقم 42)",
+    ];
+    let mut texts: Vec<String> = WORDS.iter().map(|word| word.to_string()).collect();
+    texts.push(WORDS.join(" "));
+    texts.push(format!(
+        "{:08} row 07 {}",
+        1234,
+        "0123456789abcdef".repeat(4)
+    ));
+    texts.push("fi fl -> != === www ffi".to_string());
+    let mut cache = TextGlyphCache::new();
+    let mut glyphs = 0;
+    for family in [None, Some("SF Mono"), Some("Helvetica Neue")] {
+        for size in [13.0, 14.0, 18.0] {
+            for text in &texts {
+                let request = TextRequest::new(text, size, 400, family, 1.4);
+                let Some(shaped) = cache.shape(request).expect("shape") else {
+                    continue;
+                };
+                for glyph in shaped.glyphs.iter() {
+                    for subpixel in 0..SUBPIXEL_VARIANTS {
+                        let _ = cache.glyph(glyph, size * 2.0, subpixel);
+                        glyphs += 1;
+                    }
+                }
+            }
+        }
+    }
+    // JetBrains Mono, a static TTF with ligatures.
+    let bytes = include_bytes!("../../../../tests/fonts/JetBrainsMono-subset.ttf");
+    let data = std::sync::Arc::new(crate::renderer::text_shaping::FontBytes::Static(bytes));
+    let fonts = [
+        crate::renderer::text_shaping::TextShapingFont::new("JetBrains Mono", 0, data)
+            .expect("fixture face"),
+    ];
+    for size in [13.0, 18.0] {
+        for text in &texts {
+            let request = TextRequest::new(text, size, 400, None, 1.4);
+            let plan = crate::renderer::text_shaping::shape_with_fonts(&fonts, 0, request);
+            for glyph in plan.glyphs() {
+                for subpixel in 0..SUBPIXEL_VARIANTS {
+                    let x = f32::from(subpixel) / f32::from(SUBPIXEL_VARIANTS);
+                    let _ = super::coverage::fontations_coverage(
+                        &fonts[0],
+                        glyph.glyph_id,
+                        size * 2.0,
+                        point(x, 0.0),
+                    );
+                    glyphs += 1;
+                }
+            }
+        }
+    }
+    let (shape, coverage) = (
+        SHAPE_DIFFS.load(Ordering::Relaxed),
+        COVERAGE_DIFFS.load(Ordering::Relaxed),
+    );
+    eprintln!("{glyphs} glyph draws; {shape} shape diffs, {coverage} coverage diffs");
+    assert_eq!((shape, coverage), (0, 0));
 }

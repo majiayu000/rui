@@ -6,6 +6,7 @@ use rustybuzz::{Direction as HbDirection, Language, Script, ShapePlan, UnicodeBu
 use std::sync::{Arc, PoisonError};
 
 // Feature lists are application supplied, so keep a bounded working set per face.
+#[cfg_attr(feature = "fontations", allow(dead_code))]
 const MAX_CACHED_PLANS: usize = 32;
 
 /// A shaping plan and the buffer properties and features it was built for.
@@ -17,6 +18,7 @@ pub(super) type CachedPlan = (
     Arc<ShapePlan>,
 );
 
+#[cfg_attr(feature = "fontations", allow(dead_code))]
 impl TextShapingFont {
     /// The plan for `buffer`'s direction, script and language with `features`,
     /// built on first use.

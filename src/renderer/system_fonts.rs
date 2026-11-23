@@ -155,7 +155,7 @@ const WINDOWS_FONT_CANDIDATES: [(&str, &str); 7] = [
 ];
 
 #[cfg(not(windows))]
-fn font_candidates() -> impl Iterator<Item = (&'static str, Cow<'static, str>)> {
+pub(crate) fn font_candidates() -> impl Iterator<Item = (&'static str, Cow<'static, str>)> {
     FONT_CANDIDATES
         .into_iter()
         .map(|(family, path)| (family, Cow::Borrowed(path)))
