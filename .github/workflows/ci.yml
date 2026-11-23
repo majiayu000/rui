@@ -78,6 +78,9 @@ jobs:
       - name: Performance gate
         run: cargo bench --bench perf_gate 2>&1 | tee ci-results/perf-gate.log
 
+      - name: Text cache gate
+        run: cargo bench --bench text_cache 2>&1 | tee ci-results/text-cache.log
+
       - name: Upload check logs
         if: always()
         uses: actions/upload-artifact@v4
