@@ -305,6 +305,12 @@ fn pixel_checksum(scene: &Scene) -> Result<String, String> {
 }
 
 fn main() -> ExitCode {
+    // The budgets are release instruction counts; `cargo test --all-targets` runs
+    // this unoptimized, where they cannot hold.
+    if cfg!(debug_assertions) {
+        eprintln!("perf_gate: budgets apply to release builds; run `cargo bench --bench perf_gate`");
+        return ExitCode::SUCCESS;
+    }
     let budgets = match load_budgets() {
         Ok(budgets) => budgets,
         Err(err) => {

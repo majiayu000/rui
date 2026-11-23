@@ -10,7 +10,8 @@
 //! Scroll: the rows a viewport shows of a long list, built per frame the way a
 //! virtual list does, scrolled to the end and back. Layout measures and the
 //! renderer's glyph cache shape each row once while the list fits their targets
-//! (4 096 strings); a longer list evicts the rows scrolled furthest away.
+//! (4 096 strings, and 65 536 glyphs in the glyph cache); a longer list evicts the
+//! rows scrolled furthest away.
 use rui::core::frame_pipeline::FramePipeline;
 use rui::elements::element::LayoutNodes;
 use rui::renderer::text::{TextCacheStats, TextGlyphCache, TextMeasureCache, TextRequest};
@@ -22,7 +23,9 @@ const PARAGRAPHS: usize = 200;
 const RESIZE_FRAMES: usize = 200;
 const START_WIDTH: f32 = 700.0;
 const VIEWPORT_HEIGHT: f32 = 900.0;
-const DEFAULT_ROWS: usize = 3_000;
+const DEFAULT_ROWS: usize = 1_500;
+/// The kept-glyph target of `TextGlyphCache` (`MAX_RETAINED_SHAPE_GLYPHS`).
+const GLYPH_CACHE_GLYPHS: usize = 65_536;
 const VISIBLE_ROWS: usize = 40;
 const SCROLL_STEP: usize = 3;
 const FONT_SIZE: f32 = 14.0;
@@ -202,7 +205,12 @@ fn main() -> ExitCode {
     }
     let scroll_instructions = instructions() - i0;
     let scroll = measurer.stats();
-    if rows <= 4_096 && (scroll.shapes != rows || glyphs.shape_misses() != rows) {
+    // The rows are ASCII, one glyph per character.
+    let row_glyphs: usize = (0..rows).map(|row| row_text(row).len()).sum();
+    if rows <= 4_096
+        && row_glyphs <= GLYPH_CACHE_GLYPHS
+        && (scroll.shapes != rows || glyphs.shape_misses() != rows)
+    {
         failures.push(format!(
             "scrolling {rows} rows shaped {} times in layout and {} in the glyph cache",
             scroll.shapes,
