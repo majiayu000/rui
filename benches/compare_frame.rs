@@ -355,9 +355,19 @@ fn measure(
     let redraws = gpu_time::redraws();
     gpu_time::install();
     gpu_time::take();
+    let mut cold = (0.0, 0.0);
     for turn in 0..warmup {
         gpu_time::set_frame(turn);
+        let (i0, t0) = (rusage()[31], Instant::now());
         frame(harness, turn)?;
+        if turn == 0 {
+            // The first frame: shaping and rasterizing from empty caches (the font
+            // set loads in `Harness::new`, unless the case names a family outside it).
+            cold = (
+                rusage()[31].saturating_sub(i0) as f64 / 1e6,
+                t0.elapsed().as_secs_f64() * 1e3,
+            );
+        }
         if redraws > 0 {
             harness.redraw(turn, redraws)?;
         }
@@ -397,7 +407,9 @@ fn measure(
         String::new()
     };
     println!(
-        "rui {case} instructions_m={:.2} ms_p50={:.3} ms_p95={:.3} allocations={:.0} footprint_mb={footprint:.1} draw_calls={:.0} instances={:.0} gpu_ms_p50={:.3} gpu_ms_p95={:.3} gpu_windows=1 gpu_frames={gpu_frames}{saturated}",
+        "rui {case} cold_instructions_m={:.2} cold_ms={:.3} instructions_m={:.2} ms_p50={:.3} ms_p95={:.3} allocations={:.0} footprint_mb={footprint:.1} draw_calls={:.0} instances={:.0} gpu_ms_p50={:.3} gpu_ms_p95={:.3} gpu_windows=1 gpu_frames={gpu_frames}{saturated}",
+        cold.0,
+        cold.1,
         percentile(&mut instructions, 0.5),
         percentile(&mut ms, 0.5),
         percentile(&mut ms, 0.95),

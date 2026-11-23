@@ -16,13 +16,15 @@ pub use crate::renderer::text_plan::{
 };
 use plans::CachedPlan;
 use rusttype::{Font, GlyphId, Scale, point};
-use rustybuzz::{BufferClusterLevel, Direction as HbDirection, Face, UnicodeBuffer};
+use rustybuzz::Face;
 use std::collections::VecDeque;
 use std::ops::Range;
 use std::sync::{Arc, Mutex};
 use unicode_segmentation::UnicodeSegmentation;
 
+pub(crate) mod backend;
 mod plans;
+use backend::shape_glyphs;
 
 /// The bytes of one font file, shared by every face in it.
 #[derive(Debug)]
@@ -33,6 +35,12 @@ pub(crate) enum FontBytes {
     Owned(Vec<u8>),
     /// Bytes an app registered from its binary.
     Static(&'static [u8]),
+}
+
+impl AsRef<[u8]> for FontBytes {
+    fn as_ref(&self) -> &[u8] {
+        self.as_slice()
+    }
 }
 
 impl FontBytes {
@@ -71,9 +79,12 @@ pub(crate) struct TextShapingFont {
     /// work than shaping a short string with it.
     face: Face<'static>,
     /// Recently used plans, keyed by the buffer properties and feature settings.
+    #[cfg_attr(feature = "fontations", allow(dead_code))]
     plans: Arc<Mutex<VecDeque<CachedPlan>>>,
     boxes: Arc<GlyphBoxes>,
     ascii: AsciiCoverage,
+    #[cfg(feature = "fontations")]
+    pub(crate) fontations: crate::renderer::text_fontations::FontationsFace,
     /// Owns the bytes `font` and `face` read; never read directly.
     #[allow(dead_code)]
     data: Arc<FontBytes>,
@@ -101,7 +112,11 @@ impl TextShapingFont {
         let face = default_instance_face(bytes, index)?;
         let unscaled = font.v_metrics_unscaled();
         let height_em = (unscaled.ascent - unscaled.descent) / f32::from(font.units_per_em());
+        #[cfg(feature = "fontations")]
+        let fontations = crate::renderer::text_fontations::FontationsFace::new(&data, index)?;
         Some(Self {
+            #[cfg(feature = "fontations")]
+            fontations,
             family: family.into(),
             index,
             weight: face.weight().to_number(),
@@ -132,8 +147,7 @@ impl TextShapingFont {
         font_size: f32,
         position: rusttype::Point<f32>,
     ) -> Option<rusttype::Rect<i32>> {
-        self.boxes
-            .pixel_bounds(&self.font, &self.face, id, font_size, position)
+        self.boxes.pixel_bounds(self, id, font_size, position)
     }
 
     /// The glyph's bitmap from the strike closest above `pixels_per_em`, for
@@ -147,7 +161,7 @@ impl TextShapingFont {
             .glyph_raster_image(rustybuzz::ttf_parser::GlyphId(glyph_id), pixels_per_em)
     }
 
-    fn face(&self) -> &Face<'_> {
+    pub(crate) fn face(&self) -> &Face<'_> {
         &self.face
     }
 
@@ -602,48 +616,29 @@ fn shape_run_glyphs(
     start_x: f32,
     ink_bounds: &mut InkBounds,
 ) -> Vec<GlyphDraft> {
-    let mut buffer = UnicodeBuffer::new();
-    buffer.set_cluster_level(BufferClusterLevel::MonotoneGraphemes);
-    buffer.set_direction(if rtl {
-        HbDirection::RightToLeft
-    } else {
-        HbDirection::LeftToRight
-    });
-    if let Some(script) = script.script() {
-        buffer.set_script(script);
-    }
-    for cluster in clusters {
-        for ch in cluster.text.chars().filter(|ch| !ch.is_control()) {
-            buffer.add(ch, cluster.byte_start as u32);
-        }
-    }
-
-    buffer.guess_segment_properties();
-    let plan = font.plan_for(&buffer, features);
-    let shaped = rustybuzz::shape_with_plan(font.face(), &plan, buffer);
+    let shaped = shape_glyphs(font, features, clusters, script, rtl);
     let position_scale = font.font().scale_for_pixel_height(size);
     let mut cursor_x = start_x;
     let mut glyphs = Vec::with_capacity(shaped.len());
     let run_end = clusters.last().map(|cluster| cluster.byte_end).unwrap_or(0);
     let mut shaped_cluster_starts = shaped
-        .glyph_infos()
         .iter()
-        .map(|info| info.cluster as usize)
+        .map(|glyph| glyph.1 as usize)
         .collect::<Vec<_>>();
     shaped_cluster_starts.sort_unstable();
     shaped_cluster_starts.dedup();
 
-    for (info, position) in shaped.glyph_infos().iter().zip(shaped.glyph_positions()) {
-        let x_offset = cursor_x + position.x_offset as f32 * position_scale;
-        let y_offset = -(position.y_offset as f32 * position_scale);
-        let advance_width = position.x_advance as f32 * position_scale;
-        let glyph_id = info.glyph_id as u16;
+    for &(glyph_id, cluster, x_advance, x_offset, y_offset) in &shaped {
+        let x_offset = cursor_x + x_offset as f32 * position_scale;
+        let y_offset = -(y_offset as f32 * position_scale);
+        let advance_width = x_advance as f32 * position_scale;
+        let glyph_id = glyph_id as u16;
         let position = point(x_offset, baseline + y_offset);
         if let Some(bounds) = font.pixel_bounds(glyph_id, size, position) {
             ink_bounds.include(bounds);
         }
 
-        let byte_start = info.cluster as usize;
+        let byte_start = cluster as usize;
         glyphs.push(GlyphDraft {
             byte_start,
             byte_end: glyph_byte_end_for_offset(&shaped_cluster_starts, run_end, byte_start),

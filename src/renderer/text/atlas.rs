@@ -19,9 +19,10 @@ use crate::renderer::resources::{
 };
 use crate::renderer::text_face_size::face_size;
 use color::color_bitmap;
+use coverage::coverage;
 pub use placed::GlyphSprite;
 use placed::PlacedText;
-use rusttype::{GlyphId, Scale, point};
+use rusttype::{Scale, point};
 use shaped_entry::{ShapedEntry, shape_hash};
 use std::sync::Arc;
 
@@ -602,14 +603,6 @@ impl TextGlyphCache {
             .fonts
             .get(glyph.font_index as usize)
             .ok_or(TextError::MissingFont)?;
-        let positioned = font
-            .font()
-            .glyph(GlyphId(glyph.glyph_id))
-            .scaled(Scale::uniform(device_font_size))
-            .positioned(point(
-                f32::from(subpixel) / f32::from(SUBPIXEL_VARIANTS),
-                0.0,
-            ));
         // A bitmap color font, as emoji fonts are, may also carry outlines, which
         // are only placeholders: its images come first.
         if let Some((left, top, width, height, pixels)) =
@@ -617,18 +610,13 @@ impl TextGlyphCache {
         {
             return self.insert_glyph(key, true, left, top, width, height, pixels);
         }
-        let Some(bounds) = positioned.pixel_bounding_box() else {
+        let position = point(f32::from(subpixel) / f32::from(SUBPIXEL_VARIANTS), 0.0);
+        let Some((bounds, pixels)) = coverage(font, glyph.glyph_id, device_font_size, position)
+        else {
             self.glyphs.insert(key, None);
             return Ok(None);
         };
-        let width = bounds.width() as u32;
-        let height = bounds.height() as u32;
-        let mut pixels = vec![0u8; width as usize * height as usize];
-        positioned.draw(|x, y, coverage| {
-            if x < width && y < height {
-                pixels[(y * width + x) as usize] = (coverage.clamp(0.0, 1.0) * 255.0).round() as u8;
-            }
-        });
+        let (width, height) = (bounds.width() as u32, bounds.height() as u32);
         self.insert_glyph(
             key,
             false,
@@ -797,6 +785,7 @@ impl Default for TextGlyphCache {
 }
 
 mod color;
+pub(crate) mod coverage;
 mod font_glyph;
 mod placed;
 mod shaped_entry;

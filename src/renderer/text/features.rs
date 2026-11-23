@@ -17,6 +17,7 @@ impl FontFeature {
 }
 
 /// `features` as rustybuzz takes them, each over the whole text.
+#[cfg_attr(feature = "fontations", allow(dead_code))]
 pub(crate) fn rustybuzz_features(features: &[FontFeature]) -> Vec<rustybuzz::Feature> {
     use rustybuzz::ttf_parser::Tag;
     let feature = |f: &FontFeature| rustybuzz::Feature::new(Tag::from_bytes(&f.tag), f.value, ..);

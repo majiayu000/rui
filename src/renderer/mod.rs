@@ -18,6 +18,8 @@ mod text_cluster_position;
 mod text_default_instance;
 mod text_face_size;
 mod text_fallback;
+#[cfg(feature = "fontations")]
+mod text_fontations;
 mod text_glyph_box;
 mod text_plan;
 mod text_shaping;

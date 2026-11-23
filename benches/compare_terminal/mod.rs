@@ -23,7 +23,12 @@ pub(super) fn terminal_rows(turn: usize, width: f32) -> impl Element {
     let rows: Vec<SharedStr> = (0..VISIBLE_ROWS)
         .map(|row| terminal_text(row, turn).into())
         .collect();
-    let family: Arc<str> = Arc::from(FONT);
+    // `RUI_TERMINAL_FONT` names another family, such as a static TrueType one.
+    let family: Arc<str> = Arc::from(
+        std::env::var("RUI_TERMINAL_FONT")
+            .as_deref()
+            .unwrap_or(FONT),
+    );
     canvas(move |bounds, painter| {
         painter.fill(bounds, Color::hex(PANE_BG));
         for (index, text) in rows.iter().enumerate() {
