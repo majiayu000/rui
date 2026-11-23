@@ -34,12 +34,14 @@ ZED_DIR="$(cd "$ZED_DIR" && pwd)"
 RUN_DIR="$(mktemp -d "$OUT/run.XXXXXXXX")"
 echo "== artifacts: $RUN_DIR" >&2
 
-cp "$ROOT/benchmarks/gpui_compare/fixtures.rs" "$ZED_DIR/crates/gpui_platform/benches/rui_compare.rs"
+# -p keeps each file's mtime, so cargo rebuilds the GPUI bench only when a file changed
+# and an unchanged checkout runs no compile right before the timed runs.
+cp -p "$ROOT/benchmarks/gpui_compare/fixtures.rs" "$ZED_DIR/crates/gpui_platform/benches/rui_compare.rs"
 # The bench's own modules: `gpu_time` (both sides read GPU time through the same hook),
 # `counting_renderer` (counts draws and tags frames), `fonts` and the `terminal_rows` fixture.
 modules="gpu_time counting_renderer fonts terminal workbench workbench_data"
 for module in $modules; do
-  cp "$ROOT/benchmarks/gpui_compare/$module.rs" "$ZED_DIR/crates/gpui_platform/benches/$module.rs"
+  cp -p "$ROOT/benchmarks/gpui_compare/$module.rs" "$ZED_DIR/crates/gpui_platform/benches/$module.rs"
 done
 manifest="$ZED_DIR/crates/gpui_platform/Cargo.toml"
 if ! grep -q 'name = "rui_compare"' "$manifest"; then
