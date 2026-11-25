@@ -1,0 +1,44 @@
+rui_revision=29544b1ef5eb7c5c1f8c3006ce8a9d0ed3687140
+zed_revision=784374c6794ace885137bc4806427a5f47cc3f06
+zed_requested_revision=784374c6794ace885137bc4806427a5f47cc3f06
+zed_dir=<rui>/target/gpui_compare/zed
+repeats=3
+cases=startup list_full list_full_one_row list_virtual_1k list_virtual_100k text_paragraphs quad_grid resize_full resize_virtual editor_scroll editor_edit terminal_rows workbench_pane workbench_full
+gpui_features=bench-support,runtime_shaders,font-kit
+measurement=instructions
+gpu_sampling=fixed-single-window
+gpu_warmup_frames=10
+gpu_samples_requested=60
+gpu_redraws=0
+CARGO_TARGET_DIR=
+RUSTFLAGS=
+started_utc=2026-11-25T17:54:07Z
+Darwin <host> 27.2.0 Darwin Kernel Version 27.2.0: Thu Oct 15 00:00:57 PDT 2026; root:xnu-13432.41.4~25/RELEASE_ARM64_T6020 arm64
+ProductName:		macOS
+ProductVersion:		27.2.1
+BuildVersion:		26B131
+machdep.cpu.brand_string: Apple M2 Max
+hw.ncpu: 12
+hw.memsize: 103079215104
+
+rui_toolchain:
+rustc 1.99.1 (58cf8f9c3 2026-10-13)
+cargo 1.99.1 (5f94df478 2026-08-27)
+
+zed_toolchain:
+rustc 1.98.1 (48a229cea 2026-09-01)
+cargo 1.98.1 (797e8a9bc 2026-08-05)
+
+rui_worktree:
+
+zed_worktree:
+ M crates/gpui_platform/Cargo.toml
+?? crates/gpui_platform/benches/counting_renderer.rs
+?? crates/gpui_platform/benches/fonts.rs
+?? crates/gpui_platform/benches/gpu_time.rs
+?? crates/gpui_platform/benches/rui_compare.rs
+?? crates/gpui_platform/benches/terminal.rs
+?? crates/gpui_platform/benches/workbench.rs
+?? crates/gpui_platform/benches/workbench_data.rs
+rui_executable=<rui>/target/release/deps/compare_frame-c4ac81ceffbcd78c
+gpui_executable=<rui>/target/gpui_compare/zed/target/release/deps/rui_compare-725684db25512afb
