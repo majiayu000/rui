@@ -35,19 +35,26 @@ allocator, and GPU time comes from `benchmarks/gpui_compare/gpu_time.rs` on both
 sides. wgpu commits several command buffers a frame, the same number every frame, so
 egui's frame GPU time is their sum.
 
-## Results (RUI `main` 27a9be7, egui 0.37.0)
+## Results (RUI `main` 29544b1, egui 0.37.0, 2026-11-26)
 
-Apple M2 Max, macOS 26.5.2, load average 11–51. Three runs per case, each in its own
-process; instructions and allocations moved by under 3% between runs (egui's virtual
-lists up to 20%).
+Apple M2 Max, macOS 27, three runs per case, each in its own process, the two sides
+interleaved. The machine was compiling at the same time (load average 50–150), so
+instructions and allocations are the numbers to compare; GPU time moved by up to 2x
+between runs and is shown only as a range.
 
 | Case | egui instructions (M) | RUI instructions (M) | egui allocations | RUI allocations | egui GPU ms p50 | RUI GPU ms p50 |
 |---|---|---|---|---|---|---|
-| list_full | 17.2–17.4 | 24.0 | 12 097 | 16 015 | 0.18–0.27 | 0.18–0.22 |
-| list_virtual_1k | 1.22–1.32 | 0.85–0.93 | 288 | 299 | 0.06–0.13 | 0.15–0.22 |
-| list_virtual_100k | 1.27–1.48 | 0.91–0.94 | 288 | 299 | 0.07–0.17 | 0.10–0.17 |
-| text_paragraphs | 5.38–5.50 | 10.36–10.39 | 941 | 1 553 | 0.04–0.09 | 0.23 |
-| quad_grid | 22.8–23.0 | 5.30–5.32 | 101 | 16 | 0.33 | 0.17–0.30 |
+| list_full | 16.56–16.69 | 16.95–16.96 | 12 097 | 4 077 | 0.32 | 0.15 |
+| list_virtual_1k | 1.39–1.42 | 0.77 | 288 | 151 | 0.13–0.14 | 0.07–0.11 |
+| list_virtual_100k | 1.33–1.66 | 0.77 | 288 | 151 | 0.15–0.27 | 0.10–0.11 |
+| text_paragraphs | 5.44–5.46 | 3.78–3.80 | 941 | 898 | 0.10–0.17 | 0.06–0.13 |
+| quad_grid | 23.08–23.18 | 5.91–5.92 | 101 | 16 | 0.39 | 0.09 |
+
+RUI's first frame of each case costs far more than its steady frames
+(`cold_instructions_m`: 166–170 M on `list_full`, 125 M on `text_paragraphs`); egui
+reports no cold frame, so this is not compared.
+
+Startup was not rerun under this load. The last measurement (RUI 27a9be7):
 
 | Startup, process start to first frame | egui | RUI |
 |---|---|---|
@@ -56,16 +63,13 @@ lists up to 20%).
 
 ## Where each is ahead
 
-- **egui is ahead on `list_full`**, by 1.4x in instructions: it has no layout engine,
-  and its rows place themselves top to bottom. RUI lays out 2000 flex rows.
-- **egui is ahead on `text_paragraphs`**, by 1.9x in instructions and 4x in GPU time.
-  #301 (glyph bounding boxes read once) brings RUI to 7.84 M, still 1.4x behind.
-- **egui starts faster**, about 37 ms against 60 ms.
-- **egui's GPU time is lower on the virtual lists and text**: it draws tessellated
-  triangles with one small shader, where RUI's one shader handles every primitive.
-- **RUI is ahead on the virtual lists** (1.4x fewer instructions) and on
-  `quad_grid` (4.3x fewer instructions, half the GPU time): egui tessellates every
-  rectangle into triangles each frame.
+- **`list_full` is level** in instructions (16.6 M against 17.0 M); RUI allocates 3x
+  less. At 27a9be7 egui was 1.4x ahead.
+- **RUI is ahead on `text_paragraphs`**, by 1.4x in instructions. At 27a9be7 egui was
+  1.9x ahead. GPU time was too noisy in this run to call.
+- **RUI is ahead on the virtual lists** (1.8x fewer instructions) and on `quad_grid`
+  (3.9x fewer instructions): egui tessellates every rectangle into triangles each frame.
+- **egui started faster** at the last startup measurement, about 37 ms against 60 ms.
 
 ## Not compared yet
 

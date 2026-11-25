@@ -278,9 +278,16 @@ fn test_easing_spring() {
         stiffness: 100.0,
         damping: 10.0,
     };
-    let result = spring_underdamped.apply(0.5);
-    // Just verify it produces a value
-    assert!(result.is_finite(), "Spring should produce finite values");
+    // omega = 10, zeta = 0.5: the first peak is at pi / omega_d and overshoots
+    // by exp(-zeta * pi / sqrt(1 - zeta^2)), about 16%.
+    let omega_d = 10.0_f32 * (1.0_f32 - 0.25).sqrt();
+    let peak = spring_underdamped.apply(std::f32::consts::PI / omega_d);
+    let expected = 1.0 + (-0.5 * std::f32::consts::PI / 0.75_f32.sqrt()).exp();
+    assert!(
+        (peak - expected).abs() < 1e-4,
+        "underdamped spring should overshoot to {expected}, got {peak}"
+    );
+    assert!(spring_underdamped.apply(0.0).abs() < 1e-6);
 
     // Test critically damped spring
     let spring_critical = Easing::Spring {
