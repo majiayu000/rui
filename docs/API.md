@@ -216,6 +216,10 @@ input().id(self.field.id()).accessibility_label("Search");
 div().on_click(cx.listener(|this, cx| this.field.focus(cx.app_mut())));
 ```
 
+`.id(...)` on any element takes an `ElementId` or a name (`.id("search")`); the
+same name gives the same id in every rebuild. Elements without one get an id
+derived from their place in the tree.
+
 The change applies in the window's next frame: the old element's `on_blur`
 runs, then the new one's `on_focus`. `focused()` already reports a change
 that has been asked for. Focusing an id that is not in the window logs an

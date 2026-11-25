@@ -87,6 +87,22 @@ fn explicit_ids_win_and_key_their_subtree() {
 }
 
 #[test]
+fn named_ids_are_stable_and_key_their_subtree() {
+    let keyed = |name: &str| div().id(name).child(div().w(2.0));
+    let before = identities_of(&laid_out(div().child(keyed("draft")).child(keyed("title"))));
+    let after = identities_of(&laid_out(
+        div()
+            .child(div())
+            .child(keyed("draft"))
+            .child(keyed("title")),
+    ));
+    assert_eq!(before[0], ElementId::from("draft"));
+    assert_ne!(before[0], before[2], "different names give different ids");
+    assert!(!before[0].is_ephemeral() && !before[0].is_derived());
+    assert_eq!(before[..], after[1..]);
+}
+
+#[test]
 fn virtual_list_rows_keep_their_identity_while_scrolling() {
     let handle = VirtualListHandle::new();
     let list = |handle: &VirtualListHandle| {

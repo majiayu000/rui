@@ -285,7 +285,8 @@ impl StyledText {
         }
     }
 
-    pub fn id(mut self, id: ElementId) -> Self {
+    pub fn id(mut self, id: impl Into<ElementId>) -> Self {
+        let id = id.into();
         self.id = Some(id);
         if self.accessible.is_some() {
             self.accessible = Some(StableId::explicit(id));

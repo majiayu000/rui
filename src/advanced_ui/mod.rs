@@ -188,7 +188,8 @@ impl Container {
         Self { inner: div() }
     }
 
-    pub fn id(mut self, id: ElementId) -> Self {
+    pub fn id(mut self, id: impl Into<ElementId>) -> Self {
+        let id = id.into();
         self.inner = self.inner.id(id);
         self
     }
@@ -379,7 +380,8 @@ impl Flex {
         }
     }
 
-    pub fn id(mut self, id: ElementId) -> Self {
+    pub fn id(mut self, id: impl Into<ElementId>) -> Self {
+        let id = id.into();
         self.inner = self.inner.id(id);
         self
     }
@@ -530,7 +532,8 @@ impl Hoverable {
         }
     }
 
-    pub fn id(mut self, id: ElementId) -> Self {
+    pub fn id(mut self, id: impl Into<ElementId>) -> Self {
+        let id = id.into();
         self.id = StableId::explicit(id);
         self
     }

@@ -135,6 +135,18 @@ impl From<u64> for ElementId {
     }
 }
 
+/// A named id, as in `input().id("search")`: the same name gives the same id in
+/// every rebuild. Names are hashed (FNV-1a) into the explicit id range, so two
+/// different names, or a name and a numeric id, collide with negligible odds.
+impl From<&str> for ElementId {
+    fn from(name: &str) -> Self {
+        let hash = name.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3)
+        });
+        Self(hash & !(GENERATED_BIT | DERIVED_BIT))
+    }
+}
+
 /// Pixels unit type for type-safe pixel measurements
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Default)]
 pub struct Pixels(pub f32);
