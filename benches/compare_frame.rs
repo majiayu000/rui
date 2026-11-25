@@ -15,13 +15,17 @@
 //! Draw calls and instances come from `MetalRenderer::last_frame_stats`. GPU time comes
 //! from the same sampled frames through `benchmarks/gpui_compare/gpu_time.rs`, which
 //! GPUI's side uses too: each committed command buffer's `GPUEndTime - GPUStartTime`.
+//!
+//! With the `wgpu` feature and `RUI_COMPARE_BACKEND=wgpu`, every case draws through
+//! RUI's wgpu backend (on Metal underneath) instead, to measure what that backend
+//! costs against the Metal one on the same fixtures.
 use rui::core::entity::Entity;
 use rui::core::frame_pipeline::FramePipeline;
 use rui::elements::element::{Element, LayoutNodes};
 use rui::elements::{VirtualListHandle, virtual_list};
-use rui::renderer::metal::MetalRenderer;
+use compare_renderer::BenchRenderer;
 use rui::renderer::text::TextMeasureCache;
-use rui::renderer::{RendererResourceLimits, Scene};
+use rui::renderer::Scene;
 use rui::{AppContext, Color, ElementId, Size, div, text};
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -52,6 +56,7 @@ const CASES: [&str; 19] = [
 mod compare_editor;
 mod compare_grid;
 mod compare_paths;
+mod compare_renderer;
 mod compare_terminal;
 mod compare_workbench;
 #[path = "../benchmarks/gpui_compare/workbench_data.rs"]
@@ -221,7 +226,7 @@ struct Harness {
     nodes: LayoutNodes,
     scene: Scene,
     measurer: TextMeasureCache,
-    renderer: MetalRenderer,
+    renderer: BenchRenderer,
     /// The viewport of the last frame drawn, for its redraws.
     viewport: Size,
 }
@@ -233,7 +238,7 @@ impl Harness {
             nodes: LayoutNodes::new(),
             scene: Scene::new(),
             measurer: TextMeasureCache::new(),
-            renderer: MetalRenderer::new()?,
+            renderer: BenchRenderer::new()?,
             viewport: Size::new(VIEWPORT.0, VIEWPORT.1),
         })
     }
@@ -382,9 +387,9 @@ fn measure(
         ms.push(t0.elapsed().as_secs_f64() * 1e3);
         instructions.push(rusage()[31].saturating_sub(i0) as f64 / 1e6);
         allocations.push(ALLOCATIONS.load(Ordering::Relaxed).saturating_sub(a0) as f64);
-        let stats = harness.renderer.last_frame_stats();
-        draw_calls.push(f64::from(stats.draw_calls));
-        instances.push(f64::from(stats.instances));
+        let (calls, drawn) = harness.renderer.last_frame_stats();
+        draw_calls.push(f64::from(calls));
+        instances.push(f64::from(drawn));
         if redraws > 0 {
             harness.redraw(turn, redraws)?;
         }
@@ -393,8 +398,16 @@ fn measure(
     let footprint = footprint_mb();
     std::thread::sleep(GPU_SETTLE);
     let tagged = gpu_time::take_tagged();
-    let mut gpu_ms = gpu_time::steady_samples(&tagged, warmup, samples)
-        .map_err(|err| format!("{case}: {err}"))?;
+    let mut gpu_ms = if harness.renderer.one_buffer_per_frame() {
+        gpu_time::steady_samples(&tagged, warmup, samples)
+            .map_err(|err| format!("{case}: {err}"))?
+    } else {
+        // wgpu commits several command buffers a frame, as egui's side does: a
+        // frame's GPU time is what its buffers add together.
+        summed_per_frame(&tagged, warmup..warmup + samples).ok_or_else(|| {
+            format!("{case}: a sampled frame completed no command buffer")
+        })?
+    };
     let gpu_frames = gpu_ms.len();
     let saturated = if redraws > 0 {
         let mut saturated = gpu_time::steady_redraws(&tagged, warmup, samples, redraws)
@@ -422,6 +435,19 @@ fn measure(
     Ok(())
 }
 
+/// GPU busy time per frame in `frames`, summed over each frame's command buffers;
+/// `None` when a frame has none.
+fn summed_per_frame(tagged: &[(usize, f64)], frames: std::ops::Range<usize>) -> Option<Vec<f64>> {
+    let mut per_frame = vec![None; frames.len()];
+    for &(frame, busy) in tagged {
+        if frames.contains(&frame) {
+            let slot: &mut Option<f64> = &mut per_frame[frame - frames.start];
+            *slot = Some(slot.unwrap_or(0.0) + busy);
+        }
+    }
+    per_frame.into_iter().collect()
+}
+
 fn run(case: &str) -> Result<(), Box<dyn std::error::Error>> {
     let viewport = Size::new(VIEWPORT.0, VIEWPORT.1);
     let resized = |turn: usize| {
@@ -441,7 +467,7 @@ fn run(case: &str) -> Result<(), Box<dyn std::error::Error>> {
         "startup" => {
             let to_fixture = ms_since_process_start();
             let t0 = Instant::now();
-            let pending = MetalRenderer::spawn(RendererResourceLimits::default());
+            let pending = BenchRenderer::spawn();
             let (mut taffy, mut nodes, mut scene) =
                 (TaffyTree::new(), LayoutNodes::new(), Scene::new());
             let mut measurer = TextMeasureCache::new();
