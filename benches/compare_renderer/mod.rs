@@ -6,14 +6,12 @@ use rui::renderer::metal::{MetalRenderer, PendingMetalRenderer};
 use rui::renderer::wgpu::WgpuRenderer;
 use rui::renderer::{RendererError, RendererResourceLimits, Scene};
 #[cfg(feature = "wgpu")]
-use std::sync::Arc;
-#[cfg(feature = "wgpu")]
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::collections::VecDeque;
 
 /// Frames submitted and not yet finished before the next one waits, as
 /// `MetalRenderer::render_offscreen` allows.
 #[cfg(feature = "wgpu")]
-const MAX_FRAMES_IN_FLIGHT: u64 = 3;
+const MAX_FRAMES_IN_FLIGHT: usize = 3;
 
 /// The renderer every case draws with, picked by `RUI_COMPARE_BACKEND`.
 #[allow(clippy::large_enum_variant)] // one per process
@@ -25,8 +23,9 @@ pub enum BenchRenderer {
         /// One offscreen texture per size drawn, so the resize cases, which
         /// alternate two widths, allocate none after warmup, as Metal does.
         textures: Vec<wgpu::Texture>,
-        submitted: u64,
-        completed: Arc<AtomicU64>,
+        /// A submission right after each frame still in flight, oldest first.
+        /// Submissions finish in order, so each one finishing means its frame did.
+        in_flight: VecDeque<wgpu::SubmissionIndex>,
     },
 }
 
@@ -75,8 +74,7 @@ impl BenchRenderer {
         Self::Wgpu {
             renderer,
             textures: Vec::new(),
-            submitted: 0,
-            completed: Arc::new(AtomicU64::new(0)),
+            in_flight: VecDeque::new(),
         }
     }
 
@@ -106,17 +104,22 @@ impl BenchRenderer {
             Self::Wgpu {
                 renderer,
                 textures,
-                submitted,
-                completed,
+                in_flight,
             } => {
                 let (width, height) = (
                     (viewport.width * scale_factor).round() as u32,
                     (viewport.height * scale_factor).round() as u32,
                 );
-                while *submitted - completed.load(Ordering::Acquire) >= MAX_FRAMES_IN_FLIGHT {
+                // Wait for the oldest frame only, as Metal does, so the other two
+                // keep running while this one is prepared.
+                while in_flight.len() >= MAX_FRAMES_IN_FLIGHT {
+                    let oldest = in_flight.pop_front();
                     renderer
                         .device()
-                        .poll(wgpu::PollType::wait_indefinitely())
+                        .poll(wgpu::PollType::Wait {
+                            submission_index: oldest,
+                            timeout: None,
+                        })
                         .map_err(|err| RendererError::render_failed(err.to_string()))?;
                 }
                 let kept = textures
@@ -145,11 +148,9 @@ impl BenchRenderer {
                     }
                 };
                 renderer.render(scene, &target, viewport)?;
-                let done = Arc::clone(completed);
-                renderer.queue().on_submitted_work_done(move || {
-                    done.fetch_add(1, Ordering::Release);
-                });
-                *submitted += 1;
+                // `render` keeps its submission index; an empty submission after
+                // it finishes right after the frame does.
+                in_flight.push_back(renderer.queue().submit([]));
                 Ok(())
             }
         }
