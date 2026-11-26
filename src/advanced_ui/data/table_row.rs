@@ -55,7 +55,8 @@ impl DataTableCell {
         }
     }
 
-    pub fn id(mut self, id: ElementId) -> Self {
+    pub fn id(mut self, id: impl Into<ElementId>) -> Self {
+        let id = id.into();
         self.id = StableId::explicit(id);
         self
     }
@@ -201,7 +202,8 @@ impl DataTableRow {
         Self::new(cells).header_row(true)
     }
 
-    pub fn id(mut self, id: ElementId) -> Self {
+    pub fn id(mut self, id: impl Into<ElementId>) -> Self {
+        let id = id.into();
         self.id = StableId::explicit(id);
         self
     }

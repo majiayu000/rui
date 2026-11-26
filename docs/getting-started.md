@@ -72,13 +72,15 @@ For a view with a `draft: String` field, bind the current value and update it wi
 
 ```rust,ignore
 input()
-    .id(ElementId(100))
     .accessibility_label("Draft")
     .value(self.draft.clone())
     .on_change(cx.text_listener(|this, value, _| this.draft = value))
 ```
 
-Keep the input ID stable between renders. `text_listener` copies the event's
+The input needs no id: layout derives a stable one from its place in the tree,
+so its focus and caret survive each render. Give it one when it moves among its
+siblings, for example in a list that reorders: `.id("draft")` takes a name, and
+`.id(ElementId(100))` still works. `text_listener` copies the event's
 borrowed `&str` into a `String` so it can reach the queued closure safely. It also
 works with `on_submit`; both callbacks receive the text as their second argument.
 For an owned event value, use `listener_with`, for example a checkbox's boolean:

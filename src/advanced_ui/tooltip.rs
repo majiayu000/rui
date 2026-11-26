@@ -39,7 +39,8 @@ impl Tooltip {
         }
     }
 
-    pub fn id(mut self, id: ElementId) -> Self {
+    pub fn id(mut self, id: impl Into<ElementId>) -> Self {
+        let id = id.into();
         self.id = StableId::explicit(id);
         self
     }
