@@ -282,6 +282,41 @@ they moved by under 1%. Two changes since `27a9be7`:
   rebuilt list here; with rows as views (above) it allocates 20 against GPUI's
   6 092.
 
+## Run on `29544b1` (2026-11-26, archived)
+
+`benchmarks/gpui_compare/run.sh` with every case, three rounds, GPUI at Zed `784374c`.
+The raw output, metadata, run order and commands are in
+`benchmarks/gpui_compare/results/2026-11-26-29544b1/`. Apple M2 Max, macOS 27.2.1. The
+machine was busy (load average 99 before, 214 after), so instructions and allocations
+are the numbers to compare; wall and GPU time moved with the load. It is the first
+archived run after #340, so RUI draws text at the same em as GPUI here, unlike the
+runs below.
+
+| Case | RUI instructions (M) | GPUI instructions (M) | GPUI / RUI | RUI allocations | GPUI allocations | RUI footprint (MB) | GPUI footprint (MB) |
+|---|---|---|---|---|---|---|---|
+| list_full | 16.96–16.97 | 156.8–158.5 | 9.3x | 4 077 | 50 046–50 053 | 57–60 | 88–95 |
+| list_full_one_row | 2.57–2.58 | 248.2–263.1 | 99x | 14 | 6 092–6 141 | 62–63 | 199–207 |
+| list_virtual_1k | 0.76–0.77 | 3.89–3.97 | 5.2x | 151 | 787–788 | 48 | 76–85 |
+| list_virtual_100k | 0.62–0.77 | 3.97–4.09 | 5.6x | 151 | 787–788 | 48 | 79–96 |
+| text_paragraphs | 3.78–3.80 | 19.70–20.04 | 5.2x | 898 | 1 842–1 845 | 54–55 | 72–76 |
+| quad_grid | 5.92–5.97 | 80.01–81.86 | 13.6x | 16 | 14–26 | 57–58 | 75–79 |
+| resize_full | 39.87 | 161.5–163.3 | 4.1x | 16 088 | 50 045–50 063 | 58–62 | 88–93 |
+| resize_virtual | 1.23–1.24 | 9.39–9.46 | 7.6x | 384 | 788–789 | 48 | 79–143 |
+| editor_scroll | 2.50–2.51 | 8.76–9.05 | 3.6x | 677 | 1 636–1 638 | 59–60 | 66–89 |
+| editor_edit | 2.19–2.21 | 8.79–9.13 | 4.1x | 354 | 1 636–1 640 | 59–60 | 68–75 |
+| terminal_rows | 3.16 | 7.25–7.72 | 2.4x | 885 | 357–359 | 55 | 63–80 |
+| workbench_pane | 3.42–3.44 | 8.30–8.56 | 2.5x | 893 | 367–369 | 55 | 65–85 |
+| workbench_full | 3.76–3.78 | 10.49–10.66 | 2.8x | 1 082 | 894–895 | 55 | 56–87 |
+
+Startup, process start to the first frame: RUI 20–35 ms, GPUI 269–436 ms.
+
+- **The workbench figures #179 closed on reproduce:** GPUI 8.30–8.56 M and 10.49–10.66 M
+  against the 8.27 M and 10.34 M recorded there, and RUI 3.42 M and 3.77 M as before.
+- **GPUI allocates less on `terminal_rows` (2.5x) and the workbench cases (1.2–2.4x).**
+  On the editor cases RUI now allocates less.
+- **GPU time is level or RUI ahead in every case** in this run; `text_paragraphs`, which
+  the matched-sample run below had RUI behind on, is a tie.
+
 ## Final results (RUI `c2e3596`)
 
 Apple M2 Max (12 cores, 96 GB), macOS 26.5.2. RUI `c2e3596`: every lane of #179

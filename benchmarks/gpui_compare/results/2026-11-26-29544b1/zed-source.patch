@@ -1,0 +1,21 @@
+diff --git a/crates/gpui_platform/Cargo.toml b/crates/gpui_platform/Cargo.toml
+index d0b6bcaf74..b5f82fd93a 100644
+--- a/crates/gpui_platform/Cargo.toml
++++ b/crates/gpui_platform/Cargo.toml
+@@ -59,6 +59,7 @@ gpui.workspace = true
+ [dev-dependencies]
+ bench_metrics.workspace = true
+ criterion.workspace = true
++image.workspace = true
+ 
+ [target.'cfg(target_os = "macos")'.dependencies]
+ gpui_macos.workspace = true
+@@ -79,3 +80,8 @@ gpui_wgpu = { workspace = true, optional = true }
+ [target.'cfg(target_family = "wasm")'.dependencies]
+ gpui_web.workspace = true
+ console_error_panic_hook.workspace = true
++
++[[bench]]
++name = "rui_compare"
++harness = false
++required-features = ["bench-support"]

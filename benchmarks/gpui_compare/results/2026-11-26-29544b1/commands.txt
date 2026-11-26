@@ -1,0 +1,84 @@
+<rui>/target/release/deps/compare_frame-c4ac81ceffbcd78c startup
+cd <rui>/target/gpui_compare/zed && BENCH_MEASUREMENT=instructions <rui>/target/gpui_compare/zed/target/release/deps/rui_compare-725684db25512afb --bench --exact startup
+<rui>/target/release/deps/compare_frame-c4ac81ceffbcd78c list_full
+cd <rui>/target/gpui_compare/zed && BENCH_MEASUREMENT=instructions <rui>/target/gpui_compare/zed/target/release/deps/rui_compare-725684db25512afb --bench --exact list_full
+<rui>/target/release/deps/compare_frame-c4ac81ceffbcd78c list_full_one_row
+cd <rui>/target/gpui_compare/zed && BENCH_MEASUREMENT=instructions <rui>/target/gpui_compare/zed/target/release/deps/rui_compare-725684db25512afb --bench --exact list_full_one_row
+<rui>/target/release/deps/compare_frame-c4ac81ceffbcd78c list_virtual_1k
+cd <rui>/target/gpui_compare/zed && BENCH_MEASUREMENT=instructions <rui>/target/gpui_compare/zed/target/release/deps/rui_compare-725684db25512afb --bench --exact list_virtual_1k
+<rui>/target/release/deps/compare_frame-c4ac81ceffbcd78c list_virtual_100k
+cd <rui>/target/gpui_compare/zed && BENCH_MEASUREMENT=instructions <rui>/target/gpui_compare/zed/target/release/deps/rui_compare-725684db25512afb --bench --exact list_virtual_100k
+<rui>/target/release/deps/compare_frame-c4ac81ceffbcd78c text_paragraphs
+cd <rui>/target/gpui_compare/zed && BENCH_MEASUREMENT=instructions <rui>/target/gpui_compare/zed/target/release/deps/rui_compare-725684db25512afb --bench --exact text_paragraphs
+<rui>/target/release/deps/compare_frame-c4ac81ceffbcd78c quad_grid
+cd <rui>/target/gpui_compare/zed && BENCH_MEASUREMENT=instructions <rui>/target/gpui_compare/zed/target/release/deps/rui_compare-725684db25512afb --bench --exact quad_grid
+<rui>/target/release/deps/compare_frame-c4ac81ceffbcd78c resize_full
+cd <rui>/target/gpui_compare/zed && BENCH_MEASUREMENT=instructions <rui>/target/gpui_compare/zed/target/release/deps/rui_compare-725684db25512afb --bench --exact resize_full
+<rui>/target/release/deps/compare_frame-c4ac81ceffbcd78c resize_virtual
+cd <rui>/target/gpui_compare/zed && BENCH_MEASUREMENT=instructions <rui>/target/gpui_compare/zed/target/release/deps/rui_compare-725684db25512afb --bench --exact resize_virtual
+<rui>/target/release/deps/compare_frame-c4ac81ceffbcd78c editor_scroll
+cd <rui>/target/gpui_compare/zed && BENCH_MEASUREMENT=instructions <rui>/target/gpui_compare/zed/target/release/deps/rui_compare-725684db25512afb --bench --exact editor_scroll
+<rui>/target/release/deps/compare_frame-c4ac81ceffbcd78c editor_edit
+cd <rui>/target/gpui_compare/zed && BENCH_MEASUREMENT=instructions <rui>/target/gpui_compare/zed/target/release/deps/rui_compare-725684db25512afb --bench --exact editor_edit
+<rui>/target/release/deps/compare_frame-c4ac81ceffbcd78c terminal_rows
+cd <rui>/target/gpui_compare/zed && BENCH_MEASUREMENT=instructions <rui>/target/gpui_compare/zed/target/release/deps/rui_compare-725684db25512afb --bench --exact terminal_rows
+<rui>/target/release/deps/compare_frame-c4ac81ceffbcd78c workbench_pane
+cd <rui>/target/gpui_compare/zed && BENCH_MEASUREMENT=instructions <rui>/target/gpui_compare/zed/target/release/deps/rui_compare-725684db25512afb --bench --exact workbench_pane
+<rui>/target/release/deps/compare_frame-c4ac81ceffbcd78c workbench_full
+cd <rui>/target/gpui_compare/zed && BENCH_MEASUREMENT=instructions <rui>/target/gpui_compare/zed/target/release/deps/rui_compare-725684db25512afb --bench --exact workbench_full
+cd <rui>/target/gpui_compare/zed && BENCH_MEASUREMENT=instructions <rui>/target/gpui_compare/zed/target/release/deps/rui_compare-725684db25512afb --bench --exact startup
+<rui>/target/release/deps/compare_frame-c4ac81ceffbcd78c startup
+cd <rui>/target/gpui_compare/zed && BENCH_MEASUREMENT=instructions <rui>/target/gpui_compare/zed/target/release/deps/rui_compare-725684db25512afb --bench --exact list_full
+<rui>/target/release/deps/compare_frame-c4ac81ceffbcd78c list_full
+cd <rui>/target/gpui_compare/zed && BENCH_MEASUREMENT=instructions <rui>/target/gpui_compare/zed/target/release/deps/rui_compare-725684db25512afb --bench --exact list_full_one_row
+<rui>/target/release/deps/compare_frame-c4ac81ceffbcd78c list_full_one_row
+cd <rui>/target/gpui_compare/zed && BENCH_MEASUREMENT=instructions <rui>/target/gpui_compare/zed/target/release/deps/rui_compare-725684db25512afb --bench --exact list_virtual_1k
+<rui>/target/release/deps/compare_frame-c4ac81ceffbcd78c list_virtual_1k
+cd <rui>/target/gpui_compare/zed && BENCH_MEASUREMENT=instructions <rui>/target/gpui_compare/zed/target/release/deps/rui_compare-725684db25512afb --bench --exact list_virtual_100k
+<rui>/target/release/deps/compare_frame-c4ac81ceffbcd78c list_virtual_100k
+cd <rui>/target/gpui_compare/zed && BENCH_MEASUREMENT=instructions <rui>/target/gpui_compare/zed/target/release/deps/rui_compare-725684db25512afb --bench --exact text_paragraphs
+<rui>/target/release/deps/compare_frame-c4ac81ceffbcd78c text_paragraphs
+cd <rui>/target/gpui_compare/zed && BENCH_MEASUREMENT=instructions <rui>/target/gpui_compare/zed/target/release/deps/rui_compare-725684db25512afb --bench --exact quad_grid
+<rui>/target/release/deps/compare_frame-c4ac81ceffbcd78c quad_grid
+cd <rui>/target/gpui_compare/zed && BENCH_MEASUREMENT=instructions <rui>/target/gpui_compare/zed/target/release/deps/rui_compare-725684db25512afb --bench --exact resize_full
+<rui>/target/release/deps/compare_frame-c4ac81ceffbcd78c resize_full
+cd <rui>/target/gpui_compare/zed && BENCH_MEASUREMENT=instructions <rui>/target/gpui_compare/zed/target/release/deps/rui_compare-725684db25512afb --bench --exact resize_virtual
+<rui>/target/release/deps/compare_frame-c4ac81ceffbcd78c resize_virtual
+cd <rui>/target/gpui_compare/zed && BENCH_MEASUREMENT=instructions <rui>/target/gpui_compare/zed/target/release/deps/rui_compare-725684db25512afb --bench --exact editor_scroll
+<rui>/target/release/deps/compare_frame-c4ac81ceffbcd78c editor_scroll
+cd <rui>/target/gpui_compare/zed && BENCH_MEASUREMENT=instructions <rui>/target/gpui_compare/zed/target/release/deps/rui_compare-725684db25512afb --bench --exact editor_edit
+<rui>/target/release/deps/compare_frame-c4ac81ceffbcd78c editor_edit
+cd <rui>/target/gpui_compare/zed && BENCH_MEASUREMENT=instructions <rui>/target/gpui_compare/zed/target/release/deps/rui_compare-725684db25512afb --bench --exact terminal_rows
+<rui>/target/release/deps/compare_frame-c4ac81ceffbcd78c terminal_rows
+cd <rui>/target/gpui_compare/zed && BENCH_MEASUREMENT=instructions <rui>/target/gpui_compare/zed/target/release/deps/rui_compare-725684db25512afb --bench --exact workbench_pane
+<rui>/target/release/deps/compare_frame-c4ac81ceffbcd78c workbench_pane
+cd <rui>/target/gpui_compare/zed && BENCH_MEASUREMENT=instructions <rui>/target/gpui_compare/zed/target/release/deps/rui_compare-725684db25512afb --bench --exact workbench_full
+<rui>/target/release/deps/compare_frame-c4ac81ceffbcd78c workbench_full
+<rui>/target/release/deps/compare_frame-c4ac81ceffbcd78c startup
+cd <rui>/target/gpui_compare/zed && BENCH_MEASUREMENT=instructions <rui>/target/gpui_compare/zed/target/release/deps/rui_compare-725684db25512afb --bench --exact startup
+<rui>/target/release/deps/compare_frame-c4ac81ceffbcd78c list_full
+cd <rui>/target/gpui_compare/zed && BENCH_MEASUREMENT=instructions <rui>/target/gpui_compare/zed/target/release/deps/rui_compare-725684db25512afb --bench --exact list_full
+<rui>/target/release/deps/compare_frame-c4ac81ceffbcd78c list_full_one_row
+cd <rui>/target/gpui_compare/zed && BENCH_MEASUREMENT=instructions <rui>/target/gpui_compare/zed/target/release/deps/rui_compare-725684db25512afb --bench --exact list_full_one_row
+<rui>/target/release/deps/compare_frame-c4ac81ceffbcd78c list_virtual_1k
+cd <rui>/target/gpui_compare/zed && BENCH_MEASUREMENT=instructions <rui>/target/gpui_compare/zed/target/release/deps/rui_compare-725684db25512afb --bench --exact list_virtual_1k
+<rui>/target/release/deps/compare_frame-c4ac81ceffbcd78c list_virtual_100k
+cd <rui>/target/gpui_compare/zed && BENCH_MEASUREMENT=instructions <rui>/target/gpui_compare/zed/target/release/deps/rui_compare-725684db25512afb --bench --exact list_virtual_100k
+<rui>/target/release/deps/compare_frame-c4ac81ceffbcd78c text_paragraphs
+cd <rui>/target/gpui_compare/zed && BENCH_MEASUREMENT=instructions <rui>/target/gpui_compare/zed/target/release/deps/rui_compare-725684db25512afb --bench --exact text_paragraphs
+<rui>/target/release/deps/compare_frame-c4ac81ceffbcd78c quad_grid
+cd <rui>/target/gpui_compare/zed && BENCH_MEASUREMENT=instructions <rui>/target/gpui_compare/zed/target/release/deps/rui_compare-725684db25512afb --bench --exact quad_grid
+<rui>/target/release/deps/compare_frame-c4ac81ceffbcd78c resize_full
+cd <rui>/target/gpui_compare/zed && BENCH_MEASUREMENT=instructions <rui>/target/gpui_compare/zed/target/release/deps/rui_compare-725684db25512afb --bench --exact resize_full
+<rui>/target/release/deps/compare_frame-c4ac81ceffbcd78c resize_virtual
+cd <rui>/target/gpui_compare/zed && BENCH_MEASUREMENT=instructions <rui>/target/gpui_compare/zed/target/release/deps/rui_compare-725684db25512afb --bench --exact resize_virtual
+<rui>/target/release/deps/compare_frame-c4ac81ceffbcd78c editor_scroll
+cd <rui>/target/gpui_compare/zed && BENCH_MEASUREMENT=instructions <rui>/target/gpui_compare/zed/target/release/deps/rui_compare-725684db25512afb --bench --exact editor_scroll
+<rui>/target/release/deps/compare_frame-c4ac81ceffbcd78c editor_edit
+cd <rui>/target/gpui_compare/zed && BENCH_MEASUREMENT=instructions <rui>/target/gpui_compare/zed/target/release/deps/rui_compare-725684db25512afb --bench --exact editor_edit
+<rui>/target/release/deps/compare_frame-c4ac81ceffbcd78c terminal_rows
+cd <rui>/target/gpui_compare/zed && BENCH_MEASUREMENT=instructions <rui>/target/gpui_compare/zed/target/release/deps/rui_compare-725684db25512afb --bench --exact terminal_rows
+<rui>/target/release/deps/compare_frame-c4ac81ceffbcd78c workbench_pane
+cd <rui>/target/gpui_compare/zed && BENCH_MEASUREMENT=instructions <rui>/target/gpui_compare/zed/target/release/deps/rui_compare-725684db25512afb --bench --exact workbench_pane
+<rui>/target/release/deps/compare_frame-c4ac81ceffbcd78c workbench_full
+cd <rui>/target/gpui_compare/zed && BENCH_MEASUREMENT=instructions <rui>/target/gpui_compare/zed/target/release/deps/rui_compare-725684db25512afb --bench --exact workbench_full
