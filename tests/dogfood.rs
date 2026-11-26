@@ -34,7 +34,7 @@ fn dogfood_loads_repository_owned_data() {
         Err(err) => panic!("dogfood data should load from this checkout: {err}"),
     };
 
-    assert_eq!(data.package_name, "rui");
+    assert_eq!(data.package_name, "ruikit");
     assert!(!data.package_version.trim().is_empty());
     assert!(data.advanced_ui_files > 0);
     assert!(data.integration_tests > 0);
@@ -62,7 +62,7 @@ fn dogfood_controls_mount_real_data_headlessly() {
         Ok(snapshot) => snapshot,
         Err(err) => panic!("dogfood primitives should snapshot: {err}"),
     };
-    assert!(snapshot.as_str().contains("rui local dogfood"));
+    assert!(snapshot.as_str().contains("ruikit local dogfood"));
     assert!(
         data.git_changes
             .iter()
