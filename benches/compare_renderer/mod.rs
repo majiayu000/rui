@@ -5,6 +5,15 @@ use rui::renderer::metal::{MetalRenderer, PendingMetalRenderer};
 #[cfg(feature = "wgpu")]
 use rui::renderer::wgpu::WgpuRenderer;
 use rui::renderer::{RendererError, RendererResourceLimits, Scene};
+#[cfg(feature = "wgpu")]
+use std::sync::Arc;
+#[cfg(feature = "wgpu")]
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// Frames submitted and not yet finished before the next one waits, as
+/// `MetalRenderer::render_offscreen` allows.
+#[cfg(feature = "wgpu")]
+const MAX_FRAMES_IN_FLIGHT: u64 = 3;
 
 /// The renderer every case draws with, picked by `RUI_COMPARE_BACKEND`.
 #[allow(clippy::large_enum_variant)] // one per process
@@ -13,8 +22,11 @@ pub enum BenchRenderer {
     #[cfg(feature = "wgpu")]
     Wgpu {
         renderer: WgpuRenderer,
-        /// The offscreen texture, kept while the size stays.
-        texture: Option<wgpu::Texture>,
+        /// One offscreen texture per size drawn, so the resize cases, which
+        /// alternate two widths, allocate none after warmup, as Metal does.
+        textures: Vec<wgpu::Texture>,
+        submitted: u64,
+        completed: Arc<AtomicU64>,
     },
 }
 
@@ -30,12 +42,11 @@ impl PendingBenchRenderer {
         Ok(match self {
             Self::Metal(pending) => BenchRenderer::Metal(pending.wait()?),
             #[cfg(feature = "wgpu")]
-            Self::Wgpu(handle) => BenchRenderer::Wgpu {
-                renderer: handle
+            Self::Wgpu(handle) => BenchRenderer::wgpu(
+                handle
                     .join()
                     .map_err(|_| "wgpu renderer thread panicked")??,
-                texture: None,
-            },
+            ),
         })
     }
 }
@@ -53,21 +64,34 @@ impl BenchRenderer {
     pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
         #[cfg(feature = "wgpu")]
         if wgpu_requested()? {
-            return Ok(Self::Wgpu {
-                renderer: WgpuRenderer::new()?,
-                texture: None,
-            });
+            return Ok(Self::wgpu(WgpuRenderer::new()?));
         }
         wgpu_requested()?;
         Ok(Self::Metal(MetalRenderer::new()?))
     }
 
-    pub fn spawn() -> PendingBenchRenderer {
-        #[cfg(feature = "wgpu")]
-        if wgpu_requested().unwrap_or(false) {
-            return PendingBenchRenderer::Wgpu(std::thread::spawn(WgpuRenderer::new));
+    #[cfg(feature = "wgpu")]
+    fn wgpu(renderer: WgpuRenderer) -> Self {
+        Self::Wgpu {
+            renderer,
+            textures: Vec::new(),
+            submitted: 0,
+            completed: Arc::new(AtomicU64::new(0)),
         }
-        PendingBenchRenderer::Metal(MetalRenderer::spawn(RendererResourceLimits::default()))
+    }
+
+    pub fn spawn() -> Result<PendingBenchRenderer, Box<dyn std::error::Error>> {
+        let wgpu = wgpu_requested()?;
+        #[cfg(feature = "wgpu")]
+        if wgpu {
+            return Ok(PendingBenchRenderer::Wgpu(std::thread::spawn(
+                WgpuRenderer::new,
+            )));
+        }
+        debug_assert!(!wgpu, "wgpu_requested refuses wgpu without the feature");
+        Ok(PendingBenchRenderer::Metal(MetalRenderer::spawn(
+            RendererResourceLimits::default(),
+        )))
     }
 
     pub fn render_offscreen(
@@ -79,16 +103,28 @@ impl BenchRenderer {
         match self {
             Self::Metal(renderer) => renderer.render_offscreen(scene, viewport, scale_factor),
             #[cfg(feature = "wgpu")]
-            Self::Wgpu { renderer, texture } => {
+            Self::Wgpu {
+                renderer,
+                textures,
+                submitted,
+                completed,
+            } => {
                 let (width, height) = (
                     (viewport.width * scale_factor).round() as u32,
                     (viewport.height * scale_factor).round() as u32,
                 );
-                let kept = texture
-                    .as_ref()
-                    .filter(|t| t.width() == width && t.height() == height);
+                while *submitted - completed.load(Ordering::Acquire) >= MAX_FRAMES_IN_FLIGHT {
+                    renderer
+                        .device()
+                        .poll(wgpu::PollType::wait_indefinitely())
+                        .map_err(|err| RendererError::render_failed(err.to_string()))?;
+                }
+                let kept = textures
+                    .iter()
+                    .find(|t| t.width() == width && t.height() == height)
+                    .cloned();
                 let target = match kept {
-                    Some(target) => target.clone(),
+                    Some(target) => target,
                     None => {
                         let target = renderer.device().create_texture(&wgpu::TextureDescriptor {
                             label: Some("compare_frame target"),
@@ -104,11 +140,17 @@ impl BenchRenderer {
                             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
                             view_formats: &[],
                         });
-                        *texture = Some(target.clone());
+                        textures.push(target.clone());
                         target
                     }
                 };
-                renderer.render(scene, &target, viewport)
+                renderer.render(scene, &target, viewport)?;
+                let done = Arc::clone(completed);
+                renderer.queue().on_submitted_work_done(move || {
+                    done.fetch_add(1, Ordering::Release);
+                });
+                *submitted += 1;
+                Ok(())
             }
         }
     }

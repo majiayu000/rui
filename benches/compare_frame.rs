@@ -404,14 +404,25 @@ fn measure(
     } else {
         // wgpu commits several command buffers a frame, as egui's side does: a
         // frame's GPU time is what its buffers add together.
-        summed_per_frame(&tagged, warmup..warmup + samples).ok_or_else(|| {
+        summed_per_tag(&tagged, warmup..warmup + samples).ok_or_else(|| {
             format!("{case}: a sampled frame completed no command buffer")
         })?
     };
     let gpu_frames = gpu_ms.len();
     let saturated = if redraws > 0 {
-        let mut saturated = gpu_time::steady_redraws(&tagged, warmup, samples, redraws)
-            .map_err(|err| format!("{case}: {err}"))?;
+        let mut saturated = if harness.renderer.one_buffer_per_frame() {
+            gpu_time::steady_redraws(&tagged, warmup, samples, redraws)
+                .map_err(|err| format!("{case}: {err}"))?
+        } else {
+            // Each redraw commits several buffers too: a redraw's time is the mean
+            // of what all of a frame's redraw buffers add.
+            let tags = (warmup..warmup + samples).map(gpu_time::redraw_tag);
+            summed_per_tag(&tagged, tags)
+                .ok_or_else(|| format!("{case}: a sampled frame completed no redraw"))?
+                .into_iter()
+                .map(|total| total / redraws as f64)
+                .collect()
+        };
         format!(
             " gpu_saturated_ms_p50={:.3}",
             percentile(&mut saturated, 0.5)
@@ -435,17 +446,19 @@ fn measure(
     Ok(())
 }
 
-/// GPU busy time per frame in `frames`, summed over each frame's command buffers;
-/// `None` when a frame has none.
-fn summed_per_frame(tagged: &[(usize, f64)], frames: std::ops::Range<usize>) -> Option<Vec<f64>> {
-    let mut per_frame = vec![None; frames.len()];
-    for &(frame, busy) in tagged {
-        if frames.contains(&frame) {
-            let slot: &mut Option<f64> = &mut per_frame[frame - frames.start];
-            *slot = Some(slot.unwrap_or(0.0) + busy);
-        }
-    }
-    per_frame.into_iter().collect()
+/// GPU busy time for each tag in `tags`, summed over the command buffers tagged
+/// with it; `None` when a tag has none.
+fn summed_per_tag(
+    tagged: &[(usize, f64)],
+    tags: impl IntoIterator<Item = usize>,
+) -> Option<Vec<f64>> {
+    tags.into_iter()
+        .map(|tag| {
+            let mut buffers = tagged.iter().filter(|&&(t, _)| t == tag).peekable();
+            buffers.peek()?;
+            Some(buffers.map(|&(_, busy)| busy).sum())
+        })
+        .collect()
 }
 
 fn run(case: &str) -> Result<(), Box<dyn std::error::Error>> {
@@ -467,7 +480,7 @@ fn run(case: &str) -> Result<(), Box<dyn std::error::Error>> {
         "startup" => {
             let to_fixture = ms_since_process_start();
             let t0 = Instant::now();
-            let pending = BenchRenderer::spawn();
+            let pending = BenchRenderer::spawn()?;
             let (mut taffy, mut nodes, mut scene) =
                 (TaffyTree::new(), LayoutNodes::new(), Scene::new());
             let mut measurer = TextMeasureCache::new();
