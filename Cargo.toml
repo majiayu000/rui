@@ -1,5 +1,5 @@
 [package]
-name = "rui"
+name = "ruikit"
 version = "0.3.0-rc.1"
 edition = "2024"
 rust-version = "1.88"
@@ -10,6 +10,11 @@ homepage = "https://github.com/majiayu000/rui/blob/main/docs/API.md"
 readme = "README.md"
 keywords = ["gui", "macos", "metal", "declarative", "ui"]
 categories = ["gui"]
+
+# Published as `ruikit` (the `rui` name on crates.io is another project);
+# code still imports it as `rui`.
+[lib]
+name = "rui"
 
 [features]
 default = ["metal", "markdown"]

@@ -21,14 +21,14 @@ It does not need shared cells or a notifier for each button.
 ## Build your own view
 
 Create a binary project with `cargo new my-counter`. In its `Cargo.toml`, add the
-Git dependency below (the crates.io package named `rui` is a different project):
+`ruikit` package (code imports it as `rui`):
 
 ```toml
 [dependencies]
-rui = { git = "https://github.com/majiayu000/rui", rev = "8161ebcf0f0bf7d8fff38435ad12430c4eefbe17" }
+ruikit = "0.3.0-rc.1"
 ```
 
-This is the same Git revision as the README and includes the listener APIs below.
+This is the same version as the README and includes the listener APIs below.
 Replace `src/main.rs` with this complete program and run `cargo run`:
 
 ```rust

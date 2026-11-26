@@ -3390,7 +3390,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "rui"
+name = "ruikit"
 version = "0.3.0-rc.1"
 dependencies = [
  "ab_glyph_rasterizer",

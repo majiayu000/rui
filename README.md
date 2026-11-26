@@ -25,7 +25,7 @@ RUI is an early-stage, pre-1.0 framework. APIs, component behavior, and renderer
 - Linux and Windows have an experimental winit runner with the wgpu backend. The main window and every window opened through `AppContext::open_window` support pointer, keyboard, scroll, resize and DPI input. Copy and paste use the system clipboard, and IME composition goes to the focused text field. Each window publishes its accessibility tree and accepts screen reader actions through AccessKit (UI Automation on Windows, AT-SPI on Linux). File drops arrive on X11 and Windows. [In-window menus](docs/API.md#menus) serve app commands. The system menu bar uses AppKit. Web is a roadmap item.
 - Accessibility semantics and advanced component interactions are still active development areas.
 - Visual behavior should be verified on a local macOS desktop session; CI covers compile and automated tests, but not full end-to-end visual QA.
-- The recommended install path is the Git dependency shown below until crates.io package ownership or naming is resolved.
+- The package is published on crates.io as `ruikit`; code imports it as `rui`.
 
 ## Quick Start
 
@@ -38,14 +38,16 @@ cargo new rui-hello
 cd rui-hello
 ```
 
-Add this repository as a Git dependency in `Cargo.toml`:
+Add the `ruikit` package to `Cargo.toml`:
 
 ```toml
 [dependencies]
-rui = { git = "https://github.com/majiayu000/rui", rev = "8161ebcf0f0bf7d8fff38435ad12430c4eefbe17" }
+ruikit = "0.3.0-rc.1"
 ```
 
-Both installation guides pin the same Git revision. The [`rui` package on crates.io](https://crates.io/crates/rui) belongs to [`audulus/rui`](https://github.com/audulus/rui). Use the Git dependency above for this project.
+The package is called `ruikit` because the `rui` name on crates.io belongs to
+another project; your code still writes `use rui::prelude::*`. To follow `main`
+instead, use `ruikit = { git = "https://github.com/majiayu000/rui" }`.
 
 Replace `src/main.rs` with:
 
@@ -304,8 +306,8 @@ Color::hsla(180.0, 0.5, 0.5, 0.8)
 
 ## Release Status
 
-- The latest published version is listed in [GitHub Releases](https://github.com/majiayu000/rui/releases).
-- The quick start pins a newer source revision that includes the listener, native input and font changes. See [CHANGELOG.md](CHANGELOG.md) for the status of those changes.
+- Releases are published to crates.io as [`ruikit`](https://crates.io/crates/ruikit) and tagged in [GitHub Releases](https://github.com/majiayu000/rui/releases).
+- See [CHANGELOG.md](CHANGELOG.md) for what each release changes.
 
 ## Running Examples
 

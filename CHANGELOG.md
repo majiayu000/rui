@@ -4,6 +4,12 @@ All notable project changes should be recorded here.
 
 ## Unreleased
 
+### Packaging
+
+- The package is named `ruikit` so it can be published on crates.io, where `rui`
+  is another project. The library keeps the name `rui`: `use rui::prelude::*`
+  does not change.
+
 ### Rendering
 
 - Text is shaped with HarfRust and its glyphs are read through Skrifa, from
