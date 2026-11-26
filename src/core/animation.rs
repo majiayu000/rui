@@ -188,15 +188,14 @@ impl Easing {
                 }
             }
             Easing::Spring { stiffness, damping } => {
-                // Simplified spring physics
+                // Step response of a damped spring with unit mass, t in [0, 1]
                 let omega = stiffness.sqrt();
                 let zeta = *damping / (2.0 * omega);
                 if zeta < 1.0 {
                     // Underdamped
                     let omega_d = omega * (1.0 - zeta * zeta).sqrt();
                     1.0 - (-zeta * omega * t).exp()
-                        * ((zeta * omega * t / omega_d).cos()
-                            + zeta * (zeta * omega * t / omega_d).sin())
+                        * ((omega_d * t).cos() + zeta * omega / omega_d * (omega_d * t).sin())
                 } else {
                     // Critically damped or overdamped
                     1.0 - (1.0 + omega * t) * (-omega * t).exp()
